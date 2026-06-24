@@ -79,40 +79,43 @@ Design spec: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
 
 ---
 
-## DDL sequence (one operator session, against the recorded target)
+## Cutover sequence — the SEARCH-PATH FLIP (executed 2026-06-24; supersedes the rename-promote)
 
-> Confirm the target connection string is the intended prod branch **before every
-> destructive statement.** Steps 6–9 are DDL (transactional in PG); run 6–9 in one
-> transaction where practical, committing before the redeploy (10).
+> **Neon finding (load-bearing):** the original plan — rename `public`→`public_legacy`, relocate
+> `vector` into `temper_next`, rename `temper_next`→`public` — **does NOT work on Neon.**
+> `ALTER EXTENSION vector SET SCHEMA temper_next` fails with *"must be owner of type
+> public_legacy.vector"* — `neondb_owner` cannot relocate the `vector` extension (Neon owns it).
+> The Neon-native cutover is a **search-path flip**: the collapsed code is location-agnostic
+> (de-qualified SQL + no explicit `SET search_path`), so pointing the connection default at
+> `temper_next, public` makes it resolve canonical tables in `temper_next` and `vector`/`uuid` via
+> the `public` fallback — **no schema rename, no extension move, fully reversible.** The legacy
+> `public.*` stays intact + shadowed (droppable later).
+>
+> Confirm the target connection string is the intended prod branch before each statement.
 
-6. [ ] **Rename the stale schema aside:**
+6. [ ] **Identity/auth carry-over into `temper_next`** — synthesis carried ONLY the corpus owner
+   (1 `kb_profiles` row, 0 `kb_profile_auth_links`), so with **0 auth_links nobody can authenticate**
+   after the flip. Carry the rest from the still-named `public` (no rename — read `public.*`, write
+   `temper_next.*`) using the validated draft §4 (`docs/superpowers/specs/2026-06-22-ws6-canonical-layer-draft.sql`;
+   its DDL/graft half is already applied to `temper_next`). Run with `search_path=temper_next, public`:
    ```sql
-   ALTER SCHEMA public RENAME TO public_legacy;
+   SET search_path TO temper_next, public;
+   INSERT INTO kb_profiles (id, handle, display_name, system_access, email, preferences, created)
+   SELECT p.id, p.slug, p.display_name,
+          CASE WHEN p.slug='j-cole-taylor' THEN 'admin'::system_access
+               WHEN p.slug IN ('gm-anirudh','lohjishan') THEN 'approved'::system_access
+               ELSE 'none'::system_access END,
+          p.email, p.preferences, p.created
+   FROM public.kb_profiles p
+   ON CONFLICT (id) DO UPDATE SET system_access=EXCLUDED.system_access, email=EXCLUDED.email, preferences=EXCLUDED.preferences;
+   INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
+   SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+   FROM public.kb_profile_auth_links ON CONFLICT (id) DO NOTHING;
+   INSERT INTO kb_system_settings (id, access_mode, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated)
+   SELECT id, access_mode, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated
+   FROM public.kb_system_settings ON CONFLICT (id) DO UPDATE SET access_mode=EXCLUDED.access_mode;
    ```
-
-7. [ ] **Relocate the shared infrastructure into the surviving schema** (BLOCKER-1 fix —
-   rehearsed in pre-flight step 3):
-   ```sql
-   -- vector: relocate the extension (pgvector is relocatable)
-   ALTER EXTENSION vector SET SCHEMA temper_next;
-   -- uuid: re-create a self-contained generator in temper_next (do NOT relocate pg_uuidv7),
-   -- mirroring tools/flip/uuid_portable.sql:
-   CREATE OR REPLACE FUNCTION temper_next.uuid_generate_v7() RETURNS uuid
-   LANGUAGE sql VOLATILE PARALLEL SAFE AS $$
-     SELECT encode(set_bit(set_bit(overlay(
-       uuid_send(gen_random_uuid())
-       PLACING substring(int8send((extract(epoch FROM clock_timestamp())*1000)::bigint) FROM 3)
-       FROM 1 FOR 6), 52, 1), 53, 1), 'hex')::uuid;
-   $$;
-   ```
-
-8. [ ] **Apply the canonical-layer graft/reconcile/carry-over** — the validated draft
-   `docs/superpowers/specs/2026-06-22-ws6-canonical-layer-draft.sql` (substitute the real
-   `LEGACY` schema name = `public_legacy`). It reconciles `kb_profiles` (re-add
-   `email`/`preferences`), grafts the 7 substrate-absent infra tables + enums, and
-   `INSERT…SELECT`s the identity/auth/seed rows from `public_legacy` into `temper_next`.
-   Re-confirm its live-diff half (row counts: 5 profiles / 5 auth_links / …) against the
-   snapshot — the DDL half was verified byte-faithful to the cited migrations.
+   Verify: 5 profiles / 5 auth_links in `temper_next`; `has_system_access(owner)=t`.
 
 8c. [ ] **Align emitter-entity names with the de-hardcoded resolver** (code change in this branch).
    The collapsed write path resolves the per-surface emitter entity by **`<handle>@<surface>`**
@@ -131,31 +134,35 @@ Design spec: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
    (Newly auto-provisioned profiles get `<handle>@{web,cli,mcp}` from `resolve_from_claims`; this
    step only fixes the pre-existing synthesized rows.)
 
-9. [ ] **Promote:**
+9. [ ] **THE FLIP — point the connection default at the canonical schema:**
    ```sql
-   ALTER SCHEMA temper_next RENAME TO public;
+   ALTER DATABASE neondb SET search_path TO temper_next, public;
    ```
-   The canonical schema is now `public` — the connection default — owning its extensions +
-   uuid generator (step 7).
+   New connections now resolve canonical tables in `temper_next` and `vector`/`uuid` via the `public`
+   fallback. The collapsed code carries no explicit `SET search_path` (the flip removed
+   `substrate::connect`'s `after_connect`), so it picks this up on its next connection.
+   **Reversible:** `ALTER DATABASE neondb SET search_path TO public;` reverts to legacy.
 
-9b. [ ] **Reconcile `_sqlx_migrations` to the canonical baseline (mark-as-applied, NOT replay).**
-   The promoted `public` is structurally artifact-faithful but its `_sqlx_migrations` still lists the
-   retired legacy lineage. The schema already exists — do NOT replay DDL. (This replaces the prior
-   "no reconciliation needed / bootstrap-export spec's job" punt; the canonical-migrations-in-public
-   spec owns it: `docs/superpowers/specs/2026-06-23-canonical-migrations-in-public-design.md` §5.)
+9b. [ ] **(Optional) Reconcile `_sqlx_migrations` for tooling alignment.** The deploy runs no
+   boot-time `migrate!`, so this is housekeeping, not a gate. The canonical schema lives in
+   `temper_next`; future additive migrations apply with `cargo sqlx migrate run` under
+   `search_path=temper_next`. If you want `sqlx migrate info` to read clean against the canonical set,
+   create `temper_next._sqlx_migrations` and mark-as-applied the 3 baseline rows (NOT replay) — see
+   `docs/superpowers/specs/2026-06-23-canonical-migrations-in-public-design.md` §5. Deferred at the
+   2026-06-24 cutover (not load-bearing for serving traffic).
+
+   <details><summary>Superseded: the migration-aligned <code>public</code> reconciliation (only if a
+   future Neon-permission path enables the rename-promote)</summary>
+
+   The promoted `public` would be structurally artifact-faithful but its `_sqlx_migrations` still lists
+   the retired legacy lineage. The schema already exists — do NOT replay DDL.
    1. **Structural safety check (HARD GATE):** `pg_dump --schema-only` of live `public` vs. a fresh
       DB built from `migrations/` — the diff must be empty (both derive from the same artifact).
-      Account for extension residency + the uuid shim: the canonical baseline self-provisions the
-      `vector` extension and `uuid_generate_v7()`, whereas here they were relocated into the surviving
-      schema at step 7 — reconcile that benign provisioning difference rather than hand-waving the
-      diff. Abort the reconciliation if anything structural differs.
-   2. **Compute the baseline checksums** sqlx expects: `sqlx migrate info --source migrations` against
-      a fresh baseline DB (or read the `_sqlx_migrations` rows it writes there).
-   3. **Mark-as-applied** on the live DB: `TRUNCATE _sqlx_migrations;` then `INSERT` the 3 baseline
-      rows (`version`, `description`, `checksum`, `success=true`, `installed_on=now()`,
-      `execution_time=0`).
-   4. **Verify:** `sqlx migrate info --source migrations` shows all 3 **applied**, and a
-      `sqlx migrate run` against the live DB is a clean no-op. The deployment is now migration-aligned
+   2. **Compute the baseline checksums** sqlx expects: `sqlx migrate info --source migrations`.
+   3. **Mark-as-applied:** `TRUNCATE _sqlx_migrations;` then `INSERT` the 3 baseline rows.
+   4. **Verify:** `sqlx migrate info` shows all 3 **applied**, and `sqlx migrate run` is a clean no-op.
+   </details>
+   The deployment is now migration-aligned
       with the canonical set.
 
 ---
