@@ -13,7 +13,7 @@ Temper's API validates every request's JWT against three things only: the **issu
 Two consequences shape the rest of this guide:
 
 1. Temper requires a **custom audience** on its access tokens. Okta can only mint custom audiences from a **custom authorization server**, which requires the **API Access Management** add-on.
-2. A few peripheral code paths (the CLI's `temper init` URL templating, and the server's `/userinfo` email fallback) currently assume the Auth0 URL shape. The workarounds are called out inline below.
+2. Okta's authorization-server URLs differ from Auth0's (an issuer with no trailing slash; `/oauth2/<authServerId>/v1/*` endpoints). `temper init` emits these for you, and Temper resolves the `/userinfo` endpoint via OIDC discovery, so the differences surface only in the values you configure — not as manual workarounds.
 
 ## Prerequisite: API Access Management
 
