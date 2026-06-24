@@ -320,6 +320,13 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
             let idp = if idp_idx == 1 {
                 let auth_server_id: String = Input::with_theme(&theme)
                     .with_prompt("Okta authorization server ID (e.g. aus1a2b3c)")
+                    .validate_with(|input: &String| -> std::result::Result<(), &str> {
+                        if input.trim().is_empty() {
+                            Err("Okta authorization server ID cannot be empty")
+                        } else {
+                            Ok(())
+                        }
+                    })
                     .interact_text()
                     .map_err(prompt_err)?;
                 Idp::Okta {
@@ -1030,5 +1037,24 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn provider_urls_auth0_and_okta_shapes() {
+        let (authorize, token) = provider_urls(&Idp::Auth0, "acme.us.auth0.com");
+        assert_eq!(authorize, "https://acme.us.auth0.com/authorize");
+        assert_eq!(token, "https://acme.us.auth0.com/oauth/token");
+
+        let (authorize, token) = provider_urls(
+            &Idp::Okta {
+                auth_server_id: "aus1a2b3c".into(),
+            },
+            "acme.okta.com",
+        );
+        assert_eq!(
+            authorize,
+            "https://acme.okta.com/oauth2/aus1a2b3c/v1/authorize"
+        );
+        assert_eq!(token, "https://acme.okta.com/oauth2/aus1a2b3c/v1/token");
     }
 }

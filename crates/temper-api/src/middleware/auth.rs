@@ -201,7 +201,11 @@ fn parse_userinfo_endpoint(body: &str) -> Result<String, String> {
 async fn discover_userinfo_endpoint(issuer: &str) -> Result<String, String> {
     let base = issuer.trim_end_matches('/');
     let url = format!("{base}/.well-known/openid-configuration");
-    let resp = reqwest::Client::new()
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
+    let resp = client
         .get(&url)
         .send()
         .await
@@ -228,7 +232,10 @@ async fn fetch_email_from_userinfo(
     userinfo_url: &str,
     access_token: &str,
 ) -> Result<(String, Option<bool>), String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
     let resp = client
         .get(userinfo_url)
         .bearer_auth(access_token)
