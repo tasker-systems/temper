@@ -70,6 +70,61 @@ fn plan_chunks(prose: &str) -> Vec<(i32, String, String, String, u8)> {
         .collect()
 }
 
+/// A caller-supplied, already-embedded chunk — the no-embed input to [`prepare_block_from_chunks`].
+/// Field-for-field the substrate-native twin of temper-core's wire `PackedChunk` (temper-next does NOT
+/// depend on temper-core): the client did the extract→chunk→embed locally, so the server carries the
+/// vector verbatim instead of re-running ONNX. `heading_depth`/`header_path` map to the chunk's render
+/// metadata exactly as [`prepare_block`] maps the chunker's own output. `chunk_index`/`heading_depth`
+/// are already the substrate column types (`i32`/`i16`), widened from the wire's `u32`/`u8` by the
+/// surface that constructs these.
+#[derive(Debug, Clone)]
+pub struct IncomingChunk {
+    pub chunk_index: i32,
+    pub content_hash: String,
+    pub content: String,
+    pub embedding: Vec<f32>,
+    pub header_path: String,
+    pub heading_depth: i16,
+}
+
+/// Prepare one block from caller-supplied (already-embedded) chunks — the no-embed twin of
+/// [`prepare_block`]. Each [`IncomingChunk`] becomes a [`PreparedChunk`] with a freshly minted
+/// `chunk_id`; the heading mapping is IDENTICAL to `prepare_block` (`heading_depth == 0` or an empty
+/// breadcrumb ⇒ unheaded preamble, NULL columns). There is NO `embed_texts` call — the vector rides
+/// through verbatim, so this is ONNX-free. Returns `PreparedBlock` directly (no embed to fail).
+pub fn prepare_block_from_chunks(
+    seq: i32,
+    role: Option<&str>,
+    chunks: Vec<IncomingChunk>,
+) -> PreparedBlock {
+    let chunks = chunks
+        .into_iter()
+        .map(|c| {
+            // Same heading rule as prepare_block: depth 0 / empty breadcrumb ⇒ unheaded preamble (NULL).
+            let (header_path, heading_depth) = if c.heading_depth == 0 || c.header_path.is_empty() {
+                (None, None)
+            } else {
+                (Some(c.header_path), Some(c.heading_depth))
+            };
+            PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
+                chunk_index: c.chunk_index,
+                content_hash: c.content_hash,
+                content: c.content,
+                embedding: c.embedding,
+                header_path,
+                heading_depth,
+            }
+        })
+        .collect();
+    PreparedBlock {
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq,
+        role: role.map(str::to_owned),
+        chunks,
+    }
+}
+
 /// Prepare one block: chunk its prose, then embed every chunk in a single batched ONNX call.
 pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<PreparedBlock> {
     let planned = plan_chunks(prose);
@@ -147,6 +202,24 @@ pub fn body_hash_for_body(body: &str) -> String {
     let block_concat: String = planned.iter().map(|(_, hash, ..)| hash.as_str()).collect();
     let block_hash = sha256_hex(&block_concat);
     // A single block in seq order → the resource merkle is sha256 of that one per-block hash.
+    sha256_hex(&block_hash)
+}
+
+/// The resource `body_hash` for a CALLER-SUPPLIED chunk set — the no-embed twin of [`body_hash_for_body`]
+/// that reproduces its merkle from the chunks' content hashes directly (the create path persists the body
+/// as ONE roleless block at seq 0, so the merkle is `sha256_hex(per_block_hash)`, where `per_block_hash =
+/// sha256_hex(concat of the chunk content_hashes in chunk_index order)`). `chunk_hashes` MUST already be
+/// in chunk_index order. This must equal `body_hash_for_body` for the same chunk-hash set so the create
+/// dedup pre-check and the projector's stored `kb_resources.body_hash` stay consistent.
+///
+/// An empty set ⇒ `sha256_hex("")`, matching `body_hash_for_body`'s empty-body case (and the SQL's
+/// coalesce-empty-aggregate-to-`''` in `_recompute_resource_body_hash`).
+pub fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
+    if chunk_hashes.is_empty() {
+        return sha256_hex("");
+    }
+    let block_concat: String = chunk_hashes.concat();
+    let block_hash = sha256_hex(&block_concat);
     sha256_hex(&block_hash)
 }
 
@@ -283,6 +356,67 @@ mod tests {
             assert_eq!(*idx, i as i32, "chunk_index must be sequential 0..n");
             assert_eq!(hash.len(), 64);
         }
+    }
+
+    // The caller-supplied-chunk merkle MUST equal the chunk-the-prose merkle for the same chunk-hash
+    // set, so a client that pre-chunks dedups against a server-chunked twin (and vice versa).
+    #[test]
+    fn body_hash_from_chunk_hashes_matches_body_hash_for_body() {
+        let prose = "A short onboarding note about first-week confidence.";
+        let planned = plan_chunks(prose);
+        let hashes: Vec<String> = planned.iter().map(|(_, h, ..)| h.clone()).collect();
+        assert_eq!(
+            body_hash_from_chunk_hashes(&hashes),
+            body_hash_for_body(prose),
+            "supplied-chunk merkle must equal the chunk-the-prose merkle"
+        );
+    }
+
+    // Empty chunk set ⇒ sha256_hex("") — the same value body_hash_for_body returns for an empty body.
+    #[test]
+    fn body_hash_from_empty_chunk_set_matches_empty_body() {
+        assert_eq!(body_hash_from_chunk_hashes(&[]), body_hash_for_body(""));
+    }
+
+    // prepare_block_from_chunks carries the supplied embedding verbatim and maps headings like
+    // prepare_block (depth 0 / empty breadcrumb ⇒ NULL; a real heading ⇒ Some).
+    #[test]
+    fn prepare_block_from_chunks_carries_embedding_and_maps_headings() {
+        let block = prepare_block_from_chunks(
+            0,
+            None,
+            vec![
+                IncomingChunk {
+                    chunk_index: 0,
+                    content_hash: "ab".repeat(32),
+                    content: "preamble".into(),
+                    embedding: vec![0.5; 4],
+                    header_path: String::new(),
+                    heading_depth: 0,
+                },
+                IncomingChunk {
+                    chunk_index: 1,
+                    content_hash: "cd".repeat(32),
+                    content: "headed".into(),
+                    embedding: vec![0.25; 4],
+                    header_path: "Intro > Goals".into(),
+                    heading_depth: 2,
+                },
+            ],
+        );
+        assert_eq!(block.chunks.len(), 2);
+        // unheaded preamble ⇒ NULL heading columns
+        assert_eq!(block.chunks[0].header_path, None);
+        assert_eq!(block.chunks[0].heading_depth, None);
+        // embedding carried verbatim (no re-embed)
+        assert_eq!(block.chunks[0].embedding, vec![0.5; 4]);
+        // a real heading is carried
+        assert_eq!(
+            block.chunks[1].header_path.as_deref(),
+            Some("Intro > Goals")
+        );
+        assert_eq!(block.chunks[1].heading_depth, Some(2));
+        assert_eq!(block.chunks[1].embedding, vec![0.25; 4]);
     }
 
     // Blocks serialize to the JSONB shape the SQL functions consume (array of {block_id, seq, chunks:[…]}).

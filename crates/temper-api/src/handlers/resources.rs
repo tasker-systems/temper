@@ -172,8 +172,9 @@ pub async fn create(
         managed_meta: ManagedMeta::default(),
         open_meta: None,
         origin_uri: Some(req.origin_uri),
-        // POST /api/resources is a metadata-only create (no body); chunks are
-        // produced by a follow-up async ingest job.
+        // POST /api/resources is a metadata-only create: ResourceCreateRequest carries no
+        // body, so there are no client chunks to honor here. The body-bearing (client-chunked)
+        // create path is POST /api/ingest, which threads payload.chunks_packed through.
         chunks_packed: None,
         content_hash: None,
         origin: Surface::ApiHttp,
@@ -207,11 +208,14 @@ pub async fn update(
     use temper_core::operations::{BodyUpdate, UpdateResource};
     use temper_core::types::ids::ResourceId;
 
-    // Wire-supplied content_hash and chunks_packed are intentionally ignored —
-    // the server is the single source of truth for body-trio derivation. Clients
-    // should send content only; the translator (prepare_body_trio) recomputes
-    // hash + chunks server-side. (Contract tightening from Phase 3b.)
-    let body = req.content.map(BodyUpdate::new);
+    // Client-supplied chunks_packed (+ content_hash) are HONORED: the client did the
+    // extract→chunk→embed locally, so the server carries them verbatim and only embeds
+    // server-side as a fallback when they are absent. (Reverses PR#71's discard contract.)
+    let body = req.content.map(|content| BodyUpdate {
+        content,
+        content_hash: req.content_hash,
+        chunks_packed: req.chunks_packed,
+    });
 
     // Fold top-level title/slug into managed_meta so the translator can extract
     // them uniformly. Only materialise Some(managed) when there's actually

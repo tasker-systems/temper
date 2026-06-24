@@ -69,6 +69,34 @@ fn map_polarity(p: graph::Polarity) -> temper_next::payloads::EdgePolarity {
     }
 }
 
+/// Map a wire [`PackedChunk`](temper_core::types::ingest::PackedChunk) — the client's
+/// extract→chunk→embed output — to the substrate-native `IncomingChunk` the no-embed block constructor
+/// consumes. Field-for-field; the only widening is `u32`/`u8` → `i32`/`i16` (the substrate column types).
+fn packed_to_incoming(
+    c: &temper_core::types::ingest::PackedChunk,
+) -> temper_next::content::IncomingChunk {
+    temper_next::content::IncomingChunk {
+        chunk_index: c.chunk_index as i32,
+        content_hash: c.content_hash.clone(),
+        content: c.content.clone(),
+        embedding: c.embedding.clone(),
+        header_path: c.header_path.clone(),
+        heading_depth: c.heading_depth as i16,
+    }
+}
+
+/// Unpack a caller-supplied `chunks_packed` blob into substrate-native `IncomingChunk`s, ordered by
+/// `chunk_index` so the body-hash merkle matches the substrate's stored `body_hash`. A malformed blob is
+/// the caller's fault → `BadRequest`.
+fn unpack_incoming_chunks(
+    packed: &str,
+) -> Result<Vec<temper_next::content::IncomingChunk>, TemperError> {
+    let mut chunks = temper_core::types::ingest::unpack_chunks(packed)
+        .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
+    chunks.sort_by_key(|c| c.chunk_index);
+    Ok(chunks.iter().map(packed_to_incoming).collect())
+}
+
 /// Map an inbound [`Surface`] to the synthesized per-surface emitter marker (`pete@<marker>`, §1b).
 /// The HTTP/API surface maps to the web emitter (temperkb.io's surface).
 fn surface_marker(s: Surface) -> &'static str {
@@ -221,6 +249,17 @@ impl Backend for DbBackend {
             .unwrap_or_default();
         let origin_uri = cmd.origin_uri.clone().unwrap_or_default();
 
+        // Honor caller-supplied precomputed chunks (the client did extract→chunk→embed). When present
+        // the server carries the vectors verbatim — no server-side ONNX — and keys dedup on the merkle
+        // of the SUPPLIED chunk hashes; when absent the server chunks + embeds `body` itself (the
+        // fallback). Reverses PR#71's "server is the single source of truth" discard contract. A
+        // malformed blob is a caller fault → BadRequest (propagated, never swallowed).
+        let incoming_chunks: Option<Vec<temper_next::content::IncomingChunk>> =
+            match &cmd.chunks_packed {
+                Some(packed) => Some(unpack_incoming_chunks(packed)?),
+                None => None,
+            };
+
         // Create-time guards (WS6 collapse Task F). The substrate create path applies the same
         // strip → defaults → identity-keys → validate → body-hash-dedup pipeline the legacy
         // `ingest_service::ingest` ran (`:433-502`), calling the surviving pure helpers WHERE THEY
@@ -263,7 +302,17 @@ impl Backend for DbBackend {
         //    creating a twin — reconstructing the same `CommandOutput<ResourceRow>` the create path
         //    returns for a fresh row (`:254-255`).
         if !body.is_empty() {
-            let body_hash = temper_next::content::body_hash_for_body(&body);
+            // Key dedup on the SUPPLIED chunk hashes when the caller pre-chunked (so it equals the
+            // body_hash the substrate projector will store from those same hashes); otherwise on the
+            // chunk-the-prose merkle (the fallback).
+            let body_hash = match &incoming_chunks {
+                Some(chunks) => {
+                    let hashes: Vec<String> =
+                        chunks.iter().map(|c| c.content_hash.clone()).collect();
+                    temper_next::content::body_hash_from_chunk_hashes(&hashes)
+                }
+                None => temper_next::content::body_hash_for_body(&body),
+            };
             if let Some(existing) =
                 readback::find_by_body_hash(&self.pool, *self.profile_id, &body_hash)
                     .await
@@ -290,6 +339,7 @@ impl Backend for DbBackend {
                 originator: owner,
                 emitter,
                 properties: &properties,
+                chunks: incoming_chunks,
             },
         )
         .await
@@ -331,6 +381,14 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
 
         let body = cmd.body.as_ref().map(|b| b.content.clone());
+        // Honor caller-supplied precomputed chunks on the revise too (client did extract→chunk→embed):
+        // carry the vectors verbatim instead of re-embedding server-side. Absent ⇒ server chunks +
+        // embeds `body` (fallback). Reverses PR#71's discard contract.
+        let incoming_chunks: Option<Vec<temper_next::content::IncomingChunk>> =
+            match cmd.body.as_ref().and_then(|b| b.chunks_packed.as_deref()) {
+                Some(packed) => Some(unpack_incoming_chunks(packed)?),
+                None => None,
+            };
         // temper-title (a §7-Die managed key) maps to the kb_resources.title column, not a property.
         let mut title: Option<String> = None;
         let mut properties: Vec<(String, serde_json::Value)> = Vec::new();
@@ -430,6 +488,7 @@ impl Backend for DbBackend {
                 title: title.as_deref(),
                 origin_uri: None,
                 properties: &properties,
+                chunks: incoming_chunks,
                 rehome_to,
                 emitter,
             },

@@ -14,7 +14,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
-use crate::content::prepare_block;
+use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk};
 use crate::events::{fire, EdgeHome, SeedAction};
 use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId};
 use crate::payloads::{self, AnchorRef, EdgePolarity};
@@ -95,10 +95,17 @@ pub struct CreateParams<'a> {
     pub emitter: EntityId,
     /// Managed (§7-Property-fated) + open property pairs, each fired as a `PropertyAssert`.
     pub properties: &'a [(String, serde_json::Value)],
+    /// Caller-supplied, already-embedded chunks. When `Some`, the body block is built from these
+    /// verbatim (no server-side embed — the client did extract→chunk→embed); when `None`, the server
+    /// chunks + embeds `body` itself (the fallback path). Reverses PR#71's discard-client-chunks contract.
+    pub chunks: Option<Vec<IncomingChunk>>,
 }
 
 pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<ResourceId> {
-    let block = prepare_block(0, None, p.body)?;
+    let block = match p.chunks {
+        Some(chunks) => prepare_block_from_chunks(0, None, chunks),
+        None => prepare_block(0, None, p.body)?,
+    };
     let blocks = [block];
     let mut tx = begin_scoped(pool).await?;
     let new_id = fire(
@@ -144,6 +151,10 @@ pub struct UpdateParams<'a> {
     pub origin_uri: Option<&'a str>,
     /// Property pairs to (re)assert (stage/mode/effort/doc_type + meta keys).
     pub properties: &'a [(String, serde_json::Value)],
+    /// Caller-supplied, already-embedded chunks for the body revise. When `Some` (and `body` is
+    /// supplied), the new block is built from these verbatim (no server-side embed); when `None`, the
+    /// server chunks + embeds `body` (the fallback path). Reverses PR#71's discard contract.
+    pub chunks: Option<Vec<IncomingChunk>>,
     /// Destination context for a move (`move_to.context_to`).
     pub rehome_to: Option<ContextId>,
     pub emitter: EntityId,
@@ -171,7 +182,10 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
                 p.resource.uuid()
             ),
         };
-        let prepared = prepare_block(0, None, body)?;
+        let prepared = match p.chunks {
+            Some(chunks) => prepare_block_from_chunks(0, None, chunks),
+            None => prepare_block(0, None, body)?,
+        };
         if prepared.chunks.is_empty() {
             anyhow::bail!(
                 "update_resource: empty/whitespace body — refusing to write a contentless block"

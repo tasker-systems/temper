@@ -588,6 +588,7 @@ async fn writes_create_then_update_reflected_in_readback() {
             originator: owner,
             emitter,
             properties: &create_props,
+            chunks: None,
         },
     )
     .await
@@ -601,6 +602,7 @@ async fn writes_create_then_update_reflected_in_readback() {
             title: Some("Renamed"),
             origin_uri: None,
             properties: &[("temper-stage".to_string(), serde_json::json!("done"))],
+            chunks: None,
             rehome_to: Some(ctx2),
             emitter,
         },
