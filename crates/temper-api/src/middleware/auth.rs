@@ -170,6 +170,23 @@ async fn lookup_cached_email(
     email.map(|e| (e, Some(true)))
 }
 
+/// Subset of the OIDC discovery document (`/.well-known/openid-configuration`).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct OidcDiscovery {
+    userinfo_endpoint: Option<String>,
+}
+
+/// Parse the `userinfo_endpoint` out of an OIDC discovery document body.
+#[allow(dead_code)]
+fn parse_userinfo_endpoint(body: &str) -> Result<String, String> {
+    let doc: OidcDiscovery =
+        serde_json::from_str(body).map_err(|e| format!("discovery parse error: {e}"))?;
+    doc.userinfo_endpoint
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "discovery document missing userinfo_endpoint".to_string())
+}
+
 /// OIDC userinfo response (subset of fields we need).
 #[derive(Debug, Deserialize)]
 struct UserinfoResponse {
@@ -227,4 +244,33 @@ fn extract_bearer_token(request: &Request<Body>) -> Result<String, ApiError> {
     })?;
 
     Ok(token.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_userinfo_endpoint_auth0_shape() {
+        let body = r#"{"issuer":"https://t.auth0.com/","userinfo_endpoint":"https://t.auth0.com/userinfo"}"#;
+        assert_eq!(
+            parse_userinfo_endpoint(body).unwrap(),
+            "https://t.auth0.com/userinfo"
+        );
+    }
+
+    #[test]
+    fn parse_userinfo_endpoint_okta_shape() {
+        let body = r#"{"issuer":"https://org.okta.com/oauth2/aus1","userinfo_endpoint":"https://org.okta.com/oauth2/aus1/v1/userinfo"}"#;
+        assert_eq!(
+            parse_userinfo_endpoint(body).unwrap(),
+            "https://org.okta.com/oauth2/aus1/v1/userinfo"
+        );
+    }
+
+    #[test]
+    fn parse_userinfo_endpoint_missing_field_errors() {
+        let body = r#"{"issuer":"https://x"}"#;
+        assert!(parse_userinfo_endpoint(body).is_err());
+    }
 }
