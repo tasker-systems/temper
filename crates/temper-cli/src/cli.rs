@@ -66,15 +66,21 @@ pub enum Commands {
         /// Self-host: instance base URL (e.g. <https://temper.acme.com>)
         #[arg(long, requires_all = ["auth_domain", "auth_client_id", "auth_audience"])]
         instance_url: Option<String>,
-        /// Self-host: Auth0 tenant domain (e.g. acme.us.auth0.com)
+        /// Self-host: OAuth provider domain (e.g. acme.us.auth0.com or acme.okta.com)
         #[arg(long)]
         auth_domain: Option<String>,
-        /// Self-host: Auth0 CLI application client_id
+        /// Self-host: CLI application client_id
         #[arg(long)]
         auth_client_id: Option<String>,
         /// Self-host: API audience (e.g. <https://temper.acme.com/api>)
         #[arg(long)]
         auth_audience: Option<String>,
+        /// Self-host: identity provider URL shape (default: auth0)
+        #[arg(long, default_value = "auth0")]
+        idp: String,
+        /// Self-host: Okta authorization server ID (required with --idp okta)
+        #[arg(long)]
+        auth_server_id: Option<String>,
     },
     /// Check vault integrity and tool health
     Check {

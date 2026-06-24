@@ -102,14 +102,26 @@ pub async fn require_auth(
                     tracing::debug!("resolved email from cached auth link");
                     (email, Some(true))
                 }
-                None => fetch_email_from_userinfo(&state.config.auth_issuer, &token)
-                    .await
-                    .map_err(|e| {
-                        tracing::warn!("Failed to fetch email from userinfo: {e}");
-                        ApiError::Unauthorized(
-                            "Token missing email claim and userinfo lookup failed".to_string(),
-                        )
-                    })?,
+                None => {
+                    let endpoint = state
+                        .userinfo_endpoint
+                        .get_or_try_init(|| discover_userinfo_endpoint(&state.config.auth_issuer))
+                        .await
+                        .map_err(|e| {
+                            tracing::warn!("OIDC discovery failed: {e}");
+                            ApiError::Unauthorized(
+                                "Token missing email claim and userinfo lookup failed".to_string(),
+                            )
+                        })?;
+                    fetch_email_from_userinfo(endpoint, &token)
+                        .await
+                        .map_err(|e| {
+                            tracing::warn!("Failed to fetch email from userinfo: {e}");
+                            ApiError::Unauthorized(
+                                "Token missing email claim and userinfo lookup failed".to_string(),
+                            )
+                        })?
+                }
             }
         }
     };
@@ -170,6 +182,44 @@ async fn lookup_cached_email(
     email.map(|e| (e, Some(true)))
 }
 
+/// Subset of the OIDC discovery document (`/.well-known/openid-configuration`).
+#[derive(Debug, Deserialize)]
+struct OidcDiscovery {
+    userinfo_endpoint: Option<String>,
+}
+
+/// Parse the `userinfo_endpoint` out of an OIDC discovery document body.
+fn parse_userinfo_endpoint(body: &str) -> Result<String, String> {
+    let doc: OidcDiscovery =
+        serde_json::from_str(body).map_err(|e| format!("discovery parse error: {e}"))?;
+    doc.userinfo_endpoint
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "discovery document missing userinfo_endpoint".to_string())
+}
+
+/// Resolve the OIDC userinfo endpoint for `issuer` via discovery.
+async fn discover_userinfo_endpoint(issuer: &str) -> Result<String, String> {
+    let base = issuer.trim_end_matches('/');
+    let url = format!("{base}/.well-known/openid-configuration");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("discovery request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("discovery returned status {}", resp.status()));
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("discovery read error: {e}"))?;
+    parse_userinfo_endpoint(&body)
+}
+
 /// OIDC userinfo response (subset of fields we need).
 #[derive(Debug, Deserialize)]
 struct UserinfoResponse {
@@ -177,19 +227,17 @@ struct UserinfoResponse {
     email_verified: Option<bool>,
 }
 
-/// Fetch the user's email from the OIDC /userinfo endpoint.
-///
-/// Auth0 access tokens don't include `email` by default (it requires a custom
-/// Action). As a fallback, we call the issuer's `/userinfo` endpoint with the
-/// access token to retrieve the email claim.
+/// Fetch the user's email from a resolved OIDC `/userinfo` endpoint.
 async fn fetch_email_from_userinfo(
-    issuer: &str,
+    userinfo_url: &str,
     access_token: &str,
 ) -> Result<(String, Option<bool>), String> {
-    let url = format!("{}userinfo", issuer.trim_end_matches('/').to_owned() + "/");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
     let resp = client
-        .get(&url)
+        .get(userinfo_url)
         .bearer_auth(access_token)
         .send()
         .await
@@ -227,4 +275,33 @@ fn extract_bearer_token(request: &Request<Body>) -> Result<String, ApiError> {
     })?;
 
     Ok(token.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_userinfo_endpoint_auth0_shape() {
+        let body = r#"{"issuer":"https://t.auth0.com/","userinfo_endpoint":"https://t.auth0.com/userinfo"}"#;
+        assert_eq!(
+            parse_userinfo_endpoint(body).unwrap(),
+            "https://t.auth0.com/userinfo"
+        );
+    }
+
+    #[test]
+    fn parse_userinfo_endpoint_okta_shape() {
+        let body = r#"{"issuer":"https://org.okta.com/oauth2/aus1","userinfo_endpoint":"https://org.okta.com/oauth2/aus1/v1/userinfo"}"#;
+        assert_eq!(
+            parse_userinfo_endpoint(body).unwrap(),
+            "https://org.okta.com/oauth2/aus1/v1/userinfo"
+        );
+    }
+
+    #[test]
+    fn parse_userinfo_endpoint_missing_field_errors() {
+        let body = r#"{"issuer":"https://x"}"#;
+        assert!(parse_userinfo_endpoint(body).is_err());
+    }
 }

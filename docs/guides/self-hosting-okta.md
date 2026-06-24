@@ -13,7 +13,7 @@ Temper's API validates every request's JWT against three things only: the **issu
 Two consequences shape the rest of this guide:
 
 1. Temper requires a **custom audience** on its access tokens. Okta can only mint custom audiences from a **custom authorization server**, which requires the **API Access Management** add-on.
-2. A few peripheral code paths (the CLI's `temper init` URL templating, and the server's `/userinfo` email fallback) currently assume the Auth0 URL shape. The workarounds are called out inline below.
+2. Okta's authorization-server URLs differ from Auth0's (an issuer with no trailing slash; `/oauth2/<authServerId>/v1/*` endpoints). `temper init` emits these for you, and Temper resolves the `/userinfo` endpoint via OIDC discovery, so the differences surface only in the values you configure — not as manual workarounds.
 
 ## Prerequisite: API Access Management
 
@@ -47,9 +47,9 @@ Custom authorization servers **deny by default** — if a client matches no acce
 
 Without at least one policy + rule, login will fail even when every URL and ID is correct.
 
-### Add an `email` claim to the access token (required)
+### Add an `email` claim to the access token (recommended)
 
-Temper resolves the user's email from the access token's `email` claim. When that claim is absent it falls back to the OIDC `/userinfo` endpoint — but **that fallback currently assumes the Auth0 issuer URL shape and does not resolve correctly against an Okta custom authorization server.** On Okta you must therefore put `email` directly on the access token.
+Temper resolves the user's email from the access token's `email` claim. When that claim is absent it falls back to the OIDC `/userinfo` endpoint, which Temper now resolves via discovery (`{issuer}/.well-known/openid-configuration`), so the fallback works against Okta. Putting `email` directly on the access token is still **recommended** — it's the fast path and avoids a per-process discovery + userinfo round-trip — but it is no longer mandatory.
 
 On the authorization server's **Claims** tab: **Add Claim** —
 
@@ -59,7 +59,7 @@ On the authorization server's **Claims** tab: **Add Claim** —
 - **Value:** `user.email`
 - **Include in:** the scopes/policies your apps use (or "Any scope")
 
-Without this claim, login fails with `Token missing email claim and userinfo lookup failed`. See [Known limitations](#known-limitations) for the underlying code issue.
+With neither the claim nor a reachable `/userinfo` (e.g. the token lacks the `email` scope), login fails with `Token missing email claim and userinfo lookup failed`.
 
 ## Provision the applications
 
@@ -109,7 +109,18 @@ Everything else in the main guide's environment contract (`DATABASE_URL`, `DATAB
 
 ## Configure the CLI (Okta)
 
-> **`temper init` is Auth0-specific.** The wizard templates Auth0-shaped endpoints (`https://<domain>/authorize`, `https://<domain>/oauth/token`) and writes `provider = "auth0"`. It cannot emit Okta's `/oauth2/<authServerId>/v1/*` endpoints. For Okta, **write `~/.config/temper/config.toml` by hand** using the block below (or run `temper init`, then overwrite the `authorize_url` and `token_url` lines).
+> **`temper init` now supports Okta.** Interactively, choose **self-hosted → Okta** and enter your authorization server ID. Headless, pass `--idp okta --auth-server-id <authServerId>` alongside the existing self-host flags:
+>
+> ```sh
+> temper init --no-interactive \
+>   --instance-url https://<instance> \
+>   --auth-domain <okta-domain> \
+>   --idp okta --auth-server-id <authServerId> \
+>   --auth-client-id <cli-app-client-id> \
+>   --auth-audience <custom-auth-server-audience>
+> ```
+>
+> The hand-written block below remains valid as a reference (note `provider`/`name` stay `auth0`).
 
 ```toml
 [cloud]
@@ -146,14 +157,7 @@ Identical to the main guide — point MCP clients at `https://<instance>/mcp`. O
 
 Use the same verification steps as the [main guide](./self-hosting.md#verify): `/api/health`, `temper login`, and a resource round-trip. `temper login` opens a browser to your Okta authorization server's `/v1/authorize` endpoint and completes the Authorization Code + PKCE flow.
 
-If login fails with `Token missing email claim and userinfo lookup failed`, the access-token `email` claim is not configured — revisit [Add an `email` claim to the access token](#add-an-email-claim-to-the-access-token-required).
-
-## Known limitations
-
-These are current Temper behaviors that the steps above work around. They are candidates for a future code fix, after which the workarounds could be dropped:
-
-- **The `/userinfo` email fallback assumes the Auth0 issuer shape.** Temper builds the userinfo URL as `<issuer-without-trailing-slash>/userinfo`, which resolves for Auth0 but not for an Okta custom authorization server (whose userinfo endpoint is `<issuer>/v1/userinfo`). Until this is made issuer-shape-aware (or the userinfo endpoint is configurable), Okta deployments must place the `email` claim directly on the access token.
-- **`temper init` cannot generate Okta configuration.** The wizard hardcodes Auth0 endpoint shapes and `provider = "auth0"`, so Okta operators must hand-write `config.toml`. A provider-aware init (or a `--provider okta` flag emitting `/oauth2/<id>/v1/*` URLs) would remove this step.
+If login fails with `Token missing email claim and userinfo lookup failed`, either add the access-token `email` claim (above) or ensure the CLI's granted scopes include `email` so the `/userinfo` fallback can return it.
 
 ## Not covered
 
