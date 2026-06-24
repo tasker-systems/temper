@@ -80,20 +80,25 @@ jobs:
         with:
           tool: nextest,sqlx-cli
 
+      - name: Install ONNX Runtime
+        # The WS6 collapse moved chunk embedding server-side (the substrate's
+        # `create_resource` embeds inline via `temper_ingest::embed`), so ANY
+        # body-bearing ingest now initializes ort at runtime — not just the
+        # `test-embed`-gated tests. ONNX is therefore needed wherever the
+        # test-db tier runs. ort 2.0.0-rc.12 uses `load-dynamic` (API 18): fetch
+        # the ONNX Runtime 1.18.x shared library and point ORT_DYLIB_PATH at it.
+        run: |
+          set -euo pipefail
+          ORT_VERSION=1.18.1
+          curl -sSL -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+
       - name: Run migrations
         run: cargo sqlx migrate run
 
       - name: Run integration & E2E tests
-        # Body-bearing tests that exercise the server-side embed path live in
-        # the "Embed & MCP Round-Trip Tests" job (it's the only one with the
-        # ONNX Runtime installed). The names that used to be excluded here
-        # (sync_run_push_body_round_trip, graph_build_then_sync_materializes_edges)
-        # were retired in PR #94's cloud-only sweep, and the surviving
-        # body-bearing tests (cloud_update_body_and_meta_in_one_request,
-        # cloud_update_body_only_no_managed_meta,
-        # cloud_update_chunk_dedupe_skips_unchanged) are `test-embed`-gated
-        # at the source level, so they don't compile (and can't run) without
-        # the feature — no runtime exclusion needed here.
         # temper-next is excluded: its sqlx! macros target the temper_next artifact namespace, not the
         # migrated public schema this job validates against; it is compiled+tested offline in unit-tests.
         # temper-agents is excluded for the same reason: it depends on temper-next unconditionally (the
@@ -231,13 +236,24 @@ jobs:
         with:
           tool: nextest,cargo-llvm-cov,sqlx-cli
 
+      - name: Install ONNX Runtime
+        # Server-side embedding (the WS6 collapse) means the test-db tier
+        # initializes ort on every body-bearing ingest — see the integration
+        # job. ort 2.0.0-rc.12 needs the ONNX Runtime 1.18.x shared library.
+        run: |
+          set -euo pipefail
+          ORT_VERSION=1.18.1
+          curl -sSL -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+
       - name: Run migrations
         run: cargo sqlx migrate run
 
       - name: Generate coverage (test-db tier)
         # Mirrors the integration-tests job's tier so the baseline reflects
-        # unit + DB integration + e2e. No ONNX: instrumentation only compiles
-        # the embed feature, it never initializes ort at runtime here.
+        # unit + DB integration + e2e (now incl. the server-side embed path).
         # temper-next excluded (temper_next-namespace sqlx! macros; offline-validated in unit-tests).
         # temper-agents excluded too: unconditional temper-next dep (envelope re-export) would compile those macros live here.
         run: cargo llvm-cov nextest --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
