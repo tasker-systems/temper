@@ -26,7 +26,7 @@ async fn test_create_and_list_resources(pool: PgPool) {
     // Create a resource.
     let payload = json!({
         "kb_context_id": context_id.to_string(),
-        "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+        "doc_type": "research",
         "origin_uri": format!("test://resource-{}", uuid::Uuid::new_v4()),
         "title": "My Integration Test Resource",
         "slug": null,
@@ -55,7 +55,7 @@ async fn test_create_and_list_resources(pool: PgPool) {
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://listed-resource-{}", uuid::Uuid::new_v4()),
             "title": "Listed Resource",
             "slug": null,
@@ -112,7 +112,7 @@ async fn test_resource_visibility_scoping(pool: PgPool) {
         .header("Authorization", format!("Bearer {token_a}"))
         .json(&json!({
             "kb_context_id": context_id_a.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://private-{}", uuid::Uuid::new_v4()),
             "title": "User A's Private Resource",
             "slug": null,

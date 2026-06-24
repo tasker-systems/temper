@@ -39,7 +39,7 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://body-trio-{}", uuid::Uuid::new_v4()),
             "title": "Body Trio Test Resource",
             "slug": null

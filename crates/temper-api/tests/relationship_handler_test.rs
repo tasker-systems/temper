@@ -27,23 +27,27 @@ async fn insert_resource(
     slug: &str,
 ) -> Uuid {
     let id = Uuid::now_v7();
-    let doc_type_id = Uuid::parse_str(common::fixtures::RESEARCH_DOC_TYPE_ID).unwrap();
+    // Substrate: kb_resources holds (id, title, origin_uri); ownership + home
+    // live in kb_resource_homes. Home the resource in the owner's context so
+    // assert_relationship resolves its home anchor and can_modify passes.
+    sqlx::query(r#"INSERT INTO kb_resources (id, title, origin_uri) VALUES ($1, $2, $3)"#)
+        .bind(id)
+        .bind(title)
+        .bind(format!("test://{slug}"))
+        .execute(pool)
+        .await
+        .expect("insert_resource");
     sqlx::query(
-        r#"INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
-             originator_profile_id, owner_profile_id, is_active, created, updated)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())"#,
+        r#"INSERT INTO kb_resource_homes
+            (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+           VALUES ($1, 'kb_contexts', $2, $3, $3)"#,
     )
     .bind(id)
     .bind(context_id)
-    .bind(doc_type_id)
-    .bind(format!("test://{slug}"))
-    .bind(title)
-    .bind(slug)
     .bind(owner_id)
     .execute(pool)
     .await
-    .expect("insert_resource");
+    .expect("home resource");
     id
 }
 
@@ -108,13 +112,11 @@ async fn assert_relationship_returns_ack(pool: PgPool) {
     let cid_str = ack["edge_handle"].as_str().expect("edge_handle is string");
     Uuid::parse_str(cid_str).expect("edge_handle should be a valid UUID");
 
-    // Verify edge row was projected.
+    // Verify edge row was projected into the substrate kb_edges.
     let edge_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_resource_edges WHERE source_resource_id IN (
-            SELECT id FROM kb_resources WHERE slug = 'rh-assert-a' AND owner_profile_id = $1
-        )",
+        "SELECT count(*) FROM kb_edges WHERE source_table = 'kb_resources' AND source_id = $1",
     )
-    .bind(profile_id)
+    .bind(source_a)
     .fetch_one(&pool)
     .await
     .expect("edge count");
@@ -277,12 +279,11 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
         "fold ack must contain edge_handle; got {fold_ack}"
     );
 
-    // Verify edge is marked folded in the DB.
+    // Verify edge is marked folded in the DB. The ack's edge_handle IS the
+    // substrate edge id (DbBackend returns the kb_edges row id).
     let cid_uuid = Uuid::parse_str(edge_handle).expect("valid uuid");
-    let is_folded: bool = sqlx::query_scalar(
-        "SELECT is_folded FROM kb_resource_edges WHERE asserted_by_event_id = $1",
-    )
-    .bind(cid_uuid)
+    let is_folded: bool =
+        sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1").bind(cid_uuid)
     .fetch_one(&pool)
     .await
     .expect("is_folded query");

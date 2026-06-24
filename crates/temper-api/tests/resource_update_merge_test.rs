@@ -40,7 +40,7 @@ async fn setup_resource_with_managed_meta(
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://merge-managed-{}", Uuid::new_v4()),
             "title": "Managed Meta Merge Test",
             "slug": null
@@ -104,7 +104,7 @@ async fn setup_resource_with_open_meta(
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://merge-open-{}", Uuid::new_v4()),
             "title": "Open Meta Merge Test",
             "slug": null
