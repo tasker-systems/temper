@@ -157,6 +157,10 @@ pub struct AppState {
     /// Read once per process at startup. A flip takes effect on the next
     /// redeploy — that is the cutover model, not a staleness bug.
     pub backend_selection: BackendSelection,
+    /// OIDC userinfo endpoint, resolved once per process via discovery on the
+    /// first email-fallback. Lazy (not boot-time) so there is no startup
+    /// coupling to the IdP; shared across `AppState` clones via `Arc`.
+    pub userinfo_endpoint: Arc<tokio::sync::OnceCell<String>>,
 }
 
 impl AppState {
@@ -169,6 +173,7 @@ impl AppState {
             // `with_backend_selection` after reading the flag. Tests that
             // don't care get legacy for free.
             backend_selection: BackendSelection::Legacy,
+            userinfo_endpoint: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
