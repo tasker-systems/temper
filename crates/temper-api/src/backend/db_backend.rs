@@ -335,12 +335,74 @@ impl Backend for DbBackend {
         let mut title: Option<String> = None;
         let mut properties: Vec<(String, serde_json::Value)> = Vec::new();
         if let Some(mm) = &cmd.managed_meta {
-            let managed = serde_json::to_value(mm).map_err(|e| TemperError::Api(e.to_string()))?;
-            title = managed
+            let incoming = serde_json::to_value(mm).map_err(|e| TemperError::Api(e.to_string()))?;
+
+            // Update-time validation (mirror create's strip→defaults→identity→validate
+            // pipeline; restores the legacy `resource_service::update` guard the collapse
+            // dropped). The wrinkle vs create: update carries no doc_type/context/slug, so
+            // take the EFFECTIVE values from the current row (legacy did the same — load
+            // `current`, `effective_doc_type = incoming.unwrap_or(&current.doc_type_name)`).
+            // The current row is reconstructed for these values (already visibility-gated
+            // via `check_can_modify_next`).
+            let current = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
+            // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
+            // `move_to.type_to` (the file-move path); else the doc type is unchanged.
+            let effective_doc_type = incoming
+                .get("temper-type")
+                .and_then(|v| v.as_str())
+                .or_else(|| cmd.move_to.as_ref().and_then(|m| m.type_to.as_deref()))
+                .unwrap_or(current.doc_type_name.as_str())
+                .to_owned();
+            let effective_context = cmd
+                .move_to
+                .as_ref()
+                .and_then(|m| m.context_to.as_deref())
+                .unwrap_or(current.context_name.as_str())
+                .to_owned();
+            // temper-title updates the kb_resources.title column when supplied; otherwise the
+            // current title carries (and seeds validation). temper-slug is §7-Die (not stored,
+            // so `current.slug` is None) — derive the canonical slug from the title so the
+            // `temper-slug`-required schemas don't FALSE-reject a valid update.
+            let incoming_title = incoming
                 .get("temper-title")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned);
-            properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
+            let effective_title = incoming_title
+                .clone()
+                .unwrap_or_else(|| current.title.clone());
+            let effective_slug = temper_core::operations::sluggify(&effective_title);
+
+            // Build the COMPLETE validation document (strip system keys → doc-type defaults →
+            // identity keys) and validate it; PROPAGATE the typed BadRequest (an out-of-enum
+            // value or an unknown doc_type → 400, the create contract). Every schema-required
+            // field is supplied by identity (temper-slug/title) or a default (task temper-stage /
+            // goal temper-status), so a partial update never false-rejects — no merge with the
+            // current managed_meta is needed.
+            let mut validation =
+                temper_core::operations::strip_system_managed_fields(incoming.clone());
+            temper_core::operations::apply_defaults_value(&effective_doc_type, &mut validation);
+            temper_core::operations::ensure_managed_identity_keys(
+                &mut validation,
+                &effective_title,
+                Some(effective_slug.as_str()),
+            );
+            let validate_params = temper_core::operations::ValidateManagedMetaParams {
+                id: new_id,
+                created: current.created,
+                doc_type: &effective_doc_type,
+                managed_meta: Some(&validation),
+                slug: &effective_slug,
+                title: &effective_title,
+                context_name: &effective_context,
+            };
+            temper_core::operations::validate_managed_meta(&validate_params)?;
+
+            // Write only the caller-supplied keys (PATCH is a partial merge; `PropertySet`
+            // asserts per key, so unsupplied keys are untouched — DON'T write the defaulted
+            // validation set). `properties_from_meta` filters to §7-Property keys, so the
+            // §7-Die identity keys + the §7-ReconcileToDocType `temper-type` never become rows.
+            title = incoming_title;
+            properties = properties_from_meta(&incoming, cmd.open_meta.as_ref());
         } else if cmd.open_meta.is_some() {
             properties = properties_from_meta(&serde_json::Value::Null, cmd.open_meta.as_ref());
         }

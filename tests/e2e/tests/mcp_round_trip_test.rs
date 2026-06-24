@@ -722,16 +722,10 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
 /// (here: an out-of-enum `temper-stage`) is rejected before any write, and
 /// the stored frontmatter is left untouched.
 ///
-/// IGNORED — BLOCKED on a production gap surfaced by this port (NOT a test
-/// fault; the assertion below states the correct contract). The WS6 collapse
-/// kept create-time managed_meta validation (`DbBackend::create_resource` runs
-/// the strip → defaults → identity → `validate_managed_meta` pipeline) but the
-/// UPDATE path (`DbBackend::update_resource`) goes straight to
-/// `writes::update_resource` with NO validation, so an out-of-enum
-/// `temper-stage` is accepted on update. This was "write-side gap 5", fixed
-/// pre-collapse on the legacy update path; the collapse regressed it. Re-enable
-/// once `update_resource` re-runs schema validation over the merged managed_meta.
-#[ignore = "BLOCKED: WS6 collapse dropped update-path managed_meta schema validation (db_backend::update_resource) — production gap, escalated"]
+/// Locks the restored update-path validation: `DbBackend::update_resource`
+/// re-runs the strip → defaults → identity → `validate_managed_meta` pipeline
+/// (effective doc_type/context/title taken from the current row), mirroring
+/// create. This was "write-side gap 5", regressed by the collapse and restored.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;

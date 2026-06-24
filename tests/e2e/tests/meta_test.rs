@@ -288,7 +288,6 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
 /// future refactor of error types surfaces loudly here rather than silently
 /// flipping 403 ↔ 404 ↔ 400.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred (F9): the WS6 collapse dropped update-path managed_meta schema validation (db_backend update_resource), so an unknown doc_type on a meta PATCH returns 200 rather than 400. The unknown-doc_type→400 assertion (part 3) is left correct and will un-ignore once update-path validation is restored; the 403/404 auth-mapping assertions (parts 1–2) ride along until then"]
 async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
