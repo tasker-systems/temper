@@ -489,6 +489,18 @@ git commit --no-verify -m "ws6-flip: retire schema_drift/install_migration guard
 - Consumes: the collapsed service layer (from `f66cb9e`) + the green offline build (Task 4).
 - Produces: `cargo make test-db` + `cargo make test-e2e` compile and pass against the substrate.
 
+> **SCOPE EXPANSION (discovered at execution, user-approved "port now").** The flip ported
+> production code to the substrate but left the integration-test **fixture foundations** on the
+> legacy schema. So Task 8 is bigger than "rewrite/delete tests referencing deleted services": it
+> includes **porting `crates/temper-api/tests/common/fixtures.rs` (and the e2e fixture equivalent)
+> to the substrate** — substrate seed identities (the canonical seed's `handle='system'` actor, not
+> the legacy `…0004-0001` ids), the entity/emitter event model (`kb_events.emitter_entity_id` +
+> `producing_anchor_*`, not `profile_id`/`device_id`), `kb_resource_homes` population, `kb_edges`
+> (not `kb_resource_edges`), the substrate content/chunk model, and doc-type-as-property (not
+> `kb_doc_types`) — then re-dispositioning the ~8 dependent DB tests (delete retired-storage ones
+> like `chunk_dedup`/`revision_retention`; port+keep surviving ones). The 8 retired-service test
+> deletions landed in `b406195`; the fixture port is the runtime unblock.
+
 - [ ] **Step 1: Enumerate the broken test surface**
 
 ```bash
