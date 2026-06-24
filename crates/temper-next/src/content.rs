@@ -52,12 +52,21 @@ pub struct PreparedBlock {
 }
 
 /// Pure chunk plan for one block's prose — chunking + hashing only, **no** embedding (so it is
-/// ONNX-free and unit-testable). Each entry is `(chunk_index, content_hash, content)` straight from the
-/// production chunker.
-fn plan_chunks(prose: &str) -> Vec<(i32, String, String)> {
+/// ONNX-free and unit-testable). Each entry is `(chunk_index, content_hash, content, header_path,
+/// heading_depth)` straight from the production chunker — the heading fields are carried through so the
+/// body read path (`reconstruct_body`) can restore `##`-style markers (`heading_depth == 0` ⇒ preamble).
+fn plan_chunks(prose: &str) -> Vec<(i32, String, String, String, u8)> {
     temper_ingest::chunk::chunk_markdown(prose)
         .into_iter()
-        .map(|c| (c.chunk_index as i32, c.content_hash, c.content))
+        .map(|c| {
+            (
+                c.chunk_index as i32,
+                c.content_hash,
+                c.content,
+                c.header_path,
+                c.heading_depth,
+            )
+        })
         .collect()
 }
 
@@ -66,7 +75,7 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
     let planned = plan_chunks(prose);
     let texts: Vec<&str> = planned
         .iter()
-        .map(|(_, _, content)| content.as_str())
+        .map(|(_, _, content, _, _)| content.as_str())
         .collect();
     // Empty prose ⇒ no chunks ⇒ no embedding call (embed_texts on an empty slice is wasteful/undefined).
     let embeddings = if texts.is_empty() {
@@ -78,15 +87,24 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         .into_iter()
         .zip(embeddings)
         .map(
-            |((chunk_index, content_hash, content), embedding)| PreparedChunk {
-                chunk_id: ChunkId::from(Uuid::now_v7()),
-                chunk_index,
-                content_hash,
-                content,
-                embedding,
-                // the scenario-authoring path has no production headings; carry NULL (unchanged).
-                header_path: None,
-                heading_depth: None,
+            |((chunk_index, content_hash, content, header_path, heading_depth), embedding)| {
+                // Carry the chunker's heading metadata so `reconstruct_body` can re-emit markers.
+                // depth 0 / empty breadcrumb ⇒ unheaded preamble: keep NULL (matches reconstruct_body's
+                // `heading_depth == 0 ⇒ content as-is` arm). A real heading ⇒ persist depth + breadcrumb.
+                let (header_path, heading_depth) = if heading_depth == 0 || header_path.is_empty() {
+                    (None, None)
+                } else {
+                    (Some(header_path), Some(heading_depth as i16))
+                };
+                PreparedChunk {
+                    chunk_id: ChunkId::from(Uuid::now_v7()),
+                    chunk_index,
+                    content_hash,
+                    content,
+                    embedding,
+                    header_path,
+                    heading_depth,
+                }
             },
         )
         .collect();
@@ -126,7 +144,7 @@ pub fn body_hash_for_body(body: &str) -> String {
     if planned.is_empty() {
         return sha256_hex("");
     }
-    let block_concat: String = planned.iter().map(|(_, hash, _)| hash.as_str()).collect();
+    let block_concat: String = planned.iter().map(|(_, hash, ..)| hash.as_str()).collect();
     let block_hash = sha256_hex(&block_concat);
     // A single block in seq order → the resource merkle is sha256 of that one per-block hash.
     sha256_hex(&block_hash)
@@ -153,7 +171,7 @@ mod tests {
     fn short_prose_is_one_chunk_with_sha256_hash() {
         let planned = plan_chunks("A short onboarding note about first-week confidence.");
         assert_eq!(planned.len(), 1, "short prose must be a single chunk");
-        let (idx, hash, content) = &planned[0];
+        let (idx, hash, content, ..) = &planned[0];
         assert_eq!(*idx, 0);
         assert_eq!(hash.len(), 64, "sha256 hex is 64 chars");
         assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
@@ -175,7 +193,7 @@ mod tests {
             "long prose must split into >1 chunk, got {}",
             planned.len()
         );
-        for (i, (idx, hash, _)) in planned.iter().enumerate() {
+        for (i, (idx, hash, ..)) in planned.iter().enumerate() {
             assert_eq!(*idx, i as i32, "chunk_index must be sequential 0..n");
             assert_eq!(hash.len(), 64);
         }
