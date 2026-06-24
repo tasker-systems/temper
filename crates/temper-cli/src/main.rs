@@ -104,6 +104,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         auth_domain,
                         client_id,
                         audience,
+                        idp: temper_cli::commands::init::Idp::Auth0,
                     })
                 }
                 _ => None,

@@ -29,6 +29,16 @@ const HOSTED_AUTH_DOMAIN: &str = "temperkb.us.auth0.com";
 const HOSTED_CLIENT_ID: &str = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF";
 const HOSTED_AUDIENCE: &str = "https://temperkb.io/api";
 
+/// Which IdP's OAuth endpoint shapes `temper init` should emit. The written
+/// provider *label* stays "auth0" regardless — this only selects URL templating.
+#[derive(Debug, Clone)]
+pub enum Idp {
+    /// Auth0 tenant: `https://{domain}/authorize`, `/oauth/token`.
+    Auth0,
+    /// Okta custom authorization server: `https://{domain}/oauth2/{id}/v1/*`.
+    Okta { auth_server_id: String },
+}
+
 /// Per-instance OAuth inputs for a self-hosted deployment.
 #[derive(Debug, Clone)]
 pub struct SelfHostConfig {
@@ -40,6 +50,8 @@ pub struct SelfHostConfig {
     pub client_id: String,
     /// API audience / resource identifier, e.g. `https://temper.acme.com/api`.
     pub audience: String,
+    /// Identity-provider URL shape to emit (Auth0 vs Okta authz server).
+    pub idp: Idp,
 }
 
 /// User selection for instance + auth provider.
@@ -266,6 +278,7 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
                 auth_domain: auth_domain.trim().to_string(),
                 client_id: client_id.trim().to_string(),
                 audience: audience.trim().to_string(),
+                idp: Idp::Auth0,
             })
         }
         _ => AuthChoice::None,
@@ -405,6 +418,20 @@ fn ensure_server_contexts(
     Ok(())
 }
 
+/// Map an `Idp` + domain to its (authorize_url, token_url) pair.
+fn provider_urls(idp: &Idp, domain: &str) -> (String, String) {
+    match idp {
+        Idp::Auth0 => (
+            format!("https://{domain}/authorize"),
+            format!("https://{domain}/oauth/token"),
+        ),
+        Idp::Okta { auth_server_id } => (
+            format!("https://{domain}/oauth2/{auth_server_id}/v1/authorize"),
+            format!("https://{domain}/oauth2/{auth_server_id}/v1/token"),
+        ),
+    }
+}
+
 /// Build the `[auth]` + `[[auth.providers]]` block and the `[cloud]` api_url
 /// line for a configured instance (hosted or self-hosted).
 fn provider_and_cloud_sections(
@@ -412,13 +439,15 @@ fn provider_and_cloud_sections(
     auth_domain: &str,
     client_id: &str,
     audience: &str,
+    idp: &Idp,
 ) -> (String, String) {
     // Route every interpolated value through `toml::Value::String` (the same
     // escaping the vault path gets) so any character requiring escaping
     // round-trips, rather than relying on these always being metacharacter-free.
     let tv = |s: String| toml::Value::String(s).to_string();
-    let authorize_url = tv(format!("https://{auth_domain}/authorize"));
-    let token_url = tv(format!("https://{auth_domain}/oauth/token"));
+    let (authorize, token) = provider_urls(idp, auth_domain);
+    let authorize_url = tv(authorize);
+    let token_url = tv(token);
     let callback_url = tv(format!("{api_url}/api/auth/cli-callback"));
     let client_id_toml = tv(client_id.to_string());
     let audience_toml = tv(audience.to_string());
@@ -462,12 +491,14 @@ pub fn render_config_toml(answers: &WizardAnswers) -> String {
             HOSTED_AUTH_DOMAIN,
             HOSTED_CLIENT_ID,
             HOSTED_AUDIENCE,
+            &Idp::Auth0,
         ),
         AuthChoice::SelfHosted(sh) => provider_and_cloud_sections(
             &sh.instance_url,
             &sh.auth_domain,
             &sh.client_id,
             &sh.audience,
+            &sh.idp,
         ),
         AuthChoice::None => ("[auth]\nprovider = \"none\"\n".to_string(), String::new()),
     };
@@ -558,6 +589,7 @@ mod tests {
                 auth_domain: "acme.us.auth0.com".into(),
                 client_id: "AcMeClientId123".into(),
                 audience: "https://temper.acme.com/api".into(),
+                idp: Idp::Auth0,
             }),
         };
         let toml = render_config_toml(&answers);
@@ -699,6 +731,41 @@ mod tests {
     }
 
     #[test]
+    fn self_hosted_okta_emits_v1_urls_and_keeps_auth0_label() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::SelfHosted(SelfHostConfig {
+                instance_url: "https://temper.acme.com".into(),
+                auth_domain: "acme.okta.com".into(),
+                client_id: "OktaCli123".into(),
+                audience: "https://temper.acme.com/api".into(),
+                idp: Idp::Okta {
+                    auth_server_id: "aus1a2b3c".into(),
+                },
+            }),
+        };
+        let toml = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&toml).expect("okta toml parses");
+        cfg.validate().expect("okta config validates");
+        assert_eq!(cfg.auth.provider, "auth0");
+        let p = &cfg.auth.providers[0];
+        assert_eq!(p.name, "auth0");
+        assert_eq!(
+            p.authorize_url,
+            "https://acme.okta.com/oauth2/aus1a2b3c/v1/authorize"
+        );
+        assert_eq!(
+            p.token_url,
+            "https://acme.okta.com/oauth2/aus1a2b3c/v1/token"
+        );
+        assert_eq!(
+            p.callback_url,
+            "https://temper.acme.com/api/auth/cli-callback"
+        );
+    }
+
+    #[test]
     fn auth0_writes_array_of_tables_format() {
         let answers = WizardAnswers {
             vault_path: "/tmp/v".into(),
@@ -829,6 +896,7 @@ mod tests {
             auth_domain: "acme.us.auth0.com".into(),
             client_id: "AcMeClientId123".into(),
             audience: "https://temper.acme.com/api".into(),
+            idp: Idp::Auth0,
         };
         run_non_interactive(&vault, false, OutputFormat::Json, Some(sh))
             .expect("self-host non-interactive run should succeed");
