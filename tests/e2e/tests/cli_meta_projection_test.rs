@@ -217,7 +217,14 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             doc_type_name: "task".to_string(),
             content_hash: Some(hash.to_string()),
             slug: slug.to_string(),
-            content: "# Test".to_string(),
+            // EMPTY body on purpose: client-ingested resources carry their prose in
+            // `chunks_packed` (not `content`), so `content` arrives empty on the wire
+            // and the resource's `body_hash` is the empty hash. A NON-empty `content`
+            // would engage `create_resource`'s body-dedup, which then collapses these
+            // two empty-bodied rows onto the same (empty) hash → one row. An empty
+            // body skips dedup entirely, so both distinct rows persist (this is what
+            // the stage-filter seed does too).
+            content: String::new(),
             metadata: None,
             managed_meta: Some(serde_json::json!({"stage": "in-progress"})),
             open_meta: None,

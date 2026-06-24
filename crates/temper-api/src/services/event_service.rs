@@ -3,8 +3,10 @@ use uuid::Uuid;
 
 use crate::error::ApiResult;
 
-/// The most recent event id for a context, scoped to events the profile
-/// may see. Returns `None` when the context has no visible events.
+/// The most recent event id produced against a context the profile owns (directly, or via a team it
+/// belongs to). Returns `None` when the context has no events the profile may see. Post-collapse events
+/// anchor via `producing_anchor` (no `kb_context_id`/`profile_id`/`resource_id` columns); the cursor is
+/// the context's own event stream, gated by context ownership.
 pub async fn latest_event_id_for_context(
     pool: &PgPool,
     profile_id: Uuid,
@@ -12,12 +14,17 @@ pub async fn latest_event_id_for_context(
 ) -> ApiResult<Option<Uuid>> {
     let id = sqlx::query_scalar!(
         r#"
-        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT e.id
+        SELECT e.id AS "id!: Uuid"
           FROM kb_events e
-         WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
-           AND e.kb_context_id = $2
-         ORDER BY e.created DESC
+         WHERE e.producing_anchor_table = 'kb_contexts'
+           AND e.producing_anchor_id = $2
+           AND EXISTS (                                   -- context-ownership gate
+             SELECT 1 FROM kb_contexts c
+              WHERE c.id = $2 AND (
+                (c.owner_table='kb_profiles' AND c.owner_id = $1)
+                OR (c.owner_table='kb_teams' AND c.owner_id IN
+                     (SELECT team_id FROM kb_team_members WHERE profile_id = $1))))
+         ORDER BY e.occurred_at DESC
          LIMIT 1
         "#,
         profile_id,

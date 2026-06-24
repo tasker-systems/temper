@@ -25,7 +25,7 @@ async fn run_growth(file: &str, mode: MaterializeMode) -> String {
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
-        "{}/../../schema-artifact/scenarios/{file}",
+        "{}/tests/fixtures/scenarios/{file}",
         env!("CARGO_MANIFEST_DIR")
     );
     let scenario: Scenario =
@@ -72,7 +72,7 @@ async fn incremental_actually_reuses_the_untouched_component() {
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
-        "{}/../../schema-artifact/scenarios/storyteller-growth.yaml",
+        "{}/tests/fixtures/scenarios/storyteller-growth.yaml",
         env!("CARGO_MANIFEST_DIR")
     );
     let scenario: Scenario =
@@ -109,7 +109,7 @@ async fn run_readout_scenario(file: &str, mode: MaterializeMode) -> String {
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
-        "{}/../../schema-artifact/scenarios/{file}",
+        "{}/tests/fixtures/scenarios/{file}",
         env!("CARGO_MANIFEST_DIR")
     );
     let scenario: Scenario =
@@ -158,7 +158,7 @@ async fn readout_refresh_is_scoped_to_the_region_whose_member_moved() {
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
-        "{}/../../schema-artifact/scenarios/storyteller-readout.yaml",
+        "{}/tests/fixtures/scenarios/storyteller-readout.yaml",
         env!("CARGO_MANIFEST_DIR")
     );
     let scenario: Scenario =

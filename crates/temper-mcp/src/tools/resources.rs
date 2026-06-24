@@ -5,11 +5,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::selection::BackendSelection;
-use temper_api::backend::{read_selector, select_backend};
-use temper_api::services::resource_service;
+use temper_api::backend::{read_selector, DbBackend};
 use temper_core::error::TemperError;
-use temper_core::operations::{BodyUpdate, CreateResource, Surface};
+use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
 
@@ -231,13 +229,12 @@ fn build_enriched(
 /// to the caller (the rows came from a visibility-scoped query), so the
 /// Legacy batch fetch skips a redundant per-row visibility check.
 pub async fn enrich_resources(
-    selection: BackendSelection,
     pool: &sqlx::PgPool,
     profile_id: Uuid,
     rows: &[temper_core::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
     let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
-    let mut meta = read_selector::get_meta_batch_select(selection, pool, profile_id, &ids)
+    let mut meta = read_selector::get_meta_batch_select(pool, profile_id, &ids)
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
 
@@ -255,13 +252,12 @@ pub async fn enrich_resources(
 /// Enrich a single resource row, including its frontmatter. Thin
 /// single-row wrapper over [`enrich_resources`].
 pub async fn enrich_resource(
-    selection: BackendSelection,
     pool: &sqlx::PgPool,
     profile_id: Uuid,
     row: &temper_core::types::resource::ResourceRow,
 ) -> Result<EnrichedResource, rmcp::ErrorData> {
     Ok(
-        enrich_resources(selection, pool, profile_id, std::slice::from_ref(row))
+        enrich_resources(pool, profile_id, std::slice::from_ref(row))
             .await?
             .pop()
             .expect("enrich_resources returns one row per input row"),
@@ -351,14 +347,7 @@ pub async fn create_resource(
         origin: Surface::Mcp,
     };
 
-    let backend = select_backend(
-        svc.api_state.backend_selection,
-        pool,
-        profile_id,
-        "mcp".to_string(),
-        Surface::Mcp,
-    )
-    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+    let backend = DbBackend::new(pool.clone(), profile_id);
     let out = backend.create_resource(cmd).await.map_err(|e| match e {
         TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
             "Context or doc_type not found. Use create_context / list_doc_types to verify."
@@ -372,8 +361,7 @@ pub async fn create_resource(
     })?;
     let resource = out.value;
 
-    let enriched =
-        enrich_resource(svc.api_state.backend_selection, pool, profile.id, &resource).await?;
+    let enriched = enrich_resource(pool, profile.id, &resource).await?;
     let response = CreateResourceResponse {
         resource: enriched,
         status: CreateStatus::Created,
@@ -414,23 +402,22 @@ pub async fn get_resource(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
-    let sel = svc.api_state.backend_selection;
 
     let id = temper_core::operations::parse_ref(&input.id)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
-    let row = read_selector::show_select(sel, pool, profile.id, id.into())
+    let row = read_selector::show_select(pool, profile.id, id.into())
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let meta = read_selector::get_meta_select(sel, pool, ProfileId::from(profile.id), row.id)
+    let meta = read_selector::get_meta_select(pool, ProfileId::from(profile.id), row.id)
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
 
     let body_markdown = if input.include_content.unwrap_or(false) {
-        let content = read_selector::get_content_select(sel, pool, profile.id, row.id.into())
+        let content = read_selector::get_content_select(pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
@@ -467,14 +454,10 @@ pub async fn list_resources(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
-    let sel = svc.api_state.backend_selection;
 
-    // One backend-agnostic selector returns the rows + their managed/open meta
-    // (Legacy: resolve filter names → ids → list_visible + get_meta_batch; Next:
-    // readback::enriched_list filtered in SQL). MCP has no cfg branch — both
-    // backends flow through the single `build_enriched` assembler below.
+    // One selector returns the rows + their managed/open meta
+    // (readback::enriched_list filtered in SQL), assembled by `build_enriched`.
     let rows = read_selector::list_enriched_select(
-        sel,
         pool,
         profile.id,
         input.context_name.as_deref(),
@@ -529,14 +512,14 @@ pub async fn update_resource(
     // caller is also touching title or slug, fetch existing.title for the
     // canonical-key fill so the wire payload's temper-title / temper-slug
     // match what the receive-side will write. Pure meta-only updates skip
-    // the fetch — resource_service::update's receive-side ensure call fills
+    // the fetch — the backend update's receive-side ensure call fills
     // canonical keys from the stored title/slug for us.
     let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
         })?;
     if input.title.is_some() || input.slug.is_some() || input.content.is_some() {
-        let existing = resource_service::get_visible(pool, profile.id, input.id)
+        let existing = read_selector::show_select(pool, profile.id, input.id)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
@@ -571,14 +554,7 @@ pub async fn update_resource(
         origin: Surface::Mcp,
     };
 
-    let backend = select_backend(
-        svc.api_state.backend_selection,
-        pool,
-        profile_id,
-        "mcp".to_string(),
-        Surface::Mcp,
-    )
-    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+    let backend = DbBackend::new(pool.clone(), profile_id);
     backend.update_resource(cmd).await.map_err(|e| match e {
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
@@ -594,13 +570,13 @@ pub async fn update_resource(
     })?;
 
     // Return enriched current state
-    let row = resource_service::get_visible(pool, profile.id, input.id)
+    let row = read_selector::show_select(pool, profile.id, input.id)
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let enriched = enrich_resource(svc.api_state.backend_selection, pool, profile.id, &row).await?;
+    let enriched = enrich_resource(pool, profile.id, &row).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))
@@ -630,14 +606,7 @@ pub async fn update_resource_meta(
         origin: Surface::Mcp,
     };
 
-    let backend = select_backend(
-        svc.api_state.backend_selection,
-        pool,
-        profile_id,
-        "mcp".to_string(),
-        Surface::Mcp,
-    )
-    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+    let backend = DbBackend::new(pool.clone(), profile_id);
     backend.update_resource(cmd).await.map_err(|e| match e {
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
@@ -678,14 +647,7 @@ pub async fn delete_resource(
         origin: Surface::Mcp,
     };
 
-    let backend = select_backend(
-        svc.api_state.backend_selection,
-        pool,
-        profile_id,
-        "mcp".to_string(),
-        Surface::Mcp,
-    )
-    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+    let backend = DbBackend::new(pool.clone(), profile_id);
     backend.delete_resource(cmd).await.map_err(|e| match e {
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),

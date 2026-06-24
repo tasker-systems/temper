@@ -1,9 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use temper_next::synthesis::{self, RunOpts};
 use temper_next::{embed::embed_chunks, substrate, write::materialize_cogmap};
 
-/// `temper-next` harness binary. Two subcommands over the shared `temper_next` substrate.
+/// `temper-next` harness binary over the shared substrate.
 #[derive(Parser)]
 #[command(name = "temper-next")]
 enum Cmd {
@@ -16,13 +15,6 @@ enum Cmd {
         /// Lens name (e.g. `telos-default`, `telos-default-propheavy`).
         #[arg(default_value = "telos-default")]
         lens: String,
-    },
-    /// Synthesize the `temper_next` substrate from current `public.*` state (WS6 §0). Explicitly
-    /// invoked — never a migrate-time side effect (§D).
-    Synthesize {
-        /// Stop after N resources (rehearsal); 0 = all.
-        #[arg(long, default_value_t = 0)]
-        limit: usize,
     },
 }
 
@@ -49,13 +41,6 @@ async fn main() -> Result<()> {
             println!(
                 "materialized {} region(s) for '{}' (lens '{}')\nmembership: {}",
                 outcome.regions, name, lens, outcome.membership_fingerprint
-            );
-        }
-        Cmd::Synthesize { limit } => {
-            let report = synthesis::run(&pool, RunOpts { limit }).await?;
-            println!(
-                "synthesized: {} resource(s), {} property(ies), {} edge(s)",
-                report.resources, report.properties, report.edges
             );
         }
     }

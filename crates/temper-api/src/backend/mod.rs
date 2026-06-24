@@ -1,23 +1,10 @@
-//! `DbBackend` — Postgres-backed impl of [`temper_core::operations::Backend`].
+//! `DbBackend` — Postgres-backed impl of [`temper_core::operations::Backend`] over the substrate.
 //!
-//! Per-request construction: handlers (3b) and MCP tools (3c) build a
-//! `DbBackend` from their auth context and dispatch one command through it.
-//! Each trait method is a thin translator over an existing service function;
-//! events are synthesized post-hoc on success.
-//!
-//! See `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`.
+//! Per-request construction: handlers and MCP tools build a `DbBackend` from their auth context and
+//! dispatch one command through it. Reads go through the [`read_selector`] dispatcher (the substrate
+//! read path); writes compose `temper_next::writes` and fire through the event ledger.
 
 mod db_backend;
-#[cfg(feature = "next-backend")]
-mod next_backend;
 pub mod read_selector;
-pub mod selection;
-mod translators;
-
-#[cfg(all(test, feature = "test-db"))]
-mod tests;
 
 pub use db_backend::DbBackend;
-#[cfg(feature = "next-backend")]
-pub use next_backend::NextBackend;
-pub use selection::{require_legacy_backend, select_backend, BackendSelection};

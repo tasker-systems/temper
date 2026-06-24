@@ -24,17 +24,9 @@ async fn main() {
         .await
         .expect("Failed to connect to database");
 
-    sqlx::migrate!("../../migrations")
-        .run(&pool)
-        .await
-        .expect("Failed to run migrations");
-
     let jwks_store = JwksKeyStore::new(config.jwks_url.clone());
     let port = config.port;
-    let backend_selection = temper_api::services::backend_selection_service::read(&pool)
-        .await
-        .expect("Failed to read backend selection flag");
-    let state = AppState::new(pool, jwks_store, config).with_backend_selection(backend_selection);
+    let state = AppState::new(pool, jwks_store, config);
     let app = create_app(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

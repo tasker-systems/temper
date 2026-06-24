@@ -1,5 +1,5 @@
 #![cfg(feature = "artifact-tests")]
-//! Corpus sweep: EVERY seed document in `schema-artifact/seeds/` (excluding `system.yaml`, the
+//! Corpus sweep: EVERY seed document in `tests/fixtures/seeds/` (excluding `system.yaml`, the
 //! boot-seed) parses as a `Seed`, loads through the standard path (`bootseed` + `load_seed`), and
 //! its telos charter reproduces byte-exact through the role-filtered `resource_blocks` reads.
 //!
@@ -15,7 +15,7 @@ use temper_next::scenario::model::Seed;
 use temper_next::scenario::{bootseed, loader};
 use temper_next::substrate;
 
-const SEEDS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../schema-artifact/seeds");
+const SEEDS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/seeds");
 
 #[tokio::test]
 async fn every_corpus_seed_loads_and_charter_roundtrips() {

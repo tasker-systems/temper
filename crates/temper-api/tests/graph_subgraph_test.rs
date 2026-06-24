@@ -182,9 +182,13 @@ async fn aggregator_flag_set_correctly(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn session_count_reflects_incident_sessions(pool: PgPool) {
-    // c1 has an edge to m3 (a session); session_count for c1 should be 1.
-    // No other fixture resource has a session edge, so all others = 0.
+async fn session_count_is_zero_pending_remodel(pool: PgPool) {
+    // Session adjacency is RETIRED in the substrate: `graph_subgraph_nodes`
+    // hardcodes `session_count = 0` (the legacy session-count join depended on the
+    // dropped `kb_doc_types`; re-modelling session adjacency onto kb_properties is a
+    // follow-up). So even though c1 has an edge to m3 (a session) in the fixture,
+    // every node's session_count is 0 — the UI degrades gracefully. When session
+    // adjacency is re-modelled, restore the per-incident-session assertion.
     common::fixtures::clean_and_seed(&pool).await;
     load_graph_fixtures(&pool).await;
 
@@ -200,24 +204,10 @@ async fn session_count_reflects_incident_sessions(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let c1 = result
-        .nodes
-        .iter()
-        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
-        .expect("c1 should be in the result");
-    assert_eq!(
-        c1.session_count, 1,
-        "c1 has one session neighbor (m3); session_count reflects that"
-    );
-
-    // Every other node in the subgraph has zero session neighbors.
     for node in &result.nodes {
-        if node.id == uuid(C1_IDEMPOTENCY) {
-            continue;
-        }
         assert_eq!(
             node.session_count, 0,
-            "{} ({:?}) has no session neighbors in the fixture",
+            "session adjacency is retired (hardcoded 0); {} ({:?})",
             node.title, node.doc_type,
         );
     }

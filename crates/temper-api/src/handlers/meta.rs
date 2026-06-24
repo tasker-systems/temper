@@ -1,14 +1,13 @@
 use axum::extract::{Path, State};
-use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::select_backend;
+use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
-use crate::middleware::auth::{AuthUser, DeviceId};
+use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
-use temper_core::operations::{Surface, UpdateResource};
+use temper_core::operations::{Backend, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
 use temper_core::types::resource::ResourceRow;
@@ -31,7 +30,6 @@ pub async fn get_meta(
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceMetaResponse>> {
     crate::backend::read_selector::get_meta_select(
-        state.backend_selection,
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         ResourceId::from(resource_id),
@@ -57,14 +55,9 @@ pub async fn get_meta(
 pub async fn update_meta(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<MetaUpdatePayload>,
 ) -> ApiResult<Json<ResourceRow>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
-
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         body: None,
@@ -73,14 +66,7 @@ pub async fn update_meta(
         move_to: None,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }

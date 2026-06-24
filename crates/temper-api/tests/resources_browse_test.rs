@@ -22,7 +22,7 @@ async fn test_list_resources_returns_wrapped_response(pool: PgPool) {
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://browse-{}", uuid::Uuid::new_v4()),
             "title": "Browse Test Resource",
         }))
@@ -90,7 +90,7 @@ async fn test_list_resources_filter_by_context_name(pool: PgPool) {
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://filter-{}", uuid::Uuid::new_v4()),
             "title": "Filter Test Resource",
         }))
@@ -139,7 +139,7 @@ async fn test_list_resources_sort_by_title_asc(pool: PgPool) {
             .header("Authorization", format!("Bearer {token}"))
             .json(&json!({
                 "kb_context_id": context_id.to_string(),
-                "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+                "doc_type": "research",
                 "origin_uri": format!("test://sort-{}", uuid::Uuid::new_v4()),
                 "title": title,
             }))

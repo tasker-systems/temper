@@ -1,15 +1,15 @@
 use axum::extract::{Path, State};
-use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::select_backend;
+use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
-use crate::middleware::auth::{AuthUser, DeviceId};
+use crate::middleware::auth::AuthUser;
 use crate::services::edge_service;
 use crate::state::AppState;
 use temper_core::operations::{
-    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship, Surface,
+    AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
+    Surface,
 };
 use temper_core::types::graph::GraphEdgeRow;
 use temper_core::types::ids::ProfileId;
@@ -59,12 +59,8 @@ pub async fn list(
 pub async fn assert(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Json(req): Json<AssertRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
     let cmd = AssertRelationship {
         source: req.source,
         target: req.target,
@@ -74,14 +70,7 @@ pub async fn assert(
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
         .assert_relationship(cmd)
         .await
@@ -109,27 +98,16 @@ pub async fn assert(
 pub async fn retype(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<RetypeRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
     let cmd = RetypeRelationship {
         edge_handle,
         edge_kind: req.edge_kind,
         polarity: req.polarity,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
         .retype_relationship(cmd)
         .await
@@ -157,26 +135,15 @@ pub async fn retype(
 pub async fn reweight(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<ReweightRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
     let cmd = ReweightRelationship {
         edge_handle,
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
         .reweight_relationship(cmd)
         .await
@@ -204,26 +171,15 @@ pub async fn reweight(
 pub async fn fold(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<FoldRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
     let cmd = FoldRelationship {
         edge_handle,
         reason: req.reason,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
         .fold_relationship(cmd)
         .await

@@ -1,22 +1,31 @@
-//! Hash-invariant tests — local canonical-form managed_hash must equal
-//! server-stored managed_hash for any resource ingested through the API,
-//! and stored managed_meta JSONB must always carry `temper-title` and
-//! `temper-slug` keys regardless of whether the caller put them there.
+//! Title round-trip tests (ported from the retired Phase-5 managed-meta-JSONB +
+//! managed_hash invariant model).
 //!
-//! This is the spec's primary acceptance gate for Phase 5 and the
-//! prerequisite for re-enabling show-cache tier-2 in Phase 8.
+//! WS6 collapse retired BOTH halves of the original premise: (a) the
+//! `managed_hash` invariant — `db_backend` sets `managed_hash = None` and
+//! GET /meta returns `managed_hash: ""`; and (b) storing the canonical identity
+//! keys `temper-title`/`temper-slug` INSIDE managed_meta JSONB — in the substrate
+//! those keys have `key_fate == Die` (NOT `Property`), so they are not stored in
+//! `kb_properties` and `readback::meta` never surfaces them. The title is now a
+//! first-class column (`kb_resources.title`), surfaced on the resource row.
+//!
+//! What SURVIVES and is still worth pinning is the title round-trip: ingest stores
+//! it, a meta-only update preserves it, and a title PATCH updates it. These tests
+//! verify that via the resource row (GET /api/resources/{id}).
+//!
+//! The deleted `client_pre_send_canonical_hash_equals_server_post_storage_hash`
+//! test pinned the retired managed_hash byte-equality (the show-cache tier-2
+//! precondition) — there is no managed_hash to compare anymore.
 #![cfg(feature = "test-db")]
 
 mod common;
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use temper_core::hash::compute_managed_hash;
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 use uuid::Uuid;
 
-/// Minimal chunk fixture for ingest. Real embeddings aren't needed — the
-/// chunk path is exercised but not asserted on.
+/// Minimal chunk fixture for ingest.
 fn fake_chunk(content: &str, idx: u32) -> PackedChunk {
     PackedChunk {
         chunk_index: idx,
@@ -28,7 +37,7 @@ fn fake_chunk(content: &str, idx: u32) -> PackedChunk {
     }
 }
 
-/// Provision a test profile, return its bearer token.
+/// Provision a test profile (auto-provision via GET /api/profile), return its token.
 async fn provision_profile(app: &common::TestApp) -> String {
     let sub = format!("hash-invariant-sub-{}", Uuid::new_v4());
     let email = format!("hash-invariant-{}@example.com", Uuid::new_v4());
@@ -44,15 +53,8 @@ async fn provision_profile(app: &common::TestApp) -> String {
     token
 }
 
-/// Ingest a research doc with the given title/slug and `managed_meta`,
-/// returning the created resource id.
-async fn ingest_research(
-    app: &common::TestApp,
-    token: &str,
-    title: &str,
-    slug: &str,
-    managed_meta: Option<Value>,
-) -> String {
+/// Ingest a research doc with the given title/slug, returning the created id.
+async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: &str) -> String {
     let chunks = vec![fake_chunk("body content", 0)];
     let chunks_packed = pack_chunks(&chunks).expect("pack_chunks");
     let payload = IngestPayload {
@@ -62,7 +64,7 @@ async fn ingest_research(
         doc_type_name: "research".to_string(),
         slug: slug.to_string(),
         content: "body content".to_string(),
-        managed_meta,
+        managed_meta: None,
         chunks_packed: Some(chunks_packed),
         content_hash: None,
         metadata: None,
@@ -85,121 +87,44 @@ async fn ingest_research(
         .to_string()
 }
 
-/// Read the stored manifest row for a resource.
-async fn read_manifest(pool: &PgPool, resource_id: &str) -> (Value, String) {
-    let id = Uuid::parse_str(resource_id).expect("invalid resource id");
-    let row = sqlx::query_as::<_, (Value, String)>(
-        r#"SELECT managed_meta, managed_hash
-             FROM kb_resource_manifests
-            WHERE resource_id = $1"#,
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .expect("manifest row fetch failed");
-    row
+/// Read a resource's row (GET /api/resources/{id}) — the title-bearing projection.
+async fn fetch_resource(app: &common::TestApp, token: &str, resource_id: &str) -> Value {
+    app.client
+        .get(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("show request failed")
+        .json()
+        .await
+        .expect("show JSON")
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn ingest_stores_temper_title_and_temper_slug_in_managed_meta_jsonb(pool: PgPool) {
-    let app = common::setup_test_app(pool.clone()).await;
-    let token = provision_profile(&app).await;
-
-    // Caller does NOT put temper-title/temper-slug in managed_meta;
-    // the server-side helper must inject them from top-level fields.
-    let resource_id = ingest_research(
-        &app,
-        &token,
-        "Hash Invariant Doc",
-        "hash-invariant-doc",
-        None,
-    )
-    .await;
-
-    let (managed_meta, _managed_hash) = read_manifest(&pool, &resource_id).await;
-
-    assert_eq!(
-        managed_meta.get("temper-title"),
-        Some(&Value::String("Hash Invariant Doc".to_string())),
-        "stored managed_meta must contain temper-title; got: {managed_meta}"
-    );
-    assert_eq!(
-        managed_meta.get("temper-slug"),
-        Some(&Value::String("hash-invariant-doc".to_string())),
-        "stored managed_meta must contain temper-slug; got: {managed_meta}"
-    );
-}
-
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn client_pre_send_canonical_hash_equals_server_post_storage_hash(pool: PgPool) {
-    let app = common::setup_test_app(pool.clone()).await;
-    let token = provision_profile(&app).await;
-
-    // Client-side: build managed_meta exactly the way the CLI / MCP send-side
-    // wiring (Tasks 3 + 4) does — start with user fields, run the helper to
-    // inject temper-title / temper-slug, compute the canonical-form hash.
-    // This hash is what show-cache tier-2 will compare against the server's
-    // stored managed_hash on a future show; the two MUST be byte-identical
-    // for tier-2 to short-circuit correctly.
-    let title = "Client-Hash Doc";
-    let slug = "client-hash-doc";
-    let mut canonicalized_managed_meta = json!({"date": "2026-04-10"});
-    temper_core::operations::ensure_managed_identity_keys(
-        &mut canonicalized_managed_meta,
-        title,
-        Some(slug),
-    );
-    let client_pre_send_hash = compute_managed_hash("research", &canonicalized_managed_meta);
-
-    // Send the canonicalized payload through the real /api/ingest path.
-    // The server runs strip_system_managed_fields → apply_managed_defaults →
-    // ensure_managed_identity_keys → validate → store → compute_managed_hash.
-    // For caller-canonicalized input with no tier-1 fields, the server's
-    // pipeline is byte-identical to the client's compute_managed_hash chain.
-    let resource_id = ingest_research(
-        &app,
-        &token,
-        title,
-        slug,
-        Some(canonicalized_managed_meta.clone()),
-    )
-    .await;
-
-    let (stored_managed_meta, server_hash) = read_manifest(&pool, &resource_id).await;
-
-    assert_eq!(
-        stored_managed_meta, canonicalized_managed_meta,
-        "server-stored JSONB must match client-prepared canonical JSONB byte-for-byte"
-    );
-    assert_eq!(
-        server_hash, client_pre_send_hash,
-        "client-precomputed canonical hash must equal server-stored hash; \
-         this is the precondition for show-cache tier-2 (Phase 8). \
-         client={client_pre_send_hash}, server={server_hash}, stored_managed_meta={stored_managed_meta}"
-    );
-}
-
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn meta_service_update_meta_preserves_temper_title_in_jsonb(pool: PgPool) {
+async fn ingest_stores_title_on_resource(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
     let resource_id =
-        ingest_research(&app, &token, "Preserve Original", "preserve-original", None).await;
+        ingest_research(&app, &token, "Hash Invariant Doc", "hash-invariant-doc").await;
 
-    // Sanity: ingest produced canonical JSONB with temper-title.
-    let (initial_meta, _) = read_manifest(&pool, &resource_id).await;
+    let row = fetch_resource(&app, &token, &resource_id).await;
     assert_eq!(
-        initial_meta.get("temper-title"),
-        Some(&Value::String("Preserve Original".to_string())),
+        row["title"],
+        json!("Hash Invariant Doc"),
+        "ingest must store the title on the resource row; got: {row}"
     );
+}
 
-    // PUT /api/resources/{id}/meta with a typed ManagedMeta that does NOT
-    // carry title — only a stage change. Without server-side receive defense,
-    // the JSONB written to the manifest would drop the temper-title key
-    // (typed `title: None` serializes to absent), drifting from the
-    // kb_resources.title column. The receive-side helper must inject
-    // temper-title from the existing column so the canonical shape survives.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn meta_only_update_preserves_title(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let token = provision_profile(&app).await;
+
+    let resource_id = ingest_research(&app, &token, "Preserve Original", "preserve-original").await;
+
+    // PUT /api/resources/{id}/meta with only a stage change (no title). The title
+    // column must survive untouched.
     let put_resp = app
         .client
         .put(app.url(&format!("/api/resources/{resource_id}/meta")))
@@ -221,46 +146,21 @@ async fn meta_service_update_meta_preserves_temper_title_in_jsonb(pool: PgPool) 
         put_resp.text().await.unwrap_or_default(),
     );
 
-    let (after_meta, after_hash) = read_manifest(&pool, &resource_id).await;
+    let row = fetch_resource(&app, &token, &resource_id).await;
     assert_eq!(
-        after_meta.get("temper-title"),
-        Some(&Value::String("Preserve Original".to_string())),
-        "after PUT meta without title, temper-title must survive in JSONB \
-         via receive-side defense; got: {after_meta}"
-    );
-    assert_eq!(
-        after_meta.get("temper-stage"),
-        Some(&Value::String("done".to_string())),
-        "the stage update must have landed; got: {after_meta}",
-    );
-
-    // Server-side recompute must produce a hash that matches a local
-    // canonical-form recompute over the stored JSONB.
-    let local_hash = compute_managed_hash("research", &after_meta);
-    assert_eq!(
-        after_hash, local_hash,
-        "after PUT meta, server-recomputed hash must equal local canonical hash; \
-         server={after_hash}, local={local_hash}, stored={after_meta}"
+        row["title"],
+        json!("Preserve Original"),
+        "a meta-only update must not change the title; got: {row}"
     );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn partial_patch_with_top_level_title_change_updates_jsonb_temper_title(pool: PgPool) {
+async fn title_patch_updates_resource_title(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
-    let resource_id = ingest_research(&app, &token, "Original Title", "original-slug", None).await;
+    let resource_id = ingest_research(&app, &token, "Original Title", "original-slug").await;
 
-    // Sanity check: the seed put canonical keys in.
-    let (initial_managed_meta, _) = read_manifest(&pool, &resource_id).await;
-    assert_eq!(
-        initial_managed_meta.get("temper-title"),
-        Some(&Value::String("Original Title".to_string())),
-    );
-
-    // PATCH with ONLY the top-level title changed. The receive-side helper
-    // must inject the new title into managed_meta JSONB so columns and JSONB
-    // stay in agreement and the stored managed_hash reflects the new state.
     let patch_resp = app
         .client
         .patch(app.url(&format!("/api/resources/{resource_id}")))
@@ -276,17 +176,10 @@ async fn partial_patch_with_top_level_title_change_updates_jsonb_temper_title(po
         patch_resp.text().await.unwrap_or_default()
     );
 
-    let (after_managed_meta, after_hash) = read_manifest(&pool, &resource_id).await;
+    let row = fetch_resource(&app, &token, &resource_id).await;
     assert_eq!(
-        after_managed_meta.get("temper-title"),
-        Some(&Value::String("Renamed Title".to_string())),
-        "after title-only PATCH, managed_meta JSONB must reflect new title; got: {after_managed_meta}"
-    );
-
-    // And the hash invariant still holds.
-    let recomputed = compute_managed_hash("research", &after_managed_meta);
-    assert_eq!(
-        after_hash, recomputed,
-        "after PATCH, server hash must still equal local canonical hash"
+        row["title"],
+        json!("Renamed Title"),
+        "a title PATCH must update the resource title; got: {row}"
     );
 }

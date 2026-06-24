@@ -22,7 +22,7 @@ use temper_next::{embed, replay, substrate, write};
 
 const SEED_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/seeds/onboarding-cogmap.yaml"
+    "/tests/fixtures/seeds/onboarding-cogmap.yaml"
 );
 
 #[tokio::test]

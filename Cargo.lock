@@ -4978,7 +4978,6 @@ dependencies = [
  "serde_yaml",
  "sqlx",
  "temper-core",
- "temper-events",
  "temper-ingest",
  "temper-next",
  "thiserror 2.0.18",
@@ -5115,25 +5114,11 @@ dependencies = [
  "temper-client",
  "temper-core",
  "temper-mcp",
- "temper-next",
  "tempfile",
  "tokio",
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "temper-events"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
  "uuid",
 ]
 
@@ -5192,8 +5177,6 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
- "temper-api",
- "temper-core",
  "temper-ingest",
  "tokio",
  "uuid",

@@ -88,9 +88,6 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::events::cursor),
         )
         .route("/api/search", post(handlers::search::search))
-        .route("/api/sync/status", post(handlers::sync::status))
-        .route("/api/sync/complete", post(handlers::sync::complete))
-        .route("/api/sync/manifest", get(handlers::sync::manifest))
         .route(
             "/api/access/admin/requests",
             get(handlers::access::list_pending),

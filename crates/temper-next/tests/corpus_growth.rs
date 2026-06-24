@@ -13,7 +13,7 @@ async fn run_growth(file: &str) {
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
-        "{}/../../schema-artifact/scenarios/{file}",
+        "{}/tests/fixtures/scenarios/{file}",
         env!("CARGO_MANIFEST_DIR")
     );
     let scenario: Scenario =

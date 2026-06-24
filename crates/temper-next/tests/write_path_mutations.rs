@@ -588,6 +588,7 @@ async fn writes_create_then_update_reflected_in_readback() {
             originator: owner,
             emitter,
             properties: &create_props,
+            chunks: None,
         },
     )
     .await
@@ -601,6 +602,7 @@ async fn writes_create_then_update_reflected_in_readback() {
             title: Some("Renamed"),
             origin_uri: None,
             properties: &[("temper-stage".to_string(), serde_json::json!("done"))],
+            chunks: None,
             rehome_to: Some(ctx2),
             emitter,
         },
@@ -641,7 +643,9 @@ async fn writes_resolvers_find_context_and_emitter() {
     use temper_next::writes;
     let pool = setup().await;
     let (owner, _sys) = system_actor(&pool).await;
-    // a context named "My Ctx" → slug "my-ctx"; an emitter pete@cli for the owner profile.
+    // a context named "My Ctx" → slug "my-ctx"; the owner's per-surface emitter entity is named
+    // `<handle>@<surface>` (the de-hardcoded resolver) — the owner is the boot-seeded `system` actor,
+    // so the cli emitter is `system@cli`.
     common::insert_context(&pool, "kb_profiles", owner.uuid(), "my-ctx", "My Ctx")
         .await
         .unwrap();
@@ -650,7 +654,7 @@ async fn writes_resolvers_find_context_and_emitter() {
         .execute(&mut *tx)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'pete@cli')")
+    sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'system@cli')")
         .bind(owner.uuid())
         .execute(&mut *tx)
         .await
@@ -678,5 +682,5 @@ async fn writes_resolvers_find_context_and_emitter() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(name, "pete@cli");
+    assert_eq!(name, "system@cli");
 }

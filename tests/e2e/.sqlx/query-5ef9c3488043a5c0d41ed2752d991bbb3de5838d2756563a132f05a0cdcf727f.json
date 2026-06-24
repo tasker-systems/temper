@@ -83,7 +83,7 @@
       {
         "ordinal": 13,
         "name": "display_name",
-        "type_info": "Varchar"
+        "type_info": "Text"
       },
       {
         "ordinal": 14,

@@ -1,520 +1,373 @@
-//! Read selector (WS6 chunk 4b) — routes the service-direct read paths to either the legacy
-//! `public.*` services or the `temper_next.*` readback, per `AppState.backend_selection`. These reads
-//! bypass the `Backend` trait by design (the 4a finding: reads are service-direct passthroughs; the
-//! trait projections are lossy and don't cover meta/body/content).
+//! Substrate read dispatcher — the service-direct read paths (list / show / get_content / get_meta /
+//! search + the MCP enrichment list/meta-batch) over the one schema.
 //!
-//! Covered in 4b: `list` / `get_content` (body) / `get_meta` / `search`. **`by_uri` is NOT covered** —
-//! it resolves a resource by `slug` (`ResolveByUriParams.ident`), and slug is §7-dissolved in
-//! `temper_next` (the addressing key does not exist there; `origin_uri` is the substrate key).
+//! These reads bypass the `Backend` trait by design (the trait projections are lossy and don't cover
+//! meta/body/content); they resolve against `temper_next::readback`, reconstructing the
+//! production-shaped types at the §9 floor. Visibility is scoped to the caller's profile (WS2) — the
+//! readbacks gate through `resources_visible_to`. SQL is unqualified against the one schema (the
+//! connection carries the search_path).
 //!
-//! Chunk-5 flip adjudication: this does NOT gate the cutover. No live surface resolves a resource by
-//! URI/slug — the addressing collapse (Spec A, PR #147) made resolution trailing-UUID-only across HTTP,
-//! MCP, and CLI (all reads here are by-id: `show`/`get_content`/`get_meta`/`list`/`search`). With no
-//! caller, renaming legacy `public.*` aside at the cutover breaks nothing; re-addressing by URI is a
-//! latent post-flip surface concern only if such an endpoint is ever (re)introduced.
-//!
-//! The `Next` arms are feature-gated behind `next-backend`; without the feature they return the same
-//! `NotImplemented` gate as `select_backend`. Reads are visibility-SCOPED to the caller's profile (WS2 —
-//! the readbacks gate through `temper_next.resources_visible_to`, CONFORMing to production's scoped
-//! reads; the auth'd profile id is preserved by synthesis, so it is the `temper_next` principal directly).
+//! `list`/`list_meta` filter (context_name/doc_type_name/stage/owner/`q`-title), sort, and paginate the
+//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; the enrichment path
+//! (`list_enriched`/MCP) filters by name in SQL via `readback::enriched_list`. Full-text/vector `q` on
+//! the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
 
 use std::collections::HashMap;
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use temper_core::types::ids::{ProfileId, ResourceId};
-
-use crate::backend::selection::BackendSelection;
+use crate::backend::db_backend::{map_readback_err, reconstruct_resource_row};
 use crate::error::{ApiError, ApiResult};
-use crate::services::resource_service::{self, ResourceListParams, ResourceListResponse};
-use crate::services::{context_service, ingest_service, meta_service, search_service};
+use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
+use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
+use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 use temper_core::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
 };
-use temper_core::types::resource::{ContentResponse, ResourceRow};
+use temper_core::types::resource::{
+    ContentResponse, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
+};
+use temper_next::readback;
 
-/// `list` — list visible resources.
+fn api_err(e: impl std::fmt::Display) -> ApiError {
+    ApiError::from(TemperError::Api(e.to_string()))
+}
+
+/// One page of the filtered, visible resource set: the page's substrate ids (already
+/// sorted + paginated), the FILTERED total (before limit/offset), and the doc_type
+/// histogram over the filtered set (`ResourceFacets` = "current filter set").
+struct VisiblePage {
+    page_ids: Vec<Uuid>,
+    total: i64,
+    facets: HashMap<String, i64>,
+}
+
+/// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
+/// reaches SQL) so it is injection-safe to interpolate. Columns ground against the
+/// substrate: `kb_resources` (updated/created/title), `kb_contexts.name`, and the
+/// `kb_properties` workflow keys (`temper-stage`/`temper-seq`/`doc_type`).
+fn sort_column_sql(field: ResourceSortField) -> &'static str {
+    match field {
+        ResourceSortField::Updated => "r.updated",
+        ResourceSortField::Created => "r.created",
+        ResourceSortField::Title => "r.title",
+        ResourceSortField::Stage => "st.property_value #>> '{}'",
+        ResourceSortField::Seq => "(sq.property_value #>> '{}')::bigint",
+        ResourceSortField::ContextName => "c.name",
+        ResourceSortField::DocTypeName => "dt.property_value #>> '{}'",
+    }
+}
+
+/// Resolve the visible set, apply the `ResourceListParams` filters (context_name /
+/// doc_type_name / stage / owner / `q` title-match) + sort + pagination IN SQL, and
+/// return only the page's ids (so the caller reconstructs the page, not every visible
+/// row — this also fixes the prior all-rows N+1).
+///
+/// `owner`: `@me` resolves to the caller's profile; any other value matches the owner
+/// profile's `handle` (per `graph.rs`'s handle convention). `q` is a trivial title
+/// `ILIKE` (full text/vector `q` is search's job — a named deferral). Dynamic ORDER BY
+/// is built from the enum; the WHERE binds Option params via the `($N IS NULL OR …)`
+/// idiom, so this is the documented runtime-`query` exception (dynamic ORDER clause),
+/// not a static macro.
+async fn filtered_visible_page(
+    pool: &PgPool,
+    profile_id: Uuid,
+    params: &ResourceListParams,
+) -> ApiResult<VisiblePage> {
+    let owner_self: Option<Uuid> = match params.owner.as_deref() {
+        Some("@me") => Some(profile_id),
+        _ => None,
+    };
+    let owner_handle: Option<&str> = match params.owner.as_deref() {
+        Some(h) if h != "@me" => Some(h),
+        _ => None,
+    };
+    let sort = params.sort.unwrap_or_default();
+    let dir = match params.order.unwrap_or_default() {
+        SortOrder::Asc => "ASC",
+        SortOrder::Desc => "DESC",
+    };
+
+    // INNER JOIN dt (every resource carries exactly one `doc_type` property, as in
+    // `readback::reconstruct`); LEFT JOIN the optional workflow keys used by filters/sort.
+    let sql = format!(
+        "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name
+           FROM kb_resources r
+           JOIN resources_visible_to($1) v ON v.resource_id = r.id
+           JOIN kb_resource_homes h ON h.resource_id = r.id
+           JOIN kb_contexts c
+             ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+           JOIN kb_profiles p ON p.id = h.owner_profile_id
+           JOIN kb_properties dt
+             ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+           LEFT JOIN kb_properties st
+             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
+           LEFT JOIN kb_properties sq
+             ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
+            AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
+          WHERE r.is_active
+            AND ($2::text IS NULL OR c.name = $2)
+            AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
+            AND ($4::text IS NULL OR st.property_value #>> '{{}}' = $4)
+            AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
+            AND ($6::text IS NULL OR p.handle = $6)
+            AND ($7::text IS NULL OR r.title ILIKE '%' || $7 || '%')
+          ORDER BY {sort_col} {dir}, r.id ASC",
+        sort_col = sort_column_sql(sort),
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(profile_id)
+        .bind(params.context_name.as_deref())
+        .bind(params.doc_type_name.as_deref())
+        .bind(params.stage.as_deref())
+        .bind(owner_self)
+        .bind(owner_handle)
+        .bind(params.q.as_deref())
+        .fetch_all(pool)
+        .await
+        .map_err(api_err)?;
+
+    let total = rows.len() as i64;
+    let mut facets: HashMap<String, i64> = HashMap::new();
+    let mut all_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: Uuid = row.get("id");
+        if let Some(dt) = row.get::<Option<String>, _>("doc_type_name") {
+            *facets.entry(dt).or_insert(0) += 1;
+        }
+        all_ids.push(id);
+    }
+
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let page_ids: Vec<Uuid> = match params.limit {
+        Some(limit) if limit >= 0 => all_ids
+            .into_iter()
+            .skip(offset)
+            .take(limit as usize)
+            .collect(),
+        _ => all_ids.into_iter().skip(offset).collect(),
+    };
+
+    Ok(VisiblePage {
+        page_ids,
+        total,
+        facets,
+    })
+}
+
+/// `list` — the resources VISIBLE to the principal (WS2 — `resources_visible_to`), filtered + sorted +
+/// paginated per `ResourceListParams`, each reconstructed to a full `ResourceRow`. The filter/sort/page
+/// happen in SQL (`filtered_visible_page`); only the page's ids are reconstructed (no all-rows N+1).
+/// `total` = the FILTERED count (before limit/offset); `facets.doc_type` = the doctype histogram over the
+/// filtered set.
 pub async fn list_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: Uuid,
     params: ResourceListParams,
 ) -> ApiResult<ResourceListResponse> {
-    match selection {
-        BackendSelection::Legacy => resource_service::list_visible(pool, profile_id, params).await,
-        BackendSelection::Next => next_impl::list(pool, profile_id).await,
+    let page = filtered_visible_page(pool, profile_id, &params).await?;
+    let mut rows: Vec<ResourceRow> = Vec::with_capacity(page.page_ids.len());
+    for new_id in page.page_ids {
+        rows.push(reconstruct_resource_row(pool, profile_id, new_id).await?);
     }
+    Ok(ResourceListResponse {
+        rows,
+        total: page.total,
+        facets: ResourceFacets {
+            doc_type: page.facets,
+        },
+    })
 }
 
-/// `show` — full resource row by id.
-pub async fn show_select(
-    selection: BackendSelection,
-    pool: &PgPool,
-    profile_id: Uuid,
-    id: Uuid,
-) -> ApiResult<ResourceRow> {
-    match selection {
-        BackendSelection::Legacy => resource_service::get_visible(pool, profile_id, id).await,
-        BackendSelection::Next => next_impl::show(pool, profile_id, id).await,
-    }
+/// `show` — full resource row by id (§9 invariant floor) via the shared `reconstruct_resource_row`. The
+/// inbound id IS the substrate id. Visibility is gated inside `reconstruct_resource_row` (WS2); the typed
+/// `ReadbackError` is split by `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
+pub async fn show_select(pool: &PgPool, profile_id: Uuid, id: Uuid) -> ApiResult<ResourceRow> {
+    reconstruct_resource_row(pool, profile_id, id)
+        .await
+        .map_err(ApiError::from)
 }
 
-/// `get_content` — reconstructed markdown body.
+/// `get_content` — reconstructed markdown body (§9 body floor). `managed_meta`/`open_meta` are `None`
+/// (the meta tier is `get_meta`).
 pub async fn get_content_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: Uuid,
     resource_id: Uuid,
 ) -> ApiResult<ContentResponse> {
-    match selection {
-        BackendSelection::Legacy => {
-            resource_service::get_content(pool, profile_id, resource_id).await
-        }
-        BackendSelection::Next => next_impl::get_content(pool, profile_id, resource_id).await,
-    }
+    let markdown = readback::body(pool, profile_id, resource_id)
+        .await
+        .map_err(|e| ApiError::from(map_readback_err(e)))?;
+    Ok(ContentResponse {
+        resource_id: ResourceId::from(resource_id),
+        markdown,
+        managed_meta: None,
+        open_meta: None,
+    })
 }
 
-/// `get_meta` — managed/open frontmatter for one resource.
+/// `get_meta` — managed/open frontmatter for one resource (`readback::meta`, the §7 inverse fate).
+/// `managed_hash`/`open_hash` are §7-dissolved (emitted empty; §9 non-invariants).
 pub async fn get_meta_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: ProfileId,
     resource_id: ResourceId,
 ) -> ApiResult<ResourceMetaResponse> {
-    match selection {
-        BackendSelection::Legacy => meta_service::get_meta(pool, profile_id, resource_id).await,
-        BackendSelection::Next => {
-            next_impl::get_meta(pool, Uuid::from(profile_id), Uuid::from(resource_id)).await
-        }
-    }
+    let new_id = Uuid::from(resource_id);
+    let rb = readback::meta(pool, Uuid::from(profile_id), new_id)
+        .await
+        .map_err(|e| ApiError::from(map_readback_err(e)))?;
+    let managed: ManagedMeta =
+        serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
+    Ok(ResourceMetaResponse {
+        resource_id: ResourceId::from(new_id),
+        managed_meta: Some(managed),
+        open_meta: Some(serde_json::Value::Object(rb.open)),
+        managed_hash: String::new(),
+        open_hash: String::new(),
+    })
 }
 
-/// `list_meta` — meta-only resource list (the `?meta_only=true` projection). Legacy reuses
-/// `resource_service::list_visible_meta` (list rows + one batched manifest fetch); Next projects
-/// `readback::enriched_list` (the same WS2-scoped visible set the enriched list arm uses) to the
-/// meta-list shape. Pre-flip default `Legacy` keeps the surface byte-identical.
+/// `list_meta` — the `?meta_only=true` projection. Same WS2-scoped, filtered + sorted + paginated set as
+/// `list` (`filtered_visible_page`); each page id maps to a `ResourceMetaResponse` via `get_meta_select`
+/// (the §7 meta tier). `total`/`facets` mirror `list` (the FILTERED set).
 pub async fn list_meta_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: Uuid,
     params: ResourceListParams,
 ) -> ApiResult<ResourceMetaListResponse> {
-    match selection {
-        BackendSelection::Legacy => {
-            resource_service::list_visible_meta(pool, profile_id, params).await
-        }
-        BackendSelection::Next => next_impl::list_meta(pool, profile_id).await,
+    let page = filtered_visible_page(pool, profile_id, &params).await?;
+    let mut out = Vec::with_capacity(page.page_ids.len());
+    for new_id in page.page_ids {
+        out.push(
+            get_meta_select(pool, ProfileId::from(profile_id), ResourceId::from(new_id)).await?,
+        );
     }
+    Ok(ResourceMetaListResponse {
+        rows: out,
+        total: page.total,
+        facets: ResourceFacets {
+            doc_type: page.facets,
+        },
+    })
 }
 
-/// `get_meta_batch` — the batched meta tier for many ids (the MCP `enrich_resources` path). Legacy
-/// reuses `meta_service::get_meta_batch` (one query, no per-row visibility recheck — the ids are
-/// pre-scoped to the caller). Next loops `next_impl::get_meta` per id (each WS2-gated); a not-visible
-/// id is OMITTED from the map (parity with the legacy batch's "absent = no meta" semantics), while a
-/// genuine fault propagates.
+/// `get_meta_batch` — the batched meta tier for many ids (the MCP `enrich_resources` path). Loops
+/// `get_meta` per id (each WS2-gated); a not-visible id is OMITTED from the map (parity with the prior
+/// batch's "absent = no meta"), while a genuine fault propagates.
 pub async fn get_meta_batch_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: Uuid,
     ids: &[ResourceId],
 ) -> ApiResult<HashMap<ResourceId, ResourceMetaResponse>> {
-    match selection {
-        BackendSelection::Legacy => meta_service::get_meta_batch(pool, ids).await,
-        BackendSelection::Next => {
-            let mut map = HashMap::with_capacity(ids.len());
-            for id in ids {
-                match next_impl::get_meta(pool, profile_id, Uuid::from(*id)).await {
-                    Ok(resp) => {
-                        map.insert(*id, resp);
-                    }
-                    // A not-visible id is simply absent from the map (the legacy batch never errors
-                    // on a missing/non-visible row); a genuine fault still propagates.
-                    Err(ApiError::NotFound) => {}
-                    Err(e) => return Err(e),
-                }
+    let mut map = HashMap::with_capacity(ids.len());
+    for id in ids {
+        match get_meta_select(pool, ProfileId::from(profile_id), *id).await {
+            Ok(resp) => {
+                map.insert(*id, resp);
             }
-            Ok(map)
+            // A not-visible id is simply absent from the map; a genuine fault still propagates.
+            Err(ApiError::NotFound) => {}
+            Err(e) => return Err(e),
         }
     }
+    Ok(map)
 }
 
-/// `search` — unified FTS/vector search.
+/// `search` — vector when an embedding is supplied, else FTS over the text query (§9 search floor). The
+/// matching SET is the invariant; scores are not (emitted 0.0). Each match reconstructs to a full row.
 pub async fn search_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: Uuid,
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
-    match selection {
-        BackendSelection::Legacy => search_service::search(pool, profile_id, params).await,
-        BackendSelection::Next => next_impl::search(pool, profile_id, params).await,
+    // The search readbacks JOIN `resources_visible_to(principal)`, so the result set is already scoped.
+    let (ids, origin) = if let Some(embedding) = params.embedding.as_ref() {
+        (
+            readback::vector_search(pool, profile_id, embedding)
+                .await
+                .map_err(api_err)?,
+            "vector",
+        )
+    } else if let Some(query) = params.query.as_ref() {
+        (
+            readback::fts_search(pool, profile_id, query)
+                .await
+                .map_err(api_err)?,
+            "fts",
+        )
+    } else {
+        (Vec::new(), "fts")
+    };
+
+    let mut hits = Vec::with_capacity(ids.len());
+    for new_id in ids {
+        let row = reconstruct_resource_row(pool, profile_id, new_id).await?;
+        hits.push(UnifiedSearchResultRow {
+            resource_id: new_id,
+            title: row.title,
+            slug: String::new(),
+            kb_uri: row.origin_uri.clone(),
+            origin_uri: row.origin_uri,
+            context: Some(row.context_name),
+            doc_type: row.doc_type_name,
+            fts_score: 0.0,
+            vector_score: 0.0,
+            combined_score: 0.0,
+            origin: origin.to_string(),
+        });
     }
+    Ok(hits)
 }
 
 /// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
-/// `doc_type`, over BOTH backends. Returns always-compiled temper-core types
-/// (`Vec<(ResourceRow, Option<ManagedMeta>, Option<Value>)>`) so the consumer (MCP) needs no
-/// `next-backend` feature; the Next path is gated inside `next_impl`. The single `build_enriched`
-/// assembler then maps each tuple on either backend (no second assembler). Legacy resolves the name
-/// filters to ids then `list_visible` + `get_meta_batch`; Next filters by name in SQL via
-/// `readback::enriched_list` (slug/timestamps are §9 non-invariants — Next stamps None/now()).
+/// `doc_type` in SQL via `readback::enriched_list` (WS2-scoped). Returns always-compiled temper-core
+/// types so the MCP consumer needs no feature gate. `slug`/timestamps are §9 non-invariants (None/now()).
 pub async fn list_enriched_select(
-    selection: BackendSelection,
     pool: &PgPool,
     profile_id: Uuid,
     context_name: Option<&str>,
     doc_type: Option<&str>,
 ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
-    match selection {
-        BackendSelection::Legacy => {
-            let context_id = match context_name {
-                Some(name) => Some(
-                    context_service::resolve_by_name(pool, ProfileId::from(profile_id), name)
-                        .await?
-                        .id
-                        .into(),
-                ),
-                None => None,
-            };
-            let doc_type_id = match doc_type {
-                Some(name) => Some(ingest_service::resolve_doc_type(pool, name).await?),
-                None => None,
-            };
-            let params = ResourceListParams {
-                kb_context_id: context_id,
-                kb_doc_type_id: doc_type_id,
-                ..Default::default()
-            };
-            let response = resource_service::list_visible(pool, profile_id, params).await?;
-            let ids: Vec<ResourceId> = response.rows.iter().map(|r| r.id).collect();
-            let mut meta = meta_service::get_meta_batch(pool, &ids).await?;
-            Ok(response
-                .rows
-                .into_iter()
-                .map(|row| {
-                    let (m, o) = meta
-                        .remove(&row.id)
-                        .map(|x| (x.managed_meta, x.open_meta))
-                        .unwrap_or((None, None));
-                    (row, m, o)
-                })
-                .collect())
-        }
-        BackendSelection::Next => {
-            next_impl::list_enriched(pool, profile_id, context_name, doc_type).await
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Next arms — feature-gated. Without `next-backend`, each gates with the same
-// NotImplemented as `select_backend`; with it, each maps `temper_next` readback.
-// ---------------------------------------------------------------------------
-
-#[cfg(not(feature = "next-backend"))]
-mod next_impl {
-    use super::*;
-    use crate::error::ApiError;
-    use temper_core::error::TemperError;
-
-    fn gate<T>() -> ApiResult<T> {
-        Err(ApiError::from(TemperError::NotImplemented(
-            "next backend requires the `next-backend` build feature".into(),
-        )))
-    }
-    pub(super) async fn list(_: &PgPool, _: Uuid) -> ApiResult<ResourceListResponse> {
-        gate()
-    }
-    pub(super) async fn show(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ResourceRow> {
-        gate()
-    }
-    pub(super) async fn get_content(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ContentResponse> {
-        gate()
-    }
-    pub(super) async fn get_meta(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ResourceMetaResponse> {
-        gate()
-    }
-    pub(super) async fn list_meta(_: &PgPool, _: Uuid) -> ApiResult<ResourceMetaListResponse> {
-        gate()
-    }
-    pub(super) async fn search(
-        _: &PgPool,
-        _: Uuid,
-        _: SearchParams,
-    ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
-        gate()
-    }
-    pub(super) async fn list_enriched(
-        _: &PgPool,
-        _: Uuid,
-        _: Option<&str>,
-        _: Option<&str>,
-    ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
-        gate()
-    }
-}
-
-#[cfg(feature = "next-backend")]
-mod next_impl {
-    use super::*;
-    use crate::backend::next_backend::{map_readback_err, reconstruct_resource_row};
-    use crate::error::ApiError;
-    use std::collections::HashMap;
-    use temper_core::error::TemperError;
-    use temper_core::types::managed_meta::ManagedMeta;
-    use temper_core::types::resource::{ResourceFacets, ResourceRow};
-    use temper_next::readback;
-
-    fn api_err(e: impl std::fmt::Display) -> ApiError {
-        ApiError::from(TemperError::Api(e.to_string()))
-    }
-
-    /// `list` over `temper_next`: reconstruct a full `ResourceRow` per resource VISIBLE to the principal
-    /// (WS2 — `resources_visible_to`, CONFORMing to production's scoped list). No pagination; the asserted
-    /// invariant is the visible row SET + projected fields, not order or page bounds. `total` = row count;
-    /// `facets.doc_type` = the doctype histogram over the visible set.
-    pub(super) async fn list(pool: &PgPool, principal: Uuid) -> ApiResult<ResourceListResponse> {
-        // WS2: only resources visible to the principal. `resources_visible_to` returns synthesized
-        // (`temper_next`) ids directly (profile ids are preserved by synthesis), so we filter the set
-        // up front — a not-visible id never enters the loop, where `reconstruct_resource_row`'s gate
-        // would otherwise error. The per-row gate inside re-checks harmlessly (defense in depth).
-        //
-        // `resources_visible_to`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED,
-        // so they resolve against the connection search_path — bare-pool default `public`, where the
-        // `temper_next` helpers do not exist. Run the visible-set query inside a `SET LOCAL search_path`
-        // txn (the synthesis/readback discipline; see `readback::ensure_visible`). The per-row
-        // `reconstruct_resource_row` calls below gate via `readback`, which sets its own search_path.
-        let mut tx = pool.begin().await.map_err(api_err)?;
-        sqlx::query("SET LOCAL search_path TO temper_next, public")
-            .execute(&mut *tx)
-            .await
-            .map_err(api_err)?;
-        let visible: Vec<Uuid> =
-            sqlx::query_scalar("SELECT resource_id FROM temper_next.resources_visible_to($1)")
-                .bind(principal)
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)?;
-        let mut rows: Vec<ResourceRow> = Vec::with_capacity(visible.len());
-        for new_id in visible {
-            rows.push(reconstruct_resource_row(pool, principal, new_id).await?);
-        }
-        let mut doc_type: HashMap<String, i64> = HashMap::new();
-        for r in &rows {
-            *doc_type.entry(r.doc_type_name.clone()).or_insert(0) += 1;
-        }
-        let total = rows.len() as i64;
-        Ok(ResourceListResponse {
-            rows,
-            total,
-            facets: ResourceFacets { doc_type },
-        })
-    }
-
-    /// `show` over `temper_next`: reconstruct the full production-shaped `ResourceRow` (§9 invariant
-    /// floor) via the shared `reconstruct_resource_row` — the same path `NextBackend::show_resource` and
-    /// the full-row `list` arm use. The inbound id IS the `temper_next` id (synthesis preserves resource
-    /// ids verbatim), so it is used directly — no origin_uri remap. Visibility is gated inside
-    /// `reconstruct_resource_row` (WS2); the typed `ReadbackError` is split by `map_readback_err`
-    /// (not-visible → NotFound/404, genuine fault → Api/500) before reaching here.
-    pub(super) async fn show(
-        pool: &PgPool,
-        principal: Uuid,
-        resource_id: Uuid,
-    ) -> ApiResult<ResourceRow> {
-        reconstruct_resource_row(pool, principal, resource_id)
-            .await
-            .map_err(ApiError::from)
-    }
-
-    /// `get_content` over `temper_next`: reconstruct the markdown body (§9 body floor). `managed_meta`
-    /// / `open_meta` are left `None` — the body markdown is the floor; the meta tier is `get_meta`. The
-    /// inbound id is the preserved `temper_next` id (used directly, no remap).
-    pub(super) async fn get_content(
-        pool: &PgPool,
-        principal: Uuid,
-        resource_id: Uuid,
-    ) -> ApiResult<ContentResponse> {
-        // `readback::body` gates visibility (WS2) and returns a typed `ReadbackError`; `map_readback_err`
-        // splits not-visible → NotFound (404, leak-safe deny, never 403) from a genuine fault → Api (500).
-        let markdown = readback::body(pool, principal, resource_id)
-            .await
-            .map_err(|e| ApiError::from(map_readback_err(e)))?;
-        Ok(ContentResponse {
-            resource_id: ResourceId::from(resource_id),
-            markdown,
-            managed_meta: None,
-            open_meta: None,
-        })
-    }
-
-    /// `get_meta` over `temper_next`: reconstruct the managed/open split (`readback::meta`, the §7
-    /// inverse fate). `managed_hash`/`open_hash` are §7-dissolved (no manifest in `temper_next`) — they
-    /// are emitted empty (non-invariant; the §9 floor does not assert them). The inbound id is the
-    /// preserved `temper_next` id (used directly, no remap).
-    pub(super) async fn get_meta(
-        pool: &PgPool,
-        principal: Uuid,
-        resource_id: Uuid,
-    ) -> ApiResult<ResourceMetaResponse> {
-        let new_id = resource_id;
-        // `readback::meta` gates visibility (WS2) and returns a typed `ReadbackError`; `map_readback_err`
-        // splits not-visible → NotFound (404, leak-safe deny, never 403) from a genuine fault → Api (500).
-        let rb = readback::meta(pool, principal, new_id)
-            .await
-            .map_err(|e| ApiError::from(map_readback_err(e)))?;
-        let managed: ManagedMeta =
-            serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
-        Ok(ResourceMetaResponse {
-            resource_id: ResourceId::from(new_id),
-            managed_meta: Some(managed),
-            open_meta: Some(serde_json::Value::Object(rb.open)),
-            managed_hash: String::new(),
-            open_hash: String::new(),
-        })
-    }
-
-    /// `list_meta` over `temper_next`: the `?meta_only=true` projection. Reuses the same WS2-scoped
-    /// `readback::enriched_list(_, _, None, None)` visible set the enriched-list arm consumes (no
-    /// context/doctype filter), mapping each `EnrichedListRow` to a `ResourceMetaResponse`. The managed
-    /// map deserializes into the typed `ManagedMeta` (propagating a genuine deser fault, parity with
-    /// `get_meta`); open is carried verbatim. `managed_hash`/`open_hash` are §7-dissolved (emitted empty,
-    /// §9 non-invariants). `total` = row count; `facets.doc_type` = the doctype histogram over the set.
-    pub(super) async fn list_meta(
-        pool: &PgPool,
-        principal: Uuid,
-    ) -> ApiResult<ResourceMetaListResponse> {
-        let rows = readback::enriched_list(pool, principal, None, None)
-            .await
-            .map_err(api_err)?;
-        let mut doc_type: HashMap<String, i64> = HashMap::new();
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            *doc_type.entry(r.doc_type.clone()).or_insert(0) += 1;
-            let managed: ManagedMeta =
-                serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?;
-            out.push(ResourceMetaResponse {
-                resource_id: ResourceId::from(r.new_id),
-                managed_meta: Some(managed),
-                open_meta: Some(serde_json::Value::Object(r.open)),
-                managed_hash: String::new(),
-                open_hash: String::new(),
-            });
-        }
-        let total = out.len() as i64;
-        Ok(ResourceMetaListResponse {
-            rows: out,
-            total,
-            facets: ResourceFacets { doc_type },
-        })
-    }
-
-    /// `search` over `temper_next`: vector when an embedding is supplied, else FTS over the text query
-    /// (§9 search floor). The matching SET (origin_uri) is the invariant; scores are not (emitted 0.0).
-    /// Each matched `origin_uri` is enriched to a `UnifiedSearchResultRow` via a full-row reconstruction
-    /// (title + doctype). `slug` is §7-dissolved (emitted empty).
-    pub(super) async fn search(
-        pool: &PgPool,
-        principal: Uuid,
-        params: SearchParams,
-    ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
-        // WS2: the search readbacks JOIN `resources_visible_to(principal)`, so the result set is
-        // already visibility-scoped (a not-visible match never surfaces).
-        let (ids, origin) = if let Some(embedding) = params.embedding.as_ref() {
-            (
-                readback::vector_search(pool, principal, embedding)
-                    .await
-                    .map_err(api_err)?,
-                "vector",
-            )
-        } else if let Some(query) = params.query.as_ref() {
-            (
-                readback::fts_search(pool, principal, query)
-                    .await
-                    .map_err(api_err)?,
-                "fts",
-            )
-        } else {
-            (Vec::new(), "fts")
+    let rows = readback::enriched_list(pool, profile_id, context_name, doc_type)
+        .await
+        .map_err(api_err)?;
+    let now = chrono::Utc::now();
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let row = ResourceRow {
+            id: ResourceId::from(r.new_id),
+            kb_context_id: ContextId::from(Uuid::nil()), // re-minted; unused by build_enriched
+            kb_doc_type_id: DocTypeId::from(Uuid::nil()), // re-minted; name is authoritative
+            origin_uri: r.origin_uri,
+            title: r.title,
+            slug: None, // §7-dissolved
+            originator_profile_id: ProfileId::from(Uuid::nil()),
+            owner_profile_id: ProfileId::from(Uuid::nil()),
+            is_active: r.is_active,
+            created: now, // synthesis-collapsed (non-invariant)
+            updated: now,
+            context_name: r.context_name,
+            doc_type_name: r.doc_type,
+            owner_handle: "@me".to_string(),
+            stage: r.stage,
+            seq: None,
+            mode: r.mode,
+            effort: r.effort,
+            body_hash: None,
+            managed_hash: None,
+            open_hash: None,
         };
-
-        // Each readback returns the preserved resource id directly — `origin_uri` is non-unique (empty
-        // for CLI/agent-created resources), so the prior origin_uri→id remap collapsed every empty match
-        // onto one arbitrary resource. The id-keyed reconstruction supplies the row's origin_uri verbatim.
-        let mut hits = Vec::with_capacity(ids.len());
-        for new_id in ids {
-            let row = reconstruct_resource_row(pool, principal, new_id).await?;
-            hits.push(UnifiedSearchResultRow {
-                resource_id: new_id,
-                title: row.title,
-                slug: String::new(),
-                kb_uri: row.origin_uri.clone(),
-                origin_uri: row.origin_uri,
-                context: Some(row.context_name),
-                doc_type: row.doc_type_name,
-                fts_score: 0.0,
-                vector_score: 0.0,
-                combined_score: 0.0,
-                origin: origin.to_string(),
-            });
-        }
-        Ok(hits)
+        // Propagate a genuine deser failure (don't swallow to None — a malformed managed shape is a fault).
+        let managed: Option<ManagedMeta> =
+            Some(serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?);
+        let open = Some(serde_json::Value::Object(r.open));
+        out.push((row, managed, open));
     }
-
-    /// `list_enriched` over `temper_next`: the batched, context/doctype-filtered list projection
-    /// (`readback::enriched_list`, WS2-scoped via `resources_visible_to`), each lean `EnrichedListRow`
-    /// mapped to a full `ResourceRow` carrying ONLY the fields `build_enriched` reads (id/title/
-    /// context_name/doc_type_name/origin_uri/is_active/created/updated, plus the workflow projections);
-    /// the rest are §7-dissolved (`slug`/hashes), re-minted (the context/doctype/profile ids), or
-    /// synthesis-collapsed (`created`/`updated` → now()) — all §9 non-invariants. The managed map is
-    /// deserialized back into the typed `ManagedMeta`; open is carried verbatim.
-    pub(super) async fn list_enriched(
-        pool: &PgPool,
-        principal: Uuid,
-        context_name: Option<&str>,
-        doc_type: Option<&str>,
-    ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
-        use temper_core::types::ids::{ContextId, DocTypeId};
-        let rows = readback::enriched_list(pool, principal, context_name, doc_type)
-            .await
-            .map_err(api_err)?;
-        let now = chrono::Utc::now();
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            let row = ResourceRow {
-                id: ResourceId::from(r.new_id),
-                kb_context_id: ContextId::from(uuid::Uuid::nil()), // re-minted; unused by build_enriched
-                kb_doc_type_id: DocTypeId::from(uuid::Uuid::nil()), // re-minted; name is authoritative
-                origin_uri: r.origin_uri,
-                title: r.title,
-                slug: None, // §7-dissolved
-                originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
-                owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
-                is_active: r.is_active,
-                created: now, // synthesis-collapsed (non-invariant)
-                updated: now,
-                context_name: r.context_name,
-                doc_type_name: r.doc_type,
-                owner_handle: "@me".to_string(),
-                stage: r.stage,
-                seq: None,
-                mode: r.mode,
-                effort: r.effort,
-                body_hash: None,
-                managed_hash: None,
-                open_hash: None,
-            };
-            // Propagate a genuine deser failure (parity with `get_meta`'s `?`), don't swallow it
-            // to `None` — a malformed managed shape is a fault, not "no meta".
-            let managed: Option<ManagedMeta> = Some(
-                serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?,
-            );
-            let open = Some(serde_json::Value::Object(r.open));
-            out.push((row, managed, open));
-        }
-        Ok(out)
-    }
+    Ok(out)
 }

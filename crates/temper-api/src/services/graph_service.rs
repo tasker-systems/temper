@@ -184,15 +184,12 @@ pub async fn aggregator_subgraph(
     // edges can appear here.
     let edge_records = sqlx::query!(
         r#"
-        SELECT
-            source_resource_id AS "source!: Uuid",
-            target_resource_id AS "target!: Uuid",
-            edge_kind          AS "edge_kind!: EdgeKind",
-            polarity           AS "polarity!: Polarity",
-            label              AS "label!: String"
-          FROM kb_resource_edges
-         WHERE source_resource_id = ANY($1::uuid[])
-           AND target_resource_id = ANY($1::uuid[])
+        SELECT source_id AS "source!: Uuid", target_id AS "target!: Uuid",
+               edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+               label AS "label: String"
+          FROM kb_edges
+         WHERE source_table = 'kb_resources' AND target_table = 'kb_resources'
+           AND source_id = ANY($1::uuid[]) AND target_id = ANY($1::uuid[])
            AND NOT is_folded
         "#,
         &node_ids,
@@ -207,7 +204,7 @@ pub async fn aggregator_subgraph(
             target: rec.target,
             edge_kind: rec.edge_kind,
             polarity: rec.polarity,
-            label: rec.label,
+            label: rec.label.unwrap_or_default(),
         })
         .collect();
 

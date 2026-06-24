@@ -8,11 +8,11 @@
    * demonstration of "the ledger is primary; every higher surface is a
    * projection materialized at read time."
    *
-   * Honest basis — every visual claim traces to schema/functions in
-   * schema-artifact/:
+   * Honest basis — every visual claim traces to schema/functions in the
+   * canonical baseline (migrations/ + temper-next's tests/fixtures/):
    *   base plane, append-only, left→right  → kb_events; occurred_at;
    *                                          kb_events_append_only() trigger
-   *   row labels                           → the kb_event_types registry (03_seed.sql)
+   *   row labels                           → the kb_event_types registry (canonical_seed.sql)
    *   riser to a resource / cogmap node    → genesis_event_id (stamped by
    *                                          _project_blocks / _project_cogmap_seeded)
    *   riser to an edge                     → asserted_by_event_id (_project_relationship_asserted)

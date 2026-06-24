@@ -5,13 +5,7 @@ edition = "2021"
 publish = false
 
 [package.metadata.cargo-machete]
-ignored = ["base64", "rmp-serde", "serde_json", "temper-next"]
-
-# temper-next is an OPTIONAL normal dep (not a dev-dep) gated behind `next-backend`: it pulls
-# temper-ingest[embed] → onnx, so it must NOT enter the default e2e build (the normal no-ONNX e2e CI
-# job would fail to link). Off by default; the WS6 4b HTTP read-path test enables it explicitly.
-[dependencies]
-temper-next = { path = "../../crates/temper-next", optional = true }
+ignored = ["base64", "rmp-serde", "serde_json"]
 
 [features]
 test-db = []
@@ -22,10 +16,6 @@ test-db = []
 # pipeline on PATCH /api/resources/{id} — Phase 3b tightened that handler to
 # always recompute server-side, so cloud body-update tests now require both.
 test-embed = ["temper-cli/test-embed", "temper-api/ingest-pipeline"]
-# WS6 4b: the HTTP read-path test drives reads from temper_next behind flag=next. Pulls temper-next
-# (+ onnx) and temper-api's NextBackend. No CI job enables it; run locally with
-# `cargo nextest run -p temper-e2e --features test-db,next-backend`.
-next-backend = ["dep:temper-next", "temper-api/next-backend"]
 
 [dev-dependencies]
 axum = "0.8"

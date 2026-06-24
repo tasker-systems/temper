@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-use crate::backend::BackendSelection;
 use crate::config::ApiConfig;
 
 /// Cached keys with a timestamp for TTL-based invalidation.
@@ -154,9 +153,6 @@ pub struct AppState {
     pub pool: PgPool,
     pub jwks_store: Arc<JwksKeyStore>,
     pub config: Arc<ApiConfig>,
-    /// Read once per process at startup. A flip takes effect on the next
-    /// redeploy — that is the cutover model, not a staleness bug.
-    pub backend_selection: BackendSelection,
     /// OIDC userinfo endpoint, resolved once per process via discovery on the
     /// first email-fallback. Lazy (not boot-time) so there is no startup
     /// coupling to the IdP; shared across `AppState` clones via `Arc`.
@@ -169,20 +165,8 @@ impl AppState {
             pool,
             jwks_store: Arc::new(jwks_store),
             config: Arc::new(config),
-            // Safe default: legacy. Production startups override via
-            // `with_backend_selection` after reading the flag. Tests that
-            // don't care get legacy for free.
-            backend_selection: BackendSelection::Legacy,
             userinfo_endpoint: Arc::new(tokio::sync::OnceCell::new()),
         }
-    }
-
-    /// Override the backend selection (used by startup after reading the flag,
-    /// and by tests exercising the `next` arm without a redeploy).
-    #[must_use]
-    pub fn with_backend_selection(mut self, selection: BackendSelection) -> Self {
-        self.backend_selection = selection;
-        self
     }
 }
 

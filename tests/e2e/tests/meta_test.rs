@@ -111,10 +111,15 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
 
 /// A meta PATCH must not disturb the resource body: chunks, body_hash, and
 /// chunk content bytes stay byte-identical across a meta update, while the
-/// managed/open hashes and cascaded title advance.
+/// cascaded title advances.
 ///
 /// Acceptance anchor #1 for phase E2 — proves the server-side PUT path is
 /// truly "meta-only" and does not trigger re-chunking.
+///
+/// Post-WS6-collapse (F5): `kb_resource_manifests` is gone — `body_hash` lives
+/// on `kb_resources` and chunks read from `kb_chunks` ⋈ `kb_chunk_content`. The
+/// `managed_hash`/`open_hash` advance assertions are dropped (F4: §7-dissolved,
+/// emitted empty — they no longer exist as stored, advancing values).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -174,18 +179,19 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         .await
         .expect("ingest create failed");
 
-    // Baseline: record body_hash, managed/open hashes, chunk rows.
-    let manifest_before: (String, String, String) = sqlx::query_as(
-        "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource.id)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch manifest before");
+    // Baseline: record body_hash (now a `kb_resources` column — F5) and chunk
+    // rows (now `kb_chunks` ⋈ `kb_chunk_content`, current version — F5).
+    let body_hash_before: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(resource.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch body_hash before");
 
     let chunks_before: Vec<(i32, String, String)> = sqlx::query_as(
-        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
-         WHERE resource_id = $1 ORDER BY chunk_index",
+        "SELECT c.chunk_index, cc.content, c.content_hash \
+         FROM kb_chunks c JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+         WHERE c.resource_id = $1 AND c.is_current ORDER BY c.chunk_index",
     )
     .bind(resource.id)
     .fetch_all(&pool)
@@ -218,46 +224,26 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         .expect("meta update request failed");
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
-    // After update: body_hash unchanged, managed/open hashes advanced.
-    let manifest_after: (String, String, String) = sqlx::query_as(
-        "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource.id)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch manifest after");
+    // After update: body_hash unchanged (F4-retired managed_hash/open_hash
+    // advance assertions are intentionally dropped — they are §7-dissolved and
+    // emitted empty, so there is nothing left to advance).
+    let body_hash_after: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(resource.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch body_hash after");
 
     assert_eq!(
-        manifest_after.0, manifest_before.0,
+        body_hash_after, body_hash_before,
         "body_hash must NOT change on a meta-only update"
-    );
-    // Phase 5: server now recomputes managed_hash / open_hash on meta
-    // updates rather than trusting caller-supplied values, so the
-    // assertion shifts from "matches the payload" to "is the canonical
-    // server hash" and "advanced from the pre-update value".
-    assert_ne!(
-        manifest_after.1, manifest_before.1,
-        "managed_hash must advance on a meta update"
-    );
-    assert!(
-        manifest_after.1.starts_with("sha256:"),
-        "managed_hash must be a server-computed sha256 hash; got {}",
-        manifest_after.1,
-    );
-    assert_ne!(
-        manifest_after.2, manifest_before.2,
-        "open_hash must advance on a meta update"
-    );
-    assert!(
-        manifest_after.2.starts_with("sha256:"),
-        "open_hash must be a server-computed sha256 hash; got {}",
-        manifest_after.2,
     );
 
     // Chunks: count and content bytes unchanged.
     let chunks_after: Vec<(i32, String, String)> = sqlx::query_as(
-        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
-         WHERE resource_id = $1 ORDER BY chunk_index",
+        "SELECT c.chunk_index, cc.content, c.content_hash \
+         FROM kb_chunks c JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+         WHERE c.resource_id = $1 AND c.is_current ORDER BY c.chunk_index",
     )
     .bind(resource.id)
     .fetch_all(&pool)
@@ -283,210 +269,17 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
     assert_eq!(title_after, "Chunks Still Preserved");
 }
 
-/// A meta PATCH must reconcile `kb_resource_edges` from the new `open_meta`
-/// frontmatter declarations: adding a `relates_to` creates the edge row,
-/// removing it deletes the row, re-adding it restores the row.
-///
-/// Acceptance anchor #3 for phase E2 — proves `reconcile_edges` fires on the
-/// meta update path, not just on ingest.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
-
-    let profile = app
-        .client
-        .profile()
-        .get()
-        .await
-        .expect("profile pre-flight failed");
-
-    app.client
-        .contexts()
-        .create("meta-edges")
-        .await
-        .expect("context create failed");
-
-    // R1 — the source. Starts with no relationship declarations.
-    let r1_payload = IngestPayload {
-        title: "Edge Source R1".to_string(),
-        origin_uri: "test://e2e/meta-edges/r1".to_string(),
-        context_name: "meta-edges".to_string(),
-        doc_type_name: "research".to_string(),
-        content_hash: Some(format!("{:0>64}", "1")),
-        slug: "edge-source-r1".to_string(),
-        content: "# R1\n\nEdge source.".to_string(),
-        metadata: None,
-        managed_meta: Some(serde_json::json!({})),
-        open_meta: Some(serde_json::json!({})),
-        chunks_packed: Some(pack_chunks(&[]).expect("pack chunks")),
-    };
-    let r1 = app
-        .client
-        .ingest()
-        .create(&r1_payload)
-        .await
-        .expect("ingest r1");
-
-    // R2 — the target. Also in meta-edges so slug resolution is same-context.
-    let r2_payload = IngestPayload {
-        title: "Edge Target R2".to_string(),
-        origin_uri: "test://e2e/meta-edges/r2".to_string(),
-        context_name: "meta-edges".to_string(),
-        doc_type_name: "research".to_string(),
-        content_hash: Some(format!("{:0>64}", "2")),
-        slug: "edge-target-r2".to_string(),
-        content: "# R2\n\nEdge target.".to_string(),
-        metadata: None,
-        managed_meta: Some(serde_json::json!({})),
-        open_meta: Some(serde_json::json!({})),
-        chunks_packed: Some(pack_chunks(&[]).expect("pack chunks")),
-    };
-    let r2 = app
-        .client
-        .ingest()
-        .create(&r2_payload)
-        .await
-        .expect("ingest r2");
-
-    // The frontmatter relationship parser accepts UUID strings (TargetRef::Id)
-    // or slugs (TargetRef::Slug). Use the UUID form — owner-scoped kb:// URIs
-    // would be parsed as slugs and fail to resolve.
-    let _profile_slug = profile.slug.clone();
-    let r2_ref = r2.id.to_string();
-
-    // --- Step 1: add relates_to [r2] → expect one row in kb_resource_edges ---
-    let payload_add = MetaUpdatePayload {
-        resource_id: r1.id,
-        managed_meta: ManagedMeta {
-            doc_type: Some("research".to_string()),
-            ..Default::default()
-        },
-        open_meta: serde_json::json!({
-            "relates_to": [r2_ref.clone()],
-        }),
-        managed_hash: "sha256:edges_managed_v1".to_string(),
-        open_hash: "sha256:edges_open_v1".to_string(),
-    };
-
-    let resp = app
-        .reqwest_client
-        .put(app.url(&format!("/api/resources/{}/meta", r1.id)))
-        .header("Authorization", format!("Bearer {}", app.token))
-        .json(&payload_add)
-        .send()
-        .await
-        .expect("meta update (add) request failed");
-    assert_eq!(resp.status(), reqwest::StatusCode::OK);
-
-    let edges_after_add: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT source_resource_id, target_resource_id, label \
-         FROM kb_resource_edges \
-         WHERE source_resource_id = $1 AND target_resource_id = $2",
-    )
-    .bind(uuid::Uuid::from(r1.id))
-    .bind(uuid::Uuid::from(r2.id))
-    .fetch_all(&pool)
-    .await
-    .expect("fetch edges after add");
-
-    assert_eq!(
-        edges_after_add.len(),
-        1,
-        "expected exactly one relates_to edge from r1 → r2 after add, got {:?}",
-        edges_after_add
-    );
-    assert_eq!(edges_after_add[0].2, "relates_to");
-
-    // --- Step 2: clear relates_to → row removed ---
-    let payload_remove = MetaUpdatePayload {
-        resource_id: r1.id,
-        managed_meta: ManagedMeta {
-            doc_type: Some("research".to_string()),
-            ..Default::default()
-        },
-        open_meta: serde_json::json!({
-            "relates_to": [],
-        }),
-        managed_hash: "sha256:edges_managed_v2".to_string(),
-        open_hash: "sha256:edges_open_v2".to_string(),
-    };
-    let resp = app
-        .reqwest_client
-        .put(app.url(&format!("/api/resources/{}/meta", r1.id)))
-        .header("Authorization", format!("Bearer {}", app.token))
-        .json(&payload_remove)
-        .send()
-        .await
-        .expect("meta update (remove) request failed");
-    assert_eq!(resp.status(), reqwest::StatusCode::OK);
-
-    // Post-cutover: removal folds the row in place (`is_folded = true`), it
-    // does not delete. Positively verify the folded-projection invariant —
-    // one row, marked folded — so a regression to either hard-delete *or*
-    // leaving the row active both fail loudly.
-    let edges_after_remove: Vec<(uuid::Uuid, uuid::Uuid, bool)> = sqlx::query_as(
-        "SELECT source_resource_id, target_resource_id, is_folded \
-         FROM kb_resource_edges \
-         WHERE source_resource_id = $1 AND target_resource_id = $2",
-    )
-    .bind(uuid::Uuid::from(r1.id))
-    .bind(uuid::Uuid::from(r2.id))
-    .fetch_all(&pool)
-    .await
-    .expect("fetch edges after remove");
-    assert_eq!(
-        edges_after_remove.len(),
-        1,
-        "relates_to edge row must be preserved (folded) after declaration clear, got {:?}",
-        edges_after_remove
-    );
-    assert!(
-        edges_after_remove[0].2,
-        "relates_to edge must be is_folded = true after declaration is cleared, got {:?}",
-        edges_after_remove
-    );
-
-    // --- Step 3: re-add → edge reappears (idempotent reconcile) ---
-    let payload_readd = MetaUpdatePayload {
-        resource_id: r1.id,
-        managed_meta: ManagedMeta {
-            doc_type: Some("research".to_string()),
-            ..Default::default()
-        },
-        open_meta: serde_json::json!({
-            "relates_to": [r2_ref.clone()],
-        }),
-        managed_hash: "sha256:edges_managed_v3".to_string(),
-        open_hash: "sha256:edges_open_v3".to_string(),
-    };
-    let resp = app
-        .reqwest_client
-        .put(app.url(&format!("/api/resources/{}/meta", r1.id)))
-        .header("Authorization", format!("Bearer {}", app.token))
-        .json(&payload_readd)
-        .send()
-        .await
-        .expect("meta update (re-add) request failed");
-    assert_eq!(resp.status(), reqwest::StatusCode::OK);
-
-    let edges_after_readd: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT source_resource_id, target_resource_id, label \
-         FROM kb_resource_edges \
-         WHERE source_resource_id = $1 AND target_resource_id = $2",
-    )
-    .bind(uuid::Uuid::from(r1.id))
-    .bind(uuid::Uuid::from(r2.id))
-    .fetch_all(&pool)
-    .await
-    .expect("fetch edges after readd");
-
-    assert_eq!(
-        edges_after_readd.len(),
-        1,
-        "relates_to edge must reappear on re-add"
-    );
-    assert_eq!(edges_after_readd[0].2, "relates_to");
-}
+// DELETED (F7): `meta_patch_reconciles_edges_add_and_remove`.
+//
+// This test asserted that a meta PATCH reconciles graph edges FROM `open_meta`
+// frontmatter declarations (`relates_to`) — the legacy frontmatter→edge
+// auto-projection. That behavior is RETIRED by the WS6 collapse: the meta
+// update path no longer derives edges from `open_meta`, and `kb_resource_edges`
+// is gone (edges live on `kb_edges`). Relationships are now asserted explicitly
+// via the relationship API (`client.relationships().assert(...)` →
+// `client.resources().edges(id)`), which is covered by the relationship-handler
+// and relationship e2e suites. Nothing meaningful remains to repoint here, so
+// the test is removed rather than rewritten.
 
 /// Meta PATCH authorization + error mapping: second-user is forbidden,
 /// unknown resource id is 404, and unknown doc_type is 400.
@@ -616,12 +409,20 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     );
 }
 
-/// `GET /api/resources/{id}/meta` must return the current manifest meta
-/// tier (managed_meta, open_meta, managed_hash, open_hash) without
-/// reconstructing markdown from chunks. Asserted: response fields match
-/// the seeded values, `kb_chunks` rows are byte-identical before and
-/// after the GET, and auth scoping works (second user → 404, ghost id →
-/// 404; the READ path uses `get_visible`, which does not leak existence).
+/// `GET /api/resources/{id}/meta` must return the current meta tier without
+/// reconstructing markdown from chunks. Asserted: the response carries the
+/// seeded `open_meta` (tags), `kb_chunks` rows are byte-identical before and
+/// after the GET, and auth scoping works (second user → 404, ghost id → 404;
+/// the READ path uses `get_visible`, which does not leak existence).
+///
+/// Post-WS6-collapse repoint (F5/F4/F1): the `kb_resource_manifests` row read
+/// and the four manifest-equality assertions are dropped — the manifest table
+/// is gone (F5), `managed_hash`/`open_hash` are §7-dissolved and emitted empty
+/// (F4), and `temper-title` is a §7-Die key absent from managed_meta (F1, so
+/// the "title present in managed_meta" sub-assertion is dropped — the title
+/// survives on `kb_resources.title`, outside the meta tier). The surviving,
+/// faithful core is: get_meta returns the open tier, doesn't touch chunks, and
+/// scopes by visibility. Chunks read from `kb_chunks` ⋈ `kb_chunk_content`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -686,10 +487,11 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         .await
         .expect("ingest create failed");
 
-    // Baseline chunk state.
+    // Baseline chunk state (F5: `kb_chunks` ⋈ `kb_chunk_content`, current).
     let chunks_before: Vec<(i32, String, String)> = sqlx::query_as(
-        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
-         WHERE resource_id = $1 ORDER BY chunk_index",
+        "SELECT c.chunk_index, cc.content, c.content_hash \
+         FROM kb_chunks c JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+         WHERE c.resource_id = $1 AND c.is_current ORDER BY c.chunk_index",
     )
     .bind(resource.id)
     .fetch_all(&pool)
@@ -697,26 +499,10 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
     .expect("fetch chunks before");
     assert_eq!(chunks_before.len(), 2, "expected two seed chunks");
 
-    // Authoritative manifest row — the GET must return these exactly.
-    // Note: ingest augments managed_meta server-side (e.g. adding `date`),
-    // so the assertion must compare against the post-ingest manifest row,
-    // not the seeded input. The _ bindings keep the seeded values alive
-    // for readability and so the seeded tag is referenced somewhere in
-    // the test.
-    let _ = (&seeded_managed, &seeded_open);
-    let (manifest_managed_meta, manifest_open_meta, manifest_managed_hash, manifest_open_hash): (
-        serde_json::Value,
-        serde_json::Value,
-        String,
-        String,
-    ) = sqlx::query_as(
-        "SELECT managed_meta, open_meta, managed_hash, open_hash \
-         FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource.id)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch manifest row");
+    // The seeded managed tier is referenced only for readability now; the
+    // manifest-equality comparison it fed is retired (F5). `seeded_open` is the
+    // expectation for the open tier below.
+    let _ = &seeded_managed;
 
     // --- (1) Happy path: client.get_meta returns the current meta tier ---
     let meta = app
@@ -727,48 +513,25 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         .expect("get_meta failed");
 
     assert_eq!(meta.resource_id, resource.id);
-    // The manifest row (fetched as JSON) round-trips into a typed
-    // `ManagedMeta` for comparison against the service response. The
-    // `extra` flatten bucket makes this lossless, so if the service's
-    // deserialize drops or mangles a field, this assertion fails.
-    let manifest_managed_typed: ManagedMeta =
-        serde_json::from_value(manifest_managed_meta).expect("manifest → typed");
-    assert_eq!(
-        meta.managed_meta.as_ref(),
-        Some(&manifest_managed_typed),
-        "typed managed_meta must match the manifest row exactly",
-    );
-    assert_eq!(
-        meta.open_meta.as_ref(),
-        Some(&manifest_open_meta),
-        "open_meta must match the manifest row exactly",
-    );
-    assert_eq!(
-        meta.managed_hash, manifest_managed_hash,
-        "managed_hash must match the manifest row",
-    );
-    assert_eq!(
-        meta.open_hash, manifest_open_hash,
-        "open_hash must match the manifest row",
-    );
-    // And verify the seeded-by-caller fields survived, now via the
-    // typed accessors (this is the whole point of the typed refactor —
-    // no more `.get("title").and_then(|v| v.as_str())` stringy lookups).
-    assert_eq!(
-        meta.managed_meta.as_ref().and_then(|m| m.title.as_deref()),
-        Some("Get Meta Doc"),
-        "caller-provided title should be present in managed_meta",
+    // The open tier round-trips verbatim — the caller-provided `tags` come back
+    // on `open_meta`. (managed_meta is present but the seeded `temper-title` is
+    // a §7-Die key — F1 — so it is NOT carried in the meta tier; the title
+    // survives on `kb_resources.title`, asserted by the cascade tests.)
+    assert!(
+        meta.managed_meta.is_some(),
+        "get_meta must return a managed_meta tier (even if empty post-§7)",
     );
     assert_eq!(
         meta.open_meta.as_ref().and_then(|v| v.get("tags")),
-        Some(&serde_json::json!(["get", "meta"])),
-        "caller-provided tags should be present in open_meta",
+        seeded_open.get("tags"),
+        "caller-provided tags should round-trip on open_meta",
     );
 
     // --- (2) Chunks untouched by the GET ---
     let chunks_after: Vec<(i32, String, String)> = sqlx::query_as(
-        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
-         WHERE resource_id = $1 ORDER BY chunk_index",
+        "SELECT c.chunk_index, cc.content, c.content_hash \
+         FROM kb_chunks c JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+         WHERE c.resource_id = $1 AND c.is_current ORDER BY c.chunk_index",
     )
     .bind(resource.id)
     .fetch_all(&pool)

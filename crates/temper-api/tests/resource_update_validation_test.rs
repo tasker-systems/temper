@@ -39,7 +39,7 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
+            "doc_type": "research",
             "origin_uri": format!("test://body-trio-{}", uuid::Uuid::new_v4()),
             "title": "Body Trio Test Resource",
             "slug": null
@@ -67,18 +67,14 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// PATCH with content but no content_hash returns 400 when the server-side
-/// ingest pipeline is not available (no `ingest-pipeline` feature). The
-/// all-or-nothing guard moved from the handler into `prepare_body_trio`: the
-/// wire hash/chunks fields are now ignored and the server attempts to recompute
-/// the pair. Without the pipeline it cannot, so it returns 400.
-///
-/// When `ingest-pipeline` IS enabled (Embed CI job), sending content without a
-/// wire-supplied hash succeeds — see the body-bearing tests in
-/// `resource_update_body_test.rs` (gated on `test-embed`).
+/// PATCH with content but no content_hash succeeds (200) even without the
+/// `ingest-pipeline` feature. WS6 collapse retired the all-or-nothing 400 guard:
+/// the substrate computes the structural `body_hash` inline (`body_hash_for_body`,
+/// Task F), independent of the embed pipeline, so a content PATCH no longer
+/// requires a wire-supplied hash/chunks pair.
 #[cfg(not(feature = "ingest-pipeline"))]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn patch_returns_400_when_content_present_without_pipeline(pool: PgPool) {
+async fn patch_with_content_without_pipeline_succeeds(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, resource_id) = setup_profile_and_resource(&app).await;
 
@@ -101,13 +97,12 @@ async fn patch_returns_400_when_content_present_without_pipeline(pool: PgPool) {
     let body: Value = resp.json().await.expect("expected JSON body");
 
     assert_eq!(
-        status, 400,
-        "content without pipeline must return 400; body: {body}"
+        status, 200,
+        "content PATCH without the pipeline now succeeds (inline body_hash); body: {body}"
     );
-    let message = body["error"]["message"].as_str().unwrap_or("");
     assert!(
-        message.contains("chunks_packed"),
-        "error message must mention 'chunks_packed'; got: {message}"
+        body["body_hash"].is_string(),
+        "response must carry the inline-computed body_hash; got: {body}"
     );
 }
 

@@ -22,6 +22,19 @@ pub enum DocType {
 
 #[allow(clippy::should_implement_trait)]
 impl DocType {
+    /// Every doc-type variant, in canonical order. Single source of truth for
+    /// callers that enumerate the known doc types (e.g. the MCP `list_doc_types`
+    /// tool, post-collapse — the substrate stores doc-type as a property name,
+    /// so there is no `kb_doc_types` table to list).
+    pub const ALL: &'static [DocType] = &[
+        DocType::Task,
+        DocType::Goal,
+        DocType::Session,
+        DocType::Research,
+        DocType::Decision,
+        DocType::Concept,
+    ];
+
     /// Canonical string form as used in YAML frontmatter and vault paths.
     pub fn as_str(&self) -> &'static str {
         match self {

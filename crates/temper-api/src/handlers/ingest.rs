@@ -1,14 +1,13 @@
 use axum::extract::{Path, State};
-use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::select_backend;
+use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult};
-use crate::middleware::auth::{AuthUser, DeviceId};
+use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
-use temper_core::operations::{BodyUpdate, CreateResource, Surface, UpdateResource};
+use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::managed_meta::ManagedMeta;
@@ -29,13 +28,8 @@ use temper_core::types::resource::ResourceRow;
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
-
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     // Parse failures (malformed JSON for ManagedMeta shape) surface as BadRequest.
     let managed_meta: ManagedMeta = match payload.managed_meta {
@@ -64,14 +58,7 @@ pub async fn create(
         origin: Surface::ApiHttp,
     };
 
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -92,14 +79,9 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
-
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     let managed_meta: Option<ManagedMeta> = match payload.managed_meta {
         Some(v) => Some(
@@ -130,14 +112,7 @@ pub async fn update(
         move_to: None,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }

@@ -17,9 +17,9 @@ mod surface;
 
 pub use actions::{
     apply_defaults, apply_defaults_value, assemble_frontmatter_document,
-    ensure_managed_identity_keys, merge_managed_meta, merge_open_meta, validate_create,
-    validate_doctype, validate_open_meta_keys, validate_slug, validate_update, ActionError,
-    FrontmatterIdentity,
+    ensure_managed_identity_keys, merge_managed_meta, merge_open_meta, strip_system_managed_fields,
+    validate_create, validate_doctype, validate_managed_meta, validate_open_meta_keys,
+    validate_slug, validate_update, ActionError, FrontmatterIdentity, ValidateManagedMetaParams,
 };
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT property_set($1,$2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "property_set",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "452dd5a8b73355c721b72710ca5334a5805cfc523c426bd48c3834217e3238e9"
+}
