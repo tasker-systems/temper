@@ -114,6 +114,23 @@ Design spec: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
    Re-confirm its live-diff half (row counts: 5 profiles / 5 auth_links / …) against the
    snapshot — the DDL half was verified byte-faithful to the cited migrations.
 
+8c. [ ] **Align emitter-entity names with the de-hardcoded resolver** (code change in this branch).
+   The collapsed write path resolves the per-surface emitter entity by **`<handle>@<surface>`**
+   (`temper_next::writes::resolve_emitter` joins `kb_entities`→`kb_profiles`), replacing the former
+   hardcoded `pete@<surface>` literal. The live `kb_entities` rows were created by the now-retired
+   synthesis bootstrap with the legacy `pete@` naming, so rename any whose local-part no longer
+   matches the owner's handle — otherwise every authenticated write 500s on a missing emitter:
+   ```sql
+   UPDATE kb_entities e
+      SET name = p.handle || '@' || split_part(e.name, '@', 2)
+     FROM kb_profiles p
+    WHERE p.id = e.profile_id
+      AND e.name LIKE '%@%'
+      AND split_part(e.name, '@', 1) <> p.handle;
+   ```
+   (Newly auto-provisioned profiles get `<handle>@{web,cli,mcp}` from `resolve_from_claims`; this
+   step only fixes the pre-existing synthesized rows.)
+
 9. [ ] **Promote:**
    ```sql
    ALTER SCHEMA temper_next RENAME TO public;
