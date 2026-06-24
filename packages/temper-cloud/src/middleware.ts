@@ -1,7 +1,24 @@
 import type { AuthClaims } from "./auth.js";
 import { getIssuer, getJwksVerifier, verifyToken } from "./auth.js";
 import { getDb, type NeonClient } from "./db.js";
-import { getProfileId } from "./ingest.js";
+
+/**
+ * Look up the profile_id from auth claims.
+ * Joins through kb_profile_auth_links using claims.sub as the external identity.
+ * Returns null if no matching profile is found.
+ */
+export async function getProfileId(db: NeonClient, claims: AuthClaims): Promise<string | null> {
+  const rows = await db`
+    SELECT p.id
+    FROM kb_profiles p
+    JOIN kb_profile_auth_links pal ON pal.profile_id = p.id
+    WHERE pal.auth_provider_user_id = ${claims.sub}
+      AND p.is_active = true
+    LIMIT 1
+  `;
+  if (rows.length === 0) return null;
+  return rows[0].id as string;
+}
 
 // ---------------------------------------------------------------------------
 // Result types
