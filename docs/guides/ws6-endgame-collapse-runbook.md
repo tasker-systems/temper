@@ -65,6 +65,18 @@ Design spec: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
    ```
    **Record the branch name + id.** This is the only rollback point (`public` is stale).
 
+5b. [ ] **PERSISTENT BACKUP GATE — operator hard-stop. Do NOT run any step ≥ 6 until this is done.**
+   Elevate the step-5 branch (or cut a parallel one) into a **durable, explicitly-retained**
+   point-in-time backup — protected from Neon's default branch/PITR expiry so it survives as the
+   permanent "restore to exactly pre-flip" target long after the cutover (distinct from the
+   operational rollback branch, which may be cleaned up once the flip is confirmed). This is the
+   last point where rollback is a single lookup; steps 6–9 are destructive schema renames. Record
+   its identifier + restore command inline here before proceeding:
+   - Durable backup branch / id: `__________`
+   - Restore command:            `neonctl branches restore … __________`
+
+   Executed manually by the operator, or by the agent once `neonctl` is authenticated.
+
 ---
 
 ## DDL sequence (one operator session, against the recorded target)
@@ -107,9 +119,27 @@ Design spec: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
    ALTER SCHEMA temper_next RENAME TO public;
    ```
    The canonical schema is now `public` — the connection default — owning its extensions +
-   uuid generator (step 7). (No `_sqlx_migrations` reconciliation needed: the collapsed code
-   removed the boot-time `migrate!`; `migrations/` no longer governs this schema. Restoring a
-   meaningful migrate path is the bootstrap-export spec's job.)
+   uuid generator (step 7).
+
+9b. [ ] **Reconcile `_sqlx_migrations` to the canonical baseline (mark-as-applied, NOT replay).**
+   The promoted `public` is structurally artifact-faithful but its `_sqlx_migrations` still lists the
+   retired legacy lineage. The schema already exists — do NOT replay DDL. (This replaces the prior
+   "no reconciliation needed / bootstrap-export spec's job" punt; the canonical-migrations-in-public
+   spec owns it: `docs/superpowers/specs/2026-06-23-canonical-migrations-in-public-design.md` §5.)
+   1. **Structural safety check (HARD GATE):** `pg_dump --schema-only` of live `public` vs. a fresh
+      DB built from `migrations/` — the diff must be empty (both derive from the same artifact).
+      Account for extension residency + the uuid shim: the canonical baseline self-provisions the
+      `vector` extension and `uuid_generate_v7()`, whereas here they were relocated into the surviving
+      schema at step 7 — reconcile that benign provisioning difference rather than hand-waving the
+      diff. Abort the reconciliation if anything structural differs.
+   2. **Compute the baseline checksums** sqlx expects: `sqlx migrate info --source migrations` against
+      a fresh baseline DB (or read the `_sqlx_migrations` rows it writes there).
+   3. **Mark-as-applied** on the live DB: `TRUNCATE _sqlx_migrations;` then `INSERT` the 3 baseline
+      rows (`version`, `description`, `checksum`, `success=true`, `installed_on=now()`,
+      `execution_time=0`).
+   4. **Verify:** `sqlx migrate info --source migrations` shows all 3 **applied**, and a
+      `sqlx migrate run` against the live DB is a clean no-op. The deployment is now migration-aligned
+      with the canonical set.
 
 ---
 
