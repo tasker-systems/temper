@@ -42,7 +42,7 @@ jobs:
   integration-tests:
     name: Integration & E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -66,6 +66,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # The bge-base-en-v1.5 model + the bundled libonnxruntime are git-LFS
+          # (crates/temper-ingest/{models,lib}); `include_bytes!` bakes them in at
+          # compile time, so without an LFS checkout the build embeds a pointer and
+          # any server-side embed fails. Needed now that the test-db tier embeds.
+          lfs: true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -73,7 +79,7 @@ jobs:
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: test-db-v2
+          prefix-key: test-db-v3 # bumped: force a clean recompile that bakes the real LFS bge model
 
       - name: Install cargo-nextest and cargo-sqlx
         uses: taiki-e/install-action@v2
@@ -190,7 +196,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     # Informational, never a merge gate: introduced before CODECOV_TOKEN is
     # configured, and correctness is already gated by the integration-tests job
     # (which runs the same test-db tier uninstrumented). `continue-on-error`
@@ -220,6 +226,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          lfs: true # LFS bge model + libonnxruntime baked via include_bytes! (see integration job)
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -229,7 +237,7 @@ jobs:
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: coverage-v1
+          prefix-key: coverage-v2 # bumped: clean recompile bakes the real LFS bge model
 
       - name: Install cargo-nextest, cargo-llvm-cov, cargo-sqlx
         uses: taiki-e/install-action@v2
