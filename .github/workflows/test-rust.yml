@@ -109,7 +109,10 @@ jobs:
         # migrated public schema this job validates against; it is compiled+tested offline in unit-tests.
         # temper-agents is excluded for the same reason: it depends on temper-next unconditionally (the
         # envelope re-export), so building it here would compile temper-next's macros live and fail.
-        run: cargo nextest run --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast
+        # --test-threads 1: server-side embedding bakes the bge model into every test binary; running
+        # the body-bearing ingest tests concurrently contends on ort and flakes embed_texts (the Embed
+        # job serializes for the same reason). Serial keeps the embedding tests deterministic.
+        run: cargo nextest run --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --test-threads 1
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -264,7 +267,7 @@ jobs:
         # unit + DB integration + e2e (now incl. the server-side embed path).
         # temper-next excluded (temper_next-namespace sqlx! macros; offline-validated in unit-tests).
         # temper-agents excluded too: unconditional temper-next dep (envelope re-export) would compile those macros live here.
-        run: cargo llvm-cov nextest --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --test-threads 1 --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
