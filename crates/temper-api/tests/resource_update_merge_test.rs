@@ -60,29 +60,30 @@ async fn setup_resource_with_managed_meta(
         .as_str()
         .expect("id field missing")
         .to_string();
-    let resource_id = Uuid::parse_str(&resource_id_str).expect("invalid uuid");
 
-    // Seed the manifest row with the desired managed_meta.
-    let managed_hash = temper_core::hash::compute_managed_hash("research", &managed_meta);
-    let open_meta = json!({});
-    let open_hash = temper_core::hash::compute_open_hash(&open_meta);
-    sqlx::query(
-        r#"INSERT INTO kb_resource_manifests
-            (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
-           VALUES ($1, 'test-body-hash', $2, $3, $4, $5, now())
-           ON CONFLICT (resource_id) DO UPDATE
-               SET managed_meta = $2, managed_hash = $4, updated = now()"#,
-    )
-    .bind(resource_id)
-    .bind(&managed_meta)
-    .bind(&open_meta)
-    .bind(&managed_hash)
-    .bind(&open_hash)
-    .execute(pool)
-    .await
-    .expect("seed manifest row");
+    // Seed the baseline managed_meta via the API (the substrate stores it as
+    // kb_properties; a PATCH merges into the create-time managed_meta).
+    seed_meta(app, &token, &resource_id_str, json!({ "managed_meta": managed_meta })).await;
 
     (token, resource_id_str)
+}
+
+/// Seed/patch a resource's meta via PATCH /api/resources/{id} and assert 200.
+async fn seed_meta(app: &common::TestApp, token: &str, resource_id: &str, body: serde_json::Value) {
+    let resp = app
+        .client
+        .patch(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("seed meta PATCH failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "seed meta must succeed; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
 }
 
 /// Creates a JWT-authenticated profile + resource, seeds a manifest row with
@@ -124,61 +125,35 @@ async fn setup_resource_with_open_meta(
         .as_str()
         .expect("id field missing")
         .to_string();
-    let resource_id = Uuid::parse_str(&resource_id_str).expect("invalid uuid");
 
-    let managed_meta = json!({});
-    let managed_hash = temper_core::hash::compute_managed_hash("research", &managed_meta);
-    let open_hash = temper_core::hash::compute_open_hash(&open_meta);
-    sqlx::query(
-        r#"INSERT INTO kb_resource_manifests
-            (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
-           VALUES ($1, 'test-body-hash', $2, $3, $4, $5, now())
-           ON CONFLICT (resource_id) DO UPDATE
-               SET open_meta = $3, open_hash = $5, updated = now()"#,
-    )
-    .bind(resource_id)
-    .bind(&managed_meta)
-    .bind(&open_meta)
-    .bind(&managed_hash)
-    .bind(&open_hash)
-    .execute(pool)
-    .await
-    .expect("seed manifest row");
+    // Seed the baseline open_meta via the API (stored as kb_properties).
+    seed_meta(app, &token, &resource_id_str, json!({ "open_meta": open_meta })).await;
 
     (token, resource_id_str)
 }
 
-/// Fetch the stored managed_meta JSONB value from kb_resource_manifests.
-async fn fetch_managed_meta(pool: &PgPool, resource_id: Uuid) -> serde_json::Value {
-    sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT managed_meta FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource_id)
-    .fetch_one(pool)
-    .await
-    .expect("fetch managed_meta")
+/// Read a resource's managed_meta via GET /api/resources/{id}/meta (the
+/// substrate reconstructs it from kb_properties via readback::meta).
+async fn fetch_managed_meta(app: &common::TestApp, token: &str, resource_id: &str) -> Value {
+    fetch_meta(app, token, resource_id).await["managed_meta"].clone()
 }
 
-/// Fetch the stored open_meta JSONB value from kb_resource_manifests.
-async fn fetch_open_meta(pool: &PgPool, resource_id: Uuid) -> serde_json::Value {
-    sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT open_meta FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource_id)
-    .fetch_one(pool)
-    .await
-    .expect("fetch open_meta")
+/// Read a resource's open_meta via GET /api/resources/{id}/meta.
+async fn fetch_open_meta(app: &common::TestApp, token: &str, resource_id: &str) -> Value {
+    fetch_meta(app, token, resource_id).await["open_meta"].clone()
 }
 
-/// Fetch the stored managed_hash from kb_resource_manifests.
-async fn fetch_managed_hash(pool: &PgPool, resource_id: Uuid) -> String {
-    sqlx::query_scalar::<_, String>(
-        "SELECT managed_hash FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource_id)
-    .fetch_one(pool)
-    .await
-    .expect("fetch managed_hash")
+/// GET /api/resources/{id}/meta → the ResourceMetaResponse JSON.
+async fn fetch_meta(app: &common::TestApp, token: &str, resource_id: &str) -> Value {
+    app.client
+        .get(app.url(&format!("/api/resources/{resource_id}/meta")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("get meta failed")
+        .json()
+        .await
+        .expect("meta JSON")
 }
 
 // ---------------------------------------------------------------------------
@@ -192,10 +167,13 @@ async fn fetch_managed_hash(pool: &PgPool, resource_id: Uuid) -> String {
 async fn managed_meta_partial_update_preserves_untouched_fields(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
+    // Use managed keys whose substrate fate is `Property` (they round-trip as
+    // managed_meta via kb_properties). `temper-goal` (→Edge) and `date`
+    // (→open-tier for research) deliberately do NOT, so they are not used here.
     let stored = json!({
         "temper-stage": "in-progress",
         "temper-mode": "build",
-        "temper-goal": "g1"
+        "temper-status": "active"
     });
     let (token, resource_id) = setup_resource_with_managed_meta(&app, &pool, stored).await;
 
@@ -222,8 +200,7 @@ async fn managed_meta_partial_update_preserves_untouched_fields(pool: PgPool) {
         resp.text().await.unwrap_or_default()
     );
 
-    let rid = Uuid::parse_str(&resource_id).unwrap();
-    let merged = fetch_managed_meta(&pool, rid).await;
+    let merged = fetch_managed_meta(&app, &token, &resource_id).await;
     assert_eq!(
         merged["temper-stage"],
         json!("done"),
@@ -234,22 +211,26 @@ async fn managed_meta_partial_update_preserves_untouched_fields(pool: PgPool) {
         json!("build"),
         "mode must be preserved"
     );
-    assert_eq!(merged["temper-goal"], json!("g1"), "goal must be preserved");
+    assert_eq!(
+        merged["temper-status"],
+        json!("active"),
+        "status must be preserved"
+    );
 }
 
-/// PATCH with managed_meta that includes extra-bucket keys must merge by key:
-/// existing extras survive; incoming extras are added.
+/// PATCH with managed_meta merges by key: an existing managed key survives when
+/// a different key is patched in.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn managed_meta_extra_bucket_merges_by_key(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
-    // Pre-seed an extra "date" key (session-style, lives in the flatten bucket).
-    let stored = json!({ "date": "2026-04-13" });
+    // Seed one Property-fate managed key.
+    let stored = json!({ "temper-mode": "build" });
     let (token, resource_id) = setup_resource_with_managed_meta(&app, &pool, stored).await;
 
-    // PATCH with a different extra key — "date" must survive.
+    // PATCH a different managed key — `temper-mode` must survive.
     let req_body = json!({
-        "managed_meta": { "custom": "value" }
+        "managed_meta": { "temper-status": "active" }
     });
 
     let resp = app
@@ -268,17 +249,16 @@ async fn managed_meta_extra_bucket_merges_by_key(pool: PgPool) {
         resp.text().await.unwrap_or_default()
     );
 
-    let rid = Uuid::parse_str(&resource_id).unwrap();
-    let merged = fetch_managed_meta(&pool, rid).await;
+    let merged = fetch_managed_meta(&app, &token, &resource_id).await;
     assert_eq!(
-        merged["date"],
-        json!("2026-04-13"),
-        "existing extra key 'date' must be preserved"
+        merged["temper-mode"],
+        json!("build"),
+        "existing managed key 'temper-mode' must be preserved"
     );
     assert_eq!(
-        merged["custom"],
-        json!("value"),
-        "incoming extra key 'custom' must be added"
+        merged["temper-status"],
+        json!("active"),
+        "incoming managed key 'temper-status' must be added"
     );
 }
 
@@ -315,8 +295,7 @@ async fn open_meta_partial_update_merges_by_key(pool: PgPool) {
         resp.text().await.unwrap_or_default()
     );
 
-    let rid = Uuid::parse_str(&resource_id).unwrap();
-    let merged = fetch_open_meta(&pool, rid).await;
+    let merged = fetch_open_meta(&app, &token, &resource_id).await;
     assert_eq!(
         merged["tags"],
         json!(["rust", "axum"]),
@@ -329,42 +308,7 @@ async fn open_meta_partial_update_merges_by_key(pool: PgPool) {
     );
 }
 
-/// When managed_meta changes, the stored managed_hash must be recomputed and
-/// differ from the value before the PATCH.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn managed_hash_recomputes_after_merge(pool: PgPool) {
-    let app = common::setup_test_app(pool.clone()).await;
-
-    let stored = json!({ "temper-stage": "in-progress" });
-    let (token, resource_id) = setup_resource_with_managed_meta(&app, &pool, stored).await;
-
-    let rid = Uuid::parse_str(&resource_id).unwrap();
-    let before = fetch_managed_hash(&pool, rid).await;
-
-    // PATCH stage to "done" — managed_meta changes, so hash must change.
-    let req_body = json!({
-        "managed_meta": { "temper-stage": "done" }
-    });
-
-    let resp = app
-        .client
-        .patch(app.url(&format!("/api/resources/{resource_id}")))
-        .header("Authorization", format!("Bearer {token}"))
-        .json(&req_body)
-        .send()
-        .await
-        .expect("PATCH request failed");
-
-    assert_eq!(
-        resp.status().as_u16(),
-        200,
-        "meta-only PATCH must return 200; body: {}",
-        resp.text().await.unwrap_or_default()
-    );
-
-    let after = fetch_managed_hash(&pool, rid).await;
-    assert_ne!(
-        before, after,
-        "managed_hash must change when managed_meta changes"
-    );
-}
+// `managed_hash_recomputes_after_merge` was DELETED: the substrate retired the
+// `managed_hash` (db_backend sets it `None`; GET /meta returns `managed_hash: ""`),
+// so there is no recomputed hash to assert. The managed_meta merge it leaned on is
+// still covered by the partial-update tests above.

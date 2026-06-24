@@ -417,12 +417,50 @@ async fn body_update_combined_with_managed_meta_in_one_tx(pool: PgPool) {
 async fn update_response_includes_body_hash(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
-    let body_hash = "sha256:response-hash-test-aabbcc1122";
-    let initial_chunks = vec![make_packed_chunk(0, "Some content.", "c1")];
-    let (token, resource_id) =
-        setup_resource_with_body(&app, &pool, body_hash, &initial_chunks).await;
+    let email = format!("body-hash-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
 
-    // PATCH with managed_meta only — body_hash should still be returned.
+    // Create a resource, then give it a body via a content PATCH — the substrate
+    // computes the structural body_hash inline (`body_hash_for_body`, no pipeline).
+    let created: Value = app
+        .client
+        .post(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "kb_context_id": context_id.to_string(),
+            "doc_type": "research",
+            "origin_uri": format!("test://body-hash-{}", Uuid::new_v4()),
+            "title": "Body Hash Test",
+            "slug": null
+        }))
+        .send()
+        .await
+        .expect("create failed")
+        .json()
+        .await
+        .expect("create JSON");
+    let resource_id = created["id"].as_str().expect("id missing");
+
+    let after_content: Value = app
+        .client
+        .patch(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "content": "Some content." }))
+        .send()
+        .await
+        .expect("content PATCH failed")
+        .json()
+        .await
+        .expect("content PATCH JSON");
+    let stored_hash = after_content["body_hash"].clone();
+    assert!(
+        stored_hash.is_string(),
+        "content PATCH must compute a body_hash; got {after_content}"
+    );
+
+    // A managed_meta-only PATCH must still return the (unchanged) body_hash.
     let resp = app
         .client
         .patch(app.url(&format!("/api/resources/{resource_id}")))
@@ -442,17 +480,8 @@ async fn update_response_includes_body_hash(pool: PgPool) {
     );
 
     let body: Value = resp.json().await.expect("expected JSON response");
-    assert!(
-        body.get("body_hash").is_some(),
-        "ResourceRow response must include body_hash field"
-    );
-    assert!(
-        !body["body_hash"].is_null(),
-        "body_hash must be populated (not null) when manifest exists"
-    );
     assert_eq!(
-        body["body_hash"],
-        json!(body_hash),
-        "body_hash in response must match stored manifest value"
+        body["body_hash"], stored_hash,
+        "body_hash must be preserved (and returned) across a managed-only PATCH"
     );
 }
