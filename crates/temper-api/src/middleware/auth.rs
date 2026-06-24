@@ -172,13 +172,12 @@ async fn lookup_cached_email(
 
 /// Subset of the OIDC discovery document (`/.well-known/openid-configuration`).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct OidcDiscovery {
     userinfo_endpoint: Option<String>,
 }
 
 /// Parse the `userinfo_endpoint` out of an OIDC discovery document body.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "used by tests in A1; wired into the discovery flow in A2"))]
 fn parse_userinfo_endpoint(body: &str) -> Result<String, String> {
     let doc: OidcDiscovery =
         serde_json::from_str(body).map_err(|e| format!("discovery parse error: {e}"))?;
