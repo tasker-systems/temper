@@ -44,7 +44,7 @@ pub enum Idp {
 pub struct SelfHostConfig {
     /// Instance base URL, e.g. `https://temper.acme.com`.
     pub instance_url: String,
-    /// Auth0 tenant domain, e.g. `acme.us.auth0.com`.
+    /// OAuth provider domain — e.g. `acme.us.auth0.com` (Auth0) or `acme.okta.com` (Okta).
     pub auth_domain: String,
     /// Auth0 native-app client_id for the CLI.
     pub client_id: String,
@@ -154,6 +154,45 @@ fn prompt_err(e: dialoguer::Error) -> TemperError {
     TemperError::Config(format!("prompt error: {e}"))
 }
 
+/// Assemble a `SelfHostConfig` from `--no-interactive` flags. Returns
+/// `Ok(None)` when the instance quad is absent (local-only init). Errors when
+/// `--idp okta` is missing `--auth-server-id`, or `--idp` is unrecognized.
+pub fn self_host_from_flags(
+    instance_url: Option<String>,
+    auth_domain: Option<String>,
+    client_id: Option<String>,
+    audience: Option<String>,
+    idp: Option<String>,
+    auth_server_id: Option<String>,
+) -> Result<Option<SelfHostConfig>> {
+    let (instance_url, auth_domain, client_id, audience) =
+        match (instance_url, auth_domain, client_id, audience) {
+            (Some(i), Some(d), Some(c), Some(a)) => (i, d, c, a),
+            _ => return Ok(None),
+        };
+    let idp = match idp.as_deref() {
+        None | Some("auth0") => Idp::Auth0,
+        Some("okta") => {
+            let id = auth_server_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                TemperError::Config("--auth-server-id is required when --idp okta".to_string())
+            })?;
+            Idp::Okta { auth_server_id: id }
+        }
+        Some(other) => {
+            return Err(TemperError::Config(format!(
+                "unknown --idp '{other}' (expected 'auth0' or 'okta')"
+            )))
+        }
+    };
+    Ok(Some(SelfHostConfig {
+        instance_url: instance_url.trim_end_matches('/').to_string(),
+        auth_domain,
+        client_id,
+        audience,
+        idp,
+    }))
+}
+
 /// CLI entry point dispatched from `main.rs`.
 pub fn run(
     path: &Path,
@@ -205,7 +244,10 @@ pub fn run_non_interactive(
     contexts.extend(answers.extra_contexts.iter().cloned());
     let auth = match &answers.auth_choice {
         AuthChoice::Hosted => "auth0".to_string(),
-        AuthChoice::SelfHosted(_) => "auth0 (self-hosted)".to_string(),
+        AuthChoice::SelfHosted(sh) => match sh.idp {
+            Idp::Auth0 => "auth0 (self-hosted)".to_string(),
+            Idp::Okta { .. } => "okta (self-hosted)".to_string(),
+        },
         AuthChoice::None => "none".to_string(),
     };
     let summary = InitSummary {
@@ -901,5 +943,55 @@ mod tests {
         run_non_interactive(&vault, false, OutputFormat::Json, Some(sh))
             .expect("self-host non-interactive run should succeed");
         assert!(vault.join(".temper").is_dir());
+    }
+
+    #[test]
+    fn flags_auth0_builds_auth0_idp_and_trims_slash() {
+        let sh = self_host_from_flags(
+            Some("https://x.com/".into()),
+            Some("d.auth0.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("auth0".into()),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(sh.idp, Idp::Auth0));
+        assert_eq!(sh.instance_url, "https://x.com");
+    }
+
+    #[test]
+    fn flags_okta_without_server_id_errors() {
+        let res = self_host_from_flags(
+            Some("https://x.com".into()),
+            Some("o.okta.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("okta".into()),
+            None,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn flags_okta_with_server_id_builds_okta_idp() {
+        let sh = self_host_from_flags(
+            Some("https://x.com".into()),
+            Some("o.okta.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("okta".into()),
+            Some("aus9".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(sh.idp, Idp::Okta { .. }));
+    }
+
+    #[test]
+    fn flags_none_when_instance_missing() {
+        let res = self_host_from_flags(None, None, None, None, Some("auth0".into()), None).unwrap();
+        assert!(res.is_none());
     }
 }

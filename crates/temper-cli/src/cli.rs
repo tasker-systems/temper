@@ -75,6 +75,12 @@ pub enum Commands {
         /// Self-host: API audience (e.g. <https://temper.acme.com/api>)
         #[arg(long)]
         auth_audience: Option<String>,
+        /// Self-host: identity provider URL shape (default: auth0)
+        #[arg(long, default_value = "auth0")]
+        idp: String,
+        /// Self-host: Okta authorization server ID (required with --idp okta)
+        #[arg(long)]
+        auth_server_id: Option<String>,
     },
     /// Check vault integrity and tool health
     Check {
