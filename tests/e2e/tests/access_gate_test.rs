@@ -654,8 +654,5 @@ async fn audit_events_written_for_lifecycle(pool: sqlx::PgPool) {
         Some(admin_id),
         "approval must attribute the reviewing admin (audit trail)"
     );
-    assert!(
-        reviewed,
-        "approval must stamp reviewed_at (audit trail)"
-    );
+    assert!(reviewed, "approval must stamp reviewed_at (audit trail)");
 }

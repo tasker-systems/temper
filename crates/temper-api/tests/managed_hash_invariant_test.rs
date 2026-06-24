@@ -105,7 +105,8 @@ async fn ingest_stores_title_on_resource(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
-    let resource_id = ingest_research(&app, &token, "Hash Invariant Doc", "hash-invariant-doc").await;
+    let resource_id =
+        ingest_research(&app, &token, "Hash Invariant Doc", "hash-invariant-doc").await;
 
     let row = fetch_resource(&app, &token, &resource_id).await;
     assert_eq!(

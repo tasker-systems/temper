@@ -109,13 +109,9 @@ async fn enrich_resource_round_trips_managed_and_open(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resource(
-        &pool,
-        *profile_id,
-        &row,
-    )
-    .await
-    .expect("enrich_resource");
+    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, *profile_id, &row)
+        .await
+        .expect("enrich_resource");
 
     // doc_type lives on the typed top-level field (substrate: the `doc_type`
     // property / `ResourceRow.doc_type_name`), not in the managed_meta bag —
@@ -159,13 +155,9 @@ async fn enrich_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resource(
-        &pool,
-        *profile_id,
-        &row,
-    )
-    .await
-    .expect("enrich_resource");
+    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, *profile_id, &row)
+        .await
+        .expect("enrich_resource");
 
     assert!(
         enriched.managed_meta.is_some(),
@@ -215,13 +207,10 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
     let row_a_id = row_a.id;
     let row_b_id = row_b.id;
 
-    let enriched = temper_mcp::tools::resources::enrich_resources(
-        &pool,
-        *profile_id,
-        &[row_a, row_b],
-    )
-    .await
-    .expect("enrich_resources");
+    let enriched =
+        temper_mcp::tools::resources::enrich_resources(&pool, *profile_id, &[row_a, row_b])
+            .await
+            .expect("enrich_resources");
 
     assert_eq!(enriched.len(), 2);
     let stage_of = |rid: temper_core::types::ids::ResourceId| -> Option<String> {

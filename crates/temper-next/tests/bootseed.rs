@@ -79,7 +79,8 @@ async fn bootseed_publishes_payload_schemas() {
 /// never silently drift. Replaces the retired schema_drift.rs two-copy guard. No DB needed.
 #[test]
 fn seed_migration_event_types_match_system_yaml() {
-    let yaml_names = bootseed::system_event_type_names().expect("read system.yaml event-type names");
+    let yaml_names =
+        bootseed::system_event_type_names().expect("read system.yaml event-type names");
     let migration = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../migrations/20260624000003_canonical_seed.sql"

@@ -459,7 +459,7 @@ pub struct ValidateManagedMetaParams<'a> {
     pub context_name: &'a str,
 }
 
-/// Validate `managed_meta` against the doc-type schema, returning a typed [`TemperError`] on failure
+/// Validate `managed_meta` against the doc-type schema, returning a typed [`crate::error::TemperError`] on failure
 /// (always a `BadRequest` — these are caller-input faults, never system failures). Delegates document
 /// assembly to [`assemble_frontmatter_document`] so identity injection is defined in exactly one place.
 /// (Moved here from `temper-api`'s `ingest_service` at the WS6 collapse; the schema-validation

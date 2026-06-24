@@ -327,12 +327,11 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     .expect("spawn_blocking joined");
 
     // ---- Assertion 1: title is updated (cascaded to kb_resources.title) ----
-    let title_after: String =
-        sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1")
-            .bind(seeded.id)
-            .fetch_one(&pool)
-            .await
-            .expect("resource must exist after update");
+    let title_after: String = sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1")
+        .bind(seeded.id)
+        .fetch_one(&pool)
+        .await
+        .expect("resource must exist after update");
     assert_eq!(
         title_after, "Updated Title",
         "title must be 'Updated Title' after meta-only update; got: {title_after}"

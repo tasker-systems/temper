@@ -282,11 +282,11 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
     // Verify edge is marked folded in the DB. The ack's edge_handle IS the
     // substrate edge id (DbBackend returns the kb_edges row id).
     let cid_uuid = Uuid::parse_str(edge_handle).expect("valid uuid");
-    let is_folded: bool =
-        sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1").bind(cid_uuid)
-    .fetch_one(&pool)
-    .await
-    .expect("is_folded query");
+    let is_folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1")
+        .bind(cid_uuid)
+        .fetch_one(&pool)
+        .await
+        .expect("is_folded query");
 
     assert!(is_folded, "edge should be folded after fold endpoint call");
 }

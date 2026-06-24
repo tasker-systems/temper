@@ -24,7 +24,6 @@ use temper_api::{
 use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
 use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
 
-
 /// A running e2e test environment with in-process API server and injected client.
 pub struct E2eTestApp {
     pub addr: SocketAddr,

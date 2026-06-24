@@ -5,13 +5,7 @@ edition = "2021"
 publish = false
 
 [package.metadata.cargo-machete]
-ignored = ["base64", "rmp-serde", "serde_json", "temper-next"]
-
-# temper-next is an OPTIONAL normal dep (not a dev-dep) gated behind `next-backend`: it pulls
-# temper-ingest[embed] → onnx, so it must NOT enter the default e2e build (the normal no-ONNX e2e CI
-# job would fail to link). Off by default; the WS6 4b HTTP read-path test enables it explicitly.
-[dependencies]
-temper-next = { path = "../../crates/temper-next", optional = true }
+ignored = ["base64", "rmp-serde", "serde_json"]
 
 [features]
 test-db = []

@@ -244,7 +244,9 @@ pub async fn list_meta_select(
     let page = filtered_visible_page(pool, profile_id, &params).await?;
     let mut out = Vec::with_capacity(page.page_ids.len());
     for new_id in page.page_ids {
-        out.push(get_meta_select(pool, ProfileId::from(profile_id), ResourceId::from(new_id)).await?);
+        out.push(
+            get_meta_select(pool, ProfileId::from(profile_id), ResourceId::from(new_id)).await?,
+        );
     }
     Ok(ResourceMetaListResponse {
         rows: out,

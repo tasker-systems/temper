@@ -45,11 +45,13 @@ async fn resolve_test_profile(pool: &sqlx::PgPool) -> ProfileId {
 
 /// Helper: count current chunks for a resource.
 async fn current_chunk_count(pool: &sqlx::PgPool, id: uuid::Uuid) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND is_current = true")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .expect("chunk count")
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND is_current = true",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("chunk count")
 }
 
 /// Helper: server-derived body_hash for a resource (collapsed substrate stores
@@ -191,12 +193,11 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
     // Verify no resource was created. The collapsed substrate's `kb_resources`
     // no longer carries `slug`/`owner_profile_id`; `origin_uri` uniquely
     // identifies the would-be row.
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM kb_resources WHERE origin_uri = $1")
-            .bind("mcp://test/validation")
-            .fetch_one(&pool)
-            .await
-            .expect("count query");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_resources WHERE origin_uri = $1")
+        .bind("mcp://test/validation")
+        .fetch_one(&pool)
+        .await
+        .expect("count query");
     assert_eq!(
         count, 0,
         "no resource should be created after validation failure"
@@ -444,9 +445,9 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         origin: Surface::Mcp,
     };
     DbBackend::new(pool.clone(), profile_id)
-    .update_resource(cmd)
-    .await
-    .expect("update via DbBackend");
+        .update_resource(cmd)
+        .await
+        .expect("update via DbBackend");
 
     // Read back the row via the substrate selector (NOT the retired get_visible).
     let updated_resource = read_selector::show_select(&pool, *profile_id, *resource.id)
@@ -856,7 +857,9 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         slug: "selector-route-doc".to_string(),
         content,
         metadata: None,
-        managed_meta: Some(serde_json::json!({"temper-type": "research", "temper-stage": "in-progress"})),
+        managed_meta: Some(
+            serde_json::json!({"temper-type": "research", "temper-stage": "in-progress"}),
+        ),
         open_meta: Some(serde_json::json!({"tags": ["selector", "route"]})),
         chunks_packed: Some(packed),
     };

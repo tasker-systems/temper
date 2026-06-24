@@ -63,7 +63,13 @@ async fn setup_resource_with_managed_meta(
 
     // Seed the baseline managed_meta via the API (the substrate stores it as
     // kb_properties; a PATCH merges into the create-time managed_meta).
-    seed_meta(app, &token, &resource_id_str, json!({ "managed_meta": managed_meta })).await;
+    seed_meta(
+        app,
+        &token,
+        &resource_id_str,
+        json!({ "managed_meta": managed_meta }),
+    )
+    .await;
 
     (token, resource_id_str)
 }
@@ -127,7 +133,13 @@ async fn setup_resource_with_open_meta(
         .to_string();
 
     // Seed the baseline open_meta via the API (stored as kb_properties).
-    seed_meta(app, &token, &resource_id_str, json!({ "open_meta": open_meta })).await;
+    seed_meta(
+        app,
+        &token,
+        &resource_id_str,
+        json!({ "open_meta": open_meta }),
+    )
+    .await;
 
     (token, resource_id_str)
 }

@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 description = "Axum HTTP server implementing the temper cloud API"
 
+[package.metadata.cargo-machete]
+# temper-ingest is an OPTIONAL dep plumbed via the `ingest-pipeline` feature (enabled by temper-cloud
+# + the e2e test-embed job). The collapse moved server-side embedding into temper-next, so temper-api
+# no longer references temper-ingest directly — whether `ingest-pipeline` can be fully retired is part
+# of the deferred test-embed follow-up. Ignore until that sweep resolves it.
+ignored = ["temper-ingest"]
+
 [[bin]]
 name = "temper-api"
 path = "src/main.rs"

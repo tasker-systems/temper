@@ -55,10 +55,7 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
     // registry, and Rust types are one chain; the snapshot test pins repo==types, this pins
     // registry==repo). A name with no snapshot (foreign/not-yet-typed) stays NULL = unregistered/
     // permissive.
-    let payloads_dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/payloads"
-    );
+    let payloads_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/payloads");
     for et in &boot.event_types {
         let schema: Option<serde_json::Value> =
             std::fs::read_to_string(format!("{payloads_dir}/{et}.v1.schema.json"))
