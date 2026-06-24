@@ -180,6 +180,23 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .execute(pool)
     .await?;
 
+    // Provision the per-surface emitter entities the write path resolves
+    // (`<handle>@<surface>` — `writes::resolve_emitter`). The deleted synthesis
+    // bootstrap used to create these; without them an auto-provisioned profile
+    // could not emit events (every write would 500 on a missing emitter).
+    for surface in ["web", "cli", "mcp"] {
+        sqlx::query!(
+            r#"
+            INSERT INTO kb_entities (profile_id, name, metadata)
+            VALUES ($1, $2, '{}'::jsonb)
+            "#,
+            profile_id,
+            format!("{handle}@{surface}"),
+        )
+        .execute(pool)
+        .await?;
+    }
+
     // Auto-provision a "default" context for the new profile.
     // Ignore conflict — if the profile somehow already has one, that's fine.
     sqlx::query!(

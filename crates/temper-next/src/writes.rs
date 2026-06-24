@@ -36,17 +36,22 @@ pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<Profil
     Ok(ProfileId::from(id))
 }
 
-/// The durable per-surface emitter entity `pete@<surface>` for a profile (§1b). `surface` is the
-/// lowercase surface marker (`cli` / `mcp` / `web`).
+/// The durable per-surface emitter entity `<handle>@<surface>` for a profile (§1b). `surface` is
+/// the lowercase surface marker (`cli` / `mcp` / `web`); `<handle>` is the profile's
+/// `kb_profiles.handle`. Resolves by joining through kb_profiles so the actor name is
+/// handle-derived (no hardcoded literal) and needs no extra round-trip.
 pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -> Result<EntityId> {
-    let name = format!("pete@{surface}");
-    let id: Uuid = sqlx::query("SELECT id FROM kb_entities WHERE profile_id = $1 AND name = $2")
-        .bind(profile.uuid())
-        .bind(&name)
-        .fetch_one(pool)
-        .await
-        .with_context(|| format!("no emitter entity {name:?} for the resolved profile"))?
-        .get("id");
+    let id: Uuid = sqlx::query(
+        "SELECT e.id FROM kb_entities e \
+         JOIN kb_profiles p ON p.id = e.profile_id \
+         WHERE e.profile_id = $1 AND e.name = p.handle || '@' || $2",
+    )
+    .bind(profile.uuid())
+    .bind(surface)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("no emitter entity <handle>@{surface} for the resolved profile"))?
+    .get("id");
     Ok(EntityId::from(id))
 }
 

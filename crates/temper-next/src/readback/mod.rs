@@ -567,25 +567,46 @@ pub async fn resource_row(
     })
 }
 
-/// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read
-/// floor. Reuses [`crate::parity::reconstruct_body`] (the production `get_content` assembly)
-/// over the shared [`crate::parity::new_substrate_chunks`] reader, so the read surface and
-/// the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
+/// Reconstruct a resource's markdown body from its substrate chunks — the §9 body read floor.
+/// Reuses [`crate::parity::reconstruct_body`] (the production `get_content` assembly) so the read
+/// surface and the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
 ///
-/// Keys the shared reader by `new_id` directly — the synthesized resource id (preserved verbatim from
-/// production). The reader was previously keyed by `origin_uri`, which is NOT unique (empty for
-/// CLI/agent-created resources), so it returned a concatenation of every empty-`origin_uri` resource's
-/// chunks; keying on the id is correct for every resource (WS6 flip real-corpus rehearsal finding).
+/// Reads the chunk tables UNQUALIFIED (like every sibling readback) so they resolve against the
+/// connection's search_path / the single post-collapse schema — the `parity::new_substrate_chunks`
+/// reader this used is hard-qualified to `temper_next` (the dark-launch dual-schema comparator) and
+/// would not resolve once the substrate is the lone `public` schema.
 ///
-/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
-/// module-level note.
+/// Keys by `new_id` directly — the resource id (preserved verbatim from production).
+///
+/// Read-only; no writes. Runtime `sqlx::query` (NEVER the `query!` macros) — see the module-level note.
 pub async fn body(
     pool: &PgPool,
     principal: Uuid,
     new_id: Uuid,
 ) -> std::result::Result<String, ReadbackError> {
+    use sqlx::Row;
     ensure_visible(pool, principal, new_id).await?;
-    let chunks = crate::parity::new_substrate_chunks(pool, new_id).await?;
+    let rows = sqlx::query(
+        "SELECT c.chunk_index, COALESCE(c.header_path, '') AS header_path, \
+                COALESCE(c.heading_depth, 0::smallint) AS heading_depth, cc.content \
+         FROM kb_chunks c \
+         JOIN kb_content_blocks b ON b.id = c.block_id \
+         JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+         WHERE c.resource_id = $1 AND c.is_current \
+         ORDER BY b.seq, c.chunk_index",
+    )
+    .bind(new_id)
+    .fetch_all(pool)
+    .await?;
+    let chunks: Vec<crate::parity::ReadChunk> = rows
+        .iter()
+        .map(|row| crate::parity::ReadChunk {
+            chunk_index: row.get("chunk_index"),
+            header_path: row.get("header_path"),
+            heading_depth: row.get("heading_depth"),
+            content: row.get("content"),
+        })
+        .collect();
     Ok(crate::parity::reconstruct_body(&chunks))
 }
 

@@ -79,16 +79,16 @@ pub async fn create_test_profile_with_context(
     .expect("create test auth link");
 
     // 3. The per-surface emitter entities the write path requires. `resolve_emitter`
-    //    looks up `pete@<surface>` (web=ApiHttp, cli=CliCloud, mcp=Mcp) and errors
-    //    if absent; the post-synthesis production provision path does not create
-    //    these, so the fixture supplies them for the surfaces a test may drive.
+    //    looks up `<handle>@<surface>` (web=ApiHttp, cli=CliCloud, mcp=Mcp), mirroring
+    //    production provisioning (profile_service::resolve_from_claims), for the
+    //    surfaces a test may drive.
     for surface in ["web", "cli", "mcp"] {
         sqlx::query(
             r#"INSERT INTO kb_entities (profile_id, name, metadata)
                VALUES ($1, $2, '{}'::jsonb)"#,
         )
         .bind(profile_id)
-        .bind(format!("pete@{surface}"))
+        .bind(format!("{handle}@{surface}"))
         .execute(pool)
         .await
         .expect("create emitter entity");
