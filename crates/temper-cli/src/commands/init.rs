@@ -303,12 +303,33 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
                 .with_prompt("Instance base URL (e.g. https://temper.acme.com)")
                 .interact_text()
                 .map_err(prompt_err)?;
+            let idp_idx = Select::with_theme(&theme)
+                .with_prompt("Identity provider")
+                .default(0)
+                .items(["Auth0", "Okta"])
+                .interact()
+                .map_err(prompt_err)?;
             let auth_domain: String = Input::with_theme(&theme)
-                .with_prompt("Auth0 tenant domain (e.g. acme.us.auth0.com)")
+                .with_prompt(if idp_idx == 1 {
+                    "Okta org domain (e.g. acme.okta.com)"
+                } else {
+                    "Auth0 tenant domain (e.g. acme.us.auth0.com)"
+                })
                 .interact_text()
                 .map_err(prompt_err)?;
+            let idp = if idp_idx == 1 {
+                let auth_server_id: String = Input::with_theme(&theme)
+                    .with_prompt("Okta authorization server ID (e.g. aus1a2b3c)")
+                    .interact_text()
+                    .map_err(prompt_err)?;
+                Idp::Okta {
+                    auth_server_id: auth_server_id.trim().to_string(),
+                }
+            } else {
+                Idp::Auth0
+            };
             let client_id: String = Input::with_theme(&theme)
-                .with_prompt("Auth0 CLI application client_id")
+                .with_prompt("CLI application client_id")
                 .interact_text()
                 .map_err(prompt_err)?;
             let audience: String = Input::with_theme(&theme)
@@ -320,7 +341,7 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
                 auth_domain: auth_domain.trim().to_string(),
                 client_id: client_id.trim().to_string(),
                 audience: audience.trim().to_string(),
-                idp: Idp::Auth0,
+                idp,
             })
         }
         _ => AuthChoice::None,
@@ -342,7 +363,10 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
     output::label("Contexts", ctxs.join(", "));
     let auth_label = match &answers.auth_choice {
         AuthChoice::Hosted => "auth0",
-        AuthChoice::SelfHosted(_) => "auth0 (self-hosted)",
+        AuthChoice::SelfHosted(sh) => match &sh.idp {
+            Idp::Auth0 => "auth0 (self-hosted)",
+            Idp::Okta { .. } => "okta (self-hosted)",
+        },
         AuthChoice::None => "none",
     };
     output::label("Auth", auth_label);
@@ -993,5 +1017,18 @@ mod tests {
     fn flags_none_when_instance_missing() {
         let res = self_host_from_flags(None, None, None, None, Some("auth0".into()), None).unwrap();
         assert!(res.is_none());
+    }
+
+    #[test]
+    fn flags_unknown_idp_errors() {
+        assert!(self_host_from_flags(
+            Some("https://x.com".into()),
+            Some("d.auth0.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("saml".into()),
+            None,
+        )
+        .is_err());
     }
 }
