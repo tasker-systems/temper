@@ -7,13 +7,14 @@
 //! readbacks gate through `resources_visible_to`. SQL is unqualified against the one schema (the
 //! connection carries the search_path).
 //!
-//! `list`/`list_meta` are unfiltered at the §9 floor (the context/doctype/pagination filters on
-//! `ResourceListParams` are not yet applied to the substrate list — a named post-collapse follow-up);
-//! the enrichment path (`list_enriched`/MCP) DOES filter by name in SQL via `readback::enriched_list`.
+//! `list`/`list_meta` filter (context_name/doc_type_name/stage/owner/`q`-title), sort, and paginate the
+//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; the enrichment path
+//! (`list_enriched`/MCP) filters by name in SQL via `readback::enriched_list`. Full-text/vector `q` on
+//! the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
 
 use std::collections::HashMap;
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::backend::db_backend::{map_readback_err, reconstruct_resource_row};
@@ -25,43 +26,161 @@ use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 use temper_core::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
 };
-use temper_core::types::resource::{ContentResponse, ResourceFacets, ResourceRow};
+use temper_core::types::resource::{
+    ContentResponse, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
+};
 use temper_next::readback;
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))
 }
 
-/// `list` — every resource VISIBLE to the principal (WS2 — `resources_visible_to`), reconstructed to a
-/// full `ResourceRow`. No pagination; the asserted invariant is the visible row SET + projected fields
-/// (the `_params` filters are a post-collapse follow-up). `total` = row count; `facets.doc_type` = the
-/// doctype histogram over the visible set.
-pub async fn list_select(
+/// One page of the filtered, visible resource set: the page's substrate ids (already
+/// sorted + paginated), the FILTERED total (before limit/offset), and the doc_type
+/// histogram over the filtered set (`ResourceFacets` = "current filter set").
+struct VisiblePage {
+    page_ids: Vec<Uuid>,
+    total: i64,
+    facets: HashMap<String, i64>,
+}
+
+/// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
+/// reaches SQL) so it is injection-safe to interpolate. Columns ground against the
+/// substrate: `kb_resources` (updated/created/title), `kb_contexts.name`, and the
+/// `kb_properties` workflow keys (`temper-stage`/`temper-seq`/`doc_type`).
+fn sort_column_sql(field: ResourceSortField) -> &'static str {
+    match field {
+        ResourceSortField::Updated => "r.updated",
+        ResourceSortField::Created => "r.created",
+        ResourceSortField::Title => "r.title",
+        ResourceSortField::Stage => "st.property_value #>> '{}'",
+        ResourceSortField::Seq => "(sq.property_value #>> '{}')::bigint",
+        ResourceSortField::ContextName => "c.name",
+        ResourceSortField::DocTypeName => "dt.property_value #>> '{}'",
+    }
+}
+
+/// Resolve the visible set, apply the `ResourceListParams` filters (context_name /
+/// doc_type_name / stage / owner / `q` title-match) + sort + pagination IN SQL, and
+/// return only the page's ids (so the caller reconstructs the page, not every visible
+/// row — this also fixes the prior all-rows N+1).
+///
+/// `owner`: `@me` resolves to the caller's profile; any other value matches the owner
+/// profile's `handle` (per `graph.rs`'s handle convention). `q` is a trivial title
+/// `ILIKE` (full text/vector `q` is search's job — a named deferral). Dynamic ORDER BY
+/// is built from the enum; the WHERE binds Option params via the `($N IS NULL OR …)`
+/// idiom, so this is the documented runtime-`query` exception (dynamic ORDER clause),
+/// not a static macro.
+async fn filtered_visible_page(
     pool: &PgPool,
     profile_id: Uuid,
-    _params: ResourceListParams,
-) -> ApiResult<ResourceListResponse> {
-    // Only resources visible to the principal. `resources_visible_to` returns substrate ids directly
-    // (profile ids preserved by synthesis), so we filter the set up front — a not-visible id never
-    // enters the loop, where `reconstruct_resource_row`'s gate would otherwise error.
-    let visible: Vec<Uuid> = sqlx::query_scalar("SELECT resource_id FROM resources_visible_to($1)")
+    params: &ResourceListParams,
+) -> ApiResult<VisiblePage> {
+    let owner_self: Option<Uuid> = match params.owner.as_deref() {
+        Some("@me") => Some(profile_id),
+        _ => None,
+    };
+    let owner_handle: Option<&str> = match params.owner.as_deref() {
+        Some(h) if h != "@me" => Some(h),
+        _ => None,
+    };
+    let sort = params.sort.unwrap_or_default();
+    let dir = match params.order.unwrap_or_default() {
+        SortOrder::Asc => "ASC",
+        SortOrder::Desc => "DESC",
+    };
+
+    // INNER JOIN dt (every resource carries exactly one `doc_type` property, as in
+    // `readback::reconstruct`); LEFT JOIN the optional workflow keys used by filters/sort.
+    let sql = format!(
+        "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name
+           FROM kb_resources r
+           JOIN resources_visible_to($1) v ON v.resource_id = r.id
+           JOIN kb_resource_homes h ON h.resource_id = r.id
+           JOIN kb_contexts c
+             ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+           JOIN kb_profiles p ON p.id = h.owner_profile_id
+           JOIN kb_properties dt
+             ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+           LEFT JOIN kb_properties st
+             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
+           LEFT JOIN kb_properties sq
+             ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
+            AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
+          WHERE r.is_active
+            AND ($2::text IS NULL OR c.name = $2)
+            AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
+            AND ($4::text IS NULL OR st.property_value #>> '{{}}' = $4)
+            AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
+            AND ($6::text IS NULL OR p.handle = $6)
+            AND ($7::text IS NULL OR r.title ILIKE '%' || $7 || '%')
+          ORDER BY {sort_col} {dir}, r.id ASC",
+        sort_col = sort_column_sql(sort),
+    );
+
+    let rows = sqlx::query(&sql)
         .bind(profile_id)
+        .bind(params.context_name.as_deref())
+        .bind(params.doc_type_name.as_deref())
+        .bind(params.stage.as_deref())
+        .bind(owner_self)
+        .bind(owner_handle)
+        .bind(params.q.as_deref())
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
-    let mut rows: Vec<ResourceRow> = Vec::with_capacity(visible.len());
-    for new_id in visible {
+
+    let total = rows.len() as i64;
+    let mut facets: HashMap<String, i64> = HashMap::new();
+    let mut all_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: Uuid = row.get("id");
+        if let Some(dt) = row.get::<Option<String>, _>("doc_type_name") {
+            *facets.entry(dt).or_insert(0) += 1;
+        }
+        all_ids.push(id);
+    }
+
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let page_ids: Vec<Uuid> = match params.limit {
+        Some(limit) if limit >= 0 => all_ids
+            .into_iter()
+            .skip(offset)
+            .take(limit as usize)
+            .collect(),
+        _ => all_ids.into_iter().skip(offset).collect(),
+    };
+
+    Ok(VisiblePage {
+        page_ids,
+        total,
+        facets,
+    })
+}
+
+/// `list` — the resources VISIBLE to the principal (WS2 — `resources_visible_to`), filtered + sorted +
+/// paginated per `ResourceListParams`, each reconstructed to a full `ResourceRow`. The filter/sort/page
+/// happen in SQL (`filtered_visible_page`); only the page's ids are reconstructed (no all-rows N+1).
+/// `total` = the FILTERED count (before limit/offset); `facets.doc_type` = the doctype histogram over the
+/// filtered set.
+pub async fn list_select(
+    pool: &PgPool,
+    profile_id: Uuid,
+    params: ResourceListParams,
+) -> ApiResult<ResourceListResponse> {
+    let page = filtered_visible_page(pool, profile_id, &params).await?;
+    let mut rows: Vec<ResourceRow> = Vec::with_capacity(page.page_ids.len());
+    for new_id in page.page_ids {
         rows.push(reconstruct_resource_row(pool, profile_id, new_id).await?);
     }
-    let mut doc_type: HashMap<String, i64> = HashMap::new();
-    for r in &rows {
-        *doc_type.entry(r.doc_type_name.clone()).or_insert(0) += 1;
-    }
-    let total = rows.len() as i64;
     Ok(ResourceListResponse {
         rows,
-        total,
-        facets: ResourceFacets { doc_type },
+        total: page.total,
+        facets: ResourceFacets {
+            doc_type: page.facets,
+        },
     })
 }
 
@@ -114,35 +233,25 @@ pub async fn get_meta_select(
     })
 }
 
-/// `list_meta` — the `?meta_only=true` projection. Reuses the WS2-scoped `readback::enriched_list`
-/// visible set (no context/doctype filter), mapping each row to a `ResourceMetaResponse`.
+/// `list_meta` — the `?meta_only=true` projection. Same WS2-scoped, filtered + sorted + paginated set as
+/// `list` (`filtered_visible_page`); each page id maps to a `ResourceMetaResponse` via `get_meta_select`
+/// (the §7 meta tier). `total`/`facets` mirror `list` (the FILTERED set).
 pub async fn list_meta_select(
     pool: &PgPool,
     profile_id: Uuid,
-    _params: ResourceListParams,
+    params: ResourceListParams,
 ) -> ApiResult<ResourceMetaListResponse> {
-    let rows = readback::enriched_list(pool, profile_id, None, None)
-        .await
-        .map_err(api_err)?;
-    let mut doc_type: HashMap<String, i64> = HashMap::new();
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        *doc_type.entry(r.doc_type.clone()).or_insert(0) += 1;
-        let managed: ManagedMeta =
-            serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?;
-        out.push(ResourceMetaResponse {
-            resource_id: ResourceId::from(r.new_id),
-            managed_meta: Some(managed),
-            open_meta: Some(serde_json::Value::Object(r.open)),
-            managed_hash: String::new(),
-            open_hash: String::new(),
-        });
+    let page = filtered_visible_page(pool, profile_id, &params).await?;
+    let mut out = Vec::with_capacity(page.page_ids.len());
+    for new_id in page.page_ids {
+        out.push(get_meta_select(pool, ProfileId::from(profile_id), ResourceId::from(new_id)).await?);
     }
-    let total = out.len() as i64;
     Ok(ResourceMetaListResponse {
         rows: out,
-        total,
-        facets: ResourceFacets { doc_type },
+        total: page.total,
+        facets: ResourceFacets {
+            doc_type: page.facets,
+        },
     })
 }
 
