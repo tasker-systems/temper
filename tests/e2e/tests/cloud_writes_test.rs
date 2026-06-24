@@ -424,6 +424,18 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         .await
         .expect("seed resource");
 
+    // F5: the manifest table is gone — body_hash lives on `kb_resources`,
+    // server-derived (a merkle over chunk content-hashes), keyed by the
+    // server-assigned id. Read the stored hash before the update so we can prove
+    // it CHANGED (it is NOT the caller's `compute_body_hash`, which is the raw
+    // body's `sha256:`-prefixed digest — a different computation).
+    let body_hash_before: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(seeded.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource must exist after seed");
+
     // Write the new body to a temp file (cloud update reads from @<path>).
     let new_body_path = app.vault_dir.path().join("new-body.md");
     let new_body = "# Body+Meta Test\n\nUpdated body content — different from initial.\n";
@@ -476,51 +488,49 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     .expect("spawn_blocking joined");
 
     // ---- Assert body_hash changed ----
-    let body_hash_after: String = sqlx::query_scalar(
-        "SELECT m.body_hash
-         FROM kb_resource_manifests m
-         JOIN kb_resources r ON r.id = m.resource_id
-         WHERE r.slug = 'body-and-meta-update-test'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("manifest after update");
+    // F5: read the server-derived body_hash off `kb_resources` (manifest table
+    // gone) and assert it CHANGED. Comparing to `compute_body_hash(new_body)` is
+    // retired — the substrate body_hash is a merkle over chunk content-hashes,
+    // not the caller's raw-body sha256.
+    let body_hash_after: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(seeded.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource after update");
 
     assert_ne!(
-        initial_hash, body_hash_after,
+        body_hash_before, body_hash_after,
         "body_hash must change after body+meta update"
     );
 
-    let expected_new_hash = temper_core::hash::compute_body_hash(new_body);
+    // ---- Assert title cascaded + stage preserved ----
+    // temper-title is §7-Die → the `kb_resources.title` column (F1/F5); temper-stage
+    // survives §7 as a `kb_properties` row (F5). The retired `kb_resource_manifests`
+    // managed_meta blob is gone.
+    let title_after: String = sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1")
+        .bind(seeded.id)
+        .fetch_one(&pool)
+        .await
+        .expect("title after update");
     assert_eq!(
-        body_hash_after, expected_new_hash,
-        "body_hash must match the new body's hash"
-    );
-
-    // ---- Assert stage changed ----
-    let managed_meta: serde_json::Value = sqlx::query_scalar(
-        "SELECT m.managed_meta
-         FROM kb_resource_manifests m
-         JOIN kb_resources r ON r.id = m.resource_id
-         WHERE r.slug = 'body-and-meta-update-test'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("manifest managed_meta after update");
-
-    let obj = managed_meta
-        .as_object()
-        .expect("managed_meta must be a JSON object");
-    assert_eq!(
-        obj.get("temper-title").and_then(|v| v.as_str()),
-        Some("Updated Title"),
-        "temper-title must be 'Updated Title' after body+meta update; got: {managed_meta}"
+        title_after, "Updated Title",
+        "temper-title must cascade to kb_resources.title after body+meta update; got: {title_after}"
     );
     // Seed-side stage preserved through partial merge.
+    let stage_after: Option<String> = sqlx::query_scalar(
+        "SELECT property_value #>> '{}' FROM kb_properties \
+         WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+           AND property_key = 'temper-stage' AND NOT is_folded",
+    )
+    .bind(seeded.id)
+    .fetch_one(&pool)
+    .await
+    .expect("query temper-stage property");
     assert_eq!(
-        obj.get("temper-stage").and_then(|v| v.as_str()),
+        stage_after.as_deref(),
         Some("backlog"),
-        "temper-stage must be preserved from seed after body+meta update; got: {managed_meta}"
+        "temper-stage must be preserved from seed after body+meta update; got: {stage_after:?}"
     );
 }
 
@@ -579,6 +589,15 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         .await
         .expect("seed resource");
 
+    // F5: body_hash lives on `kb_resources` (server-derived merkle), keyed by id —
+    // the manifest table is gone. Read it before the update to prove the change.
+    let body_hash_before: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(seeded.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource must exist after seed");
+
     // Write new body to a temp file.
     let new_body_path = app.vault_dir.path().join("body-only-new.md");
     let new_body = "# Body-Only Test\n\nReplacement body — new content.\n";
@@ -628,39 +647,36 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
     .expect("spawn_blocking joined");
 
     // ---- Assert body_hash changed ----
-    let body_hash_after: String = sqlx::query_scalar(
-        "SELECT m.body_hash
-         FROM kb_resource_manifests m
-         JOIN kb_resources r ON r.id = m.resource_id
-         WHERE r.slug = 'body-only-update-test'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("manifest body_hash after update");
+    // F5: read the server-derived body_hash off `kb_resources` and assert it
+    // changed (caller `compute_body_hash` equality is retired — merkle vs raw sha256).
+    let body_hash_after: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(seeded.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource body_hash after update");
 
     assert_ne!(
-        initial_hash, body_hash_after,
+        body_hash_before, body_hash_after,
         "body_hash must change after body-only update"
     );
 
-    // ---- Assert managed_meta.temper-stage preserved ----
-    let managed_meta: serde_json::Value = sqlx::query_scalar(
-        "SELECT m.managed_meta
-         FROM kb_resource_manifests m
-         JOIN kb_resources r ON r.id = m.resource_id
-         WHERE r.slug = 'body-only-update-test'",
+    // ---- Assert temper-stage preserved ----
+    // F5: temper-stage survives §7 as a `kb_properties` row (the manifest
+    // managed_meta blob is gone). A body-only update must not touch it.
+    let stage_after: Option<String> = sqlx::query_scalar(
+        "SELECT property_value #>> '{}' FROM kb_properties \
+         WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+           AND property_key = 'temper-stage' AND NOT is_folded",
     )
+    .bind(seeded.id)
     .fetch_one(&pool)
     .await
-    .expect("manifest managed_meta after update");
-
-    let obj = managed_meta
-        .as_object()
-        .expect("managed_meta must be a JSON object");
+    .expect("query temper-stage property");
     assert_eq!(
-        obj.get("temper-stage").and_then(|v| v.as_str()),
+        stage_after.as_deref(),
         Some("in-progress"),
-        "temper-stage must remain 'in-progress' after body-only update; got: {managed_meta}"
+        "temper-stage must remain 'in-progress' after body-only update; got: {stage_after:?}"
     );
 }
 
@@ -721,6 +737,16 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         .await
         .expect("seed resource");
 
+    // F5: body_hash lives on `kb_resources` (server-derived), keyed by id — the
+    // manifest table is gone. Capture it before the (rejected) update to prove the
+    // empty-body guard left the server UNCHANGED.
+    let body_hash_before: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(seeded.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource must exist after seed");
+
     // Write an empty file — the guard must reject this.
     let empty_path = app.vault_dir.path().join("empty-body.md");
     std::fs::write(&empty_path, "").expect("write empty file");
@@ -778,18 +804,19 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
     );
 
     // ---- Assert no server-side mutation occurred ----
-    let body_hash_after: String = sqlx::query_scalar(
-        "SELECT m.body_hash
-         FROM kb_resource_manifests m
-         JOIN kb_resources r ON r.id = m.resource_id
-         WHERE r.slug = 'body-empty-guard-test'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("manifest after attempted update");
+    // F5: read the stored body_hash off `kb_resources` (manifest table gone) and
+    // assert it is UNCHANGED from before the rejected update. (Comparing to the
+    // caller's `compute_body_hash` is retired — the substrate stores a merkle, not
+    // the raw-body sha256.)
+    let body_hash_after: Option<String> =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(seeded.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource after attempted update");
 
     assert_eq!(
-        body_hash_after, initial_hash,
+        body_hash_before, body_hash_after,
         "body_hash must be unchanged when --body @empty.md errors"
     );
 }
