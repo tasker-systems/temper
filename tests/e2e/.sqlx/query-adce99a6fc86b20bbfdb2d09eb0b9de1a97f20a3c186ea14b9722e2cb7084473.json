@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT relationship_assert($1,$2,$3,$4)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "relationship_assert",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "adce99a6fc86b20bbfdb2d09eb0b9de1a97f20a3c186ea14b9722e2cb7084473"
+}

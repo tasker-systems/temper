@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT name FROM kb_contexts WHERE id = $1",
+  "query": "SELECT is_stale FROM cogmap_staleness($1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "name",
-        "type_info": "Text"
+        "name": "is_stale",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -15,8 +15,8 @@
       ]
     },
     "nullable": [
-      false
+      null
     ]
   },
-  "hash": "38a6ec01ad26ad0d503fde3ed0d2f338bdbce8f82aa4c7244cd0dd58702a5a96"
+  "hash": "2c7323be71b840b7cdb1b024800e87658c41ab548992d5a6b2c0141689f5d43f"
 }

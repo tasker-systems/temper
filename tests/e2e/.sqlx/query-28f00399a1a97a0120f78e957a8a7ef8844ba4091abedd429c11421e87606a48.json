@@ -1,22 +1,23 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT name FROM kb_contexts WHERE id = $1",
+  "query": "SELECT lens_create($1,$2)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "name",
-        "type_info": "Text"
+        "name": "lens_create",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
+        "Jsonb",
         "Uuid"
       ]
     },
     "nullable": [
-      false
+      null
     ]
   },
-  "hash": "38a6ec01ad26ad0d503fde3ed0d2f338bdbce8f82aa4c7244cd0dd58702a5a96"
+  "hash": "28f00399a1a97a0120f78e957a8a7ef8844ba4091abedd429c11421e87606a48"
 }
