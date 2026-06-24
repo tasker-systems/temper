@@ -2,8 +2,6 @@
 
 mod common;
 
-use uuid::Uuid;
-
 use temper_core::types::resource::{
     ResourceCreateRequest, ResourceListParams, ResourceUpdateRequest,
 };
@@ -26,11 +24,9 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
         .await
         .expect("context create failed");
 
-    let doc_type_id = Uuid::parse_str(common::RESEARCH_DOC_TYPE_ID).expect("parse doc type UUID");
-
     let request = ResourceCreateRequest {
         kb_context_id: context.id.into(),
-        kb_doc_type_id: doc_type_id,
+        doc_type: "research".to_string(),
         origin_uri: "test://e2e/resource-create-get".to_string(),
         title: "E2E Create & Get Test".to_string(),
         slug: Some("e2e-create-get-test".to_string()),
@@ -46,10 +42,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
     assert_eq!(created.title, "E2E Create & Get Test");
     assert_eq!(created.origin_uri, "test://e2e/resource-create-get");
     assert_eq!(created.kb_context_id, context.id);
-    assert_eq!(
-        created.kb_doc_type_id,
-        temper_core::types::DocTypeId(doc_type_id)
-    );
+    assert_eq!(created.doc_type_name, "research");
     assert!(created.is_active);
 
     let fetched = app
@@ -82,14 +75,12 @@ async fn resource_update(pool: sqlx::PgPool) {
         .await
         .expect("context create failed");
 
-    let doc_type_id = Uuid::parse_str(common::RESEARCH_DOC_TYPE_ID).expect("parse doc type UUID");
-
     let created = app
         .client
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
-            kb_doc_type_id: doc_type_id,
+            doc_type: "research".to_string(),
             origin_uri: "test://e2e/resource-update".to_string(),
             title: "Original Title".to_string(),
             slug: None,
@@ -144,14 +135,12 @@ async fn resource_delete(pool: sqlx::PgPool) {
         .await
         .expect("context create failed");
 
-    let doc_type_id = Uuid::parse_str(common::RESEARCH_DOC_TYPE_ID).expect("parse doc type UUID");
-
     let created = app
         .client
         .resources()
         .create(&ResourceCreateRequest {
             kb_context_id: context.id.into(),
-            kb_doc_type_id: doc_type_id,
+            doc_type: "research".to_string(),
             origin_uri: "test://e2e/resource-delete".to_string(),
             title: "Resource To Delete".to_string(),
             slug: None,
@@ -206,14 +195,12 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
         .await
         .expect("context create failed");
 
-    let doc_type_id = Uuid::parse_str(common::RESEARCH_DOC_TYPE_ID).expect("parse doc type UUID");
-
     for i in 1..=3 {
         app.client
             .resources()
             .create(&ResourceCreateRequest {
                 kb_context_id: context.id.into(),
-                kb_doc_type_id: doc_type_id,
+                doc_type: "research".to_string(),
                 origin_uri: format!("test://e2e/resource-page/{i}"),
                 title: format!("Pagination Resource {i}"),
                 slug: None,

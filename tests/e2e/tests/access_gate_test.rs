@@ -490,12 +490,14 @@ async fn non_admin_blocked_from_admin_endpoints(pool: sqlx::PgPool) {
     let second_profile = preflight(&app, &second_token).await;
     let second_id = profile_id(&second_profile);
 
+    // `enable_invite_only` above created the `temper-system` gating team; resolve
+    // it by slug and add the second user as a watcher (substrate `kb_team_members`
+    // is keyed on `(team_id, profile_id)` — no surrogate id / `joined_at`).
     sqlx::query(
-        "INSERT INTO kb_team_members (id, team_id, profile_id, role, joined_at)
-         VALUES (gen_random_uuid(), $1::uuid, $2, 'watcher', now())
+        "INSERT INTO kb_team_members (team_id, profile_id, role)
+         SELECT id, $1, 'watcher' FROM kb_teams WHERE slug = 'temper-system'
          ON CONFLICT (team_id, profile_id) DO NOTHING",
     )
-    .bind(uuid::Uuid::parse_str(common::TEMPER_SYSTEM_TEAM_ID).unwrap())
     .bind(second_id)
     .execute(&pool)
     .await

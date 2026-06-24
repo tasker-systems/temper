@@ -12,9 +12,8 @@
 
 mod common;
 
-use temper_api::backend::BackendSelection;
-use temper_api::services::{context_service, ingest_service, resource_service};
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::ProfileId;
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
 fn sha2_hex(content: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -35,50 +34,39 @@ async fn resolve_test_profile(pool: &sqlx::PgPool) -> ProfileId {
     ProfileId::from(id)
 }
 
-/// Seed a resource with managed + open meta and return its row.
+/// Seed a resource with managed + open meta through the production ingest path
+/// (POST /api/ingest) and return its row. The substrate's collapsed write path
+/// is the only resource-creation surface; `ingest_service` is retired.
 async fn seed_resource(
-    pool: &sqlx::PgPool,
-    profile_id: ProfileId,
+    app: &common::E2eTestApp,
     context_name: &str,
     slug: &str,
     managed_meta: &serde_json::Value,
     open_meta: &serde_json::Value,
 ) -> temper_core::types::resource::ResourceRow {
-    context_service::create(pool, profile_id, context_name)
+    app.client
+        .contexts()
+        .create(context_name)
         .await
         .expect("context create");
-    let context = context_service::resolve_by_name(pool, profile_id, context_name)
-        .await
-        .expect("context resolve");
-    let doc_type_id = ingest_service::resolve_doc_type(pool, "research")
-        .await
-        .expect("doc_type resolve");
 
-    let body_hash = format!("sha256:{}", sha2_hex("body"));
-    let resource = ingest_service::create_resource_with_manifest(
-        pool,
-        &ingest_service::CreateResourceParams {
-            id: ResourceId::new(),
-            profile_id,
-            device_id: "mcp-get-meta",
-            context_id: context.id,
-            doc_type_id,
-            doc_type_name: "research",
-            title: slug,
-            slug: Some(slug),
-            origin_uri: &format!("mcp://test/{slug}"),
-            content_hash: &body_hash,
-            managed_meta,
-            open_meta,
-            chunks_packed: None,
-        },
-    )
-    .await
-    .expect("create resource");
-
-    resource_service::get_visible(pool, *profile_id, *resource.id)
+    app.client
+        .ingest()
+        .create(&IngestPayload {
+            title: slug.to_string(),
+            origin_uri: format!("mcp://test/{slug}"),
+            context_name: context_name.to_string(),
+            doc_type_name: "research".to_string(),
+            content_hash: Some(format!("sha256:{}", sha2_hex(slug))),
+            slug: slug.to_string(),
+            content: "body".to_string(),
+            metadata: None,
+            managed_meta: Some(managed_meta.clone()),
+            open_meta: Some(open_meta.clone()),
+            chunks_packed: Some(pack_chunks(&[]).expect("pack empty chunks")),
+        })
         .await
-        .expect("get_visible")
+        .expect("ingest create")
 }
 
 /// `enrich_resource` returns both meta blocks, with typed `ManagedMeta`
@@ -95,8 +83,7 @@ async fn enrich_resource_round_trips_managed_and_open(pool: sqlx::PgPool) {
 
     let seeded_open = serde_json::json!({"tags": ["alpha", "mcp"], "weight": 3});
     let row = seed_resource(
-        &pool,
-        profile_id,
+        &app,
         "mcp-get-meta",
         "mcp-get-meta",
         &serde_json::json!({
@@ -110,7 +97,6 @@ async fn enrich_resource_round_trips_managed_and_open(pool: sqlx::PgPool) {
     .await;
 
     let enriched = temper_mcp::tools::resources::enrich_resource(
-        BackendSelection::Legacy,
         &pool,
         *profile_id,
         &row,
@@ -145,8 +131,7 @@ async fn enrich_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
 
     let empty_open = serde_json::json!({});
     let row = seed_resource(
-        &pool,
-        profile_id,
+        &app,
         "mcp-empty-open",
         "empty-open",
         &serde_json::json!({"temper-type": "research", "temper-title": "empty-open"}),
@@ -155,7 +140,6 @@ async fn enrich_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
     .await;
 
     let enriched = temper_mcp::tools::resources::enrich_resource(
-        BackendSelection::Legacy,
         &pool,
         *profile_id,
         &row,
@@ -187,8 +171,7 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
     let profile_id = resolve_test_profile(&pool).await;
 
     let row_a = seed_resource(
-        &pool,
-        profile_id,
+        &app,
         "mcp-batch",
         "batch-a",
         &serde_json::json!({"temper-type": "research", "temper-stage": "backlog"}),
@@ -196,8 +179,7 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
     )
     .await;
     let row_b = seed_resource(
-        &pool,
-        profile_id,
+        &app,
         "mcp-batch-2",
         "batch-b",
         &serde_json::json!({"temper-type": "research", "temper-stage": "done"}),
@@ -206,7 +188,6 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
     .await;
 
     let enriched = temper_mcp::tools::resources::enrich_resources(
-        BackendSelection::Legacy,
         &pool,
         *profile_id,
         &[row_a, row_b],

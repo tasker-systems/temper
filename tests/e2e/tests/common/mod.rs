@@ -24,12 +24,6 @@ use temper_api::{
 use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
 use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
 
-// Well-known UUIDs from seed migration.
-pub const SYSTEM_PROFILE_ID: &str = "00000000-0000-0000-0004-000000000001";
-pub const TEMPER_CONTEXT_ID: &str = "00000000-0000-0000-0003-000000000001";
-pub const RESEARCH_DOC_TYPE_ID: &str = "00000000-0000-0000-0001-000000000004";
-pub const TEMPER_SYSTEM_TEAM_ID: &str = "00000000-0000-0000-0000-000000000002";
-pub const TEMPER_SYSTEM_GENERAL_CONTEXT_ID: &str = "00000000-0000-0000-0000-000000000003";
 
 /// A running e2e test environment with in-process API server and injected client.
 pub struct E2eTestApp {
@@ -175,14 +169,32 @@ pub fn generate_second_user_jwt() -> String {
     generate_test_jwt("e2e-second-user", "second@test.example.com")
 }
 
-/// Enable invite-only mode in tests by adding admin to temper-system team and flipping the setting.
+/// Enable invite-only mode in tests by adding admin to the `temper-system`
+/// gating team and flipping the setting.
+///
+/// The substrate has no seeded `temper-system` team (the canonical seed only
+/// provisions the `system` actor); the access predicates resolve the gating
+/// team by slug (`has_system_access`/`is_system_admin` JOIN `kb_teams` on
+/// `slug = gating_team_slug`). So we create it by slug on demand. `kb_teams`
+/// mints its own `id`; `kb_team_members` is keyed on `(team_id, profile_id)`
+/// with no surrogate id / `joined_at` (substrate shape).
 pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
+    let team_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name)
+         VALUES ('temper-system', 'Temper System')
+         ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("ensure temper-system gating team");
+
     sqlx::query(
-        "INSERT INTO kb_team_members (id, team_id, profile_id, role, joined_at)
-         VALUES (gen_random_uuid(), $1::uuid, $2, 'owner', now())
+        "INSERT INTO kb_team_members (team_id, profile_id, role)
+         VALUES ($1, $2, 'owner')
          ON CONFLICT (team_id, profile_id) DO NOTHING",
     )
-    .bind(uuid::Uuid::parse_str(TEMPER_SYSTEM_TEAM_ID).unwrap())
+    .bind(team_id)
     .bind(admin_profile_id)
     .execute(pool)
     .await
@@ -196,155 +208,19 @@ pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
     .expect("enable invite_only mode");
 }
 
-/// Seed fixtures: delete test data, insert stable seed resource.
-async fn clean_and_seed(pool: &PgPool) {
-    sqlx::query("DELETE FROM kb_resource_audits")
-        .execute(pool)
-        .await
-        .expect("clean kb_resource_audits");
-
-    sqlx::query(
-        "DELETE FROM kb_events WHERE profile_id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("clean kb_events");
-
-    sqlx::query("DELETE FROM kb_device_sync_state")
-        .execute(pool)
-        .await
-        .expect("clean kb_device_sync_state");
-    sqlx::query("DELETE FROM kb_transfers")
-        .execute(pool)
-        .await
-        .expect("clean kb_transfers");
-    // Reset system settings to open mode (before team cleanup)
-    sqlx::query("UPDATE kb_system_settings SET access_mode = 'open', gating_team_slug = NULL, updated = now()")
-        .execute(pool)
-        .await
-        .expect("reset kb_system_settings");
-
-    sqlx::query("DELETE FROM kb_join_requests")
-        .execute(pool)
-        .await
-        .expect("clean kb_join_requests");
-
-    sqlx::query("DELETE FROM kb_team_invitations")
-        .execute(pool)
-        .await
-        .expect("clean kb_team_invitations");
-    sqlx::query("DELETE FROM kb_team_resources")
-        .execute(pool)
-        .await
-        .expect("clean kb_team_resources");
-    sqlx::query(
-        "DELETE FROM kb_team_members WHERE team_id != '00000000-0000-0000-0000-000000000002'::uuid",
-    )
-    .execute(pool)
-    .await
-    .expect("clean kb_team_members");
-    sqlx::query("DELETE FROM kb_teams WHERE id != '00000000-0000-0000-0000-000000000002'::uuid")
-        .execute(pool)
-        .await
-        .expect("clean kb_teams");
-
-    sqlx::query(
-        "DELETE FROM kb_resources WHERE owner_profile_id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("clean test resources");
-
-    sqlx::query(
-        "DELETE FROM kb_profile_auth_links WHERE profile_id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("clean test auth links");
-
-    sqlx::query(
-        "DELETE FROM kb_profiles WHERE id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("clean test profiles");
-
-    sqlx::query(
-        r#"
-        INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
-             originator_profile_id, owner_profile_id, is_active, created, updated)
-        VALUES (
-            '00000000-0000-0000-0099-000000000001',
-            $1, $2,
-            'test://seed-resource',
-            'Seed Research Doc',
-            'seed-research-doc',
-            $3, $3,
-            true, now(), now()
-        )
-        ON CONFLICT (id) DO UPDATE SET updated = now()
-        "#,
-    )
-    .bind(uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap())
-    .bind(uuid::Uuid::parse_str(RESEARCH_DOC_TYPE_ID).unwrap())
-    .bind(uuid::Uuid::parse_str(SYSTEM_PROFILE_ID).unwrap())
-    .execute(pool)
-    .await
-    .expect("seed resource");
-}
-
-/// Spawn ONLY an Axum server (no clean/seed) over an existing pool, with an explicit
-/// `BackendSelection`, and return its address. Used by tests that need a SECOND server over the same
-/// data under a different substrate selection (e.g. the WS6 4b read-path test: seed + synthesize under
-/// legacy, then serve the same pool under `Next`). The startup-reads-the-flag-once model is what the
-/// real deploy does; here the selection is injected directly rather than via the DB flag.
-pub async fn spawn_app_server(
-    pool: PgPool,
-    selection: temper_api::backend::BackendSelection,
-) -> SocketAddr {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
-            .expect("Failed to load test RSA public key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
-
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-    };
-
-    let state = AppState::new(pool, jwks_store, api_config).with_backend_selection(selection);
-    let app = create_app(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind test listener");
-    let addr = listener.local_addr().expect("Failed to get local addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("Test server failed");
-    });
-    addr
-}
+/// No-op: `#[sqlx::test(migrator = "temper_api::MIGRATOR")]` already provisions
+/// an isolated database with `migrations/` (including the canonical system seed:
+/// the `handle='system'` actor, `kb_system_settings(access_mode='open')`, the
+/// event-type registry, and the global lenses). There is no shared state to
+/// scrub. The e2e principal (`e2e-test-user`) is auto-provisioned on its first
+/// authenticated request (profile + per-surface emitter entities + a default
+/// context). Tests that need named contexts create them through the API.
+///
+/// Retained so existing call sites keep compiling. The legacy body scrubbed a
+/// shared DB and seeded a fixed-UUID System resource against tables/columns the
+/// substrate retired (`kb_resource_audits`, `kb_doc_type_id`,
+/// `kb_device_sync_state`, the `0004-`/`0099-` seed identities).
+async fn clean_and_seed(_pool: &PgPool) {}
 
 /// Build an `E2eTestApp` from a pool provided by `#[sqlx::test]`.
 pub async fn setup(pool: PgPool) -> E2eTestApp {
@@ -367,11 +243,7 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
         enable_swagger: false,
     };
 
-    let backend_selection = temper_api::services::backend_selection_service::read(&pool)
-        .await
-        .expect("read backend selection flag");
-    let state = AppState::new(pool.clone(), jwks_store, api_config)
-        .with_backend_selection(backend_selection);
+    let state = AppState::new(pool.clone(), jwks_store, api_config);
     let app = create_app(state);
 
     let listener = TcpListener::bind("127.0.0.1:0")
