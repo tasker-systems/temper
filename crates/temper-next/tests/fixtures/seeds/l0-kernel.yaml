@@ -1,0 +1,87 @@
+# L0 — the kernel "what is temper" orientation map (spec: 2026-06-25-l0-orientation-kernel-charter).
+# Unlike temper-foundational (charter-only at birth), L0 is BORN POPULATED: its content IS its function
+# (a set of skill files + references for an arriving agent). Workbench fixture; not the production L0.
+name: l0-kernel
+
+cogmap:
+  telos:
+    title: "What Temper Is"
+    statement: "Orient an arriving agent so it can act correctly under temper's substrate at minimal attention cost — by holding the landmarks that say what temper is and how it works, the settled invariants it must not break, and the wayfinding that routes it to the right tool, skill, or more-specific map. This is the bottom referent every agent and every other cognitive map is situated by: it says 'this is the system you are in,' and it actively lowers the activation energy to reach for — and compose — the capabilities temper offers, so a less-powerful model acts where it would otherwise stall. In service of any agent, on any model, becoming competent-to-act in temper without rediscovering the system."
+    questions:
+      - question: "Is this a landmark an agent needs the moment it arrives to know what temper is and where it stands — the substrate, this map's bottom-referent role, the telos it's currently thinking under?"
+        context: "The first thing any agent asks is where am I. Hold the few situating landmarks, not their depth."
+      - question: "Is this a core term an agent must share to read temper at all — cogmap, telos, resource, edge, facet, region, lens, event, invocation — versus jargon a specific map can own?"
+        context: "An agent that can't read the system's words can't act in it. L0 is the kernel-vocabulary bedrock; deeper or domain terms live where they're used."
+      - question: "Is this a settled invariant an agent must not break — event-as-primary, the access floor (it operates as a scoped principal), agents tend declared structure and never cluster, acts carry attribution, cross-map promotion is human-gated?"
+        context: "A weaker model won't infer these and will violate them by default. State the always/nevers plainly as landmarks — this is where L0 earns its keep."
+      - question: "When an agent needs to do something, does L0 name the tool, skill, or map to reach for — and make reaching the obvious next move?"
+        context: "Weaker models stall not for lack of reasoning but for lack of willingness to reach for and compose tools. L0 routes — need X, the tool is Y, use it; compose Y with Z — it gives permission to act."
+      - question: "Is this depth that belongs in a more-specific map, with L0 holding only the landmark and the path to it?"
+        context: "L0 holds landmarks-and-the-way-to-reach, never contents. What falls through to be elaborated here is the saturation pole — it bloats the kernel an arriving model must read."
+      - question: "Does the agent need this to know the edge of what it may do here — what's out of bounds, what needs a human, what it must not assume?"
+        context: "An oriented agent also needs to know where its competence and authority stop — the HITL gates, the leak-safety floor it can't cross, the acts that aren't its to make. This is also where a steward learns to read a telos-charter as an instrument: acting-under-a-telos is the steward's job."
+    framing:
+      - "This map is self-referential: temper mapped in temper's own substrate; the canonical worked-example of a bootstrapped map."
+      - "It is a reference layer — skill files and references — born populated and curated, not accreted from work. That is what distinguishes it from every other map."
+      - "Every other map (organizational-foundational, domain) is situated by L0 and routes through it; L0 holds kernel landmarks and the paths, the specific maps hold depth."
+      - "Authored for the arriving agent, possibly a weaker model — invariant-forward, scannable, landmark-shaped. Every byte costs context; the attention-manifesto extends to agents."
+      - "L0 models how a telos-charter is read to make judgment calls, so a steward learns to find the edge of its mandate from the charter itself."
+  owner: temper
+  emitter: "kernel-curator#1"
+
+world:
+  profiles:
+    - { handle: temper, display_name: "Temper System", system_access: admin }
+  entities:
+    - { name: "kernel-curator#1", profile: temper }
+
+# Born populated: the four landmark categories (concept / invariant / reference / boundary).
+resources:
+  # --- concept-landmarks (Q2 vocabulary) ---
+  - { key: cogmap,     origin_uri: "temper://kernel/concept/cogmap",     facets: { values: { layer: concept } },  body: "A cognitive map: a bounded, telos-governed view of resources and their relationships. An agent works inside one map's frame at a time." }
+  - { key: telos,      origin_uri: "temper://kernel/concept/telos",      facets: { values: { layer: concept } },  body: "A map's telos: its declared purpose, held as a charter (statement + questions-with-context + framing). The telos is the perspective under which salience is judged — salience is never universal." }
+  - { key: resource,   origin_uri: "temper://kernel/concept/resource",   facets: { values: { layer: concept } },  body: "A resource: the named, findable unit of content in a map. Addressed by ref; its body is content blocks." }
+  - { key: edge,       origin_uri: "temper://kernel/concept/edge",       facets: { values: { layer: concept } },  body: "An edge: a declared, typed relationship between resources (express, contains, leads_to, near). Edges are authored, never inferred." }
+  - { key: facet,      origin_uri: "temper://kernel/concept/facet",      facets: { values: { layer: concept } },  body: "A facet: a key/value property on a resource (e.g. layer: concept). Facet overlap binds resources into families and is an affinity input." }
+  - { key: region,     origin_uri: "temper://kernel/concept/region",     facets: { values: { layer: concept } },  body: "A region: a materialized cluster of resources under a lens. Regions are the substrate's pure function over edges + facets — agents never assign them." }
+  - { key: lens,       origin_uri: "temper://kernel/concept/lens",       facets: { values: { layer: concept } },  body: "A lens: a weighting over edge-kinds and salience that shapes how a map materializes into regions. The same map yields different regions under different lenses." }
+  - { key: event,      origin_uri: "temper://kernel/concept/event",      facets: { values: { layer: concept } },  body: "An event: the append-only record of a mutation, projected to state. The ledger, not the row, is the source of truth." }
+  - { key: invocation, origin_uri: "temper://kernel/concept/invocation", facets: { values: { layer: concept } },  body: "An invocation: one accountable agent run — its trigger, its scope (a cogmap's telos), the mutation events it produced, and a terminal outcome." }
+  - { key: steward,    origin_uri: "temper://kernel/concept/steward",    facets: { values: { layer: concept } },  body: "A steward: an agent that tends a map's declared structure under its telos — creating resources, asserting edges, setting facets — but never clustering." }
+  # --- invariant-landmarks (Q3) ---
+  - { key: inv_event_primary, origin_uri: "temper://kernel/invariant/event-as-primary", facets: { values: { layer: invariant } }, body: "Always: every mutation is an event appended to the ledger and projected to state. Never edit state directly; the ledger is authoritative and replayable." }
+  - { key: inv_access_floor,  origin_uri: "temper://kernel/invariant/access-floor",     facets: { values: { layer: invariant } }, body: "Always: you operate as a scoped principal. You can only read and write within your map's visibility; the substrate enforces this — you cannot reach beyond your bounds even by mistake." }
+  - { key: inv_tend,          origin_uri: "temper://kernel/invariant/tend-not-cluster",  facets: { values: { layer: invariant } }, body: "Always tend declared structure (resources, edges, facets). Never compute regions or assign salience — region formation is the substrate's pure function on materialize." }
+  - { key: inv_attribution,   origin_uri: "temper://kernel/invariant/attribution",       facets: { values: { layer: invariant } }, body: "Always: your structural acts carry attribution — a reason and a confidence band — so every act is reviewable and reversible." }
+  - { key: inv_promotion,     origin_uri: "temper://kernel/invariant/promotion-gated",   facets: { values: { layer: invariant } }, body: "Lifting a concept across into a different map (promotion-translation) is human-gated: it means something different under the target telos. Never promote autonomously." }
+  # --- wayfinding references (Q4/Q5) ---
+  - { key: ref_search,      origin_uri: "temper://kernel/reference/search",      facets: { values: { layer: reference } }, body: "To find what already exists by meaning or graph-nearness, reach for the search tool. Start here before creating anything." }
+  - { key: ref_create,      origin_uri: "temper://kernel/reference/create",      facets: { values: { layer: reference } }, body: "To add a resource reach for resource_create; to relate two, relationship_assert; to tag one, facet_set. Compose them: create, then relate, then facet." }
+  - { key: ref_materialize, origin_uri: "temper://kernel/reference/materialize", facets: { values: { layer: reference } }, body: "To see the map's current regions, reach for request_materialize under a lens. Read the regions to orient before acting." }
+  - { key: ref_charter,     origin_uri: "temper://kernel/reference/charter",     facets: { values: { layer: reference } }, body: "To understand a map's purpose and the edge of your mandate, read its telos-charter. The questions-with-context tell you what belongs and what doesn't." }
+  # --- boundary-landmarks (Q6) ---
+  - { key: bnd_hitl,    origin_uri: "temper://kernel/boundary/hitl",    facets: { values: { layer: boundary } }, body: "Out of bounds without a human: cross-map promotion, founding a new map's identity, and changing a settled commitment. Pause and ask." }
+  - { key: bnd_leak,    origin_uri: "temper://kernel/boundary/leak",    facets: { values: { layer: boundary } }, body: "You cannot read another team's material into a lower map — the access floor forbids it structurally. If a read returns nothing, it may be out of scope, not absent." }
+  - { key: bnd_mandate, origin_uri: "temper://kernel/boundary/mandate", facets: { values: { layer: boundary } }, body: "Read the charter's questions to find the edge of your mandate: if material is depth for a more-specific map, route it there rather than elaborating it here." }
+
+edges:
+  # concept vocabulary clusters (near / express) — orientation topology
+  - { from: event,      to: invocation, kind: near,     label: ledger-grain }
+  - { from: invocation, to: steward,    kind: express,  label: run-by }
+  - { from: cogmap,     to: region,     kind: contains, label: holds }
+  - { from: region,     to: lens,       kind: express,  label: shaped-by }
+  - { from: telos,      to: cogmap,     kind: express,  label: governs }
+  - { from: resource,   to: edge,       kind: near,     label: graph-grain }
+  - { from: facet,      to: region,     kind: express,  label: binds-into }
+  # invariants govern concepts (express)
+  - { from: inv_event_primary, to: event,      kind: express, label: governs }
+  - { from: inv_access_floor,  to: resource,   kind: express, label: governs }
+  - { from: inv_tend,          to: region,     kind: express, label: governs }
+  - { from: inv_attribution,   to: invocation, kind: express, label: governs }
+  # wayfinding routes (leads_to) — reference -> capability
+  - { from: ref_search,      to: resource, kind: leads_to, label: to-find }
+  - { from: ref_create,      to: resource, kind: leads_to, label: to-add }
+  - { from: ref_materialize, to: region,   kind: leads_to, label: to-see }
+  - { from: ref_charter,     to: telos,    kind: leads_to, label: to-understand }
+
+uses_lenses: [orientation, wayfinding]
