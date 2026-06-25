@@ -654,6 +654,75 @@ pub async fn find_by_body_hash(
     Ok(dup)
 }
 
+/// One row of L0's reconcile diff source: a `provenance: kernel` resource homed to a cogmap, keyed
+/// (by the caller) on `origin_uri`, carrying its body merkle and merged facet object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelSliceRow {
+    /// The resource id (the reconcile applier addresses blocks/edges by it).
+    pub resource_id: Uuid,
+    /// The diff key — verbatim `kb_resources.origin_uri` (a kernel landmark's stable identity).
+    pub origin_uri: String,
+    /// The body merkle — `kb_resources.body_hash`, IDENTICAL to the expression `resource_row` reads
+    /// (the bare column; the structural sha256 over chunk content-hashes), so the reconcile diff can
+    /// compare `entry.content_hash` against it like-for-like.
+    pub body_hash: Option<String>,
+    /// The resource's merged non-folded property object (`jsonb_object_agg` over `kb_properties`):
+    /// the facets (`provenance`/`layer`/…) plus the `doc_type` property, mirroring how [`meta`] reads
+    /// the same rows. The reconcile diff re-asserts the incoming facet keys idempotently against this.
+    pub facets: serde_json::Value,
+}
+
+/// All `provenance: kernel` resources homed to `cogmap_id`, keyed (by the caller) on `origin_uri`,
+/// each with its body merkle (`body_hash`) and merged facet object. The reconcile diff source: the
+/// orchestration ([`crate`]'s temper-api caller) compares these against the incoming desired-state
+/// entries to plan create/update/fold.
+///
+/// Scoped to the kernel slice by an inner join on the resource's non-folded `provenance` property
+/// equal to `kernel`, so `promoted`/`operator` content homed to the same cogmap — and the cogmap's
+/// own (provenance-less) telos — are excluded by construction. `body_hash` is the bare
+/// `kb_resources.body_hash` column, byte-identical to [`resource_row`]'s `r.body_hash`.
+///
+/// Compile-time macro (like [`find_by_body_hash`], the only other macro here): the SQL is UNQUALIFIED
+/// (`kb_resources`/`kb_resource_homes`/`kb_properties`), its `.sqlx` cache prepared with
+/// `search_path=temper_next` (`cargo make prepare-next`); at runtime the connection search_path points
+/// at the one schema post-collapse.
+pub async fn kernel_slice(pool: &PgPool, cogmap_id: Uuid) -> Result<Vec<KernelSliceRow>> {
+    let rows = sqlx::query!(
+        r#"SELECT r.id              AS "resource_id!",
+                  r.origin_uri      AS "origin_uri!",
+                  r.body_hash       AS "body_hash?",
+                  (SELECT jsonb_object_agg(p.property_key, p.property_value)
+                     FROM kb_properties p
+                    WHERE p.owner_table = 'kb_resources' AND p.owner_id = r.id
+                      AND NOT p.is_folded) AS "facets?"
+             FROM kb_resources r
+             JOIN kb_resource_homes h
+               ON h.resource_id = r.id
+              AND h.anchor_table = 'kb_cogmaps' AND h.anchor_id = $1
+             JOIN kb_properties prov
+               ON prov.owner_table = 'kb_resources' AND prov.owner_id = r.id
+              AND prov.property_key = 'provenance' AND NOT prov.is_folded
+              AND prov.property_value #>> '{}' = 'kernel'
+            WHERE r.is_active = true
+            ORDER BY r.origin_uri"#,
+        cogmap_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| KernelSliceRow {
+            resource_id: row.resource_id,
+            origin_uri: row.origin_uri,
+            body_hash: row.body_hash,
+            // The inner join guarantees at least the `provenance` property, so the aggregate is never
+            // SQL-NULL in practice; default to an empty object for total safety.
+            facets: row.facets.unwrap_or_else(|| serde_json::json!({})),
+        })
+        .collect())
+}
+
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
 /// search read floor. Builds, per resource, the §9-REBUILT weighted tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
