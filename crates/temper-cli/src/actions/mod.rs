@@ -2,6 +2,7 @@ pub mod body_source;
 pub mod config;
 pub mod ingest;
 pub mod progress;
+pub mod reconcile;
 pub mod runtime;
 pub mod search;
 pub mod show_cache;

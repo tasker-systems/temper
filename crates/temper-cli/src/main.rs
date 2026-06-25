@@ -1,6 +1,7 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction, TeamAction,
+    AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction,
+    TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -356,5 +357,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             no_graph,
         ),
         Commands::Edge { action } => temper_cli::commands::edge::run(action),
+        Commands::Cogmap { cmd } => match cmd {
+            CogmapCmd::Reconcile { r#ref, manifest } => {
+                commands::cogmap::reconcile(&r#ref, &manifest, output_format)
+            }
+        },
     }
 }
