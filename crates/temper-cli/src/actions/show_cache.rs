@@ -1,32 +1,25 @@
-//! Three-tier freshness ladder for `temper resource show` in Local mode.
+//! Two-tier freshness ladder for `temper resource show` in Local mode.
 //!
 //! Given a resource id and its local cached path, decide how to produce
 //! the content to render:
 //!
 //! 1. **Debounce**: if the local file's mtime is within `DEBOUNCE_SECONDS`
 //!    of now, render the local content without any API call.
-//! 2. **Hash-verify**: otherwise, `GET /resources/{id}` (metadata only, no
-//!    body). If the server's `updated` timestamp matches the local
-//!    frontmatter's `temper-updated`, touch the local mtime to now and
-//!    render the local content.
-//! 3. **Full-fetch**: if metadata diverges or no local file exists, call
-//!    `GET /resources/{id}/content`, rebuild the full file
+//! 2. **Full-fetch**: otherwise, `GET /resources/{id}` (metadata) then
+//!    `GET /resources/{id}/content` (body), rebuild the full file
 //!    (frontmatter + body) from the server response, overwrite the local
-//!    file, and render it. Tier-3 is the corruption-resistant path — it
-//!    always reconstructs from canonical server state.
+//!    file, and render it. Full-fetch is the corruption-resistant path —
+//!    it always reconstructs from canonical server state.
 //!
 //! Cloud mode never calls into this module — callers select the
 //! appropriate code path before invoking.
 //!
-//! Offline degradation: on any network error inside tier 2 or 3, fall
-//! back to "render local with a warn" if a local file exists, otherwise
-//! surface the error.
+//! Offline degradation: on any network error, fall back to "render local
+//! with a warn" if a local file exists, otherwise surface the error.
 
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
-
-use filetime::{set_file_mtime, FileTime};
 use temper_client::TemperClient;
 use temper_core::types::ids::ResourceId;
 use temper_core::types::{ContentResponse, ResourceRow};
@@ -53,7 +46,6 @@ pub struct ShowCacheResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreshnessTier {
     Debounced,
-    HashMatch,
     FullFetch,
     OfflineFallback,
 }
@@ -114,35 +106,6 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
         .await
         .map_err(client_err_to_temper)?;
 
-    let mut local_was_corrupted = false;
-    if let Ok(local_body) = fs::read_to_string(params.local_path) {
-        match try_hash_match(&local_body, &meta_check) {
-            HashMatchOutcome::Match => {
-                let now = FileTime::from_system_time(SystemTime::now());
-                set_file_mtime(params.local_path, now)
-                    .map_err(|e| TemperError::Vault(format!("touch mtime: {e}")))?;
-                return Ok(ShowCacheResult {
-                    content: local_body,
-                    source: FreshnessTier::HashMatch,
-                });
-            }
-            HashMatchOutcome::Mismatch => {}
-            HashMatchOutcome::LocalUnparseable => {
-                local_was_corrupted = true;
-                tracing::debug!(
-                    path = %params.local_path.display(),
-                    "frontmatter unparseable; tier-2 hash check skipped, full fetch"
-                );
-            }
-            HashMatchOutcome::ServerHashesMissing => {
-                tracing::debug!(
-                    path = %params.local_path.display(),
-                    "server returned no canonical hashes (manifest missing or empty-string sentinel); tier-2 skipped"
-                );
-            }
-        }
-    }
-
     let content = params
         .client
         .resources()
@@ -152,58 +115,12 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
 
     let file_content = reconstruct_full_file_content(&meta_check, &content)?;
 
-    if local_was_corrupted {
-        output::warning(format!(
-            "rebuilt corrupted frontmatter at {} from server",
-            params.local_path.display()
-        ));
-    }
-
     fs::write(params.local_path, &file_content)
         .map_err(|e| TemperError::Vault(format!("cache write: {e}")))?;
     Ok(ShowCacheResult {
         content: file_content,
         source: FreshnessTier::FullFetch,
     })
-}
-
-enum HashMatchOutcome {
-    Match,
-    Mismatch,
-    LocalUnparseable,
-    ServerHashesMissing,
-}
-
-/// Tier-2 short-circuit: do the locally-computed canonical hashes match the
-/// server's stored hashes?
-///
-/// Compares `managed_hash` and `open_hash` only. `body_hash` is intentionally
-/// excluded because the canonical body form for hashing is not unified across
-/// the ingest path (hashes the raw user-submitted body) and the on-disk form
-/// (hashes after `normalize_body_for_vault` prepends a leading newline). A
-/// future phase will reconcile the body canonical form and add `body_hash` to
-/// this check; until then a server-side body-only edit (no managed-meta
-/// projection change) can fall through this match — tier-3 still heals on
-/// the next forced fetch.
-fn try_hash_match(local_body: &str, meta: &temper_core::types::ResourceRow) -> HashMatchOutcome {
-    use temper_core::frontmatter::Frontmatter;
-
-    let (server_managed, server_open) = match (&meta.managed_hash, &meta.open_hash) {
-        (Some(m), Some(o)) if !m.is_empty() && !o.is_empty() => (m.as_str(), o.as_str()),
-        _ => return HashMatchOutcome::ServerHashesMissing,
-    };
-
-    let fm = match Frontmatter::try_from(local_body) {
-        Ok(fm) => fm,
-        Err(_) => return HashMatchOutcome::LocalUnparseable,
-    };
-    let (local_managed, local_open) = fm.hashes();
-
-    if local_managed == server_managed && local_open == server_open {
-        HashMatchOutcome::Match
-    } else {
-        HashMatchOutcome::Mismatch
-    }
 }
 
 /// Reconstruct the full vault file (frontmatter + body) from a metadata
@@ -254,9 +171,6 @@ pub(super) fn reconstruct_full_file_content(
         "temper-title",
         serde_json::Value::String(meta.title.clone()),
     );
-    if let Some(slug) = &meta.slug {
-        fm.set_managed_field("temper-slug", serde_json::Value::String(slug.clone()));
-    }
     if !meta.owner_handle.is_empty() {
         fm.set_managed_field(
             "temper-owner",
@@ -288,6 +202,7 @@ pub(super) fn reconstruct_full_file_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use filetime::{set_file_mtime, FileTime};
     use std::time::Duration;
     use tempfile::NamedTempFile;
 
@@ -335,14 +250,12 @@ mod tests {
     }
 
     fn test_resource_row() -> ResourceRow {
-        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+        use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
-            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
             origin_uri: "test://origin".to_string(),
             title: "Test Title".to_string(),
-            slug: Some("test-slug".to_string()),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
@@ -356,8 +269,6 @@ mod tests {
             mode: None,
             effort: None,
             body_hash: None,
-            managed_hash: None,
-            open_hash: None,
         }
     }
 

@@ -207,7 +207,7 @@ fn build_enriched(
     EnrichedResource {
         id: row.id.into(),
         title: row.title.clone(),
-        slug: row.slug.clone(),
+        slug: None,
         context_name: row.context_name.clone(),
         doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
@@ -525,11 +525,16 @@ pub async fn update_resource(
                 rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
             })?;
         let title = input.title.clone().unwrap_or(existing.title);
-        let slug_opt = input.slug.clone().or(existing.slug);
+        // slug is §7-dissolved from ResourceRow; derive from effective title when the
+        // caller hasn't supplied one explicitly.
+        let slug = input
+            .slug
+            .clone()
+            .unwrap_or_else(|| temper_core::operations::sluggify(&title));
         temper_core::operations::ensure_managed_identity_keys(
             &mut managed_meta_value,
             &title,
-            slug_opt.as_deref(),
+            Some(slug.as_str()),
         );
     }
 
@@ -729,16 +734,14 @@ mod build_enriched_tests {
     use super::*;
 
     fn sample_row() -> temper_core::types::resource::ResourceRow {
-        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+        use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         use temper_core::types::resource::ResourceRow;
         let nil = uuid::Uuid::nil();
         ResourceRow {
             id: ResourceId::from(uuid::Uuid::now_v7()),
             kb_context_id: ContextId::from(nil),
-            kb_doc_type_id: DocTypeId::from(nil),
             origin_uri: "temper://fixture/task-doc".to_string(),
             title: "Wire the widget".to_string(),
-            slug: Some("wire-the-widget".to_string()),
             originator_profile_id: ProfileId::from(nil),
             owner_profile_id: ProfileId::from(nil),
             is_active: true,
@@ -752,8 +755,6 @@ mod build_enriched_tests {
             mode: None,
             effort: None,
             body_hash: None,
-            managed_hash: None,
-            open_hash: None,
         }
     }
 

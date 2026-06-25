@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+use super::ids::{ContextId, ProfileId, ResourceId};
 use super::managed_meta::ManagedMeta;
 
 /// Row type for resource listings — includes joined display fields
@@ -18,10 +18,8 @@ use super::managed_meta::ManagedMeta;
 pub struct ResourceRow {
     pub id: ResourceId,
     pub kb_context_id: ContextId,
-    pub kb_doc_type_id: DocTypeId,
     pub origin_uri: String,
     pub title: String,
-    pub slug: Option<String>,
     pub originator_profile_id: ProfileId,
     pub owner_profile_id: ProfileId,
     pub is_active: bool,
@@ -41,16 +39,6 @@ pub struct ResourceRow {
     /// `None` when no manifest row exists (resource created via POST without a
     /// body trio, or the manifest join returned NULL).
     pub body_hash: Option<String>,
-    /// Canonical hash of the typed managed_meta JSONB, from
-    /// `kb_resource_manifests`. `None` when no manifest row exists.
-    /// `show_cache` tier-2 compares this against the local-computed
-    /// `compute_managed_hash` to short-circuit a tier-3 round-trip when
-    /// frontmatter content is unchanged.
-    pub managed_hash: Option<String>,
-    /// Canonical hash of the open_meta JSONB, from `kb_resource_manifests`.
-    /// `None` when no manifest row exists. Companion to `managed_hash` for
-    /// `show_cache` tier-2.
-    pub open_hash: Option<String>,
 }
 
 /// Sort field for resource listing.
