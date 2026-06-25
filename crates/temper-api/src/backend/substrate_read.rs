@@ -2,7 +2,7 @@
 //! search + the MCP enrichment list/meta-batch) over the one schema.
 //!
 //! These reads bypass the `Backend` trait by design (the trait projections are lossy and don't cover
-//! meta/body/content); they resolve against `temper_next::readback`, producing native `ResourceRow`s
+//! meta/body/content); they resolve against `temper_substrate::readback`, producing native `ResourceRow`s
 //! (real timestamps, name-only doc type, no fabricated fields) via `native_resource_row`. Visibility
 //! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
 //! is unqualified against the one schema (the connection carries the search_path).
@@ -29,7 +29,7 @@ use temper_core::types::managed_meta::{
 use temper_core::types::resource::{
     ContentResponse, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
-use temper_next::readback;
+use temper_substrate::readback;
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))
