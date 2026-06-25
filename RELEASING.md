@@ -1,80 +1,41 @@
 # Releasing temper
 
-Production for the `temper-cloud` Vercel project (the repo-root `vercel.json` that
-ships the Rust serverless functions — `/api/axum` and `/api/mcp`) deploys on a
-**release tag**, not on merge to `main`. Merges to `main` produce only **preview**
-deploys; cutting a release is the intentional gesture that ships prod, and it runs
-behind a **migration-aware gate** so schema-incompatible code can't auto-ship against
-an un-migrated Neon DB.
+Cutting a release is an **OSS-commitment-level**, target-agnostic act: it produces
+the versioned source, the cross-platform `temper` CLI binaries, and a GitHub Release.
+It does **not** deploy any running site. A release is the artifact that the world and
+every deployment target consume; how a release reaches a running site is a separate,
+per-target concern — see [DEPLOYING.md](DEPLOYING.md).
 
-## One-time prerequisite (operator, manual)
+## What a release produces
 
-**Disable Vercel's git auto-deploy to production for `temper-cloud`.** Without this,
-Vercel still ships prod on every `main` merge and the gate below is bypassed.
+A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
-In the Vercel dashboard → Project `temper-cloud` → **Settings → Git**, do one of:
+`determine-version` → `build-cli-binaries` (darwin-arm64 / linux-x64 / windows-x64) →
+`release-summary` (publishes the GitHub Release with the CLI binaries attached).
 
-- Clear/redirect the **Production Branch** so `main` no longer maps to production, or
-- Add an **Ignored Build Step** that skips production builds (e.g. exit 0 when the
-  target environment is production), leaving preview builds on PR branches intact.
-
-The goal: `main` merges only ever produce **preview** deploys; production is reached
-exclusively through the `deploy-production` job in `.github/workflows/release.yml`.
-
-Also add these repo secrets (Settings → Secrets and variables → Actions):
-
-- `VERCEL_TOKEN` — a Vercel access token with deploy rights to the project.
-- `VERCEL_ORG_ID` — the Vercel org/team id (`vercel link` writes it to `.vercel/project.json`).
-- `VERCEL_PROJECT_ID` — the `temper-cloud` project id (same `.vercel/project.json`).
+No Vercel deploy, no schema migration, no production side effects. Releasing and
+deploying are decoupled by design (see
+[docs/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md](docs/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md)).
 
 ## Release checklist
 
-1. **Make changes and merge to `main`.** Per-PR preview deploys validate the change
-   before it can reach prod.
+1. **Merge to `main`.** Per-PR CI validates the change; per-target preview deploys
+   (Vercel) validate it on each deployment target before it can reach that target's
+   production.
 
-2. **If the release includes a schema change, apply the prod migration/cutover FIRST.**
-   Prod migrations are operator-run on Neon (boot-time `migrate!` was removed). Order:
-   **back up → migrate/cutover → verify.**
-   - Additive migration → `sqlx migrate run` against Neon with the canonical
-     `search_path`.
-   - Big-bang / search-path flip → follow
-     [docs/guides/ws6-endgame-collapse-runbook.md](docs/guides/ws6-endgame-collapse-runbook.md).
+2. **Bump `VERSION` on `main`.** [`release-tag.yml`](.github/workflows/release-tag.yml)
+   derives and pushes the `v<VERSION>` tag, which invokes `release.yml`.
 
-   Do this **before** the deploy so the new code lands on a ready schema.
+3. **Verify the GitHub Release.** The Actions run should be green and the Release
+   should list the three CLI binaries. That's the whole release.
 
-3. **Bump `VERSION` on `main`.** `release-tag.yml` derives and pushes the `v<VERSION>`
-   tag, which invokes `release.yml`: `determine-version` → `build-cli-binaries` →
-   `release-summary` (GitHub Release) and `deploy-production` (ships prod once the
-   migration gate clears).
+A release can also be (re-)run manually via **Actions → Release → Run workflow** with
+an explicit `tag` input — useful to re-cut binaries for an existing tag.
 
-4. **If a migration was applied, clear the gate with `migrations_applied=true`.**
-   The gate diffs `migrations/` between this tag and the previous `v*` tag. When
-   migrations changed it **halts the deploy** unless the release was triggered with
-   `migrations_applied=true` — a pure tag-push can't set that input, so it fails
-   closed by design.
+## Deploying a release
 
-   To proceed after applying the prod migration, re-run the release via
-   **workflow_dispatch**: Actions → **Release** → *Run workflow* → set `tag` to the
-   release tag (e.g. `v0.1.7`) and `migrations_applied` to **true**. (The first job,
-   `build-cli-binaries`, re-runs idempotently; `deploy-production` then clears the
-   gate and ships.)
-
-   A **code-only** release (no `migrations/` diff vs the previous tag) needs no
-   override — `deploy-production` runs straight through on the tag push.
-
-   > First release (no previous `v*` tag) fails closed too: with no prior schema to
-   > diff against, the inaugural deploy requires `migrations_applied=true` once Neon
-   > is provisioned.
-
-## Rollback
-
-`deploy-production` ships an immutable Vercel deployment. To revert prod, re-point the
-production alias to the prior good deployment:
-
-```bash
-vercel rollback                       # previous production deployment
-vercel rollback <deployment-url-or-id>  # a specific one
-```
-
-`rollback` is instant (no rebuild). If the bad release also applied a schema change,
-roll the schema back per the runbook before/with the alias rollback.
+Releasing does not ship a running site. Each deployment target (temperkb.io, an
+enterprise self-hosted instance) is an independent Vercel project that consumes the
+repo on its own cadence, with its own Neon DB and env. See **[DEPLOYING.md](DEPLOYING.md)**
+for the per-target model, the additive-only-on-`main` invariant, and how schema
+changes are applied per target.
