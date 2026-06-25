@@ -1,6 +1,6 @@
 //! `DbBackend` — the substrate backend behind the `Backend` trait (the single backend post-WS6-collapse).
 //!
-//! Reads delegate to `temper_next::readback`; writes compose `temper_next::writes`. The SQL is
+//! Reads delegate to `temper_substrate::readback`; writes compose `temper_substrate::writes`. The SQL is
 //! unqualified against the one schema (the connection carries the search_path — dev: `temper_next,public`;
 //! live: `public` after the rename).
 //!
@@ -23,11 +23,11 @@ use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::resource::ResourceRow;
 
-use temper_next::keys::{key_fate, KeyFate};
-use temper_next::readback;
-use temper_next::writes;
+use temper_substrate::keys::{key_fate, KeyFate};
+use temper_substrate::readback;
+use temper_substrate::writes;
 
-/// Bridge a temper-next (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
+/// Bridge a temper-substrate (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
 /// depend on it) — `anyhow::Error: Display`, so `to_string()` carries the message.
 fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
@@ -48,9 +48,9 @@ pub(crate) fn map_readback_err(e: readback::ReadbackError) -> TemperError {
     }
 }
 
-/// graph::EdgeKind → temper-next's affinity::EdgeKind (identical 4-variant taxonomy — 1:1, no §4 remap).
-fn map_edge_kind(k: graph::EdgeKind) -> temper_next::affinity::EdgeKind {
-    use temper_next::affinity::EdgeKind as N;
+/// graph::EdgeKind → temper-substrate's affinity::EdgeKind (identical 4-variant taxonomy — 1:1, no §4 remap).
+fn map_edge_kind(k: graph::EdgeKind) -> temper_substrate::affinity::EdgeKind {
+    use temper_substrate::affinity::EdgeKind as N;
     match k {
         graph::EdgeKind::Express => N::Express,
         graph::EdgeKind::Contains => N::Contains,
@@ -59,9 +59,9 @@ fn map_edge_kind(k: graph::EdgeKind) -> temper_next::affinity::EdgeKind {
     }
 }
 
-/// graph::Polarity → temper-next's payloads::EdgePolarity.
-fn map_polarity(p: graph::Polarity) -> temper_next::payloads::EdgePolarity {
-    use temper_next::payloads::EdgePolarity as N;
+/// graph::Polarity → temper-substrate's payloads::EdgePolarity.
+fn map_polarity(p: graph::Polarity) -> temper_substrate::payloads::EdgePolarity {
+    use temper_substrate::payloads::EdgePolarity as N;
     match p {
         graph::Polarity::Forward => N::Forward,
         graph::Polarity::Inverse => N::Inverse,
@@ -73,8 +73,8 @@ fn map_polarity(p: graph::Polarity) -> temper_next::payloads::EdgePolarity {
 /// consumes. Field-for-field; the only widening is `u32`/`u8` → `i32`/`i16` (the substrate column types).
 fn packed_to_incoming(
     c: &temper_core::types::ingest::PackedChunk,
-) -> temper_next::content::IncomingChunk {
-    temper_next::content::IncomingChunk {
+) -> temper_substrate::content::IncomingChunk {
+    temper_substrate::content::IncomingChunk {
         chunk_index: c.chunk_index as i32,
         content_hash: c.content_hash.clone(),
         content: c.content.clone(),
@@ -89,7 +89,7 @@ fn packed_to_incoming(
 /// the caller's fault → `BadRequest`.
 fn unpack_incoming_chunks(
     packed: &str,
-) -> Result<Vec<temper_next::content::IncomingChunk>, TemperError> {
+) -> Result<Vec<temper_substrate::content::IncomingChunk>, TemperError> {
     let mut chunks = temper_core::types::ingest::unpack_chunks(packed)
         .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
     chunks.sort_by_key(|c| c.chunk_index);
@@ -246,7 +246,7 @@ impl Backend for DbBackend {
         // of the SUPPLIED chunk hashes; when absent the server chunks + embeds `body` itself (the
         // fallback). Reverses PR#71's "server is the single source of truth" discard contract. A
         // malformed blob is a caller fault → BadRequest (propagated, never swallowed).
-        let incoming_chunks: Option<Vec<temper_next::content::IncomingChunk>> =
+        let incoming_chunks: Option<Vec<temper_substrate::content::IncomingChunk>> =
             match &cmd.chunks_packed {
                 Some(packed) => Some(unpack_incoming_chunks(packed)?),
                 None => None,
@@ -301,9 +301,9 @@ impl Backend for DbBackend {
                 Some(chunks) => {
                     let hashes: Vec<String> =
                         chunks.iter().map(|c| c.content_hash.clone()).collect();
-                    temper_next::content::body_hash_from_chunk_hashes(&hashes)
+                    temper_substrate::content::body_hash_from_chunk_hashes(&hashes)
                 }
-                None => temper_next::content::body_hash_for_body(&body),
+                None => temper_substrate::content::body_hash_for_body(&body),
             };
             if let Some(existing) =
                 readback::find_by_body_hash(&self.pool, *self.profile_id, &body_hash)
@@ -376,7 +376,7 @@ impl Backend for DbBackend {
         // Honor caller-supplied precomputed chunks on the revise too (client did extract→chunk→embed):
         // carry the vectors verbatim instead of re-embedding server-side. Absent ⇒ server chunks +
         // embeds `body` (fallback). Reverses PR#71's discard contract.
-        let incoming_chunks: Option<Vec<temper_next::content::IncomingChunk>> =
+        let incoming_chunks: Option<Vec<temper_substrate::content::IncomingChunk>> =
             match cmd.body.as_ref().and_then(|b| b.chunks_packed.as_deref()) {
                 Some(packed) => Some(unpack_incoming_chunks(packed)?),
                 None => None,
@@ -475,7 +475,7 @@ impl Backend for DbBackend {
         writes::update_resource(
             &self.pool,
             writes::UpdateParams {
-                resource: temper_next::ids::ResourceId::from(new_id),
+                resource: temper_substrate::ids::ResourceId::from(new_id),
                 body: body.as_deref(),
                 title: title.as_deref(),
                 origin_uri: None,
@@ -505,7 +505,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::delete_resource(
             &self.pool,
-            temper_next::ids::ResourceId::from(new_id),
+            temper_substrate::ids::ResourceId::from(new_id),
             emitter,
         )
         .await
@@ -599,13 +599,13 @@ impl Backend for DbBackend {
         let edge = writes::assert_relationship(
             &self.pool,
             writes::AssertParams {
-                src: temper_next::ids::ResourceId::from(src_next),
-                tgt: temper_next::ids::ResourceId::from(tgt_next),
+                src: temper_substrate::ids::ResourceId::from(src_next),
+                tgt: temper_substrate::ids::ResourceId::from(tgt_next),
                 kind: map_edge_kind(cmd.edge_kind),
                 polarity: map_polarity(cmd.polarity),
                 label,
                 weight: cmd.weight,
-                home: temper_next::ids::ContextId::from(home_next),
+                home: temper_substrate::ids::ContextId::from(home_next),
                 emitter,
             },
         )
@@ -630,7 +630,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::retype_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
@@ -655,7 +655,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::reweight_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
             cmd.weight,
             emitter,
         )
@@ -679,7 +679,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::fold_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
             cmd.reason.as_deref(),
             emitter,
         )

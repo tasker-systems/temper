@@ -4960,7 +4960,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
- "temper-next",
+ "temper-substrate",
  "ts-rs",
 ]
 
@@ -4979,7 +4979,7 @@ dependencies = [
  "sqlx",
  "temper-core",
  "temper-ingest",
- "temper-next",
+ "temper-substrate",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
@@ -5166,7 +5166,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-next"
+name = "temper-substrate"
 version = "0.0.0"
 dependencies = [
  "anyhow",

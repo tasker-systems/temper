@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-temper-next = { path = "../temper-next" }
+temper-substrate = { path = "../temper-substrate" }
 serde = { version = "1", features = ["derive"] }
 ts-rs = { version = "10", features = [
   "chrono-impl",

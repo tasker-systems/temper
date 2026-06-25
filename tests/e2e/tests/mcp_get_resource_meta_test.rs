@@ -78,7 +78,7 @@ async fn seed_resource(
 ///
 /// DEFERRED (F1): `slug` is a top-level identity field (`EnrichedResource.slug`
 /// from `ResourceRow.slug`), NOT a managed_meta key — `temper-slug` is
-/// `KeyFate::Die` (temper-next keys.rs:66) so it never reappears in the
+/// `KeyFate::Die` (temper-substrate keys.rs:66) so it never reappears in the
 /// readback managed bag. Receive-side identity-key injection is unimplemented,
 /// so `reconstruct_resource_row` sets `row.slug = None` (db_backend.rs:129),
 /// making `enriched.slug` None. The slug assertion below is the correct
