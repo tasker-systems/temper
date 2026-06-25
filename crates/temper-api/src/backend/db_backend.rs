@@ -275,10 +275,24 @@ impl DbBackend {
 
         // PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist).
         for entry in &request.entries {
+            // Unpack the supplied (client-embedded) chunks once. The body merkle the substrate WILL
+            // store for them is computed the SAME way the create-dedup path does
+            // (`body_hash_from_chunk_hashes`, see :304), so it byte-matches the stored `body_hash`. The
+            // diff keys on THIS merkle — never the wire `content_hash`, which the CLI derives
+            // differently (whole-body `sha256:`-prefixed hash, not the chunk-merkle) and which the
+            // server therefore does not trust. Trusting it would make every re-run re-block every entry.
+            let incoming_chunks = unpack_incoming_chunks(&entry.chunks_packed)?;
+            let chunk_hashes: Vec<String> = incoming_chunks
+                .iter()
+                .map(|c| c.content_hash.clone())
+                .collect();
+            let incoming_body_hash =
+                temper_next::content::body_hash_from_chunk_hashes(&chunk_hashes);
+
             match live_by_uri.get(entry.origin_uri.as_str()) {
                 None => {
                     // CREATE — the resource itself, then STAMP provenance, then the clustering facets.
-                    let chunks = Some(unpack_incoming_chunks(&entry.chunks_packed)?);
+                    let chunks = Some(incoming_chunks);
                     let rid = writes::create_kernel_resource(
                         &self.pool,
                         writes::KernelCreateParams {
@@ -319,9 +333,10 @@ impl DbBackend {
                     id_by_uri.insert(entry.origin_uri.clone(), rid.uuid());
                     outcome.created += 1;
                 }
-                Some(row) if row.body_hash.as_deref() != Some(entry.content_hash.as_str()) => {
-                    // UPDATE — body changed; re-block from the supplied chunks. (Facet/edge deltas on an
-                    // existing entry are DEFERRED v1 — see the method doc.)
+                Some(row) if row.body_hash.as_deref() != Some(incoming_body_hash.as_str()) => {
+                    // UPDATE — body changed (the stored merkle differs from the incoming chunks'
+                    // merkle). Re-block from the supplied chunks. (Facet/edge deltas on an existing
+                    // entry are DEFERRED v1 — see the method doc.)
                     writes::update_resource(
                         &self.pool,
                         writes::UpdateParams {
@@ -330,7 +345,7 @@ impl DbBackend {
                             title: None,
                             origin_uri: None,
                             properties: &[],
-                            chunks: Some(unpack_incoming_chunks(&entry.chunks_packed)?),
+                            chunks: Some(incoming_chunks),
                             rehome_to: None,
                             emitter,
                         },

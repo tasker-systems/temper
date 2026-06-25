@@ -12,9 +12,13 @@ use serde::{Deserialize, Serialize};
 /// One kernel landmark in a reconcile request — **pre-embedded** by the CLI.
 ///
 /// `chunks_packed` is the `compute_body_chunks` output (the same packed-blob wire format as
-/// `IngestPayload::chunks_packed`); `content_hash` is its sibling (the body merkle). `facets` is the
-/// open multi-key JSONB object (e.g. `{ "provenance": "kernel", "layer": "concept" }`), matching the
-/// seed YAML `facets.values` shape.
+/// `IngestPayload::chunks_packed`) and is the AUTHORITATIVE body content for the diff. `content_hash`
+/// is ADVISORY only: the reconcile diff recomputes the body merkle server-side from `chunks_packed`
+/// (the same `body_hash_from_chunk_hashes` the substrate stores) and never trusts this field — the CLI
+/// fills it via `compute_body_hash` (a whole-body `sha256:`-prefixed hash) which does not equal the
+/// stored chunk-merkle, so trusting it would re-block every entry on every run. `facets` is the
+/// CLUSTERING facet object (e.g. `{ "layer": "concept" }`); `provenance: kernel` is server-stamped, not
+/// carried here (see the reconcile design, Decision #6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReconcileEntry {

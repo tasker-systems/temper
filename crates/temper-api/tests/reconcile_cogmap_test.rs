@@ -462,3 +462,47 @@ async fn open_admin_reconcile_blocks_a_concurrent_run(pool: PgPool) {
         "expected Conflict, got {err:?}"
     );
 }
+
+/// Regression guard for the CLI/server hash-source split. The wire `content_hash` is ADVISORY: the
+/// server diffs on the chunk-merkle it computes from `chunks_packed` (the same `body_hash_from_chunk_hashes`
+/// the substrate stores), NEVER on `content_hash`. The operator CLI fills `content_hash` via
+/// `compute_body_hash` (a whole-body `sha256:`-prefixed hash) which can never equal the stored
+/// chunk-merkle — so if the diff trusted it, every release would re-block every landmark. Here we
+/// deliver an entry whose `content_hash` is exactly that CLI-style value and assert the re-run is
+/// UNCHANGED (before the fix this reported `updated=1`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn wire_content_hash_is_advisory_rerun_is_unchanged(pool: PgPool) {
+    let be = backend(&pool).await;
+    let mut e = entry(
+        "temper://kernel/concept/cogmap",
+        "cogmap",
+        "A cognitive map: a bounded, telos-governed view.",
+        0.1,
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![],
+    );
+    // Override with the value the REAL operator CLI emits (whole-body hash, `sha256:`-prefixed) — which
+    // never equals the stored chunk-merkle. A diff that trusted this would re-block on every run.
+    e.content_hash =
+        temper_core::hash::compute_body_hash("A cognitive map: a bounded, telos-governed view.");
+
+    let out1 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![e.clone()])))
+        .await
+        .expect("first delivery")
+        .value;
+    assert_eq!(out1.created, 1, "first delivery creates the entry");
+
+    let out2 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![e])))
+        .await
+        .expect("re-delivery")
+        .value;
+    assert_eq!(
+        (out2.created, out2.updated, out2.unchanged),
+        (0, 0, 1),
+        "wire content_hash is advisory — the server diffs on the chunk-merkle, so a same-body re-run \
+         must be UNCHANGED even when content_hash is the CLI's (non-matching) whole-body hash",
+    );
+}
