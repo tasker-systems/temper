@@ -14,9 +14,11 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
-use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk};
+use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedChunk};
 use crate::events::{fire, EdgeHome, SeedAction};
-use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId};
+use crate::ids::{
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
+};
 use crate::payloads::{self, AnchorRef, EdgePolarity};
 use crate::text::slugify;
 
@@ -251,6 +253,168 @@ pub async fn delete_resource(pool: &PgPool, resource: ResourceId, emitter: Entit
     fire(&mut tx, SeedAction::ResourceDelete { resource, emitter }).await?;
     tx.commit().await?;
     Ok(())
+}
+
+// ── cogmap-homed kernel writes (L0 reconcile) ──────────────────────────────────
+
+/// Create a kernel resource homed to a **cogmap** (not a context) — the shape the L0 reconciler
+/// uses. Mirrors [`create_resource`] but homes `AnchorRef::cogmap(p.cogmap)` and passes
+/// `originator: None` (kernel content's originator COALESCEs to `owner` = system). The post-create
+/// property loop of `create_resource` is intentionally omitted: kernel facets/provenance are stamped
+/// by the caller via [`set_property`] / [`set_facet`].
+pub struct KernelCreateParams<'a> {
+    pub cogmap: CogmapId,
+    pub title: &'a str,
+    pub origin_uri: &'a str,
+    pub doc_type: &'a str,
+    pub body: &'a str,
+    /// Caller-supplied, already-embedded chunks. When `Some`, the body block is built from these
+    /// verbatim (the client embedded); when `None`, the server chunks + embeds `body` (fallback) —
+    /// the same client-embed-or-server-fallback affordance as [`create_resource`].
+    pub chunks: Option<Vec<IncomingChunk>>,
+    pub owner: ProfileId,
+    pub emitter: EntityId,
+}
+
+pub async fn create_kernel_resource(
+    pool: &PgPool,
+    p: KernelCreateParams<'_>,
+) -> Result<ResourceId> {
+    let block = match p.chunks {
+        Some(chunks) => prepare_block_from_chunks(0, None, chunks),
+        None => prepare_block(0, None, p.body)?,
+    };
+    let blocks = [block];
+    let mut tx = begin_scoped(pool).await?;
+    let new_id = fire(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title: p.title,
+            origin_uri: p.origin_uri,
+            // A genuinely new kernel resource — mint a fresh id.
+            resource_id: None,
+            home: AnchorRef::cogmap(p.cogmap),
+            owner: p.owner,
+            // Kernel content's originator COALESCEs to owner (= system).
+            originator: None,
+            blocks: &blocks,
+            doc_type: Some(p.doc_type),
+            emitter: p.emitter,
+        },
+    )
+    .await?
+    .resource()?;
+    tx.commit().await?;
+    Ok(new_id)
+}
+
+/// Set the **clustering** facet on a resource — one `kb_properties` row with `property_key='facet'`
+/// holding the whole `values` object (e.g. `{layer: concept}`). This is what materialization/affinity
+/// read. NOT interchangeable with [`set_property`] (Decision #6): `provenance` is per-key, not a
+/// clustering facet.
+pub async fn set_facet(
+    pool: &PgPool,
+    resource: ResourceId,
+    values: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire(
+        &mut tx,
+        SeedAction::FacetSet {
+            resource,
+            values,
+            weight,
+            emitter,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Set a single-valued **per-key** property — folds prior active `(owner, key)` rows then asserts the
+/// new value, so the key holds one current value (`property_key=<key>`). This is the shape
+/// `readback::kernel_slice` reads; the reconciler stamps `provenance: kernel` through it.
+pub async fn set_property(
+    pool: &PgPool,
+    resource: ResourceId,
+    key: &str,
+    value: &serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire(
+        &mut tx,
+        SeedAction::PropertySet {
+            resource,
+            key,
+            value,
+            weight: 1.0,
+            emitter,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Re-block a resource's body block from already-prepared chunks (the update path — the caller
+/// resolves the block id and prepares the new chunks). Mirrors the `Revise`/`BlockMutate` fire.
+pub async fn mutate_block(
+    pool: &PgPool,
+    block: BlockId,
+    chunks: &[PreparedChunk],
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block,
+            chunks,
+            emitter,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Assert (or idempotently re-assert) a **cogmap-homed** edge `src → tgt`, returning its id. Mirrors
+/// [`assert_relationship`] but homes `EdgeHome::Cogmap(p.cogmap)` (kernel landmarks home to the map,
+/// not a context).
+pub struct KernelEdgeParams<'a> {
+    pub cogmap: CogmapId,
+    pub src: ResourceId,
+    pub tgt: ResourceId,
+    pub kind: EdgeKind,
+    pub polarity: EdgePolarity,
+    pub label: Option<&'a str>,
+    pub weight: f64,
+    pub emitter: EntityId,
+}
+
+pub async fn assert_kernel_edge(pool: &PgPool, p: KernelEdgeParams<'_>) -> Result<EdgeId> {
+    let mut tx = begin_scoped(pool).await?;
+    let edge = fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: p.src,
+            tgt: p.tgt,
+            kind: p.kind,
+            polarity: p.polarity,
+            label: p.label,
+            weight: p.weight,
+            home: EdgeHome::Cogmap(p.cogmap),
+            emitter: p.emitter,
+        },
+    )
+    .await?
+    .relationship()?;
+    tx.commit().await?;
+    Ok(edge)
 }
 
 // ── relationship writes ──────────────────────────────────────────────────────────
