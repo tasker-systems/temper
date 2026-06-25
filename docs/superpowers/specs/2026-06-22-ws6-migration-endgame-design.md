@@ -1,5 +1,18 @@
 # WS6 Migration Endgame — namespace collapse, split deletion, bootstrap export
 
+> **✅ EXECUTED (2026-06-25), via re-home — not the rename-promote below.** The namespace
+> collapse described here proposed renaming `temper_next` → `public`, which proved
+> **Neon-blocked** (`neondb_owner` can't relocate the `vector` extension out of `public`).
+> It was instead accomplished by a **re-home**: drop legacy `public`, `ALTER … SET SCHEMA public`
+> the canonical objects, rewrite `_sqlx_migrations`, revert the `search_path` default, drop
+> `temper_next`. Prod is now single-schema `public`. See
+> `docs/superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
+> `…-parity-report.md`, and `docs/guides/ws6-rehome-to-public-runbook.md` (PR #168). This
+> document is retained for historical context. The OSS **bootstrap-export** follow-on is
+> already satisfied: `migrations/` (the 3 canonical files) is the clean from-scratch set
+> (parity-proven equivalent to prod). Remaining sibling **shim-exit** stands on its own
+> (row-shape refactor — NOT obviated by the re-home).
+
 Design spec for the step beyond the flip: collapsing the `temper_next` / `public`
 two-schema split back to a single canonical schema, deleting the migration machinery,
 and (as a *separate, enabled* follow-on) exporting a clean OSS bootstrap migration set.
