@@ -77,22 +77,50 @@ replay, fingerprint, substrate, text, keys, scenario. Dependency: `temper-ingest
 |--------------------------------|--------------------------------------------------------|
 | `types/resource.rs`            | `ResourceRow` (+ `ResourceFacets`, `ResourceRelationships`) |
 | `types/managed_meta.rs`        | `ManagedMeta` — temper-governed frontmatter fields     |
-| `types/graph.rs`               | relationship types; depends on `DocType`               |
-| `frontmatter/`                 | parse/validate/project; `DocType` (6-variant taxonomy) |
+| `types/graph.rs` (**split**)   | the `DocType`-dependent half — see "Mixed-module splits" |
+| `frontmatter/`                 | parse/validate/project; **`DocType`** (6-variant taxonomy moves here) |
 | `schema.rs`                    | per-doctype JSON-Schema validation                     |
 | `vault.rs`                     | vault layout + `kb://` URI construction                |
 | `defaults.rs`                  | doctype-specific managed/open defaults                 |
+| `hash.rs` (**split**)          | `compute_managed_hash` only — see "Mixed-module splits" |
 | `operations/`                  | `Backend` trait + commands + `refs.rs` (already marked) |
 
 Dependency: **`temper-core` only** (the domain-A modules don't touch `temper-next` —
 verified: only doc-comment mentions exist in core).
 
+#### Mixed-module splits (discovered at plan time)
+
+Two temper-core modules are **mixed** — they hold both neutral primitives (consumed by
+crates that sit below or beside temper-workflow) and domain-A logic. A wholesale move would
+re-create a cycle, so each splits along the neutral/domain-A grain:
+
+- **`hash.rs`.** `compute_body_hash`, `canonicalize_json`, `hash_canonical_json`,
+  `compute_open_hash`, `doc_type_from_vault_path` **stay** in `temper-core::hash` (the first
+  is consumed by `temper-ingest`, which must not depend on workflow). Only
+  `compute_managed_hash` **moves** to `temper-workflow` — it strips `TIER1_SYSTEM_FIELDS`
+  (frontmatter::fields) and applies `defaults::apply_managed_defaults`, both domain-A.
+- **`graph.rs`.** `EdgeKind` and `Polarity` (the neutral structural edge taxonomy) **stay**
+  in temper-core — `types/relationship_requests.rs` and `types/relationship_events.rs` (the
+  `/api/relationships` wire types shared with `temper-client`) depend on them. The
+  `DocType`-dependent half **moves** to temper-workflow: `EdgeType`, `TargetRef`,
+  `ResourceRelationships`, `is_aggregator(DocType)`, `GraphNode`, `GraphEdge`,
+  `GraphTraversalRow`, `GraphNeighborRow`, `GraphEdgeRow`, `ResolvedEdge`,
+  `EdgeReconciliation`, `SubgraphResponse`. The moved structs import `EdgeKind`/`Polarity`
+  from temper-core (workflow → core).
+- **`DocType`** is defined inside `frontmatter/document.rs` and **moves to temper-workflow**
+  (user decision, principled: the doc-type taxonomy is the opinionated frame; temper-core
+  stays doc-type-free). All workflow consumers reference it locally; no core code references
+  `DocType` after the move (verified: only `graph.rs`'s moving half and `hash.rs`'s moving
+  function used it).
+
 ### temper-core (shrinks to neutral leaf)
 
-Retains: `error`, `ids`, `hash`, `validation`, `projection`, `config`, and the neutral
-platform types — `auth`, `profile`, `context`, `team`, `device`, `invitation`, `access`,
-`audit`, `event`, `search`, `api`, `ownership`, `transfer`, `merge`, `conflict`, `upload`,
-`ingest`, and the **invocation/cogmap types** (`invocation`, `invocation_requests` — these
+Retains: `error`, `ids`, `hash` (neutral primitives — see split above), `validation`,
+`projection`, `config`, the neutral edge taxonomy (`EdgeKind`/`Polarity`) + the
+`/api/relationships` wire types (`relationship_requests`, `relationship_events`), and the
+neutral platform types — `auth`, `profile`, `context`, `team`, `device`, `invitation`,
+`access`, `audit`, `event`, `search`, `api`, `ownership`, `transfer`, `merge`, `conflict`,
+`upload`, `ingest`, and the **invocation/cogmap types** (`invocation`, `invocation_requests` — these
 are WS7 cognitive-map, not Domain-A task/goal; they stay).
 
 ### Dependency graph (post-split)
