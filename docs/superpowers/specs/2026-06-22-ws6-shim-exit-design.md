@@ -1,3 +1,10 @@
+> **SUPERSEDED (2026-06-25)** by
+> [`2026-06-25-ws6-shim-exit-native-shape-design.md`](2026-06-25-ws6-shim-exit-native-shape-design.md).
+> This version predates the WS6 re-home (#168) and #166 collapse: stale file references
+> (`next_backend.rs`), the endgame is now done (not a pending precondition), and its timestamp
+> premise was wrong (timestamps are not event-derived today — see the successor §3). The crate split
+> is also descoped from shim-exit into a sibling Spec B. Kept for decision history.
+
 # WS6 Shim-Exit — surfaces native to the new schema, not shimmed
 
 Design spec for retiring `NextBackend::reconstruct_resource_row` and the §9 invariant-floor
