@@ -7,9 +7,9 @@ developed and tested TDD-style against the post-collapse world.
 
 ## The idea
 
-Post-collapse there is **one** schema. The live cutover renames the already-live
-`temper_next` substrate to the canonical `public` (operator runbook:
-`docs/guides/ws6-endgame-collapse-runbook.md`). The collapsed *code* carries no
+Post-collapse there is **one** schema. The live cutover renamed the already-live
+`temper_next` substrate to the canonical `public` (executed; procedure in git
+history). The collapsed *code* carries no
 `temper_next.`-qualified SQL and no per-connection search_path hooks — it issues
 plain unqualified SQL against the connection default.
 
