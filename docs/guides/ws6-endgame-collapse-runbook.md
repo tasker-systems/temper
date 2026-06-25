@@ -1,5 +1,12 @@
 # WS6 Endgame Collapse Runbook (live cutover)
 
+> **⚠️ SUPERSEDED (2026-06-25).** The rename-promote described below (rename `temper_next` →
+> `public`) is **Neon-blocked**: `neondb_owner` cannot relocate the `vector` extension out of
+> `public`. Production was cut over via a search-path flip and then re-homed into `public` by
+> per-object `ALTER … SET SCHEMA`. See
+> [ws6-rehome-to-public-runbook.md](./ws6-rehome-to-public-runbook.md). This document is retained
+> for historical context only.
+
 Operator checklist for the **live schema collapse**: renaming the already-live
 `temper_next` to the canonical `public`, retiring the stale `public`, and redeploying
 the collapsed code. This is the destructive, one-shot production step that the code
