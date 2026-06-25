@@ -21,6 +21,7 @@ use temper_core::operations::{
 };
 use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_core::types::resource::ResourceRow;
 
 use temper_next::keys::{key_fate, KeyFate};
@@ -94,6 +95,26 @@ fn unpack_incoming_chunks(
         .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
     chunks.sort_by_key(|c| c.chunk_index);
     Ok(chunks.iter().map(packed_to_incoming).collect())
+}
+
+/// Strip a stray top-level `provenance` key from a clustering-facet object (Decision #6): `provenance`
+/// is a per-key property the reconciler STAMPS on create, never a clustering facet. Returns the object
+/// minus that key (cloned); a non-object value passes through unchanged.
+fn strip_provenance_facet(facets: &serde_json::Value) -> serde_json::Value {
+    match facets.as_object() {
+        Some(obj) => {
+            let mut out = obj.clone();
+            out.remove("provenance");
+            serde_json::Value::Object(out)
+        }
+        None => facets.clone(),
+    }
+}
+
+/// Does a facet object carry at least one clustering key? An empty object ⇒ skip `set_facet` (nothing
+/// to cluster), preserving idempotency.
+fn facet_is_nonempty(facets: &serde_json::Value) -> bool {
+    facets.as_object().is_some_and(|o| !o.is_empty())
 }
 
 /// Map an inbound [`Surface`] to the synthesized per-surface emitter marker (`pete@<marker>`, §1b).
@@ -213,6 +234,228 @@ impl DbBackend {
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))
+    }
+
+    /// The diff+apply core of `reconcile_cognitive_map`, run INSIDE the `admin_reconcile` envelope.
+    /// Returns the [`ReconcileOutcome`]; any `Err` is propagated and closes the envelope `Failed`.
+    ///
+    /// Idempotency (the headline invariant) holds because: an entry whose `content_hash` equals the live
+    /// `body_hash` does NOTHING (zero events); an edge is asserted only when ABSENT (checked via
+    /// `neighbors`); the clustering facet + `provenance` stamp are written only on CREATE. Re-running the
+    /// same request therefore fires zero new mutation events. (Facet-delta + edge-reweight on EXISTING
+    /// entries are DEFERRED for v1 — kernel landmarks are born with their facets/edges and rarely change
+    /// them; re-asserting either appends an event unconditionally, which would break idempotency.)
+    async fn reconcile_apply(
+        &self,
+        cogmap: temper_next::ids::CogmapId,
+        request: &ReconcileCogmapRequest,
+        owner: temper_next::ids::ProfileId,
+        emitter: temper_next::ids::EntityId,
+    ) -> Result<ReconcileOutcome, TemperError> {
+        use std::collections::{HashMap, HashSet};
+
+        let cogmap_uuid = cogmap.uuid();
+
+        // The diff source: the current `provenance: kernel` slice, indexed by `origin_uri`.
+        let live = readback::kernel_slice(&self.pool, cogmap_uuid)
+            .await
+            .map_err(api_err)?;
+        let live_by_uri: HashMap<&str, &readback::KernelSliceRow> =
+            live.iter().map(|r| (r.origin_uri.as_str(), r)).collect();
+
+        // `origin_uri` → resource id, seeded with live rows AND extended with rows created this run, so
+        // Phase-2 edges can resolve targets minted in the same pass (first delivery creates everything,
+        // then wires the edges).
+        let mut id_by_uri: HashMap<String, uuid::Uuid> = live
+            .iter()
+            .map(|r| (r.origin_uri.clone(), r.resource_id))
+            .collect();
+
+        let mut outcome = ReconcileOutcome::default();
+
+        // PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist).
+        for entry in &request.entries {
+            match live_by_uri.get(entry.origin_uri.as_str()) {
+                None => {
+                    // CREATE — the resource itself, then STAMP provenance, then the clustering facets.
+                    let chunks = Some(unpack_incoming_chunks(&entry.chunks_packed)?);
+                    let rid = writes::create_kernel_resource(
+                        &self.pool,
+                        writes::KernelCreateParams {
+                            cogmap,
+                            title: &entry.title,
+                            origin_uri: &entry.origin_uri,
+                            doc_type: &entry.doc_type,
+                            body: &entry.body,
+                            chunks,
+                            owner,
+                            emitter,
+                        },
+                    )
+                    .await
+                    .map_err(api_err)?;
+
+                    // STAMP `provenance: kernel` — the per-key property `kernel_slice` filters on
+                    // (Decision #6); every reconcile-created resource is kernel by definition.
+                    writes::set_property(
+                        &self.pool,
+                        rid,
+                        "provenance",
+                        &serde_json::json!("kernel"),
+                        emitter,
+                    )
+                    .await
+                    .map_err(api_err)?;
+
+                    // Clustering facets (e.g. `layer`) — strip any stray `provenance` (stamped above,
+                    // never clustered). Skip the write entirely when there's nothing to cluster.
+                    let facets = strip_provenance_facet(&entry.facets);
+                    if facet_is_nonempty(&facets) {
+                        writes::set_facet(&self.pool, rid, &facets, 1.0, emitter)
+                            .await
+                            .map_err(api_err)?;
+                    }
+
+                    id_by_uri.insert(entry.origin_uri.clone(), rid.uuid());
+                    outcome.created += 1;
+                }
+                Some(row) if row.body_hash.as_deref() != Some(entry.content_hash.as_str()) => {
+                    // UPDATE — body changed; re-block from the supplied chunks. (Facet/edge deltas on an
+                    // existing entry are DEFERRED v1 — see the method doc.)
+                    writes::update_resource(
+                        &self.pool,
+                        writes::UpdateParams {
+                            resource: temper_next::ids::ResourceId::from(row.resource_id),
+                            body: Some(&entry.body),
+                            title: None,
+                            origin_uri: None,
+                            properties: &[],
+                            chunks: Some(unpack_incoming_chunks(&entry.chunks_packed)?),
+                            rehome_to: None,
+                            emitter,
+                        },
+                    )
+                    .await
+                    .map_err(api_err)?;
+                    outcome.updated += 1;
+                }
+                Some(_) => {
+                    // Hashes equal → DO NOTHING (zero events). The idempotency invariant.
+                    outcome.unchanged += 1;
+                }
+            }
+        }
+
+        // PHASE 2 — edges (idempotent: assert only those not already present). Targets now resolvable.
+        for entry in &request.entries {
+            let src = match id_by_uri.get(&entry.origin_uri) {
+                Some(id) => *id,
+                None => continue, // folded/absent this run — nothing to wire from
+            };
+            if entry.edges.is_empty() {
+                continue;
+            }
+            // The resource's existing 1-hop neighbors (target origin_uri + kind) — re-asserting an edge
+            // that already exists would append an event (`relationship_assert` fires unconditionally), so
+            // we skip present ones. `neighbors` is unscoped 1-hop; the system actor sees all (fine here).
+            let existing: HashSet<(String, String)> = readback::neighbors(&self.pool, src)
+                .await
+                .map_err(api_err)?
+                .into_iter()
+                .map(|n| (n.origin_uri, n.edge_kind))
+                .collect();
+            for e in &entry.edges {
+                let tgt = match id_by_uri.get(&e.to_origin_uri) {
+                    Some(id) => *id,
+                    None => {
+                        // Target isn't a known kernel resource this run — skip + log (don't fabricate).
+                        tracing::warn!(
+                            from = %entry.origin_uri,
+                            to = %e.to_origin_uri,
+                            kind = %e.kind,
+                            "reconcile: skipping edge to unknown target origin_uri",
+                        );
+                        continue;
+                    }
+                };
+                if existing.contains(&(e.to_origin_uri.clone(), e.kind.clone())) {
+                    continue; // already present — re-assert would break idempotency
+                }
+                let kind = temper_next::affinity::EdgeKind::from_sql(&e.kind).ok_or_else(|| {
+                    TemperError::BadRequest(format!("unknown edge kind: {}", e.kind))
+                })?;
+                let polarity = temper_next::payloads::EdgePolarity::from_sql(&e.polarity)
+                    .ok_or_else(|| {
+                        TemperError::BadRequest(format!("unknown edge polarity: {}", e.polarity))
+                    })?;
+                writes::assert_kernel_edge(
+                    &self.pool,
+                    writes::KernelEdgeParams {
+                        cogmap,
+                        src: temper_next::ids::ResourceId::from(src),
+                        tgt: temper_next::ids::ResourceId::from(tgt),
+                        kind,
+                        polarity,
+                        label: e.label.as_deref(),
+                        weight: e.weight,
+                        emitter,
+                    },
+                )
+                .await
+                .map_err(api_err)?;
+            }
+        }
+
+        // PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds).
+        for t in &request.fold_resources {
+            if let Some(row) = live_by_uri.get(t.origin_uri.as_str()) {
+                writes::delete_resource(
+                    &self.pool,
+                    temper_next::ids::ResourceId::from(row.resource_id),
+                    emitter,
+                )
+                .await
+                .map_err(api_err)?;
+                outcome.folded += 1;
+            }
+        }
+        for t in &request.fold_edges {
+            let (Some(&src), Some(&tgt)) = (
+                id_by_uri.get(&t.from_origin_uri),
+                id_by_uri.get(&t.to_origin_uri),
+            ) else {
+                continue; // an endpoint isn't a known kernel resource — nothing to fold
+            };
+            let kind = temper_next::affinity::EdgeKind::from_sql(&t.kind)
+                .ok_or_else(|| TemperError::BadRequest(format!("unknown edge kind: {}", t.kind)))?;
+            // Resolve the live edge by (src, tgt, kind) over `kb_edges` (runtime query — mirrors
+            // `edge_source_resource`; an enum-cast bind keeps it macro-free, no prepare-api entry).
+            let edge_id: Option<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT id FROM kb_edges \
+                 WHERE source_id = $1 AND target_id = $2 \
+                   AND source_table = 'kb_resources' AND target_table = 'kb_resources' \
+                   AND edge_kind = $3::edge_kind AND NOT is_folded",
+            )
+            .bind(src)
+            .bind(tgt)
+            .bind(kind.as_sql())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(api_err)?;
+            if let Some(edge_id) = edge_id {
+                writes::fold_relationship(
+                    &self.pool,
+                    temper_next::ids::EdgeId::from(edge_id),
+                    Some("reconcile fold"),
+                    emitter,
+                )
+                .await
+                .map_err(api_err)?;
+                outcome.folded += 1;
+            }
+        }
+
+        Ok(outcome)
     }
 }
 
@@ -688,14 +931,78 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
-    // TODO(Task 4): replace stub — diff + plan + apply + admin_reconcile envelope + mutex.
+    /// One idempotent desired-state reconcile run inside an `admin_reconcile` `kb_invocations` envelope
+    /// (which is ALSO the serialization mutex). The system actor fires every mutation. The envelope opens
+    /// before any write and closes `Completed`/`Failed` after — so a fault still audits and never leaves a
+    /// stale open lock. No HTTP/authz here (Tasks 5–6); this is the backend command.
     async fn reconcile_cognitive_map(
         &self,
-        _cmd: ReconcileCognitiveMap,
-    ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError> {
-        Err(TemperError::NotImplemented(
-            "reconcile_cognitive_map".to_string(),
-        ))
+        cmd: ReconcileCognitiveMap,
+    ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
+        let cogmap = temper_next::ids::CogmapId::from(cmd.cogmap_id);
+
+        // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
+        // entity) — the L0 birth migration's actor.
+        let (owner, emitter) = readback::system_actor(&self.pool).await.map_err(api_err)?;
+
+        // 1. MUTEX — an open `admin_reconcile` envelope on this cogmap serializes a second reconcile.
+        if readback::has_open_invocation(&self.pool, cmd.cogmap_id, "admin_reconcile")
+            .await
+            .map_err(api_err)?
+        {
+            return Err(TemperError::Conflict(
+                "reconcile already in progress for this cognitive map".to_string(),
+            ));
+        }
+
+        // 2. OPEN the envelope (top-level: `parent: None`, so the delegation gate is not exercised).
+        let inv = writes::open_invocation(
+            &self.pool,
+            writes::OpenParams {
+                trigger_kind: "admin_reconcile".to_string(),
+                originating: cogmap,
+                parent: None,
+                scoped_entity: emitter,
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        // 3. Apply; CLOSE the envelope `Completed` on Ok, `Failed` on Err (then propagate the Err).
+        match self
+            .reconcile_apply(cogmap, &cmd.request, owner, emitter)
+            .await
+        {
+            Ok(outcome) => {
+                let outcome_json =
+                    serde_json::to_value(&outcome).map_err(|e| TemperError::Api(e.to_string()))?;
+                writes::close_invocation(
+                    &self.pool,
+                    inv,
+                    cogmap,
+                    temper_next::payloads::Disposition::Completed,
+                    outcome_json,
+                    emitter,
+                )
+                .await
+                .map_err(api_err)?;
+                Ok(CommandOutput::new(outcome))
+            }
+            Err(e) => {
+                // Best-effort close before propagating — never mask the original fault.
+                let _ = writes::close_invocation(
+                    &self.pool,
+                    inv,
+                    cogmap,
+                    temper_next::payloads::Disposition::Failed,
+                    serde_json::json!({ "error": e.to_string() }),
+                    emitter,
+                )
+                .await;
+                Err(e)
+            }
+        }
     }
 }
 

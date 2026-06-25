@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n              SELECT 1 FROM kb_invocations\n               WHERE originating_cogmap_id = $1\n                 AND trigger_kind = $2\n                 AND status = 'open'\n           ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c75acf03d2a1532fff3bc38f243dd80d00923ec3ba78d55da81dcf793fcdcd69"
+}

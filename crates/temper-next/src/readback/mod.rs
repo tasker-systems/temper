@@ -29,6 +29,7 @@ use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::ids::{EntityId, ProfileId};
 use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
@@ -721,6 +722,49 @@ pub async fn kernel_slice(pool: &PgPool, cogmap_id: Uuid) -> Result<Vec<KernelSl
             facets: row.facets.unwrap_or_else(|| serde_json::json!({})),
         })
         .collect())
+}
+
+/// Resolve the **system actor** — the `(owner_profile, emitter_entity)` pair the L0 reconciler fires
+/// every mutation under. The lookup is the L0 birth migration's exactly: the profile with
+/// `handle = 'system'` joined to its `name = 'system'` entity. Returned typed so the reconcile
+/// orchestration threads `ProfileId`/`EntityId` into the cogmap-homed writes without re-resolving.
+///
+/// Compile-time macro (`temper_next` `.sqlx` cache, `cargo make prepare-next`).
+pub async fn system_actor(pool: &PgPool) -> Result<(ProfileId, EntityId)> {
+    let row = sqlx::query!(
+        r#"SELECT p.id AS "owner!", e.id AS "emitter!"
+             FROM kb_entities e
+             JOIN kb_profiles p ON p.id = e.profile_id
+            WHERE p.handle = 'system' AND e.name = 'system'"#,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((ProfileId::from(row.owner), EntityId::from(row.emitter)))
+}
+
+/// Is there an OPEN invocation of `trigger_kind` on `cogmap_id`? The reconcile mutex: an in-flight
+/// `admin_reconcile` envelope on a cogmap serializes a second reconcile against it (the open-row
+/// check the spec §7 mandates before opening a new envelope).
+///
+/// Compile-time macro (`temper_next` `.sqlx` cache, `cargo make prepare-next`).
+pub async fn has_open_invocation(
+    pool: &PgPool,
+    cogmap_id: Uuid,
+    trigger_kind: &str,
+) -> Result<bool> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(
+              SELECT 1 FROM kb_invocations
+               WHERE originating_cogmap_id = $1
+                 AND trigger_kind = $2
+                 AND status = 'open'
+           ) AS "exists!""#,
+        cogmap_id,
+        trigger_kind,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
 }
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
