@@ -27,6 +27,8 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 - `api/mcp.rs` — Vercel runtime adapter for the MCP server (same pattern as axum.rs).
 - `api/auth/`, `api/workflows/` — Vercel serverless endpoints (TypeScript).
 
+**Release ≠ deploy.** Cutting a `v*` tag produces CLI binaries + a GitHub Release ([RELEASING.md](RELEASING.md)) — it deploys nothing. Each running site (temperkb.io, enterprise self-hosted) is an **independent Vercel project** consuming the repo on its own cadence, with its own Neon DB + env; CI does not deploy. Auto-deploy of `main` stays safe via the **additive-only-on-`main`** invariant; big-bang schema changes are operator-run per target via the cutover runbook. See [DEPLOYING.md](DEPLOYING.md).
+
 ### End-to-End Tests (tests/e2e/)
 Standalone test crate (not in `crates/`) that exercises the full stack: spawns a real Axum server, hits a real Postgres test database, and drives flows through the actual `temper-cli` and `temper-client` code paths. Use this layer for tests that span CLI ↔ API ↔ DB or that need real auth (JWT, JWKS fixtures in `tests/e2e/tests/fixtures/`). Test files in `tests/e2e/tests/`, shared harness in `tests/e2e/tests/common/`. Run with `cargo make test-e2e`.
 
