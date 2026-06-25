@@ -94,6 +94,15 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
     keys.insert("telos".to_string(), telos.uuid());
 
     for r in &s.resources {
+        // Reserved/duplicate key guard: `keys` already holds the implicit charter key `telos`; a
+        // resource keyed `telos` (or a duplicate of an earlier resource key) would silently shadow it
+        // and corrupt the charter read. Fail fast with a clear message instead.
+        if keys.contains_key(&r.key) {
+            anyhow::bail!(
+                "seed resource key {:?} collides with an existing key (the charter reserves `telos`); rename it",
+                r.key
+            );
+        }
         let title = r.title.clone().unwrap_or_else(|| r.key.clone());
         // An ordinary resource's body is one content-block (content-block §"Write path"); it chunks +
         // embeds Rust-side (sha256 + bge-768), and resource_create persists the block→chunk nesting.

@@ -39,7 +39,7 @@ world:
 resources:
   # --- concept-landmarks (Q2 vocabulary) ---
   - { key: cogmap,     origin_uri: "temper://kernel/concept/cogmap",     facets: { values: { layer: concept } },  body: "A cognitive map: a bounded, telos-governed view of resources and their relationships. An agent works inside one map's frame at a time." }
-  - { key: telos,      origin_uri: "temper://kernel/concept/telos",      facets: { values: { layer: concept } },  body: "A map's telos: its declared purpose, held as a charter (statement + questions-with-context + framing). The telos is the perspective under which salience is judged — salience is never universal." }
+  - { key: telos_concept, origin_uri: "temper://kernel/concept/telos",  facets: { values: { layer: concept } },  body: "A map's telos: its declared purpose, held as a charter (statement + questions-with-context + framing). The telos is the perspective under which salience is judged — salience is never universal." }
   - { key: resource,   origin_uri: "temper://kernel/concept/resource",   facets: { values: { layer: concept } },  body: "A resource: the named, findable unit of content in a map. Addressed by ref; its body is content blocks." }
   - { key: edge,       origin_uri: "temper://kernel/concept/edge",       facets: { values: { layer: concept } },  body: "An edge: a declared, typed relationship between resources (express, contains, leads_to, near). Edges are authored, never inferred." }
   - { key: facet,      origin_uri: "temper://kernel/concept/facet",      facets: { values: { layer: concept } },  body: "A facet: a key/value property on a resource (e.g. layer: concept). Facet overlap binds resources into families and is an affinity input." }
@@ -70,7 +70,7 @@ edges:
   - { from: invocation, to: steward,    kind: express,  label: run-by }
   - { from: cogmap,     to: region,     kind: contains, label: holds }
   - { from: region,     to: lens,       kind: express,  label: shaped-by }
-  - { from: telos,      to: cogmap,     kind: express,  label: governs }
+  - { from: telos_concept, to: cogmap,  kind: express,  label: governs }
   - { from: resource,   to: edge,       kind: near,     label: graph-grain }
   - { from: facet,      to: region,     kind: express,  label: binds-into }
   # invariants govern concepts (express)
@@ -82,6 +82,6 @@ edges:
   - { from: ref_search,      to: resource, kind: leads_to, label: to-find }
   - { from: ref_create,      to: resource, kind: leads_to, label: to-add }
   - { from: ref_materialize, to: region,   kind: leads_to, label: to-see }
-  - { from: ref_charter,     to: telos,    kind: leads_to, label: to-understand }
+  - { from: ref_charter,     to: telos_concept, kind: leads_to, label: to-understand }
 
 uses_lenses: [orientation, wayfinding]
