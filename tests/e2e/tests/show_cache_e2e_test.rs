@@ -33,11 +33,11 @@ use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 /// (`show_cache::reconstruct_full_file_content` reads `content.managed_meta`).
 /// Post-collapse, `get_content_select` returns `managed_meta: None` /
 /// `open_meta: None` — the meta tier moved to a separate `get_meta` call
-/// (read_selector.rs:196-212), so the healed file no longer carries
+/// (substrate_read.rs:196-212), so the healed file no longer carries
 /// `temper-stage` / open-meta tags. The assertions below are the correct
 /// end-state; the production fix is for show_cache to fetch meta via
 /// `get_meta` and pass it into reconstruction (as MCP's `get_resource` does).
-#[ignore = "deferred: show_cache tier-3 reads managed/open meta from the content response, which now returns None meta post-collapse (read_selector get_content_select); reconstruction must fetch get_meta separately"]
+#[ignore = "deferred: show_cache tier-3 reads managed/open meta from the content response, which now returns None meta post-collapse (substrate_read get_content_select); reconstruction must fetch get_meta separately"]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;

@@ -23,7 +23,7 @@ pub async fn search(
     auth: AuthUser,
     Json(params): Json<SearchParams>,
 ) -> ApiResult<Json<Vec<UnifiedSearchResultRow>>> {
-    crate::backend::read_selector::search_select(&state.pool, auth.0.profile.id, params)
+    crate::backend::substrate_read::search_select(&state.pool, auth.0.profile.id, params)
         .await
         .map(Json)
 }

@@ -174,7 +174,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Update a resource's frontmatter (managed_meta and open_meta) without re-chunking or re-embedding. Use for metadata-only edits like stage, tags, or relationship declarations. For content changes, use update_resource. Requires current managed_hash and open_hash for the updated payloads."
+        description = "Update a resource's frontmatter (managed_meta and open_meta) without re-chunking or re-embedding. Use for metadata-only edits like stage, tags, or relationship declarations. For content changes, use update_resource."
     )]
     async fn update_resource_meta(
         &self,

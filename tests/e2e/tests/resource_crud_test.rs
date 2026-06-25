@@ -177,6 +177,143 @@ async fn resource_delete(pool: sqlx::PgPool) {
     );
 }
 
+/// Timestamps are real and stable across reads (not read-time `now()`), and an
+/// update advances `updated` without moving `created`. Pre-shim-exit the backend
+/// stamped `Utc::now()` per read, so two reads of the same resource returned
+/// different `created` — this test pins the native, event-sourced behavior.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+    let context = app
+        .client
+        .contexts()
+        .create("e2e-resource-timestamps")
+        .await
+        .expect("context create failed");
+
+    let created = app
+        .client
+        .resources()
+        .create(&ResourceCreateRequest {
+            kb_context_id: context.id.into(),
+            doc_type: "research".to_string(),
+            origin_uri: "test://e2e/resource-timestamps".to_string(),
+            title: "Timestamp Test".to_string(),
+            slug: None,
+        })
+        .await
+        .expect("resource create failed");
+
+    let first = app
+        .client
+        .resources()
+        .get(created.id.into())
+        .await
+        .expect("first get failed");
+    let second = app
+        .client
+        .resources()
+        .get(created.id.into())
+        .await
+        .expect("second get failed");
+
+    assert_eq!(
+        first.created, second.created,
+        "created must be stable across reads, not read-time now()"
+    );
+    assert_eq!(
+        first.updated, second.updated,
+        "updated must be stable across reads"
+    );
+
+    app.client
+        .resources()
+        .update(
+            created.id.into(),
+            &ResourceUpdateRequest {
+                title: Some("Timestamp Test v2".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update failed");
+
+    let after = app
+        .client
+        .resources()
+        .get(created.id.into())
+        .await
+        .expect("get after update failed");
+    assert_eq!(
+        after.created, first.created,
+        "created must not change on update"
+    );
+    assert!(
+        after.updated >= first.updated,
+        "updated must advance (or hold) after an update"
+    );
+}
+
+/// The native ResourceRow drops the four shim fields (kb_doc_type_id, slug,
+/// managed_hash, open_hash) and keeps name-only doc type. Asserts on the
+/// serialized wire shape so it fails (red) while the fields still exist.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn resource_row_native_shape_drops_shim_fields(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+    let context = app
+        .client
+        .contexts()
+        .create("e2e-native-shape")
+        .await
+        .expect("context create failed");
+
+    let created = app
+        .client
+        .resources()
+        .create(&ResourceCreateRequest {
+            kb_context_id: context.id.into(),
+            doc_type: "research".to_string(),
+            origin_uri: "test://e2e/native-shape".to_string(),
+            title: "Native Shape".to_string(),
+            slug: None,
+        })
+        .await
+        .expect("resource create failed");
+
+    let fetched = app
+        .client
+        .resources()
+        .get(created.id.into())
+        .await
+        .expect("get failed");
+
+    let json = serde_json::to_value(&fetched).expect("serialize ResourceRow");
+    let obj = json
+        .as_object()
+        .expect("ResourceRow serializes to an object");
+    for k in ["kb_doc_type_id", "slug", "managed_hash", "open_hash"] {
+        assert!(
+            !obj.contains_key(k),
+            "native ResourceRow must drop `{k}`, got: {json}"
+        );
+    }
+    assert_eq!(
+        obj.get("doc_type_name").and_then(|v| v.as_str()),
+        Some("research"),
+        "native ResourceRow keeps name-only doc type"
+    );
+}
+
 /// Create 3 resources, list with limit=2, verify exactly 2 returned.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn resource_list_pagination(pool: sqlx::PgPool) {

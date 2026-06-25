@@ -403,7 +403,7 @@ mod tests {
 
     // ── Task 4 tests ─────────────────────────────────────────────────────────
 
-    use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+    use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
     use temper_core::types::resource::ResourceRow;
     use uuid::Uuid;
 
@@ -412,10 +412,8 @@ mod tests {
         ResourceRow {
             id: ResourceId(nil),
             kb_context_id: ContextId(nil),
-            kb_doc_type_id: DocTypeId(nil),
             origin_uri: "kb://@me/temper/task/test-task".to_string(),
             title: "Test Task".to_string(),
-            slug: Some("test-task".to_string()),
             originator_profile_id: ProfileId(nil),
             owner_profile_id: ProfileId(nil),
             is_active: true,
@@ -429,8 +427,6 @@ mod tests {
             mode: None,
             effort: None,
             body_hash: Some("abc123".to_string()),
-            managed_hash: None,
-            open_hash: None,
         }
     }
 
@@ -438,7 +434,6 @@ mod tests {
     fn wire_resource_to_resource_row_maps_basic_fields() {
         let wire = sample_resource_row();
         let row = wire_resource_to_resource_row(&wire);
-        assert_eq!(row.slug, Some("test-task".to_string()));
         assert_eq!(row.title, "Test Task");
         assert_eq!(row.id, ResourceId(Uuid::nil()));
         assert_eq!(row.context_name, "temper");

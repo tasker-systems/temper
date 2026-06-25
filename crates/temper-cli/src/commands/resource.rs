@@ -574,7 +574,7 @@ pub fn delete(
     let _ = output;
     let result = DeleteActionResult {
         status: "ok",
-        slug: row.slug.clone().unwrap_or_default(),
+        slug: crate::actions::ingest::slug_from_title(&row.title),
         doc_type: row.doc_type_name.clone(),
     };
     let rendered = crate::format::render(&result, fmt)?;
@@ -1091,14 +1091,14 @@ mod build_helpers_tests {
 
 #[cfg(test)]
 mod action_result_tests {
-    use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+    use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
     use temper_core::types::resource::ResourceRow;
 
     use super::{CreateActionResult, DeleteActionResult, UpdateActionResult};
 
     /// Build a minimal `ResourceRow` fixture for action result tests.
     pub(super) fn make_resource_row(
-        slug: &str,
+        _slug: &str,
         doc_type: &str,
         title: &str,
         context: &str,
@@ -1106,10 +1106,8 @@ mod action_result_tests {
         ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
-            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
             origin_uri: "test://origin".to_string(),
             title: title.to_string(),
-            slug: Some(slug.to_string()),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
@@ -1123,8 +1121,6 @@ mod action_result_tests {
             mode: None,
             effort: None,
             body_hash: None,
-            managed_hash: None,
-            open_hash: None,
         }
     }
 
@@ -1143,11 +1139,14 @@ mod action_result_tests {
 
         // status and flattened wire fields at top level.
         assert!(out.contains("\"status\": \"ok\""), "status missing: {out}");
-        assert!(out.contains("\"slug\""), "slug missing: {out}");
         assert!(out.contains("\"title\""), "title missing: {out}");
         assert!(
             out.contains("\"context_name\""),
             "context_name missing: {out}"
+        );
+        assert!(
+            out.contains("\"doc_type_name\""),
+            "doc_type_name missing: {out}"
         );
 
         // Old per-doctype keys must not appear.
@@ -1206,7 +1205,10 @@ mod action_result_tests {
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
 
         assert!(out.contains("\"status\": \"ok\""), "status missing: {out}");
-        assert!(out.contains("\"slug\""), "slug missing: {out}");
+        assert!(
+            out.contains("\"doc_type_name\""),
+            "doc_type_name missing: {out}"
+        );
         // body_hash is now visible (was hidden in the old { temper-slug, content_hash } shape).
         assert!(
             out.contains("body_hash"),
@@ -1285,7 +1287,7 @@ mod from_flag_tests {
 
 #[cfg(test)]
 mod resource_list_render_tests {
-    use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+    use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
     use temper_core::types::resource::ResourceRow;
 
     /// Task 7: verify that `render()` passthrough includes internal wire fields
@@ -1296,10 +1298,8 @@ mod resource_list_render_tests {
         let rows: Vec<ResourceRow> = vec![ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
-            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
             origin_uri: "test://origin".to_string(),
             title: "Test Resource".to_string(),
-            slug: Some("test-resource".to_string()),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
@@ -1313,8 +1313,6 @@ mod resource_list_render_tests {
             mode: None,
             effort: None,
             body_hash: Some("abc123deadbeef".to_string()),
-            managed_hash: None,
-            open_hash: None,
         }];
 
         let out =
@@ -1340,7 +1338,10 @@ mod resource_list_render_tests {
             out.contains("\"title\""),
             "wire field 'title' missing: {out}"
         );
-        assert!(out.contains("\"slug\""), "wire field 'slug' missing: {out}");
+        assert!(
+            out.contains("\"doc_type_name\""),
+            "wire field 'doc_type_name' missing: {out}"
+        );
     }
 }
 

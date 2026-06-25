@@ -13,7 +13,7 @@ pub async fn search(
     let profile = svc.require_profile().await?;
 
     let rows =
-        temper_api::backend::read_selector::search_select(&svc.api_state.pool, profile.id, input)
+        temper_api::backend::substrate_read::search_select(&svc.api_state.pool, profile.id, input)
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(format!("Search failed: {e}"), None))?;
 

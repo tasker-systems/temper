@@ -4,11 +4,10 @@
 //! unqualified against the one schema (the connection carries the search_path — dev: `temper_next,public`;
 //! live: `public` after the rename).
 //!
-//! The full-row read (`show_resource`) reconstructs the migration-invariant subset of `ResourceRow`
-//! from the substrate (`readback::resource_row`) and fills the non-invariant fields best-effort:
-//! re-minted ids verbatim, `kb_doc_type_id` re-minted nil (the doc_type NAME is authoritative — §7
-//! dissolved the typed `DocTypeId`, so the substrate keeps only the name), `slug`/`managed_hash`/
-//! `open_hash` = `None`, `created`/`updated` = read-time `Utc::now()`. See the §9 parity floor.
+//! The full-row read (`show_resource`) maps the substrate readback (`readback::resource_row`) to the
+//! native `ResourceRow` — real timestamps (event-sourced from `kb_events.occurred_at`), name-only
+//! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
+//! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -21,7 +20,7 @@ use temper_core::operations::{
     SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::graph;
-use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::resource::ResourceRow;
 
 use temper_next::keys::{key_fate, KeyFate};
@@ -38,7 +37,7 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 /// single-resource reads can return: not-visible is the leak-safe deny → **404** (`NotFound`), never 403
 /// (403 confirms existence) and never 500 (it is not a system failure); a genuine fault stays **500**
 /// (`Api`). Collapsing both into NotFound — the pre-typing behavior on every `temper_next` single-read
-/// surface — masked real faults as 404. Shared by `reconstruct_resource_row` and the read selector's
+/// surface — masked real faults as 404. Shared by `native_resource_row` and the substrate read's
 /// `get_content`/`get_meta` arms so the mapping lives in exactly one place.
 pub(crate) fn map_readback_err(e: readback::ReadbackError) -> TemperError {
     match e {
@@ -132,13 +131,12 @@ fn properties_from_meta(
     out
 }
 
-/// Reconstruct a full production-shaped `ResourceRow` from a synthesized (`temper_next`) resource id,
-/// at the §9 invariant floor. The invariant fields come from `readback::resource_row`; the
-/// non-invariant fields are filled best-effort (re-minted ids verbatim, `kb_doc_type_id` re-minted nil
-/// — the doc_type NAME is authoritative, §7 dissolved the typed id — `slug`/hashes `None`, timestamps
-/// read-time `now()`). Shared by `DbBackend::show_resource` and the read selector's full-row
-/// `list`/`search`. CONFORMs to the `list_enriched` arm's same nil fill.
-pub(crate) async fn reconstruct_resource_row(
+/// Maps the substrate readback (`readback::resource_row`) to the native `ResourceRow` — real
+/// timestamps (event-sourced from `kb_events.occurred_at`), name-only doc type, no fabrication.
+/// Shared by `show_resource` and the read selector arms (`list_select`, `show_select`,
+/// `search_select`). The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`, `open_hash`)
+/// are absent; `doc_type_name` is authoritative.
+pub(crate) async fn native_resource_row(
     pool: &PgPool,
     principal: uuid::Uuid,
     new_id: uuid::Uuid,
@@ -146,20 +144,16 @@ pub(crate) async fn reconstruct_resource_row(
     let p = readback::resource_row(pool, principal, new_id)
         .await
         .map_err(map_readback_err)?;
-    let now = Utc::now();
     Ok(ResourceRow {
         id: ResourceId::from(p.re_minted_id),
         kb_context_id: ContextId::from(p.re_minted_context_id),
-        // §7-dissolved typed DocTypeId → re-minted nil; `doc_type_name` (below) is authoritative.
-        kb_doc_type_id: DocTypeId::from(uuid::Uuid::nil()),
         origin_uri: p.origin_uri,
         title: p.title,
-        slug: None,
         originator_profile_id: ProfileId::from(p.originator_profile_id),
         owner_profile_id: ProfileId::from(p.owner_profile_id),
         is_active: p.is_active,
-        created: now,
-        updated: now,
+        created: p.created,
+        updated: p.updated,
         context_name: p.context_name,
         doc_type_name: p.doc_type_name,
         owner_handle: p.owner_handle,
@@ -168,8 +162,6 @@ pub(crate) async fn reconstruct_resource_row(
         mode: p.mode,
         effort: p.effort,
         body_hash: p.body_hash,
-        managed_hash: None,
-        open_hash: None,
     })
 }
 
@@ -318,7 +310,7 @@ impl Backend for DbBackend {
                     .await
                     .map_err(api_err)?
             {
-                let row = reconstruct_resource_row(&self.pool, *self.profile_id, existing).await?;
+                let row = native_resource_row(&self.pool, *self.profile_id, existing).await?;
                 return Ok(CommandOutput::new(row));
             }
         }
@@ -345,7 +337,7 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id.uuid()).await?;
+        let row = native_resource_row(&self.pool, *self.profile_id, new_id.uuid()).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -356,11 +348,11 @@ impl Backend for DbBackend {
         // The inbound id IS the `temper_next` id — synthesis preserves resource ids verbatim, so there
         // is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
         let new_id = uuid::Uuid::from(cmd.resource);
-        // `reconstruct_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
+        // `native_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
         // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
         // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
         // collapse masked real faults as 404.
-        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
+        let row = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -402,7 +394,7 @@ impl Backend for DbBackend {
             // `current`, `effective_doc_type = incoming.unwrap_or(&current.doc_type_name)`).
             // The current row is reconstructed for these values (already visibility-gated
             // via `check_can_modify_next`).
-            let current = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
+            let current = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
             // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
             // `move_to.type_to` (the file-move path); else the doc type is unchanged.
             let effective_doc_type = incoming
@@ -496,7 +488,7 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
+        let row = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -556,7 +548,7 @@ impl Backend for DbBackend {
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let mut hits = Vec::with_capacity(ids.len());
         for new_id in ids {
-            let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
+            let row = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
             hits.push(SearchHit {
                 summary: ResourceSummary {
                     // slug is §7-dissolved; the summary uses origin_uri as the stable handle.

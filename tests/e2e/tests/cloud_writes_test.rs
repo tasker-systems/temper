@@ -145,7 +145,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
     // F5: legacy `kb_doc_types` / `r.kb_doc_type_id` / `r.kb_context_id` /
     // `r.slug` are gone. doc_type is now the `kb_properties(property_key=
     // 'doc_type')` substrate row; context is via `kb_resource_homes` →
-    // `kb_contexts` (the read_selector join pattern). The CLI-created row has no
+    // `kb_contexts` (the substrate_read join pattern). The CLI-created row has no
     // stored slug (F1), so it is located by its (unique) title.
     let title = "Cloud Round-Trip Session";
     let (doc_type_name, context_name): (String, String) = sqlx::query_as(
