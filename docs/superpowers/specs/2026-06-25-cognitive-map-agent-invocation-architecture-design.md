@@ -74,13 +74,26 @@ We fill the reserved root rather than inventing a parallel one. The universal or
 is therefore *opinionated* — it says what temper is — which is intended: there is a necessary
 "temper-as-a-system" foundational map, and every other map is situated above it.
 
-### Birth — deterministic
+### Birth — deterministic (SQL-native seed migration)
 
-L0 is authored as **the canonical seed** in the seed DSL and loaded at boot through the *same*
-`cogmap_genesis` → charter-resource → blocks → `facet_set` / `relationship_assert` functions every map
-uses, authored by the **system actor** (a peer of the existing boot-seed). Its birth is therefore
-reproducible-from-code **and** a genuine worked example of the genesis mechanism — not a special-cased
-construct. (Dogfood: temper's own self-map is the canonical demonstration of a bootstrapped map.)
+L0 is born at boot **through the same genesis SQL functions every map uses** —
+`cogmap_genesis(payload, content, emitter)` → charter-resource → blocks, then
+`facet_set` / `relationship_assert` — invoked from a **canonical-seed migration**, authored by the
+**system actor** (a peer of the existing seed in `20260624000003_canonical_seed.sql`).
+
+**Mechanism note (grounded 2026-06-25).** The seed-DSL Rust loader (`load_seed`/`run_scenario` in
+`temper-next`) is *test-only* — no production path calls it; production boot runs only the
+`sqlx::migrate!` files. `cogmap_genesis`/`resource_create`/`facet_set`/`relationship_assert` are SQL
+functions callable directly from a migration, so L0 is seeded **migration-native** (no `temper-next`
+runtime dependency on `temper-api`). This satisfies the real invariant — *same genesis functions,
+deterministic, replay-safe* — rather than the literal "seed DSL" phrasing. The birth is reproducible
+from the migration and a genuine worked example of the genesis mechanism (the SQL calls are the same
+ones every map's genesis makes). Authoring L0 as a first-class seed/scenario *YAML* loadable in
+production is a deferred thread (it would make `temper-next` a runtime dep) — see Deferred.
+
+**Latent gap this closes.** The root team `temper-system` is *referenced* by canonical triggers/functions
+but is created only in test fixtures, never in production migrations. L0 needs it, so the seed migration
+creates the root team + joins the system-default cogmap to it — fixing a pre-existing production gap.
 
 ### Evolution — living, but release/operator-governed
 
@@ -254,6 +267,9 @@ Each stage is independently shippable and independently valuable.
 - **Eve-vs-temper wake-evaluator mechanics** — the concrete cron/dispatch wiring behind the
   `kb_system_settings.steward_scheduler` switch (Vercel Cron → temper endpoint → POST Eve, vs Eve's own
   schedule as the backstop). An infra detail for the plan, gated by the setting.
+- **L0 authored as a first-class seed/scenario YAML loadable in production** — would make `temper-next`'s
+  loader a runtime dependency of `temper-api`; pursue only if the worked-example-in-DSL value proves worth
+  the runtime-dep cost. L0 ships SQL-native first (see Birth).
 
 ---
 
