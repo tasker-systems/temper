@@ -45,3 +45,8 @@ async fn temper_foundational_smoke() {
 async fn learning_maths_smoke() {
     run_smoke("learning-maths-smoke.yaml").await
 }
+
+#[tokio::test]
+async fn l0_kernel_orientation_smoke() {
+    run_smoke("l0-kernel-orientation.yaml").await
+}
