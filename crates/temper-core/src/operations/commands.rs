@@ -175,6 +175,17 @@ pub struct CloseInvocation {
     pub origin: Surface,
 }
 
+/// Reconcile the L0-style kernel slice of a cognitive map to a pre-embedded
+/// desired-state manifest. Idempotent + additive-only + provenance-scoped: the
+/// `request` is the contract, the fired events are its consequence. `cogmap_id`
+/// is a temper_next cogmap id (not a resource ref).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReconcileCognitiveMap {
+    pub cogmap_id: uuid::Uuid,
+    pub request: crate::types::reconcile::ReconcileCogmapRequest,
+    pub origin: Surface,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

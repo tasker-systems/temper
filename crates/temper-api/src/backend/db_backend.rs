@@ -16,8 +16,8 @@ use sqlx::PgPool;
 use temper_core::error::TemperError;
 use temper_core::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
-    ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
-    SearchResources, ShowResource, Surface, UpdateResource,
+    ListResources, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
+    ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
@@ -686,6 +686,16 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
+    }
+
+    // TODO(Task 4): replace stub — diff + plan + apply + admin_reconcile envelope + mutex.
+    async fn reconcile_cognitive_map(
+        &self,
+        _cmd: ReconcileCognitiveMap,
+    ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError> {
+        Err(TemperError::NotImplemented(
+            "reconcile_cognitive_map".to_string(),
+        ))
     }
 }
 
