@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::{read_selector, DbBackend};
+use temper_api::backend::{substrate_read, DbBackend};
 use temper_core::error::TemperError;
 use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -223,7 +223,7 @@ fn build_enriched(
 
 /// Enrich a batch of resource rows, each with its `managed_meta` /
 /// `open_meta`. The meta tier is fetched through
-/// [`read_selector::get_meta_batch_select`] (flag-gated): the Legacy arm
+/// [`substrate_read::get_meta_batch_select`] (flag-gated): the Legacy arm
 /// is a single `get_meta_batch` query, so the list surface is not N+1 on
 /// meta; the Next arm projects the substrate per id. Rows are pre-scoped
 /// to the caller (the rows came from a visibility-scoped query), so the
@@ -234,7 +234,7 @@ pub async fn enrich_resources(
     rows: &[temper_core::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
     let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
-    let mut meta = read_selector::get_meta_batch_select(pool, profile_id, &ids)
+    let mut meta = substrate_read::get_meta_batch_select(pool, profile_id, &ids)
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
 
@@ -389,7 +389,7 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
-// WS6 Spec B: `get_resource` routes the base read through `read_selector`, so it answers from
+// WS6 Spec B: `get_resource` routes the base read through `substrate_read`, so it answers from
 // `temper_next` under `flag=next` (and the legacy services otherwise). The row comes from
 // `show_select`, meta from `get_meta_select`, and body (when requested) from `get_content_select` —
 // uniform across backends. Sourcing meta via `get_meta_select` (not the legacy "`get_content` returns
@@ -406,18 +406,18 @@ pub async fn get_resource(
     let id = temper_core::operations::parse_ref(&input.id)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
-    let row = read_selector::show_select(pool, profile.id, id.into())
+    let row = substrate_read::show_select(pool, profile.id, id.into())
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let meta = read_selector::get_meta_select(pool, ProfileId::from(profile.id), row.id)
+    let meta = substrate_read::get_meta_select(pool, ProfileId::from(profile.id), row.id)
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
 
     let body_markdown = if input.include_content.unwrap_or(false) {
-        let content = read_selector::get_content_select(pool, profile.id, row.id.into())
+        let content = substrate_read::get_content_select(pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
@@ -457,7 +457,7 @@ pub async fn list_resources(
 
     // One selector returns the rows + their managed/open meta
     // (readback::enriched_list filtered in SQL), assembled by `build_enriched`.
-    let rows = read_selector::list_enriched_select(
+    let rows = substrate_read::list_enriched_select(
         pool,
         profile.id,
         input.context_name.as_deref(),
@@ -519,7 +519,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
         })?;
     if input.title.is_some() || input.slug.is_some() || input.content.is_some() {
-        let existing = read_selector::show_select(pool, profile.id, input.id)
+        let existing = substrate_read::show_select(pool, profile.id, input.id)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
@@ -575,7 +575,7 @@ pub async fn update_resource(
     })?;
 
     // Return enriched current state
-    let row = read_selector::show_select(pool, profile.id, input.id)
+    let row = substrate_read::show_select(pool, profile.id, input.id)
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)

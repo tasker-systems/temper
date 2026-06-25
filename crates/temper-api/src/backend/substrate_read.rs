@@ -184,16 +184,16 @@ pub async fn list_select(
     })
 }
 
-/// `show` — full resource row by id (§9 invariant floor) via the shared `reconstruct_resource_row`. The
-/// inbound id IS the substrate id. Visibility is gated inside `reconstruct_resource_row` (WS2); the typed
-/// `ReadbackError` is split by `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
+/// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
+/// Visibility is gated inside `native_resource_row` (WS2); the typed `ReadbackError` is split by
+/// `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
 pub async fn show_select(pool: &PgPool, profile_id: Uuid, id: Uuid) -> ApiResult<ResourceRow> {
     native_resource_row(pool, profile_id, id)
         .await
         .map_err(ApiError::from)
 }
 
-/// `get_content` — reconstructed markdown body (§9 body floor). `managed_meta`/`open_meta` are `None`
+/// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`
 /// (the meta tier is `get_meta`).
 pub async fn get_content_select(
     pool: &PgPool,

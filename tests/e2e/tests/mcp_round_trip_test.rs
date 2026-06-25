@@ -2,7 +2,7 @@
 
 mod common;
 
-use temper_api::backend::{read_selector, DbBackend};
+use temper_api::backend::{substrate_read, DbBackend};
 use temper_core::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -265,7 +265,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     );
 
     // Verify content is retrievable via the substrate read selector
-    let retrieved = read_selector::get_content_select(&pool, *profile_id, *resource.id)
+    let retrieved = substrate_read::get_content_select(&pool, *profile_id, *resource.id)
         .await
         .expect("get_content_select");
 
@@ -450,7 +450,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         .expect("update via DbBackend");
 
     // Read back the row via the substrate selector (NOT the retired get_visible).
-    let updated_resource = read_selector::show_select(&pool, *profile_id, *resource.id)
+    let updated_resource = substrate_read::show_select(&pool, *profile_id, *resource.id)
         .await
         .expect("show_select after update");
     assert_eq!(updated_resource.id, resource.id);
@@ -466,7 +466,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     );
 
     // 4. Verify the reconstructed body reflects the new content, not the old.
-    let reconstructed = read_selector::get_content_select(&pool, *profile_id, *resource.id)
+    let reconstructed = substrate_read::get_content_select(&pool, *profile_id, *resource.id)
         .await
         .expect("get_content_select after update")
         .markdown;
@@ -595,7 +595,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     // proof the open tier advanced. temper-title is a §7 identity key that maps to the
     // `kb_resources.title` column (NOT the meta property bag), so the managed-title
     // update surfaces via the title cascade asserted below rather than managed_meta.
-    let meta = read_selector::get_meta_select(&pool, profile_id, resource.id)
+    let meta = substrate_read::get_meta_select(&pool, profile_id, resource.id)
         .await
         .expect("get_meta_select after update");
     assert!(
@@ -692,7 +692,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
         .await
         .expect("partial update via DbBackend");
 
-    let meta = read_selector::get_meta_select(&pool, profile_id, resource.id)
+    let meta = substrate_read::get_meta_select(&pool, profile_id, resource.id)
         .await
         .expect("get_meta_select after update");
     let managed = meta.managed_meta.expect("managed_meta present");
@@ -798,7 +798,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     );
 
     // The rejected update must not have mutated the stored frontmatter.
-    let meta = read_selector::get_meta_select(&pool, profile_id, resource.id)
+    let meta = substrate_read::get_meta_select(&pool, profile_id, resource.id)
         .await
         .expect("get_meta_select after rejected update");
     let managed = meta.managed_meta.expect("managed_meta present");
@@ -810,7 +810,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 }
 
 // ---------------------------------------------------------------------------
-// WS6 Spec B Task 4: get_resource routes through read_selector
+// WS6 Spec B Task 4: get_resource routes through substrate_read
 // ---------------------------------------------------------------------------
 
 /// Drive the production MCP `get_resource` tool fn end-to-end (row via
@@ -945,7 +945,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
 // ---------------------------------------------------------------------------
 
 /// Drive the production MCP `list_resources` tool fn end-to-end (rows + meta via
-/// the single backend-agnostic `read_selector::list_enriched_select`, each
+/// the single backend-agnostic `substrate_read::list_enriched_select`, each
 /// assembled by the pure `build_enriched`). Proves the contract through the
 /// *production caller* (`TemperMcpService` → `require_profile` → `list_resources`):
 /// the doctype filter narrows the array to matching rows, and every row carries

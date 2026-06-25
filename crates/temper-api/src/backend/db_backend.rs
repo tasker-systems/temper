@@ -37,7 +37,7 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 /// single-resource reads can return: not-visible is the leak-safe deny → **404** (`NotFound`), never 403
 /// (403 confirms existence) and never 500 (it is not a system failure); a genuine fault stays **500**
 /// (`Api`). Collapsing both into NotFound — the pre-typing behavior on every `temper_next` single-read
-/// surface — masked real faults as 404. Shared by `reconstruct_resource_row` and the read selector's
+/// surface — masked real faults as 404. Shared by `native_resource_row` and the substrate read's
 /// `get_content`/`get_meta` arms so the mapping lives in exactly one place.
 pub(crate) fn map_readback_err(e: readback::ReadbackError) -> TemperError {
     match e {
