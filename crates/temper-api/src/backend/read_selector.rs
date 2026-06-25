@@ -327,7 +327,8 @@ pub async fn search_select(
 
 /// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
 /// `doc_type` in SQL via `readback::enriched_list` (WS2-scoped). Returns always-compiled temper-core
-/// types so the MCP consumer needs no feature gate. `slug`/timestamps are §9 non-invariants (None/now()).
+/// types so the MCP consumer needs no feature gate. `slug` is a §9 non-invariant (None); timestamps
+/// come from `kb_resources.created`/`updated` (event-sourced from `kb_events.occurred_at`).
 pub async fn list_enriched_select(
     pool: &PgPool,
     profile_id: Uuid,
@@ -337,7 +338,6 @@ pub async fn list_enriched_select(
     let rows = readback::enriched_list(pool, profile_id, context_name, doc_type)
         .await
         .map_err(api_err)?;
-    let now = chrono::Utc::now();
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let row = ResourceRow {
@@ -350,8 +350,8 @@ pub async fn list_enriched_select(
             originator_profile_id: ProfileId::from(Uuid::nil()),
             owner_profile_id: ProfileId::from(Uuid::nil()),
             is_active: r.is_active,
-            created: now, // synthesis-collapsed (non-invariant)
-            updated: now,
+            created: r.created,
+            updated: r.updated,
             context_name: r.context_name,
             doc_type_name: r.doc_type,
             owner_handle: "@me".to_string(),

@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -219,6 +220,10 @@ pub struct EnrichedListRow {
     pub title: String,
     /// Active flag — always true here (synthesis carries only active resources).
     pub is_active: bool,
+    /// Real genesis timestamp — `kb_resources.created`.
+    pub created: DateTime<Utc>,
+    /// Real last-mutation timestamp — `kb_resources.updated`.
+    pub updated: DateTime<Utc>,
     /// Home context display name.
     pub context_name: String,
     /// The authoritative doctype (the `doc_type` property the resource pass stamps).
@@ -266,6 +271,8 @@ pub async fn enriched_list(
                 r.origin_uri,
                 r.title,
                 r.is_active,
+                r.created,
+                r.updated,
                 c.name AS context_name,
                 dt.property_value #>> '{}' AS doc_type,
                 st.property_value #>> '{}' AS stage,
@@ -345,6 +352,8 @@ pub async fn enriched_list(
                 origin_uri: r.get("origin_uri"),
                 title: r.get("title"),
                 is_active: r.get("is_active"),
+                created: r.get("created"),
+                updated: r.get("updated"),
                 context_name: r.get("context_name"),
                 doc_type: r.get("doc_type"),
                 stage: r.get("stage"),
@@ -466,6 +475,10 @@ pub struct ResourceRowParity {
     pub title: String,
     /// Active flag (invariant; synthesis carries only active resources, so always true here).
     pub is_active: bool,
+    /// Real genesis timestamp — `kb_resources.created` (event `occurred_at` at create).
+    pub created: DateTime<Utc>,
+    /// Real last-mutation timestamp — `kb_resources.updated` (event `occurred_at` at last write).
+    pub updated: DateTime<Utc>,
     /// Home context display name (invariant).
     pub context_name: String,
     /// Authoritative doctype name (invariant) — the `doc_type` property.
@@ -487,8 +500,8 @@ pub struct ResourceRowParity {
 /// Port of production's full-row read (`resource_service::get_visible` / `resolve_by_uri`, behind
 /// `show` / `by_uri`) onto `temper_next.*`, at the §9 INVARIANT-FIELD floor. Joins the home (which
 /// anchors the context and owner profile), the `doc_type` property, and the workflow properties.
-/// Deliberately does NOT select `created`/`updated` (temper-next's sqlx has no `chrono` feature, and
-/// they are synthesis-collapsed non-invariants — the caller stamps read-time `now()`).
+/// Selects `created`/`updated` from `kb_resources` — populated from `kb_events.occurred_at` at write
+/// time (create sets both to genesis event's `occurred_at`; updates bump `updated`).
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
@@ -503,6 +516,8 @@ pub async fn resource_row(
                 r.origin_uri,
                 r.title,
                 r.is_active,
+                r.created,
+                r.updated,
                 r.body_hash,
                 c.id              AS re_minted_context_id,
                 c.name            AS context_name,
@@ -556,6 +571,8 @@ pub async fn resource_row(
         origin_uri: row.get("origin_uri"),
         title: row.get("title"),
         is_active: row.get("is_active"),
+        created: row.get("created"),
+        updated: row.get("updated"),
         context_name: row.get("context_name"),
         doc_type_name: row.get("doc_type_name"),
         owner_handle: row.get("owner_handle"),

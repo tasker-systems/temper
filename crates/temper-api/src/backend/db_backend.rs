@@ -8,7 +8,8 @@
 //! from the substrate (`readback::resource_row`) and fills the non-invariant fields best-effort:
 //! re-minted ids verbatim, `kb_doc_type_id` re-minted nil (the doc_type NAME is authoritative — §7
 //! dissolved the typed `DocTypeId`, so the substrate keeps only the name), `slug`/`managed_hash`/
-//! `open_hash` = `None`, `created`/`updated` = read-time `Utc::now()`. See the §9 parity floor.
+//! `open_hash` = `None`, `created`/`updated` from `kb_resources` (event-sourced from
+//! `kb_events.occurred_at`). See the §9 parity floor.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -136,8 +137,9 @@ fn properties_from_meta(
 /// at the §9 invariant floor. The invariant fields come from `readback::resource_row`; the
 /// non-invariant fields are filled best-effort (re-minted ids verbatim, `kb_doc_type_id` re-minted nil
 /// — the doc_type NAME is authoritative, §7 dissolved the typed id — `slug`/hashes `None`, timestamps
-/// read-time `now()`). Shared by `DbBackend::show_resource` and the read selector's full-row
-/// `list`/`search`. CONFORMs to the `list_enriched` arm's same nil fill.
+/// from `kb_resources.created`/`updated` populated from `kb_events.occurred_at`). Shared by
+/// `DbBackend::show_resource` and the read selector's full-row `list`/`search`. CONFORMs to the
+/// `list_enriched` arm's same nil fill.
 pub(crate) async fn reconstruct_resource_row(
     pool: &PgPool,
     principal: uuid::Uuid,
@@ -146,7 +148,6 @@ pub(crate) async fn reconstruct_resource_row(
     let p = readback::resource_row(pool, principal, new_id)
         .await
         .map_err(map_readback_err)?;
-    let now = Utc::now();
     Ok(ResourceRow {
         id: ResourceId::from(p.re_minted_id),
         kb_context_id: ContextId::from(p.re_minted_context_id),
@@ -158,8 +159,8 @@ pub(crate) async fn reconstruct_resource_row(
         originator_profile_id: ProfileId::from(p.originator_profile_id),
         owner_profile_id: ProfileId::from(p.owner_profile_id),
         is_active: p.is_active,
-        created: now,
-        updated: now,
+        created: p.created,
+        updated: p.updated,
         context_name: p.context_name,
         doc_type_name: p.doc_type_name,
         owner_handle: p.owner_handle,
