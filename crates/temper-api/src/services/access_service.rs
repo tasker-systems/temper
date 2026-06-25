@@ -42,6 +42,36 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: Uuid) -> ApiResult<bool>
     Ok(result.unwrap_or(false))
 }
 
+/// Structural write-gate: a write to a cognitive map joined to the gating (root) team requires
+/// `is_system_admin`. A map NOT joined to the gating team is ungated here (returns `Ok`) — its own
+/// access rules apply elsewhere. The L0 system-default map is root-joined, so this gates it.
+pub async fn require_cogmap_write_admin(
+    pool: &PgPool,
+    profile_id: Uuid,
+    cogmap_id: Uuid,
+) -> ApiResult<()> {
+    let is_root_joined: bool = sqlx::query_scalar!(
+        "SELECT EXISTS( \
+           SELECT 1 FROM kb_team_cogmaps tc \
+             JOIN kb_teams t ON t.id = tc.team_id \
+             JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
+            WHERE tc.cogmap_id = $1 )",
+        cogmap_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+
+    if !is_root_joined {
+        return Ok(()); // gate doesn't apply to non-root-team cogmaps
+    }
+    if is_system_admin(pool, profile_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // System settings
 // ---------------------------------------------------------------------------
