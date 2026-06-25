@@ -37,3 +37,7 @@ event_types:
 lenses:
   - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
   - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.3, w_prop: 1.2, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+  # Posture-lenses (L0 orientation-kernel spec §5). orientation = survey-attention (high telos +
+  # prop, low leads_to); wayfinding = graph-traversal (heavy leads_to, references salient).
+  - { name: orientation,             w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.5, w_prop: 1.0, s_telos: 0.6, s_ref: 0.3, s_central: 0.1, resolution: 0.5 }
+  - { name: wayfinding,              w_express: 0.4, w_contains: 0.4, w_leads_to: 1.5, w_near: 0.2, w_prop: 0.2, s_telos: 0.3, s_ref: 0.5, s_central: 0.2, resolution: 0.5 }

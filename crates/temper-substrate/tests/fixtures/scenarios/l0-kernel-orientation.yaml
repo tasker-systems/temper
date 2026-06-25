@@ -1,0 +1,21 @@
+# Materialize the L0 kernel under both posture-lenses; prove it forms a non-degenerate, reproducible
+# shape under each. Task 3 adds the lens-sensitivity + co-region assertions.
+name: l0-kernel-orientation
+seed: ../seeds/l0-kernel.yaml
+steps:
+  - { do: materialize, lens: orientation }
+  - { do: materialize, lens: wayfinding }
+  - do: assert
+    checks:
+      - { check: region_count, lens: orientation, op: ">=", value: 2 }
+      - { check: region_count, lens: wayfinding,  op: ">=", value: 2 }
+      # Headline: the two postures produce different shapes over the same kernel.
+      - { check: fingerprint_differs, lens_a: orientation, lens_b: wayfinding }
+      # Orientation binds concept-landmarks that share a facet + a near edge.
+      - { check: co_region, lens: orientation, members: [event, invocation], expect: true }
+      # Wayfinding binds a reference to the capability it routes to (leads_to chain).
+      - { check: co_region, lens: wayfinding, members: [ref_search, resource], expect: true }
+  - { do: materialize, lens: orientation }
+  - { do: assert, checks: [ { check: reproducible, lens: orientation } ] }
+  - { do: materialize, lens: wayfinding }
+  - { do: assert, checks: [ { check: reproducible, lens: wayfinding } ] }
