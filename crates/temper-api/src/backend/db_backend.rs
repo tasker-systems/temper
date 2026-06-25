@@ -7,7 +7,7 @@
 //! The full-row read (`show_resource`) maps the substrate readback (`readback::resource_row`) to the
 //! native `ResourceRow` — real timestamps (event-sourced from `kb_events.occurred_at`), name-only
 //! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
-//! `open_hash`) are gone. See `native_resource_row` and the §9 parity floor.
+//! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
 
 use async_trait::async_trait;
 use chrono::Utc;

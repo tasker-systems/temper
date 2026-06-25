@@ -99,7 +99,7 @@ pub fn read_if_fresh(path: &Path, debounce: Duration) -> Result<Option<String>> 
 }
 
 async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult> {
-    let meta_check = params
+    let meta = params
         .client
         .resources()
         .get(*params.resource_id.as_uuid())
@@ -113,7 +113,7 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
         .await
         .map_err(client_err_to_temper)?;
 
-    let file_content = reconstruct_full_file_content(&meta_check, &content)?;
+    let file_content = reconstruct_full_file_content(&meta, &content)?;
 
     fs::write(params.local_path, &file_content)
         .map_err(|e| TemperError::Vault(format!("cache write: {e}")))?;
