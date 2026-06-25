@@ -8,8 +8,8 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::graph_service::{aggregator_subgraph, AggregatorSubgraphParams};
 use crate::state::AppState;
-use temper_core::frontmatter::document::DocType;
-use temper_core::types::graph::SubgraphResponse;
+use temper_workflow::frontmatter::document::DocType;
+use temper_workflow::types::graph::SubgraphResponse;
 
 /// Query parameters for `GET /api/graph/subgraph`.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]

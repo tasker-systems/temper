@@ -15,7 +15,7 @@
 mod common;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
-use temper_core::types::resource::ResourceListParams;
+use temper_workflow::types::resource::ResourceListParams;
 
 /// Seed a task at a given stage via the API client (cloud-only; no vault
 /// files written). Mirrors the `seed_task` helper in

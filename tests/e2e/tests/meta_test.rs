@@ -3,7 +3,7 @@
 mod common;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
-use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
+use temper_workflow::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
 /// Ingest a resource, then update its meta via PUT /api/resources/:id/meta,
 /// verifying the response and that title cascades to kb_resources.

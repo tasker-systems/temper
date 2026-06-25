@@ -1,4 +1,4 @@
-//! `CloudBackend` — cloud-mode impl of [`temper_core::operations::Backend`].
+//! `CloudBackend` — cloud-mode impl of [`temper_workflow::operations::Backend`].
 //!
 //! Per-request construction: CLI action commands build a `CloudBackend` from
 //! a `TemperClient`, owner, and config, then dispatch one command through it.

@@ -1,4 +1,4 @@
-//! Integration tests for `temper_core::frontmatter`.
+//! Integration tests for `temper_workflow::frontmatter`.
 //!
 //! Covers parse + project + mutate + serialize + hash across every
 //! doctype, plus alias/hash symmetry and error cases. Golden files
@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use temper_core::frontmatter::{DocType, Frontmatter};
-use temper_core::types::graph::ResourceRelationships;
+use temper_workflow::frontmatter::{DocType, Frontmatter};
+use temper_workflow::types::graph::ResourceRelationships;
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/frontmatter")

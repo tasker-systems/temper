@@ -1,6 +1,6 @@
 use serde_yaml::Value;
-use temper_core::frontmatter::Frontmatter;
-use temper_core::schema::{check_unknown_temper_fields, load_schema, validate_frontmatter};
+use temper_workflow::frontmatter::Frontmatter;
+use temper_workflow::schema::{check_unknown_temper_fields, load_schema, validate_frontmatter};
 
 fn yaml(s: &str) -> Value {
     serde_yaml::from_str(s).expect("valid YAML")

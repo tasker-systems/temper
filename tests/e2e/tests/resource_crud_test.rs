@@ -2,7 +2,7 @@
 
 mod common;
 
-use temper_core::types::resource::{
+use temper_workflow::types::resource::{
     ResourceCreateRequest, ResourceListParams, ResourceUpdateRequest,
 };
 

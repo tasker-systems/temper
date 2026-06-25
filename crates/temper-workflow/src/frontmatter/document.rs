@@ -1,7 +1,7 @@
 //! `Frontmatter` aggregate type and `DocType` enum.
 
-use crate::error::{Result, TemperError};
 use crate::frontmatter::parse::{normalize_aliases, parse_yaml, split_frontmatter_block};
+use temper_core::error::{Result, TemperError};
 
 /// Typed vault doctype. All valid values are enumerated exhaustively —
 /// unknown doctypes fail at parse, not at validation.
@@ -143,7 +143,7 @@ impl Frontmatter {
         let open = self.open_json();
         (
             crate::hash::compute_managed_hash(self.doc_type.as_str(), &managed),
-            crate::hash::compute_open_hash(&open),
+            temper_core::hash::compute_open_hash(&open),
         )
     }
 

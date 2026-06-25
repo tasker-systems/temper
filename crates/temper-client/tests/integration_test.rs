@@ -15,7 +15,7 @@ use temper_client::auth::{DiskTokenStore, TokenStore};
 use temper_client::config::build_client;
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_core::types::resource::ResourceListParams;
+use temper_workflow::types::resource::ResourceListParams;
 
 /// Build a fully-configured client from `~/.config/temper/config.toml`.
 ///

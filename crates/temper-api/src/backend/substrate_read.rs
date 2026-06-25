@@ -23,13 +23,13 @@ use crate::services::resource_service::{ResourceListParams, ResourceListResponse
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-use temper_core::types::managed_meta::{
+use temper_substrate::readback;
+use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
 };
-use temper_core::types::resource::{
+use temper_workflow::types::resource::{
     ContentResponse, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
-use temper_substrate::readback;
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))

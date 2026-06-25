@@ -1,5 +1,7 @@
 use serde::Serialize;
-use temper_core::types::resource::{ResourceListParams, ResourceRow, ResourceSortField, SortOrder};
+use temper_workflow::types::resource::{
+    ResourceListParams, ResourceRow, ResourceSortField, SortOrder,
+};
 
 use crate::actions::runtime;
 use crate::config::Config;

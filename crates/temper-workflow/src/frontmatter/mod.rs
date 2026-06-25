@@ -7,7 +7,7 @@
 //! projections via standard trait impls.
 //!
 //! Hash computation delegates unchanged to `crate::hash::compute_managed_hash`
-//! and `crate::hash::compute_open_hash` from PR #40 — `Frontmatter::hashes()`
+//! and `temper_core::hash::compute_open_hash` from PR #40 — `Frontmatter::hashes()`
 //! never introduces a new canonicalization algorithm for hashing. The
 //! display-ordering algorithm in [`canonical`] is strictly for on-disk
 //! writes and has zero effect on hash output.

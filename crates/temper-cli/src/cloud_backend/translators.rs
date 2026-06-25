@@ -8,9 +8,9 @@
 #[cfg(feature = "embed")]
 use crate::error::{Result, TemperError};
 #[cfg(feature = "embed")]
-use temper_core::operations::CreateResource;
-#[cfg(feature = "embed")]
 use temper_core::types::ingest::IngestPayload;
+#[cfg(feature = "embed")]
+use temper_workflow::operations::CreateResource;
 
 /// Resolve the body content for a create.
 ///
@@ -28,7 +28,10 @@ use temper_core::types::ingest::IngestPayload;
 /// without requiring the `embed` runtime. Compiled when its callers exist:
 /// `cmd_to_ingest_payload` (embed) or the test module.
 #[cfg(any(feature = "embed", test))]
-fn resolve_create_body(body: Option<&temper_core::operations::BodyUpdate>, title: &str) -> String {
+fn resolve_create_body(
+    body: Option<&temper_workflow::operations::BodyUpdate>,
+    title: &str,
+) -> String {
     match body {
         Some(b) if !b.content.is_empty() => b.content.clone(),
         _ => format!("# {title}\n"),
@@ -56,7 +59,7 @@ fn resolve_create_body(body: Option<&temper_core::operations::BodyUpdate>, title
 /// URI from `(owner, context, doctype, slug)`.
 #[cfg(feature = "embed")]
 pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayload> {
-    use temper_core::operations::ensure_managed_identity_keys;
+    use temper_workflow::operations::ensure_managed_identity_keys;
 
     // Resolve body content (verbatim when provided; placeholder otherwise).
     let content = resolve_create_body(cmd.body.as_ref(), &cmd.title);
@@ -119,9 +122,9 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
 /// `chunks_packed`; otherwise computes via `compute_body_chunks`.
 #[cfg(feature = "embed")]
 pub(crate) fn cmd_to_resource_update_request(
-    cmd: &temper_core::operations::UpdateResource,
-) -> Result<temper_core::types::ResourceUpdateRequest> {
-    use temper_core::types::ManagedMeta;
+    cmd: &temper_workflow::operations::UpdateResource,
+) -> Result<temper_workflow::types::ResourceUpdateRequest> {
+    use temper_workflow::types::ManagedMeta;
 
     // Body-trio computation (only when body present).
     let (content, content_hash, chunks_packed) = match &cmd.body {
@@ -172,7 +175,7 @@ pub(crate) fn cmd_to_resource_update_request(
     // symmetry with today's cloud_mode_update path (commands/resource.rs:1524).
     let title = managed_meta_opt.as_ref().and_then(|mm| mm.title.clone());
 
-    Ok(temper_core::types::ResourceUpdateRequest {
+    Ok(temper_workflow::types::ResourceUpdateRequest {
         title,
         slug: None,
         managed_meta: managed_meta_opt,
@@ -186,15 +189,15 @@ pub(crate) fn cmd_to_resource_update_request(
 /// Project a `ResourceRow` (returned by `temper-client` methods) into the
 /// `ResourceRow` shape required by the `Backend` trait.
 ///
-/// The temper-client already returns `temper_core::types::resource::ResourceRow`
+/// The temper-client already returns `temper_workflow::types::resource::ResourceRow`
 /// directly — there is no separate wire `Resource` type. This function is a
 /// clone and exists as a named boundary so the `CloudBackend` impl in Task 5
 /// has a consistent translation call site matching the other translators, and
 /// so the naming in the plan aligns with the actual code structure.
 #[cfg(feature = "embed")]
 pub(crate) fn wire_resource_to_resource_row(
-    resource: &temper_core::types::resource::ResourceRow,
-) -> temper_core::types::resource::ResourceRow {
+    resource: &temper_workflow::types::resource::ResourceRow,
+) -> temper_workflow::types::resource::ResourceRow {
     resource.clone()
 }
 
@@ -202,11 +205,11 @@ pub(crate) fn wire_resource_to_resource_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_core::operations::{MoveSpec, Surface, UpdateResource};
-    use temper_core::types::ManagedMeta;
+    use temper_workflow::operations::{MoveSpec, Surface, UpdateResource};
+    use temper_workflow::types::ManagedMeta;
 
     #[cfg(feature = "test-embed")]
-    use temper_core::operations::{BodyUpdate, CreateResource};
+    use temper_workflow::operations::{BodyUpdate, CreateResource};
 
     #[cfg(feature = "test-embed")]
     fn sample_cmd() -> CreateResource {
@@ -404,7 +407,7 @@ mod tests {
     // ── Task 4 tests ─────────────────────────────────────────────────────────
 
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_core::types::resource::ResourceRow;
+    use temper_workflow::types::resource::ResourceRow;
     use uuid::Uuid;
 
     fn sample_resource_row() -> ResourceRow {
@@ -448,7 +451,7 @@ mod tests {
 #[cfg(test)]
 mod body_resolution_tests {
     use super::resolve_create_body;
-    use temper_core::operations::BodyUpdate;
+    use temper_workflow::operations::BodyUpdate;
 
     fn body(content: &str) -> BodyUpdate {
         BodyUpdate {

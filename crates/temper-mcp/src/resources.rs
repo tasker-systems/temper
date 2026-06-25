@@ -24,7 +24,7 @@ pub async fn list_resources(
     _request: Option<PaginatedRequestParams>,
 ) -> Result<ListResourcesResult, rmcp::ErrorData> {
     // Fetch all visible resources (no filters, reasonable limit for browsing).
-    let params = temper_core::types::resource::ResourceListParams {
+    let params = temper_workflow::types::resource::ResourceListParams {
         limit: Some(200),
         ..Default::default()
     };
@@ -166,7 +166,7 @@ pub async fn read_resource(
             )
         })?;
 
-        let params = temper_core::types::resource::ResourceListParams {
+        let params = temper_workflow::types::resource::ResourceListParams {
             kb_context_id: Some(uuid::Uuid::from(context.id)),
             limit: Some(200),
             ..Default::default()

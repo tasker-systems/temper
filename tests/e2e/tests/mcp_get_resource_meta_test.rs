@@ -43,7 +43,7 @@ async fn seed_resource(
     slug: &str,
     managed_meta: &serde_json::Value,
     open_meta: &serde_json::Value,
-) -> temper_core::types::resource::ResourceRow {
+) -> temper_workflow::types::resource::ResourceRow {
     app.client
         .contexts()
         .create(context_name)

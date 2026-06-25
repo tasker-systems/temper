@@ -459,15 +459,15 @@ pub struct ValidateManagedMetaParams<'a> {
     pub context_name: &'a str,
 }
 
-/// Validate `managed_meta` against the doc-type schema, returning a typed [`crate::error::TemperError`] on failure
+/// Validate `managed_meta` against the doc-type schema, returning a typed [`temper_core::error::TemperError`] on failure
 /// (always a `BadRequest` — these are caller-input faults, never system failures). Delegates document
 /// assembly to [`assemble_frontmatter_document`] so identity injection is defined in exactly one place.
 /// (Moved here from `temper-api`'s `ingest_service` at the WS6 collapse; the schema-validation
 /// machinery already lives in temper-core.)
 pub fn validate_managed_meta(
     params: &ValidateManagedMetaParams<'_>,
-) -> Result<(), crate::error::TemperError> {
-    use crate::error::TemperError;
+) -> Result<(), temper_core::error::TemperError> {
+    use temper_core::error::TemperError;
 
     let managed: Value = params
         .managed_meta
@@ -518,8 +518,8 @@ pub fn validate_managed_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ids::ResourceId;
     use serde_json::json;
+    use temper_core::types::ids::ResourceId;
     use uuid::Uuid;
 
     #[test]

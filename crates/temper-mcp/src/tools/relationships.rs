@@ -12,13 +12,13 @@ use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
 use temper_core::error::TemperError;
-use temper_core::operations::{
-    AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
-    Surface,
-};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::relationship_requests::RelationshipAck;
+use temper_workflow::operations::{
+    AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
+    Surface,
+};
 
 use crate::service::TemperMcpService;
 
@@ -102,9 +102,9 @@ pub async fn assert_relationship(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
-    let source = temper_core::operations::parse_ref(&input.source)
+    let source = temper_workflow::operations::parse_ref(&input.source)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let target = temper_core::operations::parse_ref(&input.target)
+    let target = temper_workflow::operations::parse_ref(&input.target)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
     let cmd = AssertRelationship {

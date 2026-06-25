@@ -59,7 +59,7 @@ const SYSTEM_FIELDS: &[&str] = &[
 
 /// Build a [`DocTypeSummary`] from a doc-type name and its schema metadata.
 pub fn build_doc_type_summary(name: &str) -> DocTypeSummary {
-    let (has_schema, required_fields) = match temper_core::schema::required_fields(name) {
+    let (has_schema, required_fields) = match temper_workflow::schema::required_fields(name) {
         Ok(fields) => (true, fields),
         Err(_) => (false, Vec::new()),
     };
@@ -73,7 +73,7 @@ pub fn build_doc_type_summary(name: &str) -> DocTypeSummary {
 
 /// Build a [`DescribeDocTypeResponse`] from the embedded schema.
 pub fn describe_doc_type_impl(name: &str) -> Result<DescribeDocTypeResponse, rmcp::ErrorData> {
-    let schema = temper_core::schema::schema_value(name).map_err(|e| {
+    let schema = temper_workflow::schema::schema_value(name).map_err(|e| {
         rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_PARAMS,
             format!("Unknown doc type '{name}': {e}"),
@@ -81,8 +81,8 @@ pub fn describe_doc_type_impl(name: &str) -> Result<DescribeDocTypeResponse, rmc
         )
     })?;
 
-    let required_fields = temper_core::schema::required_fields(name).unwrap_or_default();
-    let enum_fields = temper_core::schema::enum_fields(name).unwrap_or_default();
+    let required_fields = temper_workflow::schema::required_fields(name).unwrap_or_default();
+    let enum_fields = temper_workflow::schema::enum_fields(name).unwrap_or_default();
 
     // Build example_managed_meta from required tier-3 fields (exclude system fields).
     let mut example = serde_json::Map::new();
@@ -127,7 +127,7 @@ pub async fn list_doc_types(svc: &TemperMcpService) -> Result<CallToolResult, rm
 
     // Doc-types are name-keyed in the substrate — enumerate the temper-core
     // schema set (the single source of truth) rather than a DB table.
-    let summaries: Vec<DocTypeSummary> = temper_core::frontmatter::DocType::ALL
+    let summaries: Vec<DocTypeSummary> = temper_workflow::frontmatter::DocType::ALL
         .iter()
         .map(|dt| build_doc_type_summary(dt.as_str()))
         .collect();

@@ -13,7 +13,6 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 hex = "0.4"
-jsonschema = "0.45"
 rmp-serde = "1"
 schemars = { version = "1", features = ["chrono04", "uuid1"], optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -41,7 +40,6 @@ uuid = { version = "1", features = ["serde", "v7"] }
 validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]

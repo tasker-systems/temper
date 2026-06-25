@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::ids::{ContextId, ProfileId, ResourceId};
 use super::managed_meta::ManagedMeta;
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 /// Row type for resource listings — includes joined display fields
 /// and managed_meta projections from `vault_resources_browse` view.

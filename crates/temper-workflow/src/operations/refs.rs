@@ -7,8 +7,8 @@
 //! never authoritative. This module migrates to `temper-workflow` at
 //! post-cutover crate extraction.
 
-use crate::error::TemperError;
-use crate::types::ids::ResourceId;
+use temper_core::error::TemperError;
+use temper_core::types::ids::ResourceId;
 use uuid::Uuid;
 
 /// Slugify a title for the decoration half of a ref / a filename.

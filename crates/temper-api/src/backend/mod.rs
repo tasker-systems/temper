@@ -1,4 +1,4 @@
-//! `DbBackend` — Postgres-backed impl of [`temper_core::operations::Backend`] over the substrate.
+//! `DbBackend` — Postgres-backed impl of [`temper_workflow::operations::Backend`] over the substrate.
 //!
 //! Per-request construction: handlers and MCP tools build a `DbBackend` from their auth context and
 //! dispatch one command through it. Reads go through the [`substrate_read`] dispatcher (the substrate

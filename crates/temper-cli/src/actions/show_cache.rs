@@ -22,7 +22,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 use temper_client::TemperClient;
 use temper_core::types::ids::ResourceId;
-use temper_core::types::{ContentResponse, ResourceRow};
+use temper_workflow::types::{ContentResponse, ResourceRow};
 
 use crate::actions::runtime::client_err_to_temper;
 use crate::error::{Result, TemperError};
@@ -143,7 +143,7 @@ pub(super) fn reconstruct_full_file_content(
     meta: &ResourceRow,
     content: &ContentResponse,
 ) -> Result<String> {
-    use temper_core::frontmatter::{DocType, Frontmatter};
+    use temper_workflow::frontmatter::{DocType, Frontmatter};
 
     let body = crate::actions::ingest::normalize_body_for_vault(&content.markdown);
     let dt = DocType::from_str(&meta.doc_type_name)?;
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn reconstruct_preserves_typed_managed_meta_fields() {
         use temper_core::types::ids::ResourceId;
-        use temper_core::types::ManagedMeta;
+        use temper_workflow::types::ManagedMeta;
         let meta = test_resource_row();
         let managed = ManagedMeta {
             stage: Some("in-progress".to_string()),

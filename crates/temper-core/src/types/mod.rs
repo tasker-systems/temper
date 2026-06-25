@@ -23,13 +23,11 @@ pub mod ingest;
 pub mod invitation;
 pub mod invocation;
 pub mod invocation_requests;
-pub mod managed_meta;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
 pub mod relationship_events;
 pub mod relationship_requests;
-pub mod resource;
 pub mod search;
 pub mod team;
 pub mod transfer;
@@ -54,22 +52,13 @@ pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
-pub use graph::{
-    EdgeReconciliation, EdgeType, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow, ResolvedEdge,
-    ResourceRelationships, TargetRef,
-};
+pub use graph::{EdgeKind, Polarity};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
-pub use managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceManifestRow};
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
-pub use resource::{
-    ContentChunk, ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets,
-    ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
-    ResourceUpdateRequest, SortOrder,
-};
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};
 pub use upload::{UploadProcessingStatus, UploadResponse};

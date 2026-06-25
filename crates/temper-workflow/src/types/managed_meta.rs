@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::ids::ResourceId;
+use temper_core::types::ids::ResourceId;
 
 /// Temper-governed frontmatter fields for a vault resource.
 ///

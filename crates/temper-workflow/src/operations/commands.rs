@@ -11,8 +11,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::types::ids::ResourceId;
 use crate::types::managed_meta::ManagedMeta;
+use temper_core::types::ids::ResourceId;
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -121,8 +121,8 @@ pub struct SearchResources {
 pub struct AssertRelationship {
     pub source: ResourceId,
     pub target: ResourceId,
-    pub edge_kind: crate::types::graph::EdgeKind,
-    pub polarity: crate::types::graph::Polarity,
+    pub edge_kind: temper_core::types::graph::EdgeKind,
+    pub polarity: temper_core::types::graph::Polarity,
     pub label: String,
     pub weight: f64,
     pub origin: Surface,
@@ -133,8 +133,8 @@ pub struct AssertRelationship {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetypeRelationship {
     pub edge_handle: uuid::Uuid,
-    pub edge_kind: crate::types::graph::EdgeKind,
-    pub polarity: crate::types::graph::Polarity,
+    pub edge_kind: temper_core::types::graph::EdgeKind,
+    pub polarity: temper_core::types::graph::Polarity,
     pub origin: Surface,
 }
 
@@ -170,7 +170,7 @@ pub struct OpenInvocation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CloseInvocation {
     pub invocation: uuid::Uuid,
-    pub disposition: crate::types::invocation::Disposition,
+    pub disposition: temper_core::types::invocation::Disposition,
     pub outcome: serde_json::Value,
     pub origin: Surface,
 }
@@ -240,8 +240,8 @@ mod tests {
         let cmd = AssertRelationship {
             source: ResourceId(uuid::Uuid::now_v7()),
             target: ResourceId(uuid::Uuid::now_v7()),
-            edge_kind: crate::types::graph::EdgeKind::LeadsTo,
-            polarity: crate::types::graph::Polarity::Inverse,
+            edge_kind: temper_core::types::graph::EdgeKind::LeadsTo,
+            polarity: temper_core::types::graph::Polarity::Inverse,
             label: "depends_on".to_string(),
             weight: 1.0,
             origin: Surface::ApiHttp,
@@ -255,8 +255,8 @@ mod tests {
         let cmd = AssertRelationship {
             source: ResourceId(uuid::Uuid::nil()),
             target: ResourceId(uuid::Uuid::now_v7()),
-            edge_kind: crate::types::graph::EdgeKind::Near,
-            polarity: crate::types::graph::Polarity::Forward,
+            edge_kind: temper_core::types::graph::EdgeKind::Near,
+            polarity: temper_core::types::graph::Polarity::Forward,
             label: "rel".into(),
             weight: 1.0,
             origin: Surface::Mcp,

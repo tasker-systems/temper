@@ -13,11 +13,11 @@ use crate::error::{Result, TemperError};
 
 /// Slugify a title for use in URIs and slugs.
 ///
-/// Delegates to `temper_core::operations::sluggify` — the one slug function,
+/// Delegates to `temper_workflow::operations::sluggify` — the one slug function,
 /// shared with decorated-ref decoration so URIs/filenames and ref decorations
 /// can never drift apart.
 pub fn slug_from_title(title: &str) -> String {
-    temper_core::operations::sluggify(title)
+    temper_workflow::operations::sluggify(title)
 }
 
 /// Body trio extracted from raw markdown — the chunk + hash output that
@@ -167,15 +167,15 @@ fn display_name_from_url(url: &str) -> String {
 /// depends_on, and any other custom frontmatter) for complete frontmatter
 /// that matches what the CLI would produce locally.
 pub fn build_frontmatter_from_resource(
-    resource: &temper_core::types::ResourceRow,
+    resource: &temper_workflow::types::ResourceRow,
     context: &str,
     doc_type: &str,
     canonical_owner: &str,
     body: String,
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
-) -> crate::error::Result<temper_core::frontmatter::Frontmatter> {
-    use temper_core::frontmatter::{DocType, Frontmatter};
+) -> crate::error::Result<temper_workflow::frontmatter::Frontmatter> {
+    use temper_workflow::frontmatter::{DocType, Frontmatter};
 
     let dt = DocType::from_str(doc_type)?;
     let mut fm = Frontmatter::new(dt, body);
@@ -206,7 +206,7 @@ pub fn build_frontmatter_from_resource(
             // System fields plus temper-title/temper-slug are set above from
             // resource-row columns; skip them as defense-in-depth so a drifted
             // managed_meta payload can't overwrite the canonical values.
-            if temper_core::frontmatter::fields::SYSTEM_MANAGED_FIELDS.contains(&k.as_str())
+            if temper_workflow::frontmatter::fields::SYSTEM_MANAGED_FIELDS.contains(&k.as_str())
                 || k == "temper-title"
             {
                 continue;
@@ -345,9 +345,9 @@ mod tests {
         assert_eq!(display_name_from_url("https://example.com/"), "example");
     }
 
-    fn test_resource_row() -> temper_core::types::ResourceRow {
+    fn test_resource_row() -> temper_workflow::types::ResourceRow {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-        temper_core::types::ResourceRow {
+        temper_workflow::types::ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
             origin_uri: "test://origin".to_string(),

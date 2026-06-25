@@ -56,7 +56,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
     let resources = app
         .client
         .resources()
-        .list(&temper_core::types::resource::ResourceListParams {
+        .list(&temper_workflow::types::resource::ResourceListParams {
             limit: Some(50),
             ..Default::default()
         })
