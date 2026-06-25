@@ -224,14 +224,7 @@ pub fn write_resource_file_from_parts(
     let context = row.context_name.as_str();
     let doc_type = row.doc_type_name.as_str();
 
-    let slug_owned;
-    let slug: &str = match row.slug.as_deref() {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            slug_owned = ingest::slug_from_title(&row.title);
-            slug_owned.as_str()
-        }
-    };
+    let slug = ingest::slug_from_title(&row.title);
 
     let managed_value = content
         .managed_meta
@@ -248,7 +241,7 @@ pub fn write_resource_file_from_parts(
         content.open_meta.as_ref(),
     )?;
 
-    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, slug);
+    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, &slug);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -291,20 +284,13 @@ pub fn remove_resource_file_for_row(
     use crate::actions::ingest;
 
     let owner = config.owner_for_context(&row.context_name);
-    let slug_owned;
-    let slug: &str = match row.slug.as_deref() {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            slug_owned = ingest::slug_from_title(&row.title);
-            slug_owned.as_str()
-        }
-    };
+    let slug = ingest::slug_from_title(&row.title);
     remove_resource_file(
         vault_root,
         &owner,
         &row.context_name,
         &row.doc_type_name,
-        slug,
+        &slug,
     )
 }
 

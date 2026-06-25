@@ -71,13 +71,16 @@ pub async fn list(
     Query(params): Query<ResourceListParams>,
 ) -> ApiResult<ListResourcesResponse> {
     if params.meta_only.unwrap_or(false) {
-        let response =
-            crate::backend::read_selector::list_meta_select(&state.pool, auth.0.profile.id, params)
-                .await?;
+        let response = crate::backend::substrate_read::list_meta_select(
+            &state.pool,
+            auth.0.profile.id,
+            params,
+        )
+        .await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
         let response =
-            crate::backend::read_selector::list_select(&state.pool, auth.0.profile.id, params)
+            crate::backend::substrate_read::list_select(&state.pool, auth.0.profile.id, params)
                 .await?;
         Ok(ListResourcesResponse::Default(response))
     }
@@ -129,7 +132,7 @@ pub async fn get_content(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
-    crate::backend::read_selector::get_content_select(&state.pool, auth.0.profile.id, resource_id)
+    crate::backend::substrate_read::get_content_select(&state.pool, auth.0.profile.id, resource_id)
         .await
         .map(Json)
 }

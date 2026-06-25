@@ -195,9 +195,6 @@ pub fn build_frontmatter_from_resource(
         "temper-title",
         serde_json::Value::String(resource.title.clone()),
     );
-    if let Some(slug) = &resource.slug {
-        fm.set_managed_field("temper-slug", serde_json::Value::String(slug.clone()));
-    }
     if !canonical_owner.is_empty() {
         fm.set_managed_field(
             "temper-owner",
@@ -349,14 +346,12 @@ mod tests {
     }
 
     fn test_resource_row() -> temper_core::types::ResourceRow {
-        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+        use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         temper_core::types::ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
-            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
             origin_uri: "test://origin".to_string(),
             title: "Test".to_string(),
-            slug: Some("test-slug".to_string()),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
             owner_profile_id: ProfileId(uuid::Uuid::nil()),
             is_active: true,
@@ -370,8 +365,6 @@ mod tests {
             mode: None,
             effort: None,
             body_hash: None,
-            managed_hash: None,
-            open_hash: None,
         }
     }
 

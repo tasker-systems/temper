@@ -29,7 +29,7 @@ pub async fn get_meta(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceMetaResponse>> {
-    crate::backend::read_selector::get_meta_select(
+    crate::backend::substrate_read::get_meta_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         ResourceId::from(resource_id),

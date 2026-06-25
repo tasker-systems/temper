@@ -29,11 +29,12 @@ pub async fn list_resources(
         ..Default::default()
     };
 
-    let response = temper_api::backend::read_selector::list_select(&state.pool, profile.id, params)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
-        })?;
+    let response =
+        temper_api::backend::substrate_read::list_select(&state.pool, profile.id, params)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
+            })?;
 
     let resources = response
         .rows
@@ -102,7 +103,7 @@ pub async fn read_resource(
         .and_then(|id| Uuid::try_parse(id).ok())
     {
         let content =
-            temper_api::backend::read_selector::get_content_select(&state.pool, profile.id, id)
+            temper_api::backend::substrate_read::get_content_select(&state.pool, profile.id, id)
                 .await
                 .map_err(|e| {
                     rmcp::ErrorData::internal_error(
@@ -123,14 +124,14 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let row = temper_api::backend::read_selector::show_select(&state.pool, profile.id, id)
+        let row = temper_api::backend::substrate_read::show_select(&state.pool, profile.id, id)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
             })?;
 
         let content =
-            temper_api::backend::read_selector::get_content_select(&state.pool, profile.id, id)
+            temper_api::backend::substrate_read::get_content_select(&state.pool, profile.id, id)
                 .await
                 .map_err(|e| {
                     rmcp::ErrorData::internal_error(
@@ -172,7 +173,7 @@ pub async fn read_resource(
         };
 
         let response =
-            temper_api::backend::read_selector::list_select(&state.pool, profile.id, params)
+            temper_api::backend::substrate_read::list_select(&state.pool, profile.id, params)
                 .await
                 .map_err(|e| {
                     rmcp::ErrorData::internal_error(

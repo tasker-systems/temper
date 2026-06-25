@@ -2,10 +2,10 @@
 //! search + the MCP enrichment list/meta-batch) over the one schema.
 //!
 //! These reads bypass the `Backend` trait by design (the trait projections are lossy and don't cover
-//! meta/body/content); they resolve against `temper_next::readback`, reconstructing the
-//! production-shaped types at the §9 floor. Visibility is scoped to the caller's profile (WS2) — the
-//! readbacks gate through `resources_visible_to`. SQL is unqualified against the one schema (the
-//! connection carries the search_path).
+//! meta/body/content); they resolve against `temper_next::readback`, producing native `ResourceRow`s
+//! (real timestamps, name-only doc type, no fabricated fields) via `native_resource_row`. Visibility
+//! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
+//! is unqualified against the one schema (the connection carries the search_path).
 //!
 //! `list`/`list_meta` filter (context_name/doc_type_name/stage/owner/`q`-title), sort, and paginate the
 //! visible set in SQL (`filtered_visible_page`), reconstructing only the page; the enrichment path
@@ -17,12 +17,12 @@ use std::collections::HashMap;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::backend::db_backend::{map_readback_err, reconstruct_resource_row};
+use crate::backend::db_backend::{map_readback_err, native_resource_row};
 use crate::error::{ApiError, ApiResult};
 use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
 };
@@ -173,7 +173,7 @@ pub async fn list_select(
     let page = filtered_visible_page(pool, profile_id, &params).await?;
     let mut rows: Vec<ResourceRow> = Vec::with_capacity(page.page_ids.len());
     for new_id in page.page_ids {
-        rows.push(reconstruct_resource_row(pool, profile_id, new_id).await?);
+        rows.push(native_resource_row(pool, profile_id, new_id).await?);
     }
     Ok(ResourceListResponse {
         rows,
@@ -184,16 +184,16 @@ pub async fn list_select(
     })
 }
 
-/// `show` — full resource row by id (§9 invariant floor) via the shared `reconstruct_resource_row`. The
-/// inbound id IS the substrate id. Visibility is gated inside `reconstruct_resource_row` (WS2); the typed
-/// `ReadbackError` is split by `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
+/// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
+/// Visibility is gated inside `native_resource_row` (WS2); the typed `ReadbackError` is split by
+/// `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
 pub async fn show_select(pool: &PgPool, profile_id: Uuid, id: Uuid) -> ApiResult<ResourceRow> {
-    reconstruct_resource_row(pool, profile_id, id)
+    native_resource_row(pool, profile_id, id)
         .await
         .map_err(ApiError::from)
 }
 
-/// `get_content` — reconstructed markdown body (§9 body floor). `managed_meta`/`open_meta` are `None`
+/// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`
 /// (the meta tier is `get_meta`).
 pub async fn get_content_select(
     pool: &PgPool,
@@ -307,7 +307,7 @@ pub async fn search_select(
 
     let mut hits = Vec::with_capacity(ids.len());
     for new_id in ids {
-        let row = reconstruct_resource_row(pool, profile_id, new_id).await?;
+        let row = native_resource_row(pool, profile_id, new_id).await?;
         hits.push(UnifiedSearchResultRow {
             resource_id: new_id,
             title: row.title,
@@ -327,7 +327,8 @@ pub async fn search_select(
 
 /// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
 /// `doc_type` in SQL via `readback::enriched_list` (WS2-scoped). Returns always-compiled temper-core
-/// types so the MCP consumer needs no feature gate. `slug`/timestamps are §9 non-invariants (None/now()).
+/// types so the MCP consumer needs no feature gate. Native rows: real timestamps (event-sourced
+/// from `kb_events.occurred_at`), name-only doc type, no fabricated fields.
 pub async fn list_enriched_select(
     pool: &PgPool,
     profile_id: Uuid,
@@ -337,21 +338,18 @@ pub async fn list_enriched_select(
     let rows = readback::enriched_list(pool, profile_id, context_name, doc_type)
         .await
         .map_err(api_err)?;
-    let now = chrono::Utc::now();
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let row = ResourceRow {
             id: ResourceId::from(r.new_id),
             kb_context_id: ContextId::from(Uuid::nil()), // re-minted; unused by build_enriched
-            kb_doc_type_id: DocTypeId::from(Uuid::nil()), // re-minted; name is authoritative
             origin_uri: r.origin_uri,
             title: r.title,
-            slug: None, // §7-dissolved
             originator_profile_id: ProfileId::from(Uuid::nil()),
             owner_profile_id: ProfileId::from(Uuid::nil()),
             is_active: r.is_active,
-            created: now, // synthesis-collapsed (non-invariant)
-            updated: now,
+            created: r.created,
+            updated: r.updated,
             context_name: r.context_name,
             doc_type_name: r.doc_type,
             owner_handle: "@me".to_string(),
@@ -360,8 +358,6 @@ pub async fn list_enriched_select(
             mode: r.mode,
             effort: r.effort,
             body_hash: None,
-            managed_hash: None,
-            open_hash: None,
         };
         // Propagate a genuine deser failure (don't swallow to None — a malformed managed shape is a fault).
         let managed: Option<ManagedMeta> =

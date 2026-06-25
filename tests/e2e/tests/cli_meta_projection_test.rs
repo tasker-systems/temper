@@ -273,10 +273,11 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
     assert!(stdout.get("facets").is_some(), "envelope missing facets");
 }
 
-/// `temper resource list --type task --context meta-cli --fields slug,stage --format json`
+/// `temper resource list --type task --context meta-cli --fields origin_uri,stage --format json`
 /// (without --meta-only) should filter each ResourceRow in the envelope rows to
 /// include only the anchor field `id` plus the requested fields. Fields not in
 /// the selection (`title`, `created`, `updated`, `body_hash`) must be absent.
+/// Note: `slug` was removed from ResourceRow in the native-shape drop (WS6 Task 2).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -310,7 +311,7 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
             "--context",
             "meta-cli",
             "--fields",
-            "slug,stage",
+            "origin_uri,stage",
             "--format",
             "json",
         ],
@@ -334,7 +335,10 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
         // Anchor field is always preserved
         assert!(row.get("id").is_some(), "anchor `id` missing in row: {row}");
         // Requested fields present
-        assert!(row.get("slug").is_some(), "slug missing in row: {row}");
+        assert!(
+            row.get("origin_uri").is_some(),
+            "origin_uri missing in row: {row}"
+        );
         assert!(row.get("stage").is_some(), "stage missing in row: {row}");
         // Fields NOT in the selection must be absent
         assert!(
