@@ -1,5 +1,11 @@
 # WS6 Flip Runbook
 
+> **⚠️ SUPERSEDED (2026-06-25).** Production was cut over via a search-path flip and then
+> re-homed into `public`. The promote-by-rename approach is **Neon-blocked** (the `vector`
+> extension cannot be relocated out of `public` by `neondb_owner`). See
+> [ws6-rehome-to-public-runbook.md](./ws6-rehome-to-public-runbook.md) for the live procedure.
+> This document is retained for historical context only.
+
 This is the operator checklist for the WS6 hard cutover: dumping `public.*` from
 production, synthesizing `temper_next` locally, loading it back into prod, and
 flipping the backend-selection flag. The procedure is also used for the step-D
