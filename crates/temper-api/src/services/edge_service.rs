@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use temper_core::types::graph::GraphEdgeRow;
+use temper_workflow::types::graph::GraphEdgeRow;
 
 /// List the edges incident to a resource, scoped to profile visibility.
 ///

@@ -14,14 +14,14 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use temper_core::error::TemperError;
-use temper_core::operations::{
+use temper_core::types::graph;
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_workflow::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
     ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
     SearchResources, ShowResource, Surface, UpdateResource,
 };
-use temper_core::types::graph;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-use temper_core::types::resource::ResourceRow;
+use temper_workflow::types::resource::ResourceRow;
 
 use temper_substrate::keys::{key_fate, KeyFate};
 use temper_substrate::readback;
@@ -260,14 +260,14 @@ impl Backend for DbBackend {
         let mut managed =
             serde_json::to_value(&cmd.managed_meta).map_err(|e| TemperError::Api(e.to_string()))?;
         // 1. Strip identity / tier-1 system keys a caller may have echoed back from a prior read.
-        managed = temper_core::operations::strip_system_managed_fields(managed);
+        managed = temper_workflow::operations::strip_system_managed_fields(managed);
         // 2. Apply doc-type managed-tier defaults (e.g. task → `temper-stage: backlog`).
-        temper_core::operations::apply_defaults_value(&cmd.doctype, &mut managed);
+        temper_workflow::operations::apply_defaults_value(&cmd.doctype, &mut managed);
         // 3. Inject the canonical identity keys (`temper-title`/`temper-slug`) before validation, the
         //    same send/receive-symmetric discipline ingest uses. An empty slug removes `temper-slug`
         //    (mirrors ingest's `injected_slug` at `:444-453`).
         let injected_slug = (!cmd.slug.is_empty()).then_some(cmd.slug.as_str());
-        temper_core::operations::ensure_managed_identity_keys(
+        temper_workflow::operations::ensure_managed_identity_keys(
             &mut managed,
             &cmd.title,
             injected_slug,
@@ -276,7 +276,7 @@ impl Backend for DbBackend {
         //    validation error (never swallow it). A fresh canonical id + `now()` seed the validation
         //    document exactly as ingest does (`:457-467`); that id is not persisted from here — the
         //    substrate mints the resource id in `writes::create_resource`.
-        let validate_params = temper_core::operations::ValidateManagedMetaParams {
+        let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
             doc_type: &cmd.doctype,
@@ -287,7 +287,7 @@ impl Backend for DbBackend {
         };
         // `validate_managed_meta` returns a typed `TemperError::BadRequest` on a caller-input fault;
         // propagate it directly (PROPAGATE, never swallow).
-        temper_core::operations::validate_managed_meta(&validate_params)?;
+        temper_workflow::operations::validate_managed_meta(&validate_params)?;
 
         // 5. Body-hash dedup (non-empty body only, matching legacy `:497-502`): if a visible active
         //    resource already carries the same substrate body_hash merkle, return IT instead of
@@ -420,7 +420,7 @@ impl Backend for DbBackend {
             let effective_title = incoming_title
                 .clone()
                 .unwrap_or_else(|| current.title.clone());
-            let effective_slug = temper_core::operations::sluggify(&effective_title);
+            let effective_slug = temper_workflow::operations::sluggify(&effective_title);
 
             // Build the COMPLETE validation document (strip system keys → doc-type defaults →
             // identity keys) and validate it; PROPAGATE the typed BadRequest (an out-of-enum
@@ -429,14 +429,14 @@ impl Backend for DbBackend {
             // goal temper-status), so a partial update never false-rejects — no merge with the
             // current managed_meta is needed.
             let mut validation =
-                temper_core::operations::strip_system_managed_fields(incoming.clone());
-            temper_core::operations::apply_defaults_value(&effective_doc_type, &mut validation);
-            temper_core::operations::ensure_managed_identity_keys(
+                temper_workflow::operations::strip_system_managed_fields(incoming.clone());
+            temper_workflow::operations::apply_defaults_value(&effective_doc_type, &mut validation);
+            temper_workflow::operations::ensure_managed_identity_keys(
                 &mut validation,
                 &effective_title,
                 Some(effective_slug.as_str()),
             );
-            let validate_params = temper_core::operations::ValidateManagedMetaParams {
+            let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
                 id: new_id,
                 created: current.created,
                 doc_type: &effective_doc_type,
@@ -445,7 +445,7 @@ impl Backend for DbBackend {
                 title: &effective_title,
                 context_name: &effective_context,
             };
-            temper_core::operations::validate_managed_meta(&validate_params)?;
+            temper_workflow::operations::validate_managed_meta(&validate_params)?;
 
             // Write only the caller-supplied keys (PATCH is a partial merge; `PropertySet`
             // asserts per key, so unsupplied keys are untouched — DON'T write the defaulted

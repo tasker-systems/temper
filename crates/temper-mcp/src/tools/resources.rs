@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use temper_api::backend::{substrate_read, DbBackend};
 use temper_core::error::TemperError;
-use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::ManagedMeta;
+use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
+use temper_workflow::types::managed_meta::ManagedMeta;
 
 use crate::service::TemperMcpService;
 
@@ -200,7 +200,7 @@ pub struct EnrichedResource {
 /// where it comes from (a batch query for lists, `get_content`'s response
 /// for the content path).
 fn build_enriched(
-    row: &temper_core::types::resource::ResourceRow,
+    row: &temper_workflow::types::resource::ResourceRow,
     managed_meta: Option<ManagedMeta>,
     open_meta: Option<serde_json::Value>,
 ) -> EnrichedResource {
@@ -212,7 +212,7 @@ fn build_enriched(
         doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
         origin_uri: row.origin_uri.clone(),
-        r#ref: temper_core::operations::decorated_ref(&row.title, row.id),
+        r#ref: temper_workflow::operations::decorated_ref(&row.title, row.id),
         is_active: row.is_active,
         created: row.created,
         updated: row.updated,
@@ -231,7 +231,7 @@ fn build_enriched(
 pub async fn enrich_resources(
     pool: &sqlx::PgPool,
     profile_id: Uuid,
-    rows: &[temper_core::types::resource::ResourceRow],
+    rows: &[temper_workflow::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
     let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
     let mut meta = substrate_read::get_meta_batch_select(pool, profile_id, &ids)
@@ -254,7 +254,7 @@ pub async fn enrich_resources(
 pub async fn enrich_resource(
     pool: &sqlx::PgPool,
     profile_id: Uuid,
-    row: &temper_core::types::resource::ResourceRow,
+    row: &temper_workflow::types::resource::ResourceRow,
 ) -> Result<EnrichedResource, rmcp::ErrorData> {
     Ok(
         enrich_resources(pool, profile_id, std::slice::from_ref(row))
@@ -313,7 +313,7 @@ pub async fn create_resource(
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
         })?;
-    temper_core::operations::ensure_managed_identity_keys(
+    temper_workflow::operations::ensure_managed_identity_keys(
         &mut managed_meta_value,
         &input.title,
         Some(&slug),
@@ -403,7 +403,7 @@ pub async fn get_resource(
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
-    let id = temper_core::operations::parse_ref(&input.id)
+    let id = temper_workflow::operations::parse_ref(&input.id)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
     let row = substrate_read::show_select(pool, profile.id, id.into())
@@ -530,8 +530,8 @@ pub async fn update_resource(
         let slug = input
             .slug
             .clone()
-            .unwrap_or_else(|| temper_core::operations::sluggify(&title));
-        temper_core::operations::ensure_managed_identity_keys(
+            .unwrap_or_else(|| temper_workflow::operations::sluggify(&title));
+        temper_workflow::operations::ensure_managed_identity_keys(
             &mut managed_meta_value,
             &title,
             Some(slug.as_str()),
@@ -550,7 +550,7 @@ pub async fn update_resource(
         managed_meta.slug = input.slug.clone();
     }
 
-    let cmd = temper_core::operations::UpdateResource {
+    let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         body: input.content.map(BodyUpdate::new),
         managed_meta: Some(managed_meta),
@@ -602,7 +602,7 @@ pub async fn update_resource_meta(
     // fields (doc_type / context), recomputes managed_hash / open_hash
     // server-side (Phase 5: caller-supplied hashes are no longer trusted),
     // emits the update_meta audit, and reconciles edges.
-    let cmd = temper_core::operations::UpdateResource {
+    let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         body: None,
         managed_meta: Some(input.managed_meta),
@@ -644,7 +644,7 @@ pub async fn delete_resource(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
-    let cmd = temper_core::operations::DeleteResource {
+    let cmd = temper_workflow::operations::DeleteResource {
         resource: ResourceId::from(input.id),
         // CLI-side concern; DbBackend ignores per spec (force=true is only
         // relevant when a CLI surface presents a confirmation prompt).
@@ -733,9 +733,9 @@ mod tests {
 mod build_enriched_tests {
     use super::*;
 
-    fn sample_row() -> temper_core::types::resource::ResourceRow {
+    fn sample_row() -> temper_workflow::types::resource::ResourceRow {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-        use temper_core::types::resource::ResourceRow;
+        use temper_workflow::types::resource::ResourceRow;
         let nil = uuid::Uuid::nil();
         ResourceRow {
             id: ResourceId::from(uuid::Uuid::now_v7()),
@@ -766,7 +766,7 @@ mod build_enriched_tests {
         assert_eq!(e.doc_type_name, "task");
         assert_eq!(
             e.r#ref,
-            temper_core::operations::decorated_ref(&row.title, row.id)
+            temper_workflow::operations::decorated_ref(&row.title, row.id)
         );
     }
 }
@@ -842,7 +842,7 @@ mod fields_projection_tests {
     #[test]
     fn enriched_resource_carries_decorated_ref() {
         let id = uuid::Uuid::parse_str("019e84ab-26ba-7560-9d34-c60d74a9fbe2").unwrap();
-        let got = temper_core::operations::decorated_ref(
+        let got = temper_workflow::operations::decorated_ref(
             "My Task",
             temper_core::types::ids::ResourceId(id),
         );

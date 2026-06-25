@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 temper-core = { path = "../temper-core", features = ["web-api"] }
+temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-ingest = { path = "../temper-ingest", default-features = false, features = ["embed"], optional = true }
 temper-substrate = { path = "../temper-substrate" }
 async-trait = "0.1"

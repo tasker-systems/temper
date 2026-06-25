@@ -264,7 +264,7 @@ custom: ok
         );
         let (managed, open) = split_managed_open(&v, DocType::Task);
         let managed_hash = crate::hash::compute_managed_hash("task", &managed);
-        let open_hash = crate::hash::compute_open_hash(&open);
+        let open_hash = temper_core::hash::compute_open_hash(&open);
 
         // Refreshed in Phase 9: fixture migrated from bare `title:` to
         // canonical `temper-title:`; bare title no longer has a literal
@@ -296,7 +296,7 @@ tags: [x]
         );
         let (managed, open) = split_managed_open(&v, DocType::Session);
         let managed_hash = crate::hash::compute_managed_hash("session", &managed);
-        let open_hash = crate::hash::compute_open_hash(&open);
+        let open_hash = temper_core::hash::compute_open_hash(&open);
 
         // Refreshed in Phase 9: fixture migrated from bare `title:` to
         // canonical `temper-title:`. (Phase 8 also refreshed for `date`

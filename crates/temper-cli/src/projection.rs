@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use temper_client::TemperClient;
-use temper_core::types::resource::ResourceListParams;
-use temper_core::types::ContentResponse;
-use temper_core::types::ResourceRow;
-use temper_core::vault::Vault;
+use temper_workflow::types::resource::ResourceListParams;
+use temper_workflow::types::ContentResponse;
+use temper_workflow::types::ResourceRow;
+use temper_workflow::vault::Vault;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};

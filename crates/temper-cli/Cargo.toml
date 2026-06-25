@@ -32,6 +32,7 @@ sha2 = "0.10"
 shell-words = "1"
 temper-client = { path = "../temper-client" }
 temper-core = { path = "../temper-core" }
+temper-workflow = { path = "../temper-workflow" }
 temper-ingest = { path = "../temper-ingest" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

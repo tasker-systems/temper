@@ -3,9 +3,9 @@
 mod common;
 
 use temper_api::backend::{substrate_read, DbBackend};
-use temper_core::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::ManagedMeta;
+use temper_workflow::operations::{Backend, BodyUpdate, Surface, UpdateResource};
+use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Helper: SHA256 hex digest of content.
 fn sha2_hex(content: &str) -> String {
@@ -333,7 +333,7 @@ async fn mcp_describe_doc_type_returns_usable_example(_pool: sqlx::PgPool) {
         .expect("JSON to YAML conversion");
 
     let issues =
-        temper_core::schema::validate_frontmatter("task", &yaml_value).expect("schema load");
+        temper_workflow::schema::validate_frontmatter("task", &yaml_value).expect("schema load");
 
     assert!(
         issues.is_empty(),

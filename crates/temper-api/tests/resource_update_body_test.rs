@@ -86,7 +86,7 @@ async fn setup_resource_with_body(
     // Seed the manifest row with the given body_hash.
     let managed_meta = json!({});
     let open_meta = json!({});
-    let managed_hash = temper_core::hash::compute_managed_hash("research", &managed_meta);
+    let managed_hash = temper_workflow::hash::compute_managed_hash("research", &managed_meta);
     let open_hash = temper_core::hash::compute_open_hash(&open_meta);
     sqlx::query(
         r#"INSERT INTO kb_resource_manifests
@@ -340,7 +340,7 @@ async fn body_update_combined_with_managed_meta_in_one_tx(pool: PgPool) {
 
     // Seed managed_meta with a stage.
     let managed_meta = json!({ "temper-stage": "in-progress" });
-    let managed_hash = temper_core::hash::compute_managed_hash("research", &managed_meta);
+    let managed_hash = temper_workflow::hash::compute_managed_hash("research", &managed_meta);
     let open_meta = json!({});
     let open_hash = temper_core::hash::compute_open_hash(&open_meta);
     sqlx::query(

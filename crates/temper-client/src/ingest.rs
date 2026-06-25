@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::ingest::IngestPayload;
-use temper_core::types::resource::ResourceRow;
+use temper_workflow::types::resource::ResourceRow;
 
 /// Sub-client for ingest operations.
 pub struct IngestClient<'a> {

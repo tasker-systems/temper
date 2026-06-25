@@ -1,4 +1,4 @@
-//! `CloudBackend` — cloud-mode impl of [`temper_core::operations::Backend`].
+//! `CloudBackend` — cloud-mode impl of [`temper_workflow::operations::Backend`].
 //!
 //! Each method translates the inbound `temper-core::operations` command
 //! into a `temper-client` API call via the translators in `translators.rs`,
@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use temper_client::TemperClient;
-use temper_core::operations::Surface;
+use temper_workflow::operations::Surface;
 
 use super::ctx::CloudBackendCtx;
 use crate::config::Config;
@@ -53,13 +53,13 @@ impl CloudBackend {
 #[cfg(feature = "embed")]
 mod embed_impl {
     use async_trait::async_trait;
-    use temper_core::operations::{
+    use temper_workflow::operations::{
         AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
         FoldRelationship, ListResources, RetypeRelationship, ReweightRelationship, SearchResources,
         ShowResource, UpdateResource,
     };
-    use temper_core::operations::{ResourceSummary, SearchHit};
-    use temper_core::types::resource::ResourceRow;
+    use temper_workflow::operations::{ResourceSummary, SearchHit};
+    use temper_workflow::types::resource::ResourceRow;
 
     use super::super::translators::{
         cmd_to_ingest_payload, cmd_to_resource_update_request, wire_resource_to_resource_row,
@@ -208,7 +208,7 @@ mod embed_impl {
 
         use temper_client::auth::MemoryTokenStore;
         use temper_client::TemperClient;
-        use temper_core::operations::Surface;
+        use temper_workflow::operations::Surface;
 
         use super::super::super::ctx::CloudBackendCtx;
         use super::*;
@@ -272,12 +272,12 @@ mod embed_impl {
 #[cfg(not(feature = "embed"))]
 mod non_embed_impl {
     use async_trait::async_trait;
-    use temper_core::operations::{
+    use temper_workflow::operations::{
         AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource,
         FoldRelationship, ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship,
         SearchHit, SearchResources, ShowResource, UpdateResource,
     };
-    use temper_core::types::resource::ResourceRow;
+    use temper_workflow::types::resource::ResourceRow;
 
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -385,7 +385,7 @@ mod non_embed_impl {
         use std::sync::Arc;
         use temper_client::auth::MemoryTokenStore;
         use temper_client::TemperClient;
-        use temper_core::operations::Surface;
+        use temper_workflow::operations::Surface;
 
         use super::super::super::ctx::CloudBackendCtx;
         use super::super::CloudBackend;
@@ -414,8 +414,8 @@ mod non_embed_impl {
                 surface: Surface::CliCloud,
             };
             let backend = CloudBackend::new(ctx);
-            use temper_core::operations::CreateResource;
-            use temper_core::types::ManagedMeta;
+            use temper_workflow::operations::CreateResource;
+            use temper_workflow::types::ManagedMeta;
             let cmd = CreateResource {
                 slug: "test".to_string(),
                 doctype: "task".to_string(),

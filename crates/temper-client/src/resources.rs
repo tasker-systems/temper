@@ -5,11 +5,11 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::graph::GraphEdgeRow;
-use temper_core::types::managed_meta::{
+use temper_workflow::types::graph::GraphEdgeRow;
+use temper_workflow::types::managed_meta::{
     MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
 };
-use temper_core::types::resource::{
+use temper_workflow::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
 };
@@ -155,9 +155,11 @@ mod meta_list_tests {
     // if the signature drifts.
     fn _assert_callable<'a>(
         client: &'a ResourceClient<'a>,
-        params: &'a temper_core::types::resource::ResourceListParams,
+        params: &'a temper_workflow::types::resource::ResourceListParams,
     ) -> impl std::future::Future<
-        Output = crate::error::Result<temper_core::types::managed_meta::ResourceMetaListResponse>,
+        Output = crate::error::Result<
+            temper_workflow::types::managed_meta::ResourceMetaListResponse,
+        >,
     > + 'a {
         client.list_meta(params)
     }

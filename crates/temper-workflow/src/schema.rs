@@ -3,12 +3,12 @@
 //! Loads JSON Schema files embedded at compile time, validates YAML frontmatter
 //! against them, and finds unknown temper-* fields.
 
-use crate::error::{Result, TemperError};
 use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, SYSTEM_MANAGED_FIELDS};
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
+use temper_core::error::{Result, TemperError};
 
 // ---------------------------------------------------------------------------
 // Embedded schemas

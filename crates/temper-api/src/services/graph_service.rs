@@ -10,10 +10,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use temper_core::frontmatter::document::DocType;
-use temper_core::types::graph::{
-    is_aggregator, EdgeKind, GraphEdge, GraphNode, Polarity, SubgraphResponse,
-};
+use temper_core::types::graph::{EdgeKind, Polarity};
+use temper_workflow::frontmatter::document::DocType;
+use temper_workflow::types::graph::{is_aggregator, GraphEdge, GraphNode, SubgraphResponse};
 
 /// Hard upper bound on traversal depth. Recursive-CTE cost grows superlinearly
 /// with depth; 10 hops covers any imaginable UI traversal. Clamped silently.

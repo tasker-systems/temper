@@ -6,7 +6,7 @@
 //! handlers + `substrate_read` address by their `crate::services::resource_service`
 //! path.
 
-pub use temper_core::types::resource::{
+pub use temper_workflow::types::resource::{
     ContentChunk, ContentResponse, ResourceCreateRequest, ResourceFacets, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
 };

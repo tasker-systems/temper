@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use temper_client::TemperClient;
-use temper_core::operations::Surface;
+use temper_workflow::operations::Surface;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};

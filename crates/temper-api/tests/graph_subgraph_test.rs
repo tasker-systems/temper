@@ -12,7 +12,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use temper_api::services::graph_service::{aggregator_subgraph, AggregatorSubgraphParams};
-use temper_core::frontmatter::document::DocType;
+use temper_workflow::frontmatter::document::DocType;
 
 // Well-known UUIDs from scripts/seed-graph-fixtures.sql.
 const ALICE: &str = "00000000-0000-0000-0088-000000000001";

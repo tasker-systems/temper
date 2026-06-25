@@ -1,8 +1,8 @@
 //! Text block splitting, YAML parsing, and alias normalization at the
 //! parse boundary.
 
-use crate::error::{Result, TemperError};
 use crate::frontmatter::registry::{lookup, KnownOpenField};
+use temper_core::error::{Result, TemperError};
 
 /// Lenient YAML frontmatter parse.
 ///

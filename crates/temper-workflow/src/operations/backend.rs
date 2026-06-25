@@ -14,8 +14,8 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::TemperError;
 use crate::types::resource::ResourceRow;
+use temper_core::error::TemperError;
 
 use super::commands::{
     AssertRelationship, CreateResource, DeleteResource, FoldRelationship, ListResources,

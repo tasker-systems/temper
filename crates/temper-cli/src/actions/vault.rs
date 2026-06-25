@@ -9,7 +9,7 @@ pub fn read_document(path: &Path) -> Result<VaultDocument> {
         .map_err(|e| TemperError::Vault(format!("Failed to read {}: {e}", path.display())))?;
 
     let frontmatter =
-        temper_core::frontmatter::parse_yaml_block(&raw).unwrap_or(serde_yaml::Value::Null);
+        temper_workflow::frontmatter::parse_yaml_block(&raw).unwrap_or(serde_yaml::Value::Null);
 
     let note_type = frontmatter
         .get("temper-type")

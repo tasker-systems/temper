@@ -1159,7 +1159,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
     // ---- Assertion 2: frontmatter temper-slug matches created resource ----
     let content =
         std::fs::read_to_string(&projection_path).expect("projection file must be readable");
-    let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str())
+    let fm = temper_workflow::frontmatter::Frontmatter::try_from(content.as_str())
         .expect("projection file must have valid frontmatter");
     let fm_json = serde_json::to_value(fm.value()).expect("frontmatter JSON conversion");
     assert_eq!(
@@ -1254,7 +1254,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
     // Read the pre-update frontmatter to verify it has the original title.
     let content_before = std::fs::read_to_string(&projection_path)
         .expect("projection file must be readable before update");
-    let fm_before = temper_core::frontmatter::Frontmatter::try_from(content_before.as_str())
+    let fm_before = temper_workflow::frontmatter::Frontmatter::try_from(content_before.as_str())
         .expect("projection file must have valid frontmatter before update");
     let fm_before_json =
         serde_json::to_value(fm_before.value()).expect("frontmatter JSON conversion");
@@ -1306,7 +1306,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
     // ---- Assertion: projection file has the updated title in frontmatter ----
     let content_after = std::fs::read_to_string(&projection_path)
         .expect("projection file must be readable after update");
-    let fm_after = temper_core::frontmatter::Frontmatter::try_from(content_after.as_str())
+    let fm_after = temper_workflow::frontmatter::Frontmatter::try_from(content_after.as_str())
         .expect("projection file must have valid frontmatter after update");
     let fm_after_json =
         serde_json::to_value(fm_after.value()).expect("frontmatter JSON conversion after update");
@@ -1585,7 +1585,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
     //   - decorated form: `decorated-ref-target-<uuid>`
     //   - stale/wrong decoration: right uuid, deliberately wrong slug half
     //   - bare uuid (control)
-    let decorated = temper_core::operations::decorated_ref(&title, id);
+    let decorated = temper_workflow::operations::decorated_ref(&title, id);
     assert_eq!(
         decorated,
         format!("decorated-ref-target-{uuid}"),

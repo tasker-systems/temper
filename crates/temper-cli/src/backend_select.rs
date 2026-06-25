@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use temper_client::TemperClient;
-use temper_core::operations::Backend;
+use temper_workflow::operations::Backend;
 
 use crate::config::Config;
 use crate::error::Result;

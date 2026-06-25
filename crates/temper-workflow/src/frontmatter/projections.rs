@@ -1,11 +1,11 @@
 //! Trait impls projecting `Frontmatter` to the typed structs in
 //! `crate::types`: `ResourceRelationships`, `ManagedMeta`, `ResourceFrontmatter`.
 
-use crate::error::{Result, TemperError};
 use crate::frontmatter::document::Frontmatter;
 use crate::types::graph::ResourceRelationships;
 use crate::types::managed_meta::ManagedMeta;
-use crate::types::vault::ResourceFrontmatter;
+use temper_core::error::{Result, TemperError};
+use temper_core::types::vault::ResourceFrontmatter;
 
 impl From<&Frontmatter> for ResourceRelationships {
     /// Project a [`Frontmatter`] to a [`ResourceRelationships`] by

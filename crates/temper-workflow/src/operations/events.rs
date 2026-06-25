@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::types::ids::ResourceId;
+use temper_core::types::ids::ResourceId;
 
 /// A past-tense fact about something that happened during command execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

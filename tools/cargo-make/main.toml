@@ -151,9 +151,9 @@ command = "cargo"
 args = ["doc", "--workspace", "--no-deps", "--document-private-items"]
 # Match CI's code-quality job: rustdoc warnings (broken intra-doc links, bare
 # URLs, etc.) fail the build locally before they reach CI. The global
-# SQLX_OFFLINE=true keeps temper-next's namespaced macros resolving from its
+# SQLX_OFFLINE=true keeps temper-substrate's namespaced macros resolving from its
 # per-crate .sqlx cache, so a single --workspace pass suffices (mirrors how
-# rust-clippy is run locally; CI splits temper-next only to avoid double-linting).
+# rust-clippy is run locally; CI splits temper-substrate only to avoid double-linting).
 env = { RUSTDOCFLAGS = "-D warnings" }
 
 [tasks.rust-machete]
@@ -208,6 +208,7 @@ description = "Generate TypeScript types from temper-core Rust structs via ts-rs
 script = [
   "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated",
   "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript",
+  "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-workflow --features typescript",
   "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-agents --features typescript",
   "generated=$(ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts 2>/dev/null | wc -l | tr -d ' ')",
   "if [ \"$generated\" -eq 0 ]; then echo 'ERROR: No TypeScript files were generated'; exit 1; fi",
