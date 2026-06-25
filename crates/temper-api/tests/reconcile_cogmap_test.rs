@@ -15,12 +15,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
-use temper_core::operations::{Backend, ReconcileCognitiveMap, Surface};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_core::types::reconcile::{
     ReconcileCogmapRequest, ReconcileEdge, ReconcileEntry, ReconcileTombstone,
 };
+use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 
@@ -46,9 +46,9 @@ fn entry(
         content_hash: format!("{hash_seed:0>64}"),
         embedding: vec![fill; 768],
     };
-    let content_hash = temper_next::content::body_hash_from_chunk_hashes(std::slice::from_ref(
-        &chunk.content_hash,
-    ));
+    let content_hash = temper_substrate::content::body_hash_from_chunk_hashes(
+        std::slice::from_ref(&chunk.content_hash),
+    );
     let chunks_packed = pack_chunks(std::slice::from_ref(&chunk)).expect("pack");
     ReconcileEntry {
         origin_uri: origin_uri.to_string(),
@@ -156,7 +156,7 @@ async fn first_delivery_creates_all_entries(pool: PgPool) {
         (2, 0, 0, 0)
     );
 
-    let slice = temper_next::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
         .await
         .unwrap();
     assert_eq!(slice.len(), 2, "both kernel landmarks now homed to L0");
@@ -302,8 +302,9 @@ async fn body_change_updates_only_that_entry(pool: PgPool) {
     );
 
     // The live body_hash now equals the revised entry's content_hash.
-    let expected = temper_next::content::body_hash_from_chunk_hashes(&[format!("{:0>64}", "cc")]);
-    let slice = temper_next::readback::kernel_slice(&pool, L0_COGMAP)
+    let expected =
+        temper_substrate::content::body_hash_from_chunk_hashes(&[format!("{:0>64}", "cc")]);
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
         .await
         .unwrap();
     let row = slice
@@ -318,11 +319,13 @@ async fn body_change_updates_only_that_entry(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promoted_content_is_isolated(pool: PgPool) {
     // Seed a `provenance: promoted` resource homed to the cogmap (NOT part of the kernel slice).
-    let (owner, emitter) = temper_next::readback::system_actor(&pool).await.unwrap();
-    let promoted = temper_next::writes::create_kernel_resource(
+    let (owner, emitter) = temper_substrate::readback::system_actor(&pool)
+        .await
+        .unwrap();
+    let promoted = temper_substrate::writes::create_kernel_resource(
         &pool,
-        temper_next::writes::KernelCreateParams {
-            cogmap: temper_next::ids::CogmapId::from(L0_COGMAP),
+        temper_substrate::writes::KernelCreateParams {
+            cogmap: temper_substrate::ids::CogmapId::from(L0_COGMAP),
             title: "promoted landmark",
             origin_uri: "temper://promoted/concept/derived",
             doc_type: "kernel_landmark",
@@ -334,7 +337,7 @@ async fn promoted_content_is_isolated(pool: PgPool) {
     )
     .await
     .unwrap();
-    temper_next::writes::set_property(
+    temper_substrate::writes::set_property(
         &pool,
         promoted,
         "provenance",
@@ -367,7 +370,7 @@ async fn promoted_content_is_isolated(pool: PgPool) {
 
     // The promoted resource is still active and still NOT in the kernel slice.
     assert!(is_active(&pool, promoted.uuid()).await);
-    let slice = temper_next::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
         .await
         .unwrap();
     assert!(
@@ -424,7 +427,7 @@ async fn explicit_tombstone_folds_kernel_resource(pool: PgPool) {
         (0, 0, 1, 0)
     );
 
-    let slice = temper_next::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
         .await
         .unwrap();
     assert!(
@@ -438,12 +441,14 @@ async fn explicit_tombstone_folds_kernel_resource(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn open_admin_reconcile_blocks_a_concurrent_run(pool: PgPool) {
     // Manually open an `admin_reconcile` invocation on L0 (the mutex the reconciler checks).
-    let (_, emitter) = temper_next::readback::system_actor(&pool).await.unwrap();
-    temper_next::writes::open_invocation(
+    let (_, emitter) = temper_substrate::readback::system_actor(&pool)
+        .await
+        .unwrap();
+    temper_substrate::writes::open_invocation(
         &pool,
-        temper_next::writes::OpenParams {
+        temper_substrate::writes::OpenParams {
             trigger_kind: "admin_reconcile".to_string(),
-            originating: temper_next::ids::CogmapId::from(L0_COGMAP),
+            originating: temper_substrate::ids::CogmapId::from(L0_COGMAP),
             parent: None,
             scoped_entity: emitter,
             emitter,

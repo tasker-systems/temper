@@ -14,9 +14,9 @@ use crate::middleware::auth::AuthUser;
 use crate::services::access_service;
 use crate::state::AppState;
 
-use temper_core::operations::{Backend, ReconcileCognitiveMap, Surface};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
+use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
 
 #[utoipa::path(
     put,

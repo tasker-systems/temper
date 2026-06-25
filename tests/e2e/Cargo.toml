@@ -39,6 +39,7 @@ temper-api = { path = "../../crates/temper-api" }
 temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }
+temper-workflow = { path = "../../crates/temper-workflow" }
 temper-mcp = { path = "../../crates/temper-mcp" }
 temp-env = "0.3"
 tempfile = "3"

@@ -7,11 +7,11 @@ use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
-use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
-use temper_core::types::managed_meta::ManagedMeta;
-use temper_core::types::resource::ResourceRow;
+use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
+use temper_workflow::types::managed_meta::ManagedMeta;
+use temper_workflow::types::resource::ResourceRow;
 
 #[utoipa::path(
     post,

@@ -18,7 +18,7 @@ pub fn reconcile(cogmap_ref: &str, manifest_path: &str, fmt: OutputFormat) -> Re
     use crate::error::TemperError;
 
     // Resolve the cogmap ref → UUID (trailing-UUID-only; the slug half is ignored).
-    let cogmap_id = temper_core::operations::parse_ref(cogmap_ref)?.0;
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
 
     let yaml = std::fs::read_to_string(manifest_path)
         .map_err(|e| TemperError::Config(format!("reading manifest {manifest_path}: {e}")))?;

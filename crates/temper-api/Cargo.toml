@@ -6,7 +6,7 @@ description = "Axum HTTP server implementing the temper cloud API"
 
 [package.metadata.cargo-machete]
 # temper-ingest is an OPTIONAL dep plumbed via the `ingest-pipeline` feature (enabled by temper-cloud
-# + the e2e test-embed job). The collapse moved server-side embedding into temper-next, so temper-api
+# + the e2e test-embed job). The collapse moved server-side embedding into temper-substrate, so temper-api
 # no longer references temper-ingest directly — whether `ingest-pipeline` can be fully retired is part
 # of the deferred test-embed follow-up. Ignore until that sweep resolves it.
 ignored = ["temper-ingest"]
@@ -17,8 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 temper-core = { path = "../temper-core", features = ["web-api"] }
+temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-ingest = { path = "../temper-ingest", default-features = false, features = ["embed"], optional = true }
-temper-next = { path = "../temper-next" }
+temper-substrate = { path = "../temper-substrate" }
 async-trait = "0.1"
 axum = { version = "0.8", features = ["json", "query"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }

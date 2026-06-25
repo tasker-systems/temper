@@ -215,7 +215,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         "tier-3 must NOT strip the frontmatter fence; got:\n{on_disk}"
     );
     assert!(
-        temper_core::frontmatter::Frontmatter::try_from(on_disk.as_str()).is_ok(),
+        temper_workflow::frontmatter::Frontmatter::try_from(on_disk.as_str()).is_ok(),
         "tier-3 output must be parseable as a vault document; got:\n{on_disk}"
     );
 }

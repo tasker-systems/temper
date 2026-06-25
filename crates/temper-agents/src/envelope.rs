@@ -1,17 +1,17 @@
 //! The runtime-neutral agent accountability contract.
 //!
 //! Re-exports the invocation-envelope + agent-authorship data types that
-//! currently live in `temper-next` (shipped in PR #148). This crate is a thin
+//! currently live in `temper-substrate` (shipped in PR #148). This crate is a thin
 //! *consumer* of those types, never their owner — the definitional home stays
-//! `temper-next` now and moves to `temper-core` at the convergence lift, at
+//! `temper-substrate` now and moves to `temper-core` at the convergence lift, at
 //! which point only the `pub use` paths below change.
 //!
 //! Data types only: the substrate-side write helpers (`EventContext`,
 //! `fire_with`) are deliberately NOT re-exported — a remote (Claude-managed)
 //! binding reaches the substrate over MCP and cannot use sqlx-bound helpers.
 
-pub use temper_next::ids::InvocationId;
-pub use temper_next::payloads::{
+pub use temper_substrate::ids::InvocationId;
+pub use temper_substrate::payloads::{
     AgentAuthorship, ConfidenceBand, DelegatedLaunch, Disposition, InvocationClosed,
 };
 

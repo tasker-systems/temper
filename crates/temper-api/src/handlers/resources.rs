@@ -12,10 +12,10 @@ use crate::services::resource_service::{
 };
 use crate::state::AppState;
 
-use temper_core::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
-use temper_core::types::resource::{ContentResponse, DeleteResponse};
+use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
+use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
+use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
 
 /// Combined response for `GET /api/resources`.
 ///
@@ -103,8 +103,8 @@ pub async fn get(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceRow>> {
-    use temper_core::operations::{ShowResource, Surface};
     use temper_core::types::ids::ResourceId;
+    use temper_workflow::operations::{ShowResource, Surface};
 
     let cmd = ShowResource {
         resource: ResourceId::from(resource_id),
@@ -208,8 +208,8 @@ pub async fn update(
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    use temper_core::operations::{BodyUpdate, UpdateResource};
     use temper_core::types::ids::ResourceId;
+    use temper_workflow::operations::{BodyUpdate, UpdateResource};
 
     // Client-supplied chunks_packed (+ content_hash) are HONORED: the client did the
     // extract→chunk→embed locally, so the server carries them verbatim and only embeds

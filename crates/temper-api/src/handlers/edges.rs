@@ -7,16 +7,16 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::edge_service;
 use crate::state::AppState;
-use temper_core::operations::{
-    AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
-    Surface,
-};
-use temper_core::types::graph::GraphEdgeRow;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
     ReweightRelationshipRequest,
 };
+use temper_workflow::operations::{
+    AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
+    Surface,
+};
+use temper_workflow::types::graph::GraphEdgeRow;
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 

@@ -4960,7 +4960,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
- "temper-next",
+ "temper-substrate",
  "ts-rs",
 ]
 
@@ -4979,7 +4979,8 @@ dependencies = [
  "sqlx",
  "temper-core",
  "temper-ingest",
- "temper-next",
+ "temper-substrate",
+ "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
@@ -5014,6 +5015,7 @@ dependencies = [
  "temper-client",
  "temper-core",
  "temper-ingest",
+ "temper-workflow",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -5040,6 +5042,7 @@ dependencies = [
  "sha2",
  "temp-env",
  "temper-core",
+ "temper-workflow",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -5072,7 +5075,6 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "hex",
- "jsonschema",
  "rmp-serde",
  "schemars",
  "serde",
@@ -5080,7 +5082,6 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
@@ -5114,6 +5115,7 @@ dependencies = [
  "temper-client",
  "temper-core",
  "temper-mcp",
+ "temper-workflow",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -5158,6 +5160,7 @@ dependencies = [
  "sqlx",
  "temper-api",
  "temper-core",
+ "temper-workflow",
  "tokio",
  "toml 0.8.23",
  "tower-http",
@@ -5166,7 +5169,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-next"
+name = "temper-substrate"
 version = "0.0.0"
 dependencies = [
  "anyhow",
@@ -5180,6 +5183,27 @@ dependencies = [
  "sqlx",
  "temper-ingest",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "temper-workflow"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "jsonschema",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "temper-core",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "ts-rs",
+ "utoipa",
  "uuid",
 ]
 

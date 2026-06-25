@@ -1,5 +1,5 @@
 use chrono::Local;
-use temper_core::schema;
+use temper_workflow::schema;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
@@ -15,7 +15,7 @@ use crate::vault;
 pub(crate) struct CreateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
-    pub resource: temper_core::types::resource::ResourceRow,
+    pub resource: temper_workflow::types::resource::ResourceRow,
 }
 
 /// Flat result emitted by `temper resource update`.
@@ -23,7 +23,7 @@ pub(crate) struct CreateActionResult {
 pub(crate) struct UpdateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
-    pub resource: temper_core::types::resource::ResourceRow,
+    pub resource: temper_workflow::types::resource::ResourceRow,
 }
 
 /// Result emitted by `temper resource delete`.
@@ -42,8 +42,8 @@ pub(crate) struct DeleteActionResult {
 /// direction and routes through `render()` for consistent json|toon output.
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct EdgesReport {
-    pub outgoing: Vec<temper_core::types::graph::GraphEdgeRow>,
-    pub incoming: Vec<temper_core::types::graph::GraphEdgeRow>,
+    pub outgoing: Vec<temper_workflow::types::graph::GraphEdgeRow>,
+    pub incoming: Vec<temper_workflow::types::graph::GraphEdgeRow>,
 }
 
 /// Insert a derived `ref` key (the decorated, self-resolving identifier)
@@ -59,7 +59,7 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
     let Some(id) = id else { return };
     let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
     if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-        let decorated = temper_core::operations::decorated_ref(
+        let decorated = temper_workflow::operations::decorated_ref(
             title,
             temper_core::types::ids::ResourceId(uuid),
         );
@@ -163,9 +163,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     } = args;
     use std::io::IsTerminal;
 
-    use temper_core::types::ManagedMeta;
+    use temper_workflow::types::ManagedMeta;
 
-    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
+    let _ = temper_workflow::frontmatter::DocType::from_str(doc_type)?;
 
     // Fail-fast: --task linking is only valid for sessions. Reject before any
     // create round-trip (mirrors the validate_create fail-fast hoist below).
@@ -207,14 +207,14 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     };
 
     // Slug derivation (mode-independent — Concept and Goal skip date prefix).
-    let doctype_enum = temper_core::frontmatter::DocType::from_str(doc_type)?;
+    let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type)?;
     let slug_resolved = slug.map(String::from).unwrap_or_else(|| {
         let today = Local::now().format("%Y-%m-%d").to_string();
         let base_slug = vault::slugify(title);
         match doctype_enum {
             // Concept and Goal are identified by name — no date prefix.
-            temper_core::frontmatter::DocType::Concept
-            | temper_core::frontmatter::DocType::Goal => base_slug,
+            temper_workflow::frontmatter::DocType::Concept
+            | temper_workflow::frontmatter::DocType::Goal => base_slug,
             // All other doctypes get a date prefix.
             _ => format!("{today}-{base_slug}"),
         }
@@ -222,13 +222,13 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
-    let cmd = temper_core::operations::CreateResource {
+    let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
         context: ctx.to_string(),
         title: title.to_string(),
         body: body_opt.filter(|b| !b.is_empty()).map(|content| {
-            temper_core::operations::BodyUpdate {
+            temper_workflow::operations::BodyUpdate {
                 content,
                 content_hash: None,
                 chunks_packed: None,
@@ -244,7 +244,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
-        origin: temper_core::operations::Surface::CliCloud,
+        origin: temper_workflow::operations::Surface::CliCloud,
     };
 
     // Surface-side pre-flight validation — mirrors the hoist of
@@ -253,7 +253,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // bad inputs (e.g., --mode plan-or-build whitelist violations) would ship
     // a doomed request to the server. Hoisting here lets the CLI fail-fast
     // before any network call in both modes.
-    temper_core::operations::validate_create(&cmd)
+    temper_workflow::operations::validate_create(&cmd)
         .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
     // Acquire the cloud backend + client and dispatch the create.
@@ -403,7 +403,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     }
 
     use crate::actions::runtime;
-    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+    use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
     let fmt = params.format;
     let doc_type = params.doc_type.to_string();
@@ -470,7 +470,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 /// preserved untouched.
 fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
-    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+    use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
     let limit = params.limit.unwrap_or(50);
     let api_params = ResourceListParams {
@@ -535,9 +535,9 @@ pub fn delete(
     force: bool,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
-    use temper_core::operations::DeleteResource;
+    use temper_workflow::operations::DeleteResource;
 
-    let id = temper_core::operations::parse_ref(r#ref)?;
+    let id = temper_workflow::operations::parse_ref(r#ref)?;
 
     // Context-free read: fetch the row by id to learn its context (for the
     // write backend), doctype + slug (for projection removal + result shape).
@@ -554,7 +554,7 @@ pub fn delete(
     let cmd = DeleteResource {
         resource: id,
         force,
-        origin: temper_core::operations::Surface::CliCloud,
+        origin: temper_workflow::operations::Surface::CliCloud,
     };
 
     let (runtime, backend, _client) =
@@ -590,7 +590,7 @@ pub fn delete(
 /// three former per-doctype shows rendered identically), the canonical
 /// projection file is refreshed best-effort, and the row+body is rendered.
 pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
-    let id = temper_core::operations::parse_ref(params.r#ref)?;
+    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
 
     if params.meta_only {
         return show_meta_only(config, id, params.format, params.fields);
@@ -699,7 +699,7 @@ fn show_edges(
 ) -> Result<()> {
     use crate::actions::runtime;
 
-    let edges: Vec<temper_core::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
+    let edges: Vec<temper_workflow::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
         Box::pin(async move {
             client
                 .resources()
@@ -769,7 +769,7 @@ pub struct UpdateParams<'a> {
 /// dropping bare `--title` updates on the floor.
 fn build_partial_managed_meta_from_args(
     params: &UpdateParams<'_>,
-) -> Option<temper_core::types::ManagedMeta> {
+) -> Option<temper_workflow::types::ManagedMeta> {
     let any_set = params.title.is_some()
         || params.stage.is_some()
         || params.mode.is_some()
@@ -782,7 +782,7 @@ fn build_partial_managed_meta_from_args(
     if !any_set {
         return None;
     }
-    Some(temper_core::types::ManagedMeta {
+    Some(temper_workflow::types::ManagedMeta {
         title: params.title.map(String::from),
         stage: params.stage.map(String::from),
         mode: params.mode.map(String::from),
@@ -853,11 +853,11 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
 /// operations field.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
-) -> Option<temper_core::operations::MoveSpec> {
+) -> Option<temper_workflow::operations::MoveSpec> {
     if params.context_to.is_none() && params.type_to.is_none() {
         return None;
     }
-    Some(temper_core::operations::MoveSpec {
+    Some(temper_workflow::operations::MoveSpec {
         context_to: params.context_to.map(String::from),
         type_to: params.type_to.map(String::from),
     })
@@ -879,12 +879,12 @@ fn build_move_spec_from_args(
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::{BodyUpdate, UpdateResource};
+    use temper_workflow::operations::{BodyUpdate, UpdateResource};
 
     // 1. Resolve the ref to an id, then a context-free read to learn the
     //    current doctype (for per-flag schema validation) and context (for
     //    the write backend).
-    let id = temper_core::operations::parse_ref(params.r#ref)?;
+    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
@@ -895,9 +895,9 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         })
     })?;
     let current_type = row.doc_type_name.clone();
-    let _ = temper_core::frontmatter::DocType::from_str(&current_type)?;
+    let _ = temper_workflow::frontmatter::DocType::from_str(&current_type)?;
     if let Some(tt) = params.type_to {
-        let _ = temper_core::frontmatter::DocType::from_str(tt)?;
+        let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
     }
 
     // 2. Per-flag schema validation, keyed by the resolved doctype.
@@ -918,7 +918,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
-        origin: temper_core::operations::Surface::CliCloud,
+        origin: temper_workflow::operations::Surface::CliCloud,
     };
 
     // 5. Acquire the cloud backend + client and dispatch the update.
@@ -1092,7 +1092,7 @@ mod build_helpers_tests {
 #[cfg(test)]
 mod action_result_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_core::types::resource::ResourceRow;
+    use temper_workflow::types::resource::ResourceRow;
 
     use super::{CreateActionResult, DeleteActionResult, UpdateActionResult};
 
@@ -1288,7 +1288,7 @@ mod from_flag_tests {
 #[cfg(test)]
 mod resource_list_render_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_core::types::resource::ResourceRow;
+    use temper_workflow::types::resource::ResourceRow;
 
     /// Task 7: verify that `render()` passthrough includes internal wire fields
     /// like `body_hash` that the old `row_to_frontmatter_value` + `render_server_rows`
@@ -1349,7 +1349,8 @@ mod resource_list_render_tests {
 #[cfg(test)]
 mod edges_report_tests {
     use super::EdgesReport;
-    use temper_core::types::graph::{EdgeKind, GraphEdgeRow, Polarity};
+    use temper_core::types::graph::{EdgeKind, Polarity};
+    use temper_workflow::types::graph::GraphEdgeRow;
 
     fn make_edge(direction: &str, label: &str) -> GraphEdgeRow {
         GraphEdgeRow {
@@ -1583,7 +1584,7 @@ mod inject_ref_tests {
 #[cfg(test)]
 mod show_meta_only_tests {
     use temper_core::projection::apply_top_level_filter;
-    use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+    use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
 
     fn fake_meta_response() -> ResourceMetaResponse {
         ResourceMetaResponse {

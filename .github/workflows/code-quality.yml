@@ -11,7 +11,7 @@ jobs:
 
     # All `sqlx::query!()` macros here verify OFFLINE against the committed per-crate .sqlx caches
     # (SQLX_OFFLINE below). This is required, not just convenient: the `next-backend` feature pulls
-    # temper-next in as a compiled dependency, and temper-next's macros target the `temper_next`
+    # temper-substrate in as a compiled dependency, and temper-substrate's macros target the `temper_next`
     # artifact namespace, which can't be validated against this job's migrated `public` schema. The
     # Postgres service + `cargo sqlx migrate run` step remain as a cheap migrations-apply smoke check
     # (every migration, incl. the temper_next install + forward deltas, must apply cleanly).
@@ -61,24 +61,24 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # The whole job runs OFFLINE (SQLX_OFFLINE in env above). temper-next keeps its own clippy/doc
+      # The whole job runs OFFLINE (SQLX_OFFLINE in env above). temper-substrate keeps its own clippy/doc
       # steps below (its sqlx! macros target the temper_next artifact namespace, resolved from its
       # per-crate .sqlx cache); the --workspace passes exclude it to avoid double-linting.
       - name: Run Clippy lints
-        run: cargo clippy --workspace --exclude temper-next --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude temper-substrate --all-targets --all-features -- -D warnings
 
-      - name: Run Clippy lints (temper-next, offline)
-        run: cargo clippy -p temper-next --all-targets --all-features -- -D warnings
+      - name: Run Clippy lints (temper-substrate, offline)
+        run: cargo clippy -p temper-substrate --all-targets --all-features -- -D warnings
         env:
           SQLX_OFFLINE: "true"
 
       - name: Check documentation builds
-        run: cargo doc --workspace --exclude temper-next --no-deps --document-private-items
+        run: cargo doc --workspace --exclude temper-substrate --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
-      - name: Check documentation builds (temper-next, offline)
-        run: cargo doc -p temper-next --no-deps --document-private-items
+      - name: Check documentation builds (temper-substrate, offline)
+        run: cargo doc -p temper-substrate --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
           SQLX_OFFLINE: "true"

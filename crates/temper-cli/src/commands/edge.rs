@@ -42,8 +42,8 @@ pub fn run(action: EdgeAction) -> Result<()> {
             label,
             weight,
         } => {
-            let source = temper_core::operations::parse_ref(&source)?;
-            let target = temper_core::operations::parse_ref(&target)?;
+            let source = temper_workflow::operations::parse_ref(&source)?;
+            let target = temper_workflow::operations::parse_ref(&target)?;
             let req = AssertRelationshipRequest {
                 source,
                 target,

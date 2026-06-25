@@ -33,7 +33,7 @@ env_files = ["./.env"]
 
 [env]
 # Compile sqlx query! macros against the committed per-crate .sqlx caches, not the live DB — matches CI
-# (which sets SQLX_OFFLINE=true) and is REQUIRED for temper-next, whose macros target the `temper_next`
+# (which sets SQLX_OFFLINE=true) and is REQUIRED for temper-substrate, whose macros target the `temper_next`
 # artifact namespace that isn't on the dev DB's default search_path. Compile-time only; runtime DB tests
 # (test-db/test-e2e) still connect normally. `prepare-next` overrides this (it must introspect live).
 SQLX_OFFLINE = "true"
@@ -75,10 +75,10 @@ echo "Run 'cargo make --list-all-steps' for all tasks"
 '''
 
 [tasks.prepare-next]
-description = "Regenerate temper-next's per-crate .sqlx cache against the loaded temper_next artifact"
+description = "Regenerate temper-substrate's per-crate .sqlx cache against the loaded temper_next artifact"
 env = { SQLX_OFFLINE = "false" }   # prepare must introspect the LIVE artifact to build the cache
 script = '''
-# temper-next's sqlx! macros resolve against the temper_next artifact NAMESPACE (not the migrated
+# temper-substrate's sqlx! macros resolve against the temper_next artifact NAMESPACE (not the migrated
 # public schema), so prepare needs the artifact loaded + search_path set. Per-crate (run from the
 # crate dir) — NOT `--workspace`, which clobbers per-crate caches.
 DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
@@ -86,17 +86,17 @@ DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development
 # load_files (tests/common/mod.rs): the test-only namespace-reset fixture owns the DROP/CREATE, then
 # the namespace-free baseline body files from migrations/ are loaded under PGOPTIONS so their
 # unqualified DDL lands in temper_next (not public).
-FIX="crates/temper-next/tests/fixtures"
+FIX="crates/temper-substrate/tests/fixtures"
 psql "$DB" -v ON_ERROR_STOP=1 -f "$FIX/00_namespace_reset.sql" >/dev/null
 for f in migrations/20260624000001_canonical_schema.sql migrations/20260624000002_canonical_functions.sql; do
   PGOPTIONS="-csearch_path=temper_next,public" psql "$DB" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
 done
-cd crates/temper-next
+cd crates/temper-substrate
 DATABASE_URL="${DB}?options=-csearch_path%3Dtemper_next,public" cargo sqlx prepare
 '''
 
 [tasks.test-next]
-description = "Run temper-next scenario write-path artifact-tests in an isolated temper_next namespace."
+description = "Run temper-substrate scenario write-path artifact-tests in an isolated temper_next namespace."
 # The tests load the canonical baseline (migrations/) into a temper_next test namespace and reset it
 # per test. Post-collapse `substrate::connect()` uses the connection-default search_path (public, the
 # production shape), so the test runtime MUST point the pool at temper_next via the search_path option
@@ -104,7 +104,7 @@ description = "Run temper-next scenario write-path artifact-tests in an isolated
 # committed temper_next-bound cache (regenerate with `cargo make prepare-next` after touching SQL).
 env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public" }
 script = '''
-cargo nextest run -p temper-next --features artifact-tests
+cargo nextest run -p temper-substrate --features artifact-tests
 '''
 
 [tasks.prepare-api]
@@ -138,113 +138,6 @@ if [ -n "$EMAIL" ]; then
 else
   psql "${DATABASE_URL}" -f scripts/seed-dev-data.sql
 fi
-'''
-
-[tasks.flip-db-up]
-description = "Bring up the throwaway PG17 flip container (:5438) + load the portable uuid shim"
-script = '''
-set -euo pipefail
-docker compose -f docker-compose.flip.yml up -d --wait
-LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
-psql "$LOCAL" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector;'
-psql "$LOCAL" -v ON_ERROR_STOP=1 -f tools/flip/uuid_portable.sql
-echo "flip container up at $LOCAL (vector + uuid_generate_v7 ready)"
-'''
-
-[tasks.flip-db-down]
-description = "Tear down the throwaway PG17 flip container and its volume"
-script = '''
-docker compose -f docker-compose.flip.yml down -v
-'''
-
-[tasks.flip-dump-public]
-description = "Dump the source's public schema and restore it into the :5438 flip container (synthesis input)"
-script = '''
-set -euo pipefail
-: "${FLIP_SOURCE_URL:?set FLIP_SOURCE_URL to the prod/branch connection string to dump public from}"
-LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
-
-# Resolve PG17 client tools. PATH often defaults to PG18 on a dev machine, but a
-# PG18 pg_dump can't restore into a PG17 server. Prefer FLIP_PG17_BIN, else the
-# Homebrew postgresql@17 keg, else fall back to PATH and let the guard catch it.
-PG17BIN="${FLIP_PG17_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
-if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; PGRESTORE="$PG17BIN/pg_restore"; else PGDUMP=pg_dump; PGRESTORE=pg_restore; fi
-ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
-[ "$ver" = "17" ] || { echo "ERROR: need PG17 client tools (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN to a PG17 bin dir."; exit 1; }
-
-_TMP="$(mktemp -t flip_public_XXXX)"; DUMP="${_TMP}.dump"
-trap 'rm -f "$_TMP" "$DUMP"' EXIT
-echo "dumping public from source → $DUMP"
-"$PGDUMP" "$FLIP_SOURCE_URL" --schema=public --no-owner --no-privileges -Fc -f "$DUMP"
-
-echo "restoring public into $LOCAL"
-# pg_restore continues past non-fatal errors by default (e.g. CREATE EXTENSION
-# pg_uuidv7, which the container can't satisfy — uuid_generate_v7 is already
-# provided by the Task-1 shim). --clean --if-exists makes re-runs idempotent.
-"$PGRESTORE" -d "$LOCAL" --no-owner --no-privileges --clean --if-exists "$DUMP" || true
-
-# Re-assert the portable uuid shim AFTER restore in case --clean dropped a same-named
-# object from the dump, so synthesis always has a working generator.
-psql "$LOCAL" -v ON_ERROR_STOP=1 -f tools/flip/uuid_portable.sql
-echo "public restored. rows: $(psql "$LOCAL" -tAc 'SELECT count(*) FROM public.kb_resources WHERE is_active')"
-'''
-
-[tasks.flip-synthesize-local]
-description = "Load a clean temper_next artifact into the flip container and synthesize from its public state"
-script = '''
-set -euo pipefail
-LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
-
-# Clean temper_next: the namespace-reset fixture DROP/CREATEs temper_next only (public
-# untouched), then the canonical baseline body files install schema+functions under PGOPTIONS
-# (search_path=temper_next,public) so their namespace-free DDL lands in temper_next. This mirrors
-# the synthesis tests' reset_artifact() (tests/common/mod.rs) — deliberately WITHOUT 03_seed.
-# 03_seed.sql is a demo scenario fixture (the alice/bob onboarding-cogmap), NOT system seed; its
-# 20 demo resources have no public counterpart, so loading it makes the §8 body-parity gate flag
-# all of them. Synthesis seeds the system actors it needs itself (bootstrap::run).
-FIX="crates/temper-next/tests/fixtures"
-echo "loading $FIX/00_namespace_reset.sql"
-psql "$LOCAL" -v ON_ERROR_STOP=1 -f "$FIX/00_namespace_reset.sql" >/dev/null
-for f in migrations/20260624000001_canonical_schema.sql migrations/20260624000002_canonical_functions.sql; do
-  echo "loading $f (search_path=temper_next)"
-  PGOPTIONS="-csearch_path=temper_next,public" psql "$LOCAL" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
-done
-
-# Synthesize from the restored public state. The binary sets search_path=temper_next,
-# public per connection and runs resource/property/edge passes + the §8 body-parity
-# gate, which bails (nonzero exit) on any mismatch — so a clean exit IS the proof.
-echo "synthesizing (all rows)…"
-DATABASE_URL="$LOCAL" cargo run -p temper-next --bin temper-next -- synthesize
-'''
-
-[tasks.flip-load-next]
-description = "Dump the local temper_next (schema+data) and DROP/recreate it on the target, in one transaction"
-script = '''
-set -euo pipefail
-: "${FLIP_TARGET_URL:?set FLIP_TARGET_URL to the prod/branch connection string to load temper_next into}"
-LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
-
-# Resolve PG17 pg_dump (see flip-dump-public for the rationale).
-PG17BIN="${FLIP_PG17_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
-if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; else PGDUMP=pg_dump; fi
-ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
-[ "$ver" = "17" ] || { echo "ERROR: need PG17 pg_dump (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN."; exit 1; }
-
-# Full dump (schema + data) of ONLY temper_next. pg_dump emits CREATE TRIGGER AFTER
-# the COPY data, so triggers never fire during the load — no double-apply, no
-# session_replication_role needed.
-_TMP="$(mktemp -t flip_next_XXXX)"; DUMP="${_TMP}.sql"
-trap 'rm -f "$_TMP" "$DUMP"' EXIT
-echo "dumping temper_next (schema+data) → $DUMP"
-"$PGDUMP" "$LOCAL" --schema=temper_next --no-owner --no-privileges -f "$DUMP"
-
-# Replace the target's dormant temper_next wholesale, in one transaction. Safe because
-# the flag is still 'legacy' (temper_next unread) and the operator has taken a Neon
-# snapshot. --single-transaction => all-or-nothing; a failure leaves temper_next as-was.
-echo "DROP+restore temper_next on target (single transaction)…"
-{ echo "DROP SCHEMA IF EXISTS temper_next CASCADE;"; cat "$DUMP"; } \
-  | psql "$FLIP_TARGET_URL" -v ON_ERROR_STOP=1 --single-transaction
-echo "target temper_next replaced. rows: $(psql "$FLIP_TARGET_URL" -tAc 'SELECT count(*) FROM temper_next.kb_resources')"
 '''
 
 [tasks.db-collapsed]

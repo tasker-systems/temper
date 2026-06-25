@@ -1,6 +1,6 @@
 //! `DbBackend` — the substrate backend behind the `Backend` trait (the single backend post-WS6-collapse).
 //!
-//! Reads delegate to `temper_next::readback`; writes compose `temper_next::writes`. The SQL is
+//! Reads delegate to `temper_substrate::readback`; writes compose `temper_substrate::writes`. The SQL is
 //! unqualified against the one schema (the connection carries the search_path — dev: `temper_next,public`;
 //! live: `public` after the rename).
 //!
@@ -14,21 +14,21 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use temper_core::error::TemperError;
-use temper_core::operations::{
+use temper_core::types::graph;
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
+use temper_workflow::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
     ListResources, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
     ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
-use temper_core::types::graph;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
-use temper_core::types::resource::ResourceRow;
+use temper_workflow::types::resource::ResourceRow;
 
-use temper_next::keys::{key_fate, KeyFate};
-use temper_next::readback;
-use temper_next::writes;
+use temper_substrate::keys::{key_fate, KeyFate};
+use temper_substrate::readback;
+use temper_substrate::writes;
 
-/// Bridge a temper-next (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
+/// Bridge a temper-substrate (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
 /// depend on it) — `anyhow::Error: Display`, so `to_string()` carries the message.
 fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
@@ -49,9 +49,9 @@ pub(crate) fn map_readback_err(e: readback::ReadbackError) -> TemperError {
     }
 }
 
-/// graph::EdgeKind → temper-next's affinity::EdgeKind (identical 4-variant taxonomy — 1:1, no §4 remap).
-fn map_edge_kind(k: graph::EdgeKind) -> temper_next::affinity::EdgeKind {
-    use temper_next::affinity::EdgeKind as N;
+/// graph::EdgeKind → temper-substrate's affinity::EdgeKind (identical 4-variant taxonomy — 1:1, no §4 remap).
+fn map_edge_kind(k: graph::EdgeKind) -> temper_substrate::affinity::EdgeKind {
+    use temper_substrate::affinity::EdgeKind as N;
     match k {
         graph::EdgeKind::Express => N::Express,
         graph::EdgeKind::Contains => N::Contains,
@@ -60,9 +60,9 @@ fn map_edge_kind(k: graph::EdgeKind) -> temper_next::affinity::EdgeKind {
     }
 }
 
-/// graph::Polarity → temper-next's payloads::EdgePolarity.
-fn map_polarity(p: graph::Polarity) -> temper_next::payloads::EdgePolarity {
-    use temper_next::payloads::EdgePolarity as N;
+/// graph::Polarity → temper-substrate's payloads::EdgePolarity.
+fn map_polarity(p: graph::Polarity) -> temper_substrate::payloads::EdgePolarity {
+    use temper_substrate::payloads::EdgePolarity as N;
     match p {
         graph::Polarity::Forward => N::Forward,
         graph::Polarity::Inverse => N::Inverse,
@@ -74,8 +74,8 @@ fn map_polarity(p: graph::Polarity) -> temper_next::payloads::EdgePolarity {
 /// consumes. Field-for-field; the only widening is `u32`/`u8` → `i32`/`i16` (the substrate column types).
 fn packed_to_incoming(
     c: &temper_core::types::ingest::PackedChunk,
-) -> temper_next::content::IncomingChunk {
-    temper_next::content::IncomingChunk {
+) -> temper_substrate::content::IncomingChunk {
+    temper_substrate::content::IncomingChunk {
         chunk_index: c.chunk_index as i32,
         content_hash: c.content_hash.clone(),
         content: c.content.clone(),
@@ -90,7 +90,7 @@ fn packed_to_incoming(
 /// the caller's fault → `BadRequest`.
 fn unpack_incoming_chunks(
     packed: &str,
-) -> Result<Vec<temper_next::content::IncomingChunk>, TemperError> {
+) -> Result<Vec<temper_substrate::content::IncomingChunk>, TemperError> {
     let mut chunks = temper_core::types::ingest::unpack_chunks(packed)
         .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
     chunks.sort_by_key(|c| c.chunk_index);
@@ -247,10 +247,10 @@ impl DbBackend {
     /// them; re-asserting either appends an event unconditionally, which would break idempotency.)
     async fn reconcile_apply(
         &self,
-        cogmap: temper_next::ids::CogmapId,
+        cogmap: temper_substrate::ids::CogmapId,
         request: &ReconcileCogmapRequest,
-        owner: temper_next::ids::ProfileId,
-        emitter: temper_next::ids::EntityId,
+        owner: temper_substrate::ids::ProfileId,
+        emitter: temper_substrate::ids::EntityId,
     ) -> Result<ReconcileOutcome, TemperError> {
         use std::collections::{HashMap, HashSet};
 
@@ -287,7 +287,7 @@ impl DbBackend {
                 .map(|c| c.content_hash.clone())
                 .collect();
             let incoming_body_hash =
-                temper_next::content::body_hash_from_chunk_hashes(&chunk_hashes);
+                temper_substrate::content::body_hash_from_chunk_hashes(&chunk_hashes);
 
             match live_by_uri.get(entry.origin_uri.as_str()) {
                 None => {
@@ -340,7 +340,7 @@ impl DbBackend {
                     writes::update_resource(
                         &self.pool,
                         writes::UpdateParams {
-                            resource: temper_next::ids::ResourceId::from(row.resource_id),
+                            resource: temper_substrate::ids::ResourceId::from(row.resource_id),
                             body: Some(&entry.body),
                             title: None,
                             origin_uri: None,
@@ -396,10 +396,11 @@ impl DbBackend {
                 if existing.contains(&(e.to_origin_uri.clone(), e.kind.clone())) {
                     continue; // already present — re-assert would break idempotency
                 }
-                let kind = temper_next::affinity::EdgeKind::from_sql(&e.kind).ok_or_else(|| {
-                    TemperError::BadRequest(format!("unknown edge kind: {}", e.kind))
-                })?;
-                let polarity = temper_next::payloads::EdgePolarity::from_sql(&e.polarity)
+                let kind =
+                    temper_substrate::affinity::EdgeKind::from_sql(&e.kind).ok_or_else(|| {
+                        TemperError::BadRequest(format!("unknown edge kind: {}", e.kind))
+                    })?;
+                let polarity = temper_substrate::payloads::EdgePolarity::from_sql(&e.polarity)
                     .ok_or_else(|| {
                         TemperError::BadRequest(format!("unknown edge polarity: {}", e.polarity))
                     })?;
@@ -407,8 +408,8 @@ impl DbBackend {
                     &self.pool,
                     writes::KernelEdgeParams {
                         cogmap,
-                        src: temper_next::ids::ResourceId::from(src),
-                        tgt: temper_next::ids::ResourceId::from(tgt),
+                        src: temper_substrate::ids::ResourceId::from(src),
+                        tgt: temper_substrate::ids::ResourceId::from(tgt),
                         kind,
                         polarity,
                         label: e.label.as_deref(),
@@ -426,7 +427,7 @@ impl DbBackend {
             if let Some(row) = live_by_uri.get(t.origin_uri.as_str()) {
                 writes::delete_resource(
                     &self.pool,
-                    temper_next::ids::ResourceId::from(row.resource_id),
+                    temper_substrate::ids::ResourceId::from(row.resource_id),
                     emitter,
                 )
                 .await
@@ -441,7 +442,7 @@ impl DbBackend {
             ) else {
                 continue; // an endpoint isn't a known kernel resource — nothing to fold
             };
-            let kind = temper_next::affinity::EdgeKind::from_sql(&t.kind)
+            let kind = temper_substrate::affinity::EdgeKind::from_sql(&t.kind)
                 .ok_or_else(|| TemperError::BadRequest(format!("unknown edge kind: {}", t.kind)))?;
             // Resolve the live edge by (src, tgt, kind) over `kb_edges` (runtime query — mirrors
             // `edge_source_resource`; an enum-cast bind keeps it macro-free, no prepare-api entry).
@@ -460,7 +461,7 @@ impl DbBackend {
             if let Some(edge_id) = edge_id {
                 writes::fold_relationship(
                     &self.pool,
-                    temper_next::ids::EdgeId::from(edge_id),
+                    temper_substrate::ids::EdgeId::from(edge_id),
                     Some("reconcile fold"),
                     emitter,
                 )
@@ -504,7 +505,7 @@ impl Backend for DbBackend {
         // of the SUPPLIED chunk hashes; when absent the server chunks + embeds `body` itself (the
         // fallback). Reverses PR#71's "server is the single source of truth" discard contract. A
         // malformed blob is a caller fault → BadRequest (propagated, never swallowed).
-        let incoming_chunks: Option<Vec<temper_next::content::IncomingChunk>> =
+        let incoming_chunks: Option<Vec<temper_substrate::content::IncomingChunk>> =
             match &cmd.chunks_packed {
                 Some(packed) => Some(unpack_incoming_chunks(packed)?),
                 None => None,
@@ -518,14 +519,14 @@ impl Backend for DbBackend {
         let mut managed =
             serde_json::to_value(&cmd.managed_meta).map_err(|e| TemperError::Api(e.to_string()))?;
         // 1. Strip identity / tier-1 system keys a caller may have echoed back from a prior read.
-        managed = temper_core::operations::strip_system_managed_fields(managed);
+        managed = temper_workflow::operations::strip_system_managed_fields(managed);
         // 2. Apply doc-type managed-tier defaults (e.g. task → `temper-stage: backlog`).
-        temper_core::operations::apply_defaults_value(&cmd.doctype, &mut managed);
+        temper_workflow::operations::apply_defaults_value(&cmd.doctype, &mut managed);
         // 3. Inject the canonical identity keys (`temper-title`/`temper-slug`) before validation, the
         //    same send/receive-symmetric discipline ingest uses. An empty slug removes `temper-slug`
         //    (mirrors ingest's `injected_slug` at `:444-453`).
         let injected_slug = (!cmd.slug.is_empty()).then_some(cmd.slug.as_str());
-        temper_core::operations::ensure_managed_identity_keys(
+        temper_workflow::operations::ensure_managed_identity_keys(
             &mut managed,
             &cmd.title,
             injected_slug,
@@ -534,7 +535,7 @@ impl Backend for DbBackend {
         //    validation error (never swallow it). A fresh canonical id + `now()` seed the validation
         //    document exactly as ingest does (`:457-467`); that id is not persisted from here — the
         //    substrate mints the resource id in `writes::create_resource`.
-        let validate_params = temper_core::operations::ValidateManagedMetaParams {
+        let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
             doc_type: &cmd.doctype,
@@ -545,7 +546,7 @@ impl Backend for DbBackend {
         };
         // `validate_managed_meta` returns a typed `TemperError::BadRequest` on a caller-input fault;
         // propagate it directly (PROPAGATE, never swallow).
-        temper_core::operations::validate_managed_meta(&validate_params)?;
+        temper_workflow::operations::validate_managed_meta(&validate_params)?;
 
         // 5. Body-hash dedup (non-empty body only, matching legacy `:497-502`): if a visible active
         //    resource already carries the same substrate body_hash merkle, return IT instead of
@@ -559,9 +560,9 @@ impl Backend for DbBackend {
                 Some(chunks) => {
                     let hashes: Vec<String> =
                         chunks.iter().map(|c| c.content_hash.clone()).collect();
-                    temper_next::content::body_hash_from_chunk_hashes(&hashes)
+                    temper_substrate::content::body_hash_from_chunk_hashes(&hashes)
                 }
-                None => temper_next::content::body_hash_for_body(&body),
+                None => temper_substrate::content::body_hash_for_body(&body),
             };
             if let Some(existing) =
                 readback::find_by_body_hash(&self.pool, *self.profile_id, &body_hash)
@@ -634,7 +635,7 @@ impl Backend for DbBackend {
         // Honor caller-supplied precomputed chunks on the revise too (client did extract→chunk→embed):
         // carry the vectors verbatim instead of re-embedding server-side. Absent ⇒ server chunks +
         // embeds `body` (fallback). Reverses PR#71's discard contract.
-        let incoming_chunks: Option<Vec<temper_next::content::IncomingChunk>> =
+        let incoming_chunks: Option<Vec<temper_substrate::content::IncomingChunk>> =
             match cmd.body.as_ref().and_then(|b| b.chunks_packed.as_deref()) {
                 Some(packed) => Some(unpack_incoming_chunks(packed)?),
                 None => None,
@@ -678,7 +679,7 @@ impl Backend for DbBackend {
             let effective_title = incoming_title
                 .clone()
                 .unwrap_or_else(|| current.title.clone());
-            let effective_slug = temper_core::operations::sluggify(&effective_title);
+            let effective_slug = temper_workflow::operations::sluggify(&effective_title);
 
             // Build the COMPLETE validation document (strip system keys → doc-type defaults →
             // identity keys) and validate it; PROPAGATE the typed BadRequest (an out-of-enum
@@ -687,14 +688,14 @@ impl Backend for DbBackend {
             // goal temper-status), so a partial update never false-rejects — no merge with the
             // current managed_meta is needed.
             let mut validation =
-                temper_core::operations::strip_system_managed_fields(incoming.clone());
-            temper_core::operations::apply_defaults_value(&effective_doc_type, &mut validation);
-            temper_core::operations::ensure_managed_identity_keys(
+                temper_workflow::operations::strip_system_managed_fields(incoming.clone());
+            temper_workflow::operations::apply_defaults_value(&effective_doc_type, &mut validation);
+            temper_workflow::operations::ensure_managed_identity_keys(
                 &mut validation,
                 &effective_title,
                 Some(effective_slug.as_str()),
             );
-            let validate_params = temper_core::operations::ValidateManagedMetaParams {
+            let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
                 id: new_id,
                 created: current.created,
                 doc_type: &effective_doc_type,
@@ -703,7 +704,7 @@ impl Backend for DbBackend {
                 title: &effective_title,
                 context_name: &effective_context,
             };
-            temper_core::operations::validate_managed_meta(&validate_params)?;
+            temper_workflow::operations::validate_managed_meta(&validate_params)?;
 
             // Write only the caller-supplied keys (PATCH is a partial merge; `PropertySet`
             // asserts per key, so unsupplied keys are untouched — DON'T write the defaulted
@@ -733,7 +734,7 @@ impl Backend for DbBackend {
         writes::update_resource(
             &self.pool,
             writes::UpdateParams {
-                resource: temper_next::ids::ResourceId::from(new_id),
+                resource: temper_substrate::ids::ResourceId::from(new_id),
                 body: body.as_deref(),
                 title: title.as_deref(),
                 origin_uri: None,
@@ -763,7 +764,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::delete_resource(
             &self.pool,
-            temper_next::ids::ResourceId::from(new_id),
+            temper_substrate::ids::ResourceId::from(new_id),
             emitter,
         )
         .await
@@ -857,13 +858,13 @@ impl Backend for DbBackend {
         let edge = writes::assert_relationship(
             &self.pool,
             writes::AssertParams {
-                src: temper_next::ids::ResourceId::from(src_next),
-                tgt: temper_next::ids::ResourceId::from(tgt_next),
+                src: temper_substrate::ids::ResourceId::from(src_next),
+                tgt: temper_substrate::ids::ResourceId::from(tgt_next),
                 kind: map_edge_kind(cmd.edge_kind),
                 polarity: map_polarity(cmd.polarity),
                 label,
                 weight: cmd.weight,
-                home: temper_next::ids::ContextId::from(home_next),
+                home: temper_substrate::ids::ContextId::from(home_next),
                 emitter,
             },
         )
@@ -888,7 +889,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::retype_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
@@ -913,7 +914,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::reweight_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
             cmd.weight,
             emitter,
         )
@@ -937,7 +938,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::fold_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
             cmd.reason.as_deref(),
             emitter,
         )
@@ -954,7 +955,7 @@ impl Backend for DbBackend {
         &self,
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
-        let cogmap = temper_next::ids::CogmapId::from(cmd.cogmap_id);
+        let cogmap = temper_substrate::ids::CogmapId::from(cmd.cogmap_id);
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.
@@ -996,7 +997,7 @@ impl Backend for DbBackend {
                     &self.pool,
                     inv,
                     cogmap,
-                    temper_next::payloads::Disposition::Completed,
+                    temper_substrate::payloads::Disposition::Completed,
                     outcome_json,
                     emitter,
                 )
@@ -1010,7 +1011,7 @@ impl Backend for DbBackend {
                     &self.pool,
                     inv,
                     cogmap,
-                    temper_next::payloads::Disposition::Failed,
+                    temper_substrate::payloads::Disposition::Failed,
                     serde_json::json!({ "error": e.to_string() }),
                     emitter,
                 )

@@ -8,8 +8,8 @@ use temper_core::types::api::{
     UnifiedSearchResultRow,
 };
 use temper_core::types::context::ContextRowWithCounts;
-use temper_core::types::managed_meta::ResourceMetaListResponse;
-use temper_core::types::resource::{
+use temper_workflow::types::managed_meta::ResourceMetaListResponse;
+use temper_workflow::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets, ResourceListResponse,
     ResourceRow, ResourceUpdateRequest,
 };
@@ -56,15 +56,15 @@ use temper_core::types::resource::{
         SearchParams,
         SearchResultRow,
         UnifiedSearchResultRow,
-        temper_core::types::managed_meta::MetaUpdatePayload,
-        temper_core::types::managed_meta::ResourceMetaResponse,
-        temper_core::types::managed_meta::ManagedMeta,
+        temper_workflow::types::managed_meta::MetaUpdatePayload,
+        temper_workflow::types::managed_meta::ResourceMetaResponse,
+        temper_workflow::types::managed_meta::ManagedMeta,
         ErrorBody,
         ErrorDetail,
-        temper_core::types::graph::GraphEdgeRow,
-        temper_core::types::graph::GraphNode,
-        temper_core::types::graph::GraphEdge,
-        temper_core::types::graph::SubgraphResponse,
+        temper_workflow::types::graph::GraphEdgeRow,
+        temper_workflow::types::graph::GraphNode,
+        temper_workflow::types::graph::GraphEdge,
+        temper_workflow::types::graph::SubgraphResponse,
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
         temper_core::types::relationship_requests::AssertRelationshipRequest,

@@ -27,7 +27,7 @@ const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 
 /// The resource `body_hash` for a caller-supplied chunk set — the create path persists the body as ONE
 /// roleless block at seq 0, so the merkle is `sha256_hex(sha256_hex(concat of chunk content_hashes))`.
-/// Must byte-match `temper_next::content::body_hash_from_chunk_hashes` so the idempotency diff compares
+/// Must byte-match `temper_substrate::content::body_hash_from_chunk_hashes` so the idempotency diff compares
 /// like-for-like.
 fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
     use sha2::{Digest, Sha256};

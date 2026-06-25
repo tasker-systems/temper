@@ -48,9 +48,8 @@ construction.
 
 A **non-additive / big-bang** schema change (a rename, a destructive collapse, a
 search-path flip) is **not** an ordinary merge. It is operator-run against each
-target's database via the cutover runbook
-([docs/guides/ws6-endgame-collapse-runbook.md](docs/guides/ws6-endgame-collapse-runbook.md)),
-coordinated with that target's deploy. It is never a silent `main` auto-deploy.
+target's database via an operator-gated cutover procedure, coordinated with that
+target's deploy. It is never a silent `main` auto-deploy.
 
 ## Applying schema changes per target
 
@@ -62,9 +61,9 @@ Production migrations are **operator-run** against each target's Neon database
 - **Additive migration** — `sqlx migrate run` against that target's Neon with the
   canonical `search_path`. Order relative to deploy is flexible (additive is
   backward-compatible), but back up first.
-- **Big-bang / search-path flip** — follow
-  [docs/guides/ws6-endgame-collapse-runbook.md](docs/guides/ws6-endgame-collapse-runbook.md):
-  durable backup, operator-gated cutover, verify, then the coincident redeploy.
+- **Big-bang / search-path flip** — an operator-gated cutover: durable backup,
+  cutover, verify, then the coincident redeploy. (The executed `temper_next`→`public`
+  collapse that established this pattern is in git history.)
 
 ## Per-target Vercel setup (reference)
 

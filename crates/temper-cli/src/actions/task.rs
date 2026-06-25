@@ -1,6 +1,6 @@
 use temper_core::types::ids::ResourceId;
-use temper_core::types::managed_meta::ManagedMeta;
-use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+use temper_workflow::types::managed_meta::ManagedMeta;
+use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
 use crate::actions::runtime;
 use crate::actions::types::TaskInfo;

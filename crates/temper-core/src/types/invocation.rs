@@ -1,11 +1,11 @@
 //! Cross-surface invocation types. `Disposition` mirrors
-//! `temper_next::payloads::Disposition`; `NextBackend` maps between them
+//! `temper_substrate::payloads::Disposition`; `NextBackend` maps between them
 //! (the `map_edge_kind` pattern) since `temper-core` does not depend on
-//! `temper-next`.
+//! `temper-substrate`.
 
 use serde::{Deserialize, Serialize};
 
-/// Terminal outcome of an invocation. Mirrors the Postgres / temper-next
+/// Terminal outcome of an invocation. Mirrors the Postgres / temper-substrate
 /// `Disposition`. `open` is NOT representable here — closing requires a
 /// terminal value.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
