@@ -6,6 +6,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod cognitive_maps;
 pub mod config;
 pub mod contexts;
 pub mod error;
@@ -147,6 +148,11 @@ impl TemperClient {
     /// Ingest sub-client.
     pub fn ingest(&self) -> ingest::IngestClient<'_> {
         ingest::IngestClient::new(&self.http)
+    }
+
+    /// Cognitive-map sub-client (reconcile).
+    pub fn cognitive_maps(&self) -> cognitive_maps::CognitiveMapClient<'_> {
+        cognitive_maps::CognitiveMapClient::new(&self.http)
     }
 
     // ----- Auth lifecycle -----

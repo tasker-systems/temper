@@ -37,6 +37,7 @@ use temper_core::types::resource::{
         crate::handlers::edges::reweight,
         crate::handlers::edges::fold,
         crate::handlers::graph::get_subgraph,
+        crate::handlers::cognitive_maps::reconcile,
     ),
     components(schemas(
         HealthResponse,
@@ -71,6 +72,12 @@ use temper_core::types::resource::{
         temper_core::types::relationship_requests::ReweightRelationshipRequest,
         temper_core::types::relationship_requests::FoldRelationshipRequest,
         temper_core::types::relationship_requests::RelationshipAck,
+        temper_core::types::reconcile::ReconcileCogmapRequest,
+        temper_core::types::reconcile::ReconcileEntry,
+        temper_core::types::reconcile::ReconcileEdge,
+        temper_core::types::reconcile::ReconcileTombstone,
+        temper_core::types::reconcile::ReconcileEdgeTombstone,
+        temper_core::types::reconcile::ReconcileOutcome,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -82,6 +89,7 @@ use temper_core::types::resource::{
         (name = "Meta", description = "Resource frontmatter metadata management"),
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
+        (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
     ),
     info(
         title = "Temper Cloud API",
