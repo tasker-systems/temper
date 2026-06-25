@@ -19,8 +19,8 @@ async fn seed_system_seeds_registry_and_global_lenses_idempotently() {
             .await
             .unwrap();
     assert_eq!(
-        lenses, 2,
-        "exactly two global system lenses after (idempotent) seeding"
+        lenses, 4,
+        "exactly four global system lenses after (idempotent) seeding (telos-default x2 + orientation + wayfinding)"
     );
 
     let has_lens_created: bool =
@@ -38,7 +38,30 @@ async fn seed_system_seeds_registry_and_global_lenses_idempotently() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(sys_lens_events, 2, "two system-scope lens_created events");
+    assert_eq!(sys_lens_events, 4, "four system-scope lens_created events");
+}
+
+#[tokio::test]
+async fn bootseed_creates_orientation_and_wayfinding_lenses() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM kb_cogmap_lenses WHERE cogmap_id IS NULL ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        names.contains(&"orientation".to_string()),
+        "expected a global `orientation` posture-lens, got {names:?}"
+    );
+    assert!(
+        names.contains(&"wayfinding".to_string()),
+        "expected a global `wayfinding` posture-lens, got {names:?}"
+    );
 }
 
 #[tokio::test]
