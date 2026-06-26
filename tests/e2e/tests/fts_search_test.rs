@@ -83,9 +83,10 @@ async fn fts_text_query_finds_resource(pool: sqlx::PgPool) {
         "FTS text search should find the ingested resource"
     );
     assert_eq!(results[0].title, "Kubernetes Deployment Strategy");
-    assert_eq!(results[0].origin, "fts");
-    // Search SCORES are a §9 non-invariant in the collapsed read path (emitted 0.0);
-    // the matching SET is the invariant. Assert the result is present, not its score.
+    // Beat 2: unified_search pipeline — origin is always "unified".
+    assert_eq!(results[0].origin, "unified");
+    // vector_score is 0.0 because no embedding was supplied (the SQL function zeroes the vector term
+    // when p_emb is NULL); fts_score and combined_score are non-zero for a real FTS match.
     assert_eq!(results[0].vector_score, 0.0);
 }
 
