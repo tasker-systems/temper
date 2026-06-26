@@ -7,10 +7,10 @@
 //! function only persists. Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
 mod common;
 
+use temper_substrate::content;
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::scenario::bootseed;
-use temper_substrate::content;
 use uuid::Uuid;
 
 /// Minimal owner profile + emitter entity so `cogmap_genesis` (unchanged) can mint a home cogmap.

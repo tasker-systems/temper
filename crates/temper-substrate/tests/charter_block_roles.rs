@@ -5,11 +5,11 @@
 //! temper-substrate-write group.
 mod common;
 
+use temper_substrate::content;
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{EntityId, ProfileId};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::scenario::model::{QuestionDef, TelosDef};
-use temper_substrate::content;
 use uuid::Uuid;
 
 async fn seed_actor(pool: &sqlx::PgPool) -> (Uuid, Uuid) {

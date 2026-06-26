@@ -82,7 +82,9 @@ uses_lenses: [telos-default]
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn lens_name_parameter_binds_the_lens_query(pool: sqlx::PgPool) {
-    temper_substrate::scenario::bootseed::seed_system(&pool).await.unwrap();
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
     let s: Seed = serde_yaml::from_str(MINIMAL).unwrap();
     let loaded = loader::load_seed(&pool, &s).await.unwrap();
     substrate::load(&pool, loaded.cogmap, "telos-default")
@@ -95,10 +97,14 @@ async fn lens_name_parameter_binds_the_lens_query(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn seeded_telos_default_lens_mirrors_the_rust_default(pool: sqlx::PgPool) {
     use temper_substrate::affinity::Lens;
-    temper_substrate::scenario::bootseed::seed_system(&pool).await.unwrap();
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
     let s: Seed = serde_yaml::from_str(MINIMAL).unwrap();
     let loaded = loader::load_seed(&pool, &s).await.unwrap();
-    let sub = substrate::load(&pool, loaded.cogmap, "telos-default").await.unwrap();
+    let sub = substrate::load(&pool, loaded.cogmap, "telos-default")
+        .await
+        .unwrap();
     let d = Lens::telos_default();
     assert_eq!(sub.lens.w_express, d.w_express, "w_express");
     assert_eq!(sub.lens.w_contains, d.w_contains, "w_contains");

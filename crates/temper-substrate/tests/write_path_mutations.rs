@@ -102,7 +102,10 @@ async fn fire_one(pool: &sqlx::PgPool, action: SeedAction<'_>) -> temper_substra
 }
 
 /// Assert one edge `src → tgt`, returning its id.
-#[expect(clippy::too_many_arguments, reason = "test fixture — all params define the edge under test")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test fixture — all params define the edge under test"
+)]
 async fn assert_edge(
     pool: &sqlx::PgPool,
     src: ResourceId,
@@ -244,12 +247,11 @@ async fn resource_delete_sets_inactive(pool: sqlx::PgPool) {
     )
     .await;
 
-    let active: bool =
-        sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id=$1")
-            .bind(r.uuid())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let active: bool = sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id=$1")
+        .bind(r.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert!(!active, "resource_delete must flip is_active to false");
 }
 
@@ -307,13 +309,12 @@ async fn resource_rehome_moves_to_destination_context(pool: sqlx::PgPool) {
     )
     .await;
 
-    let anchor: Uuid = sqlx::query_scalar(
-        "SELECT anchor_id FROM kb_resource_homes WHERE resource_id=$1",
-    )
-    .bind(r.uuid())
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let anchor: Uuid =
+        sqlx::query_scalar("SELECT anchor_id FROM kb_resource_homes WHERE resource_id=$1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(
         anchor,
         ctx_b.uuid(),
@@ -343,12 +344,11 @@ async fn relationship_retype_changes_kind(pool: sqlx::PgPool) {
     )
     .await;
 
-    let kind: String =
-        sqlx::query_scalar("SELECT edge_kind::text FROM kb_edges WHERE id=$1")
-            .bind(edge.uuid())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let kind: String = sqlx::query_scalar("SELECT edge_kind::text FROM kb_edges WHERE id=$1")
+        .bind(edge.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(kind, "contains", "edge_kind retyped");
 }
 
@@ -603,13 +603,12 @@ async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
         .unwrap();
     assert!(body.contains("revised"), "body revised: {body:?}");
 
-    let anchor: Uuid = sqlx::query_scalar(
-        "SELECT anchor_id FROM kb_resource_homes WHERE resource_id=$1",
-    )
-    .bind(r.uuid())
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let anchor: Uuid =
+        sqlx::query_scalar("SELECT anchor_id FROM kb_resource_homes WHERE resource_id=$1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(anchor, ctx2.uuid(), "rehomed to ctx2");
 }
 

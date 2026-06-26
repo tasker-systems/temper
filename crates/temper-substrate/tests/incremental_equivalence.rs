@@ -131,8 +131,12 @@ async fn run_readout_scenario(file: &str, mode: MaterializeMode, pool: &sqlx::Pg
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn readout_refresh_incremental_equals_full(pool: sqlx::PgPool) {
     let full = run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Full, &pool).await;
-    let incremental =
-        run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Incremental, &pool).await;
+    let incremental = run_readout_scenario(
+        "storyteller-readout.yaml",
+        MaterializeMode::Incremental,
+        &pool,
+    )
+    .await;
     assert_eq!(
         full, incremental,
         "after a body revision, incremental readouts must match a full recompute (not reuse stale readouts)"

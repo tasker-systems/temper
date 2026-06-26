@@ -12,8 +12,8 @@
 //! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
 mod common;
 
-use temper_substrate::scenario::{bootseed, model::Scenario, runner};
 use temper_substrate::replay;
+use temper_substrate::scenario::{bootseed, model::Scenario, runner};
 
 /// A minimal inline seed with one concept resource (`alpha`) already created — the revise target.
 const SEED_WITH_ALPHA: &str = r#"

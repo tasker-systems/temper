@@ -7,8 +7,10 @@ mod common;
 use temper_substrate::scenario::{bootseed, loader, model::Seed};
 use temper_substrate::{embed, write};
 
-const ONBOARDING_SEED: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/seeds/onboarding-cogmap.yaml");
+const ONBOARDING_SEED: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/seeds/onboarding-cogmap.yaml"
+);
 
 fn seed() -> Seed {
     serde_yaml::from_str(&std::fs::read_to_string(ONBOARDING_SEED).unwrap()).unwrap()
@@ -25,8 +27,14 @@ async fn materialize_populates_finite_readouts_and_multiple_regions(pool: sqlx::
     let second = write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
         .await
         .unwrap();
-    assert_eq!(first.membership_fingerprint, second.membership_fingerprint, "reproducible");
-    assert!(first.regions >= 2, "expected >=2 emergent regions on the enriched seed");
+    assert_eq!(
+        first.membership_fingerprint, second.membership_fingerprint,
+        "reproducible"
+    );
+    assert!(
+        first.regions >= 2,
+        "expected >=2 emergent regions on the enriched seed"
+    );
 
     let nulls = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM kb_cogmap_regions WHERE content_cohesion IS NULL AND NOT is_folded",
@@ -34,7 +42,10 @@ async fn materialize_populates_finite_readouts_and_multiple_regions(pool: sqlx::
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(nulls, 0, "all live regions have a computed content_cohesion");
+    assert_eq!(
+        nulls, 0,
+        "all live regions have a computed content_cohesion"
+    );
 
     let nan = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM kb_cogmap_regions WHERE NOT is_folded \
@@ -43,7 +54,10 @@ async fn materialize_populates_finite_readouts_and_multiple_regions(pool: sqlx::
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(nan, 0, "no live region may have NaN salience or telos_alignment");
+    assert_eq!(
+        nan, 0,
+        "no live region may have NaN salience or telos_alignment"
+    );
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -61,7 +75,10 @@ async fn embed_leaves_no_current_chunk_unembedded(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(unembedded, 0, "embed job must leave no current chunk with content unembedded");
+    assert_eq!(
+        unembedded, 0,
+        "embed job must leave no current chunk with content unembedded"
+    );
 
     let embedded = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM kb_chunks WHERE embedding IS NOT NULL AND is_current",
