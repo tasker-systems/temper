@@ -156,7 +156,7 @@ pub struct FoldRelationship {
 }
 
 /// Open an invocation envelope — the trace primitive. `originating_cogmap` /
-/// `parent_cogmap` are temper_next cogmap ids (not resource refs). The
+/// `parent_cogmap` are substrate cogmap ids (not resource refs). The
 /// invocation id is minted by the backend and returned.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenInvocation {

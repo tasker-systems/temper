@@ -1,9 +1,9 @@
 //! Wire types for the `/api/invocations` endpoints. Shared between
 //! `temper-api` (OpenAPI source) and `temper-client` (typed request builder).
 //!
-//! Cogmap/entity ids are raw temper_next UUIDs, not resource refs: cogmaps and
-//! entities are not resource-addressable. They come from the agent's launch /
-//! delegation context, not `parse_ref`.
+//! Cogmap/entity ids are substrate UUIDs, not resource refs: cogmaps and entities
+//! are not resource-addressable. They come from the agent's launch / delegation
+//! context, not `parse_ref`.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -16,7 +16,7 @@ use crate::types::invocation::Disposition;
 pub struct OpenInvocationRequest {
     /// Free-form trigger label (e.g. `manual`, `delegated`, `scheduled`).
     pub trigger_kind: String,
-    /// The cogmap the invocation operates on (temper_next cogmap id).
+    /// The cogmap the invocation operates on (substrate cogmap id).
     pub originating_cogmap: Uuid,
     /// Optional delegating-parent cogmap (must share a team with the originating
     /// cogmap — enforced by the substrate delegation gate).

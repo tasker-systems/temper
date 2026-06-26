@@ -8,8 +8,7 @@
 //! that column does not exist in the substrate). These are additive: nothing references them until the
 //! surface ports land (Tasks B–E); the legacy `public` copies are untouched.
 //!
-//! Owns the `temper_next` namespace (resets 01+02), so it is serialized via the `temper-substrate-write`
-//! nextest group.
+//! Each test runs on an ephemeral `public`-schema database via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`.
 
 mod common;
 

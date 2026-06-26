@@ -1,6 +1,6 @@
 #![cfg(feature = "artifact-tests")]
-// Resets the temper_next artifact, then verifies the system boot-seed (event-type registry + global
-// lenses via lens_create) lands and is idempotent. Serialized via the temper-substrate-write test-group.
+// Verifies the system boot-seed (event-type registry + global lenses via lens_create) lands and is
+// idempotent on a fresh ephemeral database provisioned by #[sqlx::test].
 mod common;
 
 use temper_substrate::scenario::bootseed;

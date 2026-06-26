@@ -2,7 +2,7 @@
 //! `kb_contexts` is an owner-scoped, slugged namespace (WS6 §2 amendment 2026-06-13): a slug is unique
 //! only WITHIN one owner, so two owners may each hold a same-named/same-slug context, while a duplicate
 //! slug under one owner is rejected by `UNIQUE(owner_table, owner_id, slug)`. Isolated ephemeral DB via
-//! `temper_substrate::MIGRATOR` (the install migration creates `temper_next` alongside an empty `public`).
+//! `temper_substrate::MIGRATOR` (`#[sqlx::test]` provisions a fresh `public`-schema database per test).
 
 mod common;
 

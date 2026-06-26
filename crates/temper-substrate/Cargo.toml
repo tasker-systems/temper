@@ -6,10 +6,9 @@ publish = false
 
 [features]
 # Gates the SCENARIO write-path integration tests (bootseed/scenario_load/scenario_roundtrip). Each
-# OWNS the `temper_next` namespace — resets it to a clean 01+02 then seeds — so they're serialized via
-# the `temper-substrate-write` nextest group. Needs a DB + ONNX (bge-768). No CI job enables this; run
-# locally: `cargo nextest run -p temper-substrate --features artifact-tests`. Pure core tests (affinity,
-# cluster) are ungated and run in CI.
+# runs on an ephemeral `public`-schema database via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`.
+# Needs a DB + ONNX (bge-768). Enabled by the Embed CI job; run locally: `cargo make test-artifacts`.
+# Pure core tests (affinity, cluster) are ungated and run in CI.
 artifact-tests = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
 scenario-schema = ["schemars"]

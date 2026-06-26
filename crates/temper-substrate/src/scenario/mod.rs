@@ -1,4 +1,4 @@
-//! Declarative YAML seed/scenario DSL for the `temper_next` artifact.
+//! Declarative YAML seed/scenario DSL for the substrate.
 //!
 //! Two document kinds: a `Seed` (`tests/fixtures/seeds/`) is the substrate template a foundational
 //! cogmap is born from; a `Scenario` (`tests/fixtures/scenarios/`) references (or embeds) a seed

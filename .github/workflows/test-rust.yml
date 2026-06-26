@@ -193,13 +193,11 @@ jobs:
         run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'
 
       - name: Run cognitive-map artifact write-path tests
-        # artifact-tests gates the temper-substrate-write nextest group: bootseed,
+        # artifact-tests gates the write-path integration tests: bootseed,
         # seed/scenario load+roundtrip+equivalence, charter, content, ledger, replay.
         # These create ephemeral databases via #[sqlx::test] — ONNX Runtime and a
         # running Postgres service (both present in this job) are the only requirements.
-        # --test-threads 1: the temper-substrate-write group is serialized in nextest.toml
-        # (each test owns+resets the temper_next schema); honour that here as well.
-        run: cargo nextest run -p temper-substrate --features "artifact-tests" --locked --test-threads 1 --no-fail-fast
+        run: cargo nextest run -p temper-substrate --features "artifact-tests" --locked --no-fail-fast
 
   coverage:
     name: Coverage

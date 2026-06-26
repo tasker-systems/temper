@@ -1,8 +1,8 @@
 #![cfg(feature = "artifact-tests")]
 //! Access-scaffold proof: loads the epd-bridge access world from YAML and asserts the kernel gate
-//! functions (S1-S5) declaratively, plus the S8 capability-coherence CHECK. These OWN the
-//! `temper_next` namespace (each resets it to a clean 01+02 then loads) — serialized via the
-//! `temper-substrate-write` nextest group, ONNX-dependent (the onboarding charter embeds inline).
+//! functions (S1-S5) declaratively, plus the S8 capability-coherence CHECK. Each test runs on an
+//! ephemeral `public`-schema database via `#[sqlx::test]`. ONNX-dependent (the onboarding charter
+//! embeds inline).
 mod common;
 
 use temper_substrate::scenario::access::{self, model::AccessScenario};

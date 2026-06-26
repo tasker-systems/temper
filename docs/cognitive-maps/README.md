@@ -170,8 +170,8 @@ A cogmap has **no inside/outside** — it is a telos-seeded incubation home. Vis
 ## Provenance
 
 - **Ground-truth artifact:** [`schema-artifact/`](../../schema-artifact/) — `01_schema`,
-  `02_functions`, `03_seed`, `04_scenarios`, `README` (the `temper_next` namespace; the
-  Arc-1 destination shape, empirically loadable).
+  `02_functions`, `03_seed`, `04_scenarios`, `README` (the historical pre-collapse
+  artifact namespace; the Arc-1 destination shape, empirically loadable).
 - **Marshaling session (storyline, register, the threaded seed):** vault session
   `2026-06-04-marshaling-the-cognitive-maps-page-set-storyline-register-and-the-threaded-seed`.
 - **Grounded Arc-1 specs:** [`docs/superpowers/specs/`](../superpowers/specs/) — the six

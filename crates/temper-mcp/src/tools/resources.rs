@@ -389,8 +389,8 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
-// WS6 Spec B: `get_resource` routes the base read through `substrate_read`, so it answers from
-// `temper_next` under `flag=next` (and the legacy services otherwise). The row comes from
+// WS6 Spec B: `get_resource` routes the base read through `substrate_read` (the single backend
+// post-collapse). The row comes from
 // `show_select`, meta from `get_meta_select`, and body (when requested) from `get_content_select` —
 // uniform across backends. Sourcing meta via `get_meta_select` (not the legacy "`get_content` returns
 // meta" coupling) is what lets the Next path work: its `get_content` returns `None` meta. The §9 read
