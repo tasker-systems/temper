@@ -1,7 +1,6 @@
 #![cfg(feature = "artifact-tests")]
 //! Invocation envelope + agent-authorship metadata. Each test boot-seeds the system actor and
-//! exercises the new substrate. Isolated ephemeral DB via `MIGRATOR`. Serialized via the
-//! `temper-substrate-write` nextest group (it owns the namespace).
+//! exercises the new substrate. Isolated ephemeral DB via `MIGRATOR`.
 
 mod common;
 

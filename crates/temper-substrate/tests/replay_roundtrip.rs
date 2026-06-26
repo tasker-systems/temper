@@ -4,7 +4,7 @@
 //! projections come back byte-identical (masked-surrogate rule). Regions re-prove by
 //! re-materialization matching the payload's recorded membership fingerprint.
 //!
-//! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 

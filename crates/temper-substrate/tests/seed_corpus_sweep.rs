@@ -7,7 +7,7 @@
 //! their own tests — they prove machinery. This sweep proves charters, and grows automatically as
 //! corpus seeds land (charter-bootstrapping design, §5).
 //!
-//! Resets the artifact per seed, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 

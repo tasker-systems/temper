@@ -9,7 +9,7 @@
 //!    body produces two `kb_block_revisions` rows with the SAME `(block_id, block_body_hash)`; the
 //!    masked-replay dump orders on `created` to break that tie, so fire and replay must still match.
 //!
-//! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
 use temper_substrate::replay;

@@ -6,8 +6,8 @@
 //! and its telos resource id (sparing the loader a re-fetch).
 //!
 //! Chunking + embedding happen Rust-side via `TelosDef::block_specs` + `content::prepare_blocks`
-//! (borrowing temper-ingest); the SQL function only persists. Resets the artifact, ONNX-dependent,
-//! serialized via the temper-substrate-write group.
+//! (borrowing temper-ingest); the SQL function only persists. ONNX-dependent. Isolated ephemeral DB
+//! via `temper_substrate::MIGRATOR`.
 mod common;
 
 use temper_substrate::content;

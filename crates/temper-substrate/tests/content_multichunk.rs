@@ -4,7 +4,7 @@
 //! resource, with real sha256 content hashes, inline bge-768 embeddings, and a correct merkle body_hash.
 //!
 //! Chunking + embedding happen Rust-side via `content::prepare_blocks` (borrowing temper-ingest); the SQL
-//! function only persists. Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! function only persists. ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
 use temper_substrate::content;

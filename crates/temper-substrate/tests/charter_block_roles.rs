@@ -1,8 +1,7 @@
 #![cfg(feature = "artifact-tests")]
 //! Deliverable-3 acceptance: charter blocks carry a `block_role` property, and the generic
 //! `resource_blocks` read filters by role — so framing never leaks into the questions projection
-//! (code-review finding #1 from D2). Resets the artifact, ONNX-dependent, serialized via the
-//! temper-substrate-write group.
+//! (code-review finding #1 from D2). ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
 use temper_substrate::content;

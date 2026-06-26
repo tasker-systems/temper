@@ -197,7 +197,7 @@ jobs:
         # seed/scenario load+roundtrip+equivalence, charter, content, ledger, replay.
         # These create ephemeral databases via #[sqlx::test] — ONNX Runtime and a
         # running Postgres service (both present in this job) are the only requirements.
-        run: cargo nextest run -p temper-substrate --features "artifact-tests" --locked --no-fail-fast
+        run: cargo nextest run -p temper-substrate --features "artifact-tests" --locked --test-threads 1 --no-fail-fast
 
   coverage:
     name: Coverage

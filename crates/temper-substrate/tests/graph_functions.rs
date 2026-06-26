@@ -6,8 +6,7 @@
 //! via `kb_chunks`→`kb_content_blocks`→`kb_chunk_content`; edges via `kb_edges`; slug derived from title).
 //! Additive — nothing calls them until the surface ports land; the legacy copies are untouched.
 //!
-//! Uses an isolated ephemeral DB via `MIGRATOR` (seeds a context + two edged concept resources), so
-//! it is serialized via the `temper-substrate-write` nextest group.
+//! Uses an isolated ephemeral DB via `MIGRATOR` (seeds a context + two edged concept resources).
 
 mod common;
 

@@ -11,7 +11,7 @@
 //! The standalone path also re-runs the replay proof (payload spec §7) unchanged: the replay
 //! machinery introduced for the scenario path must hold for a seed instantiated with no runbook.
 //!
-//! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 

@@ -2,8 +2,7 @@
 //! WS6 4c write-path mutation functions — the new event-sourced mutations the `NextBackend` dispatches
 //! to: the edge-uniqueness invariant (idempotent `relationship_assert`), `resource_delete`/`update`/
 //! `rehome`, and `relationship_retype`/`reweight`. Each boot-seeds the system actor and exercises the
-//! mutation through the `events::fire` surface. Isolated ephemeral DB via `MIGRATOR`. Serialized via
-//! the `temper-substrate-write` nextest group (it owns the namespace).
+//! mutation through the `events::fire` surface. Isolated ephemeral DB via `MIGRATOR`.
 
 mod common;
 

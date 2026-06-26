@@ -5,7 +5,7 @@
 //! context persists as the documented `question + "\n\n" + context` join). This is the
 //! shape-of-the-seed proof: what a charter author writes is what every later reader gets.
 //!
-//! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 
