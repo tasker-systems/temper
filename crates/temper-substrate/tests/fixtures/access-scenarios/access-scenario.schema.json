@@ -442,6 +442,10 @@
       "description": "An authored edge homed in a named cogmap, fired through `relationship_assert` (the event-backed path\n— `kb_edges` carries NOT-NULL event FKs). `from`/`to` are resource keys.",
       "type": "object",
       "properties": {
+        "key": {
+          "description": "Unique handle for this edge within the scenario. `edge_visible_to` checks resolve through it\n(the captured `kb_edges.id`), NOT through `label` — `label` is a decorative, non-unique TEXT\ncolumn, so keying a lookup on it silently matches the wrong row when two edges share a label.",
+          "type": "string"
+        },
         "from": {
           "type": "string"
         },
@@ -471,6 +475,7 @@
         }
       },
       "required": [
+        "key",
         "from",
         "to",
         "kind",
@@ -578,13 +583,14 @@
           ]
         },
         {
-          "description": "S3 — edge-home protection: `edges_visible_to(profile)` ∋ edge (resolved by label).",
+          "description": "S3 — edge-home protection: `edges_visible_to(profile)` ∋ edge (resolved by the edge's `key`,\nits captured `kb_edges.id` — NOT by the non-unique `label`).",
           "type": "object",
           "properties": {
             "profile": {
               "type": "string"
             },
             "edge": {
+              "description": "The target edge's `key` (see [`AccessEdgeDef::key`]).",
               "type": "string"
             },
             "expect": {

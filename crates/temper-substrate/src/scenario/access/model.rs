@@ -161,6 +161,10 @@ pub enum GrantAnchor {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct AccessEdgeDef {
+    /// Unique handle for this edge within the scenario. `edge_visible_to` checks resolve through it
+    /// (the captured `kb_edges.id`), NOT through `label` — `label` is a decorative, non-unique TEXT
+    /// column, so keying a lookup on it silently matches the wrong row when two edges share a label.
+    pub key: String,
     pub from: String,
     pub to: String,
     pub kind: EdgeKind,
@@ -200,9 +204,11 @@ pub enum AccessCheck {
         resource: String,
         expect: bool,
     },
-    /// S3 — edge-home protection: `edges_visible_to(profile)` ∋ edge (resolved by label).
+    /// S3 — edge-home protection: `edges_visible_to(profile)` ∋ edge (resolved by the edge's `key`,
+    /// its captured `kb_edges.id` — NOT by the non-unique `label`).
     EdgeVisibleTo {
         profile: String,
+        /// The target edge's `key` (see [`AccessEdgeDef::key`]).
         edge: String,
         expect: bool,
     },
