@@ -115,9 +115,8 @@ async fn some_write_path_test(pool: sqlx::PgPool) {
   database, so a reset can no longer race a sibling.
 - **Replace** `common::{reset_artifact, reset_artifact_with_seed, load_files}` and
   `tests/fixtures/00_namespace_reset.sql` — they have no role once tests receive a fresh
-  migrated pool. The `scenario_roundtrip` SQL-vs-YAML equivalence test still loads
-  `03_seed.sql`, now into its own ephemeral DB via a small in-body load helper that applies
-  the fixture SQL to the injected pool; `03_seed.sql` is **retained**.
+  migrated pool. `common::reset_artifact_with_seed` and `03_seed.sql` are also retired (see
+  Component 5), so no test loads a hand-SQL seed.
 
 **Verification gates (resolve during implementation, not assumed here):**
 - Exact-count assertions (e.g. `scenario_load`'s `nodes.len() == 3`, `edges.len() == 2`) must
@@ -168,8 +167,19 @@ onboarding-cogmap), then:
 - **Delete** the three legacy test files and the `artifact-tests-legacy` feature
   (`Cargo.toml:18`).
 - **Remove** the `artifact-tests-legacy` mention in `CLAUDE.md:147` and its doc run-line.
-- **Retain** `03_seed.sql` and the boot-seed `system.yaml` fixtures (still used by the
-  write-path equivalence test).
+
+**Retire the in-SQL `03_seed.sql`.** The SQL-vs-YAML region-membership parity test
+(`scenario_roundtrip::yaml_and_sql_seed_paths_produce_identical_region_membership`) was
+transitional scaffolding: it existed only to prove the YAML scenario reproduced the structural
+correctness originally established in the hand-written `03_seed.sql`. That equivalence is now
+proven and the YAML seed is the single source of truth, so the in-SQL seed is fully deprecated:
+
+- **Delete** `tests/fixtures/03_seed.sql`, the parity test, its file-local `genesis_emitter`
+  helper, and `common::reset_artifact_with_seed` (its only caller).
+- **Retain** the boot-seed `system.yaml` and the YAML seed/scenario fixtures
+  (`seeds/onboarding-cogmap.yaml`, `scenarios/onboarding-cogmap.yaml`) — still the live inputs.
+- The other two `scenario_roundtrip` tests (`passes_full_s6_runbook`,
+  `baseline_matches_04b_sql_verdict`, both YAML-path) convert to `#[sqlx::test]` normally.
 
 ### Component 6 — docs & comments
 
@@ -195,9 +205,11 @@ onboarding-cogmap), then:
 - **Keeping `temper_next` as a renamed runtime test namespace.** The earlier "decouple but
   keep a renamed isolation namespace" option is rejected: `#[sqlx::test]` supersedes the
   shared-namespace reset model entirely, so no named test namespace is needed.
-- **Deleting `03_seed.sql` / the legacy assertions.** Rejected — `scenario_roundtrip` anchors
-  the SQL-vs-YAML equivalence proof on `03_seed`, and the three legacy tests carry unique
-  coverage. Port, don't drop.
+- **Deleting the legacy read-path *assertions*.** Rejected — the three legacy tests carry ~5
+  unique invariants; port them to `#[sqlx::test]`, don't drop. (Note: `03_seed.sql` itself and
+  the SQL-vs-YAML parity test ARE retired — that parity was transitional scaffolding to prove
+  the YAML scenario matched the original hand-SQL seed, now superseded by the proven YAML seed;
+  see Component 5.)
 
 ### Deferred (legitimate, out of this spec's arc)
 
@@ -219,6 +231,8 @@ onboarding-cogmap), then:
 - The write-path artifact tests run green on `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`
   and execute in the Embed CI job under `--features artifact-tests`.
 - `artifact-tests-legacy` is gone; its unique assertions survive as `#[sqlx::test]` tests.
+- `03_seed.sql`, the SQL-vs-YAML parity test, and `reset_artifact_with_seed` are gone; the YAML
+  seed/scenario fixtures are the single source of truth.
 - `cargo make check` (offline, workspace `.sqlx`) and the full CI matrix pass.
 
 ## Risks
