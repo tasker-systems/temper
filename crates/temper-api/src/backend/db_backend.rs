@@ -15,10 +15,11 @@ use sqlx::PgPool;
 use temper_core::error::TemperError;
 use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
-    ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
-    SearchResources, ShowResource, Surface, UpdateResource,
+    ListResources, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
+    ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
@@ -93,6 +94,26 @@ fn unpack_incoming_chunks(
         .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
     chunks.sort_by_key(|c| c.chunk_index);
     Ok(chunks.iter().map(packed_to_incoming).collect())
+}
+
+/// Strip a stray top-level `provenance` key from a clustering-facet object (Decision #6): `provenance`
+/// is a per-key property the reconciler STAMPS on create, never a clustering facet. Returns the object
+/// minus that key (cloned); a non-object value passes through unchanged.
+fn strip_provenance_facet(facets: &serde_json::Value) -> serde_json::Value {
+    match facets.as_object() {
+        Some(obj) => {
+            let mut out = obj.clone();
+            out.remove("provenance");
+            serde_json::Value::Object(out)
+        }
+        None => facets.clone(),
+    }
+}
+
+/// Does a facet object carry at least one clustering key? An empty object ⇒ skip `set_facet` (nothing
+/// to cluster), preserving idempotency.
+fn facet_is_nonempty(facets: &serde_json::Value) -> bool {
+    facets.as_object().is_some_and(|o| !o.is_empty())
 }
 
 /// Map an inbound [`Surface`] to the synthesized per-surface emitter marker (`pete@<marker>`, §1b).
@@ -212,6 +233,229 @@ impl DbBackend {
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))
+    }
+
+    /// The diff+apply core of `reconcile_cognitive_map`, run INSIDE the `admin_reconcile` envelope on a
+    /// caller-supplied serializable transaction connection (`conn`). Returns the [`ReconcileOutcome`];
+    /// any `Err` is propagated and the caller drops the transaction → Postgres rolls back EVERYTHING
+    /// (every mutation AND the envelope open), so a partial reconcile is structurally impossible.
+    ///
+    /// The diff keys on the STABLE landmark `id` (the entry's pre-generated uuidv7), NEVER on
+    /// `origin_uri` (which stays as loose, non-unique attribution). Idempotency (the headline invariant)
+    /// holds because: an entry whose body merkle equals the live `body_hash` does NOTHING (zero events);
+    /// an edge is asserted only when ABSENT (checked via a polarity-aware `find_edge`); the clustering
+    /// facet + `provenance` stamp are written only on CREATE. Re-running the same request therefore fires
+    /// zero new mutation events. (Facet-delta + edge-reweight on EXISTING entries are DEFERRED for v1 —
+    /// kernel landmarks are born with their facets/edges and rarely change them; re-asserting either
+    /// appends an event unconditionally, which would break idempotency.)
+    ///
+    /// Edge endpoints are stable ids needing no resolution (`entry.id` source, `edge.to` target);
+    /// `reconcile_cognitive_map` pre-flight-validates every `edge.to` against the ids of
+    /// `request.entries` ∪ the live slice BEFORE opening the transaction, so an unresolved target is a
+    /// hard `BadRequest` with no writes — not a silent skip.
+    async fn reconcile_apply(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        cogmap: temper_substrate::ids::CogmapId,
+        request: &ReconcileCogmapRequest,
+        owner: temper_substrate::ids::ProfileId,
+        emitter: temper_substrate::ids::EntityId,
+    ) -> Result<ReconcileOutcome, TemperError> {
+        use std::collections::HashMap;
+
+        let cogmap_uuid = cogmap.uuid();
+
+        // The diff source: the current `provenance: kernel` slice, indexed by the STABLE resource id (the
+        // diff key — `origin_uri` is pure attribution, never a key). Read on the SAME transaction so the
+        // diff sees a consistent snapshot under SERIALIZABLE.
+        let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
+            .await
+            .map_err(api_err)?;
+        let live_by_id: HashMap<uuid::Uuid, &readback::KernelSliceRow> =
+            live.iter().map(|r| (r.resource_id, r)).collect();
+
+        let mut outcome = ReconcileOutcome::default();
+
+        // PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist).
+        for entry in &request.entries {
+            // Unpack the supplied (client-embedded) chunks once. The body merkle the substrate WILL
+            // store for them is computed the SAME way the create-dedup path does
+            // (`body_hash_from_chunk_hashes`, see :304), so it byte-matches the stored `body_hash`. The
+            // diff keys on THIS merkle — never the wire `content_hash`, which the CLI derives
+            // differently (whole-body `sha256:`-prefixed hash, not the chunk-merkle) and which the
+            // server therefore does not trust. Trusting it would make every re-run re-block every entry.
+            let incoming_chunks = unpack_incoming_chunks(&entry.chunks_packed)?;
+            let chunk_hashes: Vec<String> = incoming_chunks
+                .iter()
+                .map(|c| c.content_hash.clone())
+                .collect();
+            let incoming_body_hash =
+                temper_substrate::content::body_hash_from_chunk_hashes(&chunk_hashes);
+
+            match live_by_id.get(&entry.id) {
+                None => {
+                    // CREATE — the resource itself (minted under the STABLE landmark id), then STAMP
+                    // provenance, then the clustering facets. `body` is empty: the reconcile wire carries
+                    // no raw prose — `chunks` is always `Some` here, so the wrapper builds the block from
+                    // the chunks and ignores `body` (the `body` param is only the no-chunks server-embed
+                    // fallback, never taken here). `origin_uri` is still set on the resource as
+                    // attribution.
+                    let chunks = Some(incoming_chunks);
+                    let rid = writes::create_kernel_resource_in_tx(
+                        &mut *conn,
+                        writes::KernelCreateParams {
+                            cogmap,
+                            resource_id: entry.id,
+                            title: &entry.title,
+                            origin_uri: &entry.origin_uri,
+                            doc_type: &entry.doc_type,
+                            body: "",
+                            chunks,
+                            owner,
+                            emitter,
+                        },
+                    )
+                    .await
+                    .map_err(api_err)?;
+
+                    // STAMP `provenance: kernel` — the per-key property `kernel_slice` filters on
+                    // (Decision #6); every reconcile-created resource is kernel by definition.
+                    writes::set_property_in_tx(
+                        &mut *conn,
+                        rid,
+                        "provenance",
+                        &serde_json::json!("kernel"),
+                        emitter,
+                    )
+                    .await
+                    .map_err(api_err)?;
+
+                    // Clustering facets (e.g. `layer`) — strip any stray `provenance` (stamped above,
+                    // never clustered). Skip the write entirely when there's nothing to cluster.
+                    let facets = strip_provenance_facet(&entry.facets);
+                    if facet_is_nonempty(&facets) {
+                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, emitter)
+                            .await
+                            .map_err(api_err)?;
+                    }
+
+                    // `rid` equals `entry.id` (the create minted under it); the diff already keys edges
+                    // on `entry.id`, so there is no id-by-uri map to maintain.
+                    debug_assert_eq!(rid.uuid(), entry.id);
+                    outcome.created += 1;
+                }
+                Some(row) if row.body_hash.as_deref() != Some(incoming_body_hash.as_str()) => {
+                    // UPDATE — body changed (the stored merkle differs from the incoming chunks'
+                    // merkle). Re-block from the supplied chunks. (Facet/edge deltas on an existing
+                    // entry are DEFERRED v1 — see the method doc.)
+                    writes::update_resource_in_tx(
+                        &mut *conn,
+                        writes::UpdateParams {
+                            resource: temper_substrate::ids::ResourceId::from(row.resource_id),
+                            // `Some("")` requests a body re-block (the re-block fires iff body is
+                            // `Some`); the content comes from `chunks` (always `Some` here), so the
+                            // empty string is never embedded — see the CREATE arm's note.
+                            body: Some(""),
+                            title: None,
+                            origin_uri: None,
+                            properties: &[],
+                            chunks: Some(incoming_chunks),
+                            rehome_to: None,
+                            emitter,
+                        },
+                    )
+                    .await
+                    .map_err(api_err)?;
+                    outcome.updated += 1;
+                }
+                Some(_) => {
+                    // Hashes equal → DO NOTHING (zero events). The idempotency invariant.
+                    outcome.unchanged += 1;
+                }
+            }
+        }
+
+        // PHASE 2 — edges (idempotent: assert only those not already present). Both endpoints are stable
+        // landmark ids (`entry.id` source, `edge.to` target) — NO lookup; pre-flight already proved each
+        // `edge.to` resolves to a kernel resource.
+        for entry in &request.entries {
+            let src = entry.id;
+            for e in &entry.edges {
+                let tgt = e.to;
+                let kind =
+                    temper_substrate::affinity::EdgeKind::from_sql(&e.kind).ok_or_else(|| {
+                        TemperError::BadRequest(format!("unknown edge kind: {}", e.kind))
+                    })?;
+                let polarity = temper_substrate::payloads::EdgePolarity::from_sql(&e.polarity)
+                    .ok_or_else(|| {
+                        TemperError::BadRequest(format!("unknown edge polarity: {}", e.polarity))
+                    })?;
+                // Per-edge existence check, polarity-aware (a forward and an inverse edge of the same
+                // kind to the same target are distinct, both deliverable). Re-asserting a present edge
+                // would append an event (`relationship_assert` fires unconditionally) and break
+                // idempotency, so skip when already present. The kernel has ~15 edges; per-edge
+                // `find_edge` is fine.
+                let present = readback::find_edge(&mut *conn, src, tgt, &kind, Some(&e.polarity))
+                    .await
+                    .map_err(api_err)?
+                    .is_some();
+                if present {
+                    continue; // already present — re-assert would break idempotency
+                }
+                writes::assert_kernel_edge_in_tx(
+                    &mut *conn,
+                    writes::KernelEdgeParams {
+                        cogmap,
+                        src: temper_substrate::ids::ResourceId::from(src),
+                        tgt: temper_substrate::ids::ResourceId::from(tgt),
+                        kind,
+                        polarity,
+                        label: e.label.as_deref(),
+                        weight: e.weight,
+                        emitter,
+                    },
+                )
+                .await
+                .map_err(api_err)?;
+            }
+        }
+
+        // PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds). Keyed on the stable id.
+        for t in &request.fold_resources {
+            if let Some(row) = live_by_id.get(&t.id) {
+                writes::delete_resource_in_tx(
+                    &mut *conn,
+                    temper_substrate::ids::ResourceId::from(row.resource_id),
+                    emitter,
+                )
+                .await
+                .map_err(api_err)?;
+                outcome.folded += 1;
+            }
+        }
+        for t in &request.fold_edges {
+            let kind = temper_substrate::affinity::EdgeKind::from_sql(&t.kind)
+                .ok_or_else(|| TemperError::BadRequest(format!("unknown edge kind: {}", t.kind)))?;
+            // Resolve the live edge by (from, to, kind) over `kb_edges` (any polarity → `None`) —
+            // substrate SQL lives in the substrate (`readback::find_edge`), run on this transaction's
+            // connection.
+            let edge_id = readback::find_edge(&mut *conn, t.from, t.to, &kind, None)
+                .await
+                .map_err(api_err)?;
+            if let Some(edge_id) = edge_id {
+                writes::fold_relationship_in_tx(
+                    &mut *conn,
+                    temper_substrate::ids::EdgeId::from(edge_id),
+                    Some("reconcile fold"),
+                    emitter,
+                )
+                .await
+                .map_err(api_err)?;
+                outcome.folded += 1;
+            }
+        }
+
+        Ok(outcome)
     }
 }
 
@@ -686,6 +930,143 @@ impl Backend for DbBackend {
         .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
+
+    /// One idempotent desired-state reconcile run as a SINGLE `SERIALIZABLE` transaction: the
+    /// `admin_reconcile` envelope open, every kernel mutation, and the envelope close all commit
+    /// atomically (the system actor fires every mutation). Atomicity makes a half-open envelope
+    /// structurally impossible — any error before commit drops the transaction → Postgres rolls back
+    /// EVERYTHING (mutations + the open), so there is no Failed-close path and no stale-open lock.
+    /// SERIALIZABLE makes concurrent reconciles abort-and-retry (SQLSTATE 40001 → `Conflict`) instead of
+    /// corrupting state — the old app-level open-invocation "mutex" is gone. No HTTP/authz here (the
+    /// handler gates first); this is the backend command.
+    async fn reconcile_cognitive_map(
+        &self,
+        cmd: ReconcileCognitiveMap,
+    ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
+        let cogmap = temper_substrate::ids::CogmapId::from(cmd.cogmap_id);
+
+        // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
+        // entity) — the L0 birth migration's actor.
+        let (owner, emitter) = readback::system_actor(&self.pool).await.map_err(api_err)?;
+
+        // PRE-FLIGHT (FIX #3) — fail fast + loud on an unresolved edge target, BEFORE opening the
+        // transaction, so a bad manifest writes NOTHING. A quick read on the pool; the authoritative
+        // in-tx read still happens inside `reconcile_apply`.
+        self.preflight_validate_edge_targets(cmd.cogmap_id, &cmd.request)
+            .await?;
+
+        // ONE SERIALIZABLE transaction for the whole run. `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`
+        // must precede any query in the transaction — it is the first statement after BEGIN.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .map_err(api_err)?;
+
+        // OPEN the envelope (top-level: `parent: None`, so the delegation gate is not exercised).
+        let inv = writes::open_invocation_in_tx(
+            &mut tx,
+            writes::OpenParams {
+                trigger_kind: "admin_reconcile".to_string(),
+                originating: cogmap,
+                parent: None,
+                scoped_entity: emitter,
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        // APPLY on the same connection. On ANY error the `?` returns here with `tx` dropped → full
+        // rollback (mutations + the envelope open). No Failed-close needed.
+        let outcome = self
+            .reconcile_apply(&mut tx, cogmap, &cmd.request, owner, emitter)
+            .await?;
+
+        // CLOSE the envelope `Completed` in the same transaction.
+        let outcome_json =
+            serde_json::to_value(&outcome).map_err(|e| TemperError::Api(e.to_string()))?;
+        writes::close_invocation_in_tx(
+            &mut tx,
+            inv,
+            cogmap,
+            temper_substrate::payloads::Disposition::Completed,
+            outcome_json,
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+
+        // COMMIT — a serialization failure (40001) maps to `Conflict` (retryable), any other DB error to
+        // a 500. Success returns the outcome.
+        match tx.commit().await {
+            Ok(()) => Ok(CommandOutput::new(outcome)),
+            Err(e) => Err(map_commit_err(e)),
+        }
+    }
+}
+
+/// Pre-flight validation (FIX #3): every reconcile edge target must resolve to a kernel resource that
+/// either already exists (the live slice) or is being created/kept this run (`request.entries`).
+impl DbBackend {
+    async fn preflight_validate_edge_targets(
+        &self,
+        cogmap_uuid: uuid::Uuid,
+        request: &ReconcileCogmapRequest,
+    ) -> Result<(), TemperError> {
+        use std::collections::HashSet;
+
+        let live = readback::kernel_slice(&self.pool, cogmap_uuid)
+            .await
+            .map_err(api_err)?;
+
+        // The resolvable set: stable ids of live resources ∪ this request's entry ids.
+        let mut known: HashSet<uuid::Uuid> = HashSet::new();
+        for r in &live {
+            known.insert(r.resource_id);
+        }
+        for e in &request.entries {
+            known.insert(e.id);
+        }
+
+        let unresolved = |id: uuid::Uuid| {
+            TemperError::BadRequest(format!(
+                "reconcile: edge target {id} resolves to no kernel resource"
+            ))
+        };
+
+        // Every outgoing edge's target must resolve.
+        for entry in &request.entries {
+            for edge in &entry.edges {
+                if !known.contains(&edge.to) {
+                    return Err(unresolved(edge.to));
+                }
+            }
+        }
+        // Every fold_edges endpoint (both ends) must resolve.
+        for t in &request.fold_edges {
+            if !known.contains(&t.from) {
+                return Err(unresolved(t.from));
+            }
+            if !known.contains(&t.to) {
+                return Err(unresolved(t.to));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Map a `tx.commit()` error: a SERIALIZABLE serialization failure (SQLSTATE `40001`) is a concurrent-
+/// reconcile conflict → retryable [`TemperError::Conflict`]; any other DB error is a 500 ([`api_err`]).
+fn map_commit_err(e: sqlx::Error) -> TemperError {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("40001") {
+            return TemperError::Conflict(
+                "reconcile conflicted with a concurrent run; retry".to_string(),
+            );
+        }
+    }
+    api_err(e)
 }
 
 #[cfg(test)]

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT relationship_retype($1,$2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "relationship_retype",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8529ed3915c860b3357c156a830ac9eaa4c55b445e284eebd39fc8f8dc9ec4c8"
+}

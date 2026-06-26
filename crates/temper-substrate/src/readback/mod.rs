@@ -28,6 +28,7 @@ use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::ids::{EntityId, ProfileId};
 use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
@@ -652,6 +653,130 @@ pub async fn find_by_body_hash(
     Ok(dup)
 }
 
+/// One row of L0's reconcile diff source: a `provenance: kernel` resource homed to a cogmap, keyed
+/// (by the caller) on `origin_uri`, carrying its body merkle and merged facet object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelSliceRow {
+    /// The resource id (the reconcile applier addresses blocks/edges by it).
+    pub resource_id: Uuid,
+    /// The diff key — verbatim `kb_resources.origin_uri` (a kernel landmark's stable identity).
+    pub origin_uri: String,
+    /// The body merkle — `kb_resources.body_hash`, IDENTICAL to the expression `resource_row` reads
+    /// (the bare column; the structural sha256 over chunk content-hashes), so the reconcile diff can
+    /// compare `entry.content_hash` against it like-for-like.
+    pub body_hash: Option<String>,
+    /// The resource's merged non-folded property object (`jsonb_object_agg` over `kb_properties`):
+    /// the facets (`provenance`/`layer`/…) plus the `doc_type` property, mirroring how [`meta`] reads
+    /// the same rows. The reconcile diff re-asserts the incoming facet keys idempotently against this.
+    pub facets: serde_json::Value,
+}
+
+/// All `provenance: kernel` resources homed to `cogmap_id`, keyed (by the caller) on `origin_uri`,
+/// each with its body merkle (`body_hash`) and merged facet object. The reconcile diff source: the
+/// orchestration ([`crate`]'s temper-api caller) compares these against the incoming desired-state
+/// entries to plan create/update/fold.
+///
+/// Scoped to the kernel slice by an inner join on the resource's non-folded `provenance` property
+/// equal to `kernel`, so `promoted`/`operator` content homed to the same cogmap — and the cogmap's
+/// own (provenance-less) telos — are excluded by construction. `body_hash` is the bare
+/// `kb_resources.body_hash` column, byte-identical to [`resource_row`]'s `r.body_hash`.
+///
+/// Compile-time macro (like [`find_by_body_hash`], the only other macro here): the SQL resolves against
+/// the single `public` schema, cached in the workspace `.sqlx` (post-`temper_next`-elimination, #178).
+pub async fn kernel_slice(
+    executor: impl sqlx::PgExecutor<'_>,
+    cogmap_id: Uuid,
+) -> Result<Vec<KernelSliceRow>> {
+    let rows = sqlx::query!(
+        r#"SELECT r.id              AS "resource_id!",
+                  r.origin_uri      AS "origin_uri!",
+                  r.body_hash       AS "body_hash?",
+                  (SELECT jsonb_object_agg(p.property_key, p.property_value)
+                     FROM kb_properties p
+                    WHERE p.owner_table = 'kb_resources' AND p.owner_id = r.id
+                      AND NOT p.is_folded) AS "facets?"
+             FROM kb_resources r
+             JOIN kb_resource_homes h
+               ON h.resource_id = r.id
+              AND h.anchor_table = 'kb_cogmaps' AND h.anchor_id = $1
+             JOIN kb_properties prov
+               ON prov.owner_table = 'kb_resources' AND prov.owner_id = r.id
+              AND prov.property_key = 'provenance' AND NOT prov.is_folded
+              AND prov.property_value #>> '{}' = 'kernel'
+            WHERE r.is_active = true
+            ORDER BY r.origin_uri"#,
+        cogmap_id,
+    )
+    .fetch_all(executor)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| KernelSliceRow {
+            resource_id: row.resource_id,
+            origin_uri: row.origin_uri,
+            body_hash: row.body_hash,
+            // The inner join guarantees at least the `provenance` property, so the aggregate is never
+            // SQL-NULL in practice; default to an empty object for total safety.
+            facets: row.facets.unwrap_or_else(|| serde_json::json!({})),
+        })
+        .collect())
+}
+
+/// Resolve the **system actor** — the `(owner_profile, emitter_entity)` pair the L0 reconciler fires
+/// every mutation under. The lookup is the L0 birth migration's exactly: the profile with
+/// `handle = 'system'` joined to its `name = 'system'` entity. Returned typed so the reconcile
+/// orchestration threads `ProfileId`/`EntityId` into the cogmap-homed writes without re-resolving.
+///
+/// Compile-time macro (resolves against `public`; workspace `.sqlx` cache).
+pub async fn system_actor(pool: &PgPool) -> Result<(ProfileId, EntityId)> {
+    let row = sqlx::query!(
+        r#"SELECT p.id AS "owner!", e.id AS "emitter!"
+             FROM kb_entities e
+             JOIN kb_profiles p ON p.id = e.profile_id
+            WHERE p.handle = 'system' AND e.name = 'system'"#,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((ProfileId::from(row.owner), EntityId::from(row.emitter)))
+}
+
+/// Resolve a live (non-folded) resource→resource edge by `(source, target, kind[, polarity])` over
+/// `kb_edges`, returning its id or `None`. The L0 reconcile uses this both for Phase-2 idempotent
+/// edge dedup (polarity-aware — a forward and an inverse edge of the same kind to the same target are
+/// distinct, so pass `Some(polarity)`) and for the Phase-3 edge-fold a `fold_edges` tombstone targets
+/// (kind only — pass `None` to match any polarity). Substrate SQL lives in the substrate (CLAUDE.md
+/// "Service layer owns SQL") — the reconciler in `db_backend.rs` calls this rather than inlining.
+///
+/// Casts the columns to text (`edge_kind::text = $3`, `polarity::text = $4`) and binds the SQL enum
+/// labels, so the compile-time macro needs no custom enum Rust types. The `polarity` clause is a
+/// NULL-passthrough — `$4::text IS NULL` matches any polarity (the fold path). Takes
+/// `impl sqlx::PgExecutor` so the reconciler can run it on its serializable transaction connection.
+///
+/// Compile-time macro (resolves against `public`; workspace `.sqlx` cache).
+pub async fn find_edge(
+    executor: impl sqlx::PgExecutor<'_>,
+    src: Uuid,
+    tgt: Uuid,
+    kind: &crate::affinity::EdgeKind,
+    polarity: Option<&str>,
+) -> Result<Option<Uuid>> {
+    let id = sqlx::query_scalar!(
+        r#"SELECT id FROM kb_edges
+            WHERE source_id = $1 AND target_id = $2
+              AND source_table = 'kb_resources' AND target_table = 'kb_resources'
+              AND edge_kind::text = $3 AND NOT is_folded
+              AND ($4::text IS NULL OR polarity::text = $4)"#,
+        src,
+        tgt,
+        kind.as_sql(),
+        polarity,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(id)
+}
+
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto the substrate tables — the §9
 /// search read floor. Reads the stored `kb_resource_search_index` tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
@@ -797,7 +922,7 @@ pub struct Neighbor {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
+pub async fn neighbors(executor: impl sqlx::PgExecutor<'_>, new_id: Uuid) -> Result<Vec<Neighbor>> {
     // WS2 NOTE — deliberately UNSCOPED (no principal). `neighbors` has no surface caller yet (only
     // the §9 data-parity test reads it), so visibility-scoping it now protects nothing (SG-5: no
     // speculative surface). The leak-safe gate is `edges_visible_to(principal)` (edge-home + both
@@ -826,7 +951,7 @@ pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
             AND NOT e.is_folded",
     )
     .bind(new_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(rows

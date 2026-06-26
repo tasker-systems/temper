@@ -14,9 +14,11 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
-use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk};
+use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedChunk};
 use crate::events::{fire, EdgeHome, SeedAction};
-use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId};
+use crate::ids::{
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
+};
 use crate::payloads::{self, AnchorRef, EdgePolarity};
 use crate::text::slugify;
 
@@ -161,14 +163,24 @@ pub struct UpdateParams<'a> {
 
 pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    update_resource_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(())
+}
 
+/// In-transaction variant of [`update_resource`] — fires on a caller-supplied connection (no
+/// begin/commit). The body-block lookup runs on `&mut *conn` so it shares the caller's transaction.
+pub async fn update_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: UpdateParams<'_>,
+) -> Result<()> {
     if let Some(body) = p.body {
         // resolve the resource's single non-folded body block (CONFORM scenario runner revise).
         let block_ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
         )
         .bind(p.resource.uuid())
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut *conn)
         .await?;
         let block_id = match block_ids.as_slice() {
             [one] => *one,
@@ -191,7 +203,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
             );
         }
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::BlockMutate {
                 block: crate::ids::BlockId::from(block_id),
                 chunks: &prepared.chunks,
@@ -203,7 +215,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
 
     for (key, value) in p.properties {
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::PropertySet {
                 resource: p.resource,
                 key,
@@ -217,7 +229,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
 
     if p.title.is_some() || p.origin_uri.is_some() {
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::ResourceUpdate {
                 resource: p.resource,
                 title: p.title,
@@ -230,7 +242,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
 
     if let Some(dest) = p.rehome_to {
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::ResourceRehome {
                 resource: p.resource,
                 home: AnchorRef::context(dest),
@@ -240,16 +252,237 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
         .await?;
     }
 
-    tx.commit().await?;
     Ok(())
 }
 
 /// Soft-delete a resource.
 pub async fn delete_resource(pool: &PgPool, resource: ResourceId, emitter: EntityId) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fire(&mut tx, SeedAction::ResourceDelete { resource, emitter }).await?;
+    delete_resource_in_tx(&mut tx, resource, emitter).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// In-transaction variant of [`delete_resource`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn delete_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    emitter: EntityId,
+) -> Result<()> {
+    fire(conn, SeedAction::ResourceDelete { resource, emitter }).await?;
+    Ok(())
+}
+
+// ── cogmap-homed kernel writes (L0 reconcile) ──────────────────────────────────
+
+/// Create a kernel resource homed to a **cogmap** (not a context) — the shape the L0 reconciler
+/// uses. Mirrors [`create_resource`] but homes `AnchorRef::cogmap(p.cogmap)` and passes
+/// `originator: None` (kernel content's originator COALESCEs to `owner` = system). The post-create
+/// property loop of `create_resource` is intentionally omitted: kernel facets/provenance are stamped
+/// by the caller via [`set_property`] / [`set_facet`].
+pub struct KernelCreateParams<'a> {
+    pub cogmap: CogmapId,
+    /// The STABLE landmark identity the resource is minted under (the reconcile diff key). Supplying it
+    /// (rather than minting) makes a duplicate create a PRIMARY-KEY conflict — fail-loud, never a silent
+    /// twin.
+    pub resource_id: Uuid,
+    pub title: &'a str,
+    pub origin_uri: &'a str,
+    pub doc_type: &'a str,
+    pub body: &'a str,
+    /// Caller-supplied, already-embedded chunks. When `Some`, the body block is built from these
+    /// verbatim (the client embedded); when `None`, the server chunks + embeds `body` (fallback) —
+    /// the same client-embed-or-server-fallback affordance as [`create_resource`].
+    pub chunks: Option<Vec<IncomingChunk>>,
+    pub owner: ProfileId,
+    pub emitter: EntityId,
+}
+
+pub async fn create_kernel_resource(
+    pool: &PgPool,
+    p: KernelCreateParams<'_>,
+) -> Result<ResourceId> {
+    let mut tx = begin_scoped(pool).await?;
+    let new_id = create_kernel_resource_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(new_id)
+}
+
+/// In-transaction variant of [`create_kernel_resource`] — fires on a caller-supplied connection (no
+/// begin/commit) so the L0 reconcile can run every mutation in ONE serializable transaction.
+pub async fn create_kernel_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: KernelCreateParams<'_>,
+) -> Result<ResourceId> {
+    let block = match p.chunks {
+        Some(chunks) => prepare_block_from_chunks(0, None, chunks),
+        None => prepare_block(0, None, p.body)?,
+    };
+    let blocks = [block];
+    let new_id = fire(
+        conn,
+        SeedAction::ResourceCreate {
+            title: p.title,
+            origin_uri: p.origin_uri,
+            // Mint under the caller's STABLE landmark id (the diff key) — so a duplicate create is a
+            // primary-key conflict, never a silent twin.
+            resource_id: Some(ResourceId::from(p.resource_id)),
+            home: AnchorRef::cogmap(p.cogmap),
+            owner: p.owner,
+            // Kernel content's originator COALESCEs to owner (= system).
+            originator: None,
+            blocks: &blocks,
+            doc_type: Some(p.doc_type),
+            emitter: p.emitter,
+        },
+    )
+    .await?
+    .resource()?;
+    Ok(new_id)
+}
+
+/// Set the **clustering** facet on a resource — one `kb_properties` row with `property_key='facet'`
+/// holding the whole `values` object (e.g. `{layer: concept}`). This is what materialization/affinity
+/// read. NOT interchangeable with [`set_property`] (Decision #6): `provenance` is per-key, not a
+/// clustering facet.
+pub async fn set_facet(
+    pool: &PgPool,
+    resource: ResourceId,
+    values: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    set_facet_in_tx(&mut tx, resource, values, weight, emitter).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`set_facet`] — fires on a caller-supplied connection (no begin/commit).
+pub async fn set_facet_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    values: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+) -> Result<()> {
+    fire(
+        conn,
+        SeedAction::FacetSet {
+            resource,
+            values,
+            weight,
+            emitter,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Set a single-valued **per-key** property — folds prior active `(owner, key)` rows then asserts the
+/// new value, so the key holds one current value (`property_key=<key>`). This is the shape
+/// `readback::kernel_slice` reads; the reconciler stamps `provenance: kernel` through it.
+pub async fn set_property(
+    pool: &PgPool,
+    resource: ResourceId,
+    key: &str,
+    value: &serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    set_property_in_tx(&mut tx, resource, key, value, emitter).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`set_property`] — fires on a caller-supplied connection (no begin/commit).
+pub async fn set_property_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    key: &str,
+    value: &serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
+    fire(
+        conn,
+        SeedAction::PropertySet {
+            resource,
+            key,
+            value,
+            weight: 1.0,
+            emitter,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Re-block a resource's body block from already-prepared chunks (the update path — the caller
+/// resolves the block id and prepares the new chunks). Mirrors the `Revise`/`BlockMutate` fire.
+pub async fn mutate_block(
+    pool: &PgPool,
+    block: BlockId,
+    chunks: &[PreparedChunk],
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block,
+            chunks,
+            emitter,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Assert (or idempotently re-assert) a **cogmap-homed** edge `src → tgt`, returning its id. Mirrors
+/// [`assert_relationship`] but homes `EdgeHome::Cogmap(p.cogmap)` (kernel landmarks home to the map,
+/// not a context).
+pub struct KernelEdgeParams<'a> {
+    pub cogmap: CogmapId,
+    pub src: ResourceId,
+    pub tgt: ResourceId,
+    pub kind: EdgeKind,
+    pub polarity: EdgePolarity,
+    pub label: Option<&'a str>,
+    pub weight: f64,
+    pub emitter: EntityId,
+}
+
+pub async fn assert_kernel_edge(pool: &PgPool, p: KernelEdgeParams<'_>) -> Result<EdgeId> {
+    let mut tx = begin_scoped(pool).await?;
+    let edge = assert_kernel_edge_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(edge)
+}
+
+/// In-transaction variant of [`assert_kernel_edge`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn assert_kernel_edge_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: KernelEdgeParams<'_>,
+) -> Result<EdgeId> {
+    let edge = fire(
+        conn,
+        SeedAction::RelationshipAssert {
+            src: p.src,
+            tgt: p.tgt,
+            kind: p.kind,
+            polarity: p.polarity,
+            label: p.label,
+            weight: p.weight,
+            home: EdgeHome::Cogmap(p.cogmap),
+            emitter: p.emitter,
+        },
+    )
+    .await?
+    .relationship()?;
+    Ok(edge)
 }
 
 // ── relationship writes ──────────────────────────────────────────────────────────
@@ -336,8 +569,21 @@ pub async fn fold_relationship(
     emitter: EntityId,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    fold_relationship_in_tx(&mut tx, edge, reason, emitter).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`fold_relationship`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn fold_relationship_in_tx(
+    conn: &mut sqlx::PgConnection,
+    edge: EdgeId,
+    reason: Option<&str>,
+    emitter: EntityId,
+) -> Result<()> {
     fire(
-        &mut tx,
+        conn,
         SeedAction::RelationshipFold {
             edge,
             reason,
@@ -345,7 +591,6 @@ pub async fn fold_relationship(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -365,10 +610,21 @@ pub struct OpenParams {
 
 /// Open an invocation envelope, returning the minted invocation id.
 pub async fn open_invocation(pool: &PgPool, p: OpenParams) -> Result<InvocationId> {
-    let invocation = InvocationId::from(Uuid::now_v7());
     let mut tx = begin_scoped(pool).await?;
+    let opened = open_invocation_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(opened)
+}
+
+/// In-transaction variant of [`open_invocation`] — fires on a caller-supplied connection (no
+/// begin/commit) so the open + the reconcile body + the close share ONE serializable transaction.
+pub async fn open_invocation_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: OpenParams,
+) -> Result<InvocationId> {
+    let invocation = InvocationId::from(Uuid::now_v7());
     let opened = fire(
-        &mut tx,
+        conn,
         SeedAction::InvocationOpen {
             invocation,
             trigger_kind: &p.trigger_kind,
@@ -380,7 +636,6 @@ pub async fn open_invocation(pool: &PgPool, p: OpenParams) -> Result<InvocationI
     )
     .await?
     .invocation()?;
-    tx.commit().await?;
     Ok(opened)
 }
 
@@ -397,8 +652,31 @@ pub async fn close_invocation(
     emitter: EntityId,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fire(
+    close_invocation_in_tx(
         &mut tx,
+        invocation,
+        originating,
+        disposition,
+        outcome,
+        emitter,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`close_invocation`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn close_invocation_in_tx(
+    conn: &mut sqlx::PgConnection,
+    invocation: InvocationId,
+    originating: CogmapId,
+    disposition: payloads::Disposition,
+    outcome: serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
+    fire(
+        conn,
         SeedAction::InvocationClose {
             invocation,
             disposition,
@@ -408,6 +686,5 @@ pub async fn close_invocation(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }

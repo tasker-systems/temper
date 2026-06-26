@@ -6,7 +6,21 @@ name: Rust Tests
 #   cargo nextest run --workspace --features test-embed   -> + embedding tests
 #   cargo nextest run --workspace --features test-db      -> + DB integration tests
 #
-# Embedding tests are excluded from CI (download HF models at runtime).
+# The ort RUNTIME is installed in EVERY job that runs Rust tests (unit, integration,
+# embed, coverage) — `embed` is a DEFAULT feature of temper-cli, so the workspace
+# build compiles + runs `#[cfg(feature = "embed")]` tests in the unit job too, and
+# any body-bearing path initializes ort at runtime. We deliberately make ort
+# available everywhere rather than splitting "which job may run embed code" (the
+# prior model). Each test job has the "Install ONNX Runtime" step (ort 2.0.0-rc.12
+# `load-dynamic`, API 18 -> ORT 1.18.x).
+#
+# The git-LFS bge model is a SEPARATE axis: the integration / embed / coverage jobs
+# checkout `lfs: true` because they exercise the BUNDLED (`include_bytes!`) embed
+# path (server-side embed via `temper-ingest/embed`). The unit job does NOT need LFS
+# — temper-cli's `embed` selects `temper-ingest/embed-download`, which fetches the
+# model at runtime and stays active under feature-unification, cfg'ing out the
+# bundled branch. (code-quality's Rust job needs neither: it compiles --all-features
+# but executes no tests, so it never initializes ort or reads a model.)
 # =============================================================================
 
 on:
@@ -24,6 +38,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        # No `lfs: true` here: `embed` is a default feature of temper-cli, which selects
+        # `temper-ingest/embed-download` — the model is fetched at runtime from HF (not the
+        # `include_bytes!` git-LFS-bundled path). Feature-unification keeps `embed-download` active across
+        # the workspace build, so the bundled branch is cfg'd out and no LFS asset is read. Only the ort
+        # RUNTIME is needed (below). The integration / embed / coverage jobs DO use LFS because they
+        # exercise the bundled server-side embed path.
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -35,6 +55,20 @@ jobs:
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
+
+      - name: Install ONNX Runtime
+        # `embed` is a default feature of temper-cli, so the workspace unit run compiles + RUNS the
+        # `#[cfg(feature = "embed")]` tests (e.g. the reconcile manifest tests), which initialize ort at
+        # runtime. ort 2.0.0-rc.12 uses `load-dynamic` (API 18): fetch the ONNX Runtime 1.18.x shared
+        # library and point ORT_DYLIB_PATH at it. Same step as the integration / embed / coverage jobs —
+        # ort is now available in every job that runs Rust tests.
+        run: |
+          set -euo pipefail
+          ORT_VERSION=1.18.1
+          curl -sSL -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
       - name: Run unit tests
         run: cargo nextest run --workspace --locked --no-fail-fast
