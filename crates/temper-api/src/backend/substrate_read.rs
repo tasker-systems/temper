@@ -298,6 +298,16 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
 /// (unknown context → empty corpus, not an error). Uses runtime `sqlx::query_scalar` (not the
 /// compile-time macro) — consistent with the `unified_search` convention and avoids an sqlx cache
 /// regeneration round-trip.
+///
+/// Resolution is by `name`, **unscoped by principal** (a deliberate decision, recorded in the
+/// consolidated review). Context `name` may collide across owners — uniqueness is on `slug` per
+/// owner, not on `name` globally — so on a collision (single-user-impossible today) this resolves
+/// an arbitrary matching row. That is safe: the downstream candidate functions
+/// (`search_fts_candidates` / `search_vector_candidates` / `search_graph_expand`) are all
+/// visibility-scoped through `resources_visible_to`, so a wrong/invisible resolve yields an empty
+/// result, never a cross-owner leak. We do NOT principal-scope here: `contexts_visible_to` is
+/// retired, and rebuilding the team-context join for a single-user-impossible collision is not
+/// worth it. Consistent with `graph_traverse`'s unscoped name-resolution prior art.
 async fn resolve_context_id(pool: &PgPool, name: &str) -> ApiResult<Option<Uuid>> {
     sqlx::query_scalar("SELECT id FROM kb_contexts WHERE name = $1")
         .bind(name)
@@ -315,9 +325,16 @@ pub async fn search_select(
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     let clamped = clamp_search_params(&params);
+    // Distinguish "no context filter requested" (None → SQL treats NULL as no filter) from
+    // "a context was requested but did not resolve" (a misspelled/unknown name → empty result,
+    // NOT the whole visible corpus). Without this split an unresolved name would pass `None` and
+    // silently widen the search to everything visible.
     let context_id = match params.context_name.as_deref() {
-        Some(name) => resolve_context_id(pool, name).await?,
-        None => None,
+        Some(name) => match resolve_context_id(pool, name).await? {
+            Some(id) => Some(id),
+            None => return Ok(Vec::new()), // requested-but-unresolved context → empty result
+        },
+        None => None, // no context filter requested
     };
 
     let hits = readback::unified_search(

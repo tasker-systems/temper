@@ -45,6 +45,9 @@ pub struct SearchParams {
     #[serde(default)]
     pub query: Option<String>,
     /// Postgres text-search configuration (default "english").
+    ///
+    /// NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates`
+    /// (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     #[serde(default = "default_search_config")]
     pub search_config: String,
     /// Filter by context name (resolved to UUID server-side).
@@ -62,7 +65,7 @@ pub struct SearchParams {
     /// Edge type filter for graph expansion (empty = all types).
     #[serde(default)]
     pub edge_types: Option<Vec<String>>,
-    /// Max hops for graph traversal (default 2, max 10).
+    /// Max hops for graph traversal (default 2, max 3 — clamped for Surface A).
     #[serde(default)]
     pub graph_depth: Option<i32>,
     /// Whether to expand results via graph edges (default true).

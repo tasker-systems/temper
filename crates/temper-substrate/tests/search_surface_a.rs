@@ -313,6 +313,68 @@ async fn vector_ann_uses_hnsw_index(pool: sqlx::PgPool) {
     );
 }
 
+/// Vector over-fetch survives a POST-ANN visibility drop. The nearest chunk may belong to a
+/// resource the principal cannot see; with `p_k=100 » limit` it sits inside the ANN window, gets
+/// pulled by the index ORDER BY, then the visibility join (applied AFTER the ANN) drops it — while a
+/// farther-but-visible resource still survives. This guards the over-fetch shape: visibility is a
+/// post-ANN filter, not an ANN-time predicate.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vector_over_fetch_survives_visibility_drop(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "vov").await;
+
+    // Visible (caller-owned) resource: near the query but not identical (dims 0 and 1 set ⇒ cosine
+    // distance ≈ 0.293 from unit(0)).
+    let mut visible_emb = vec![0.0_f32; 768];
+    visible_emb[0] = 1.0;
+    visible_emb[1] = 1.0;
+    let visible = mk_embedded(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "visible",
+        "temper://vov/visible",
+        visible_emb,
+    )
+    .await;
+
+    // A SECOND owner (its own profile + entity + context) whose resource is NOT visible to `owner`.
+    // Its embedding is EVEN NEARER (identical to the query ⇒ distance 0, i.e. the top ANN hit), so a
+    // pre-filter ANN would have surfaced it first — yet the post-ANN visibility join must drop it.
+    let stranger = ProfileId::from(common::insert_profile(&pool, "stranger").await);
+    let stranger_entity: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, 'stranger', '{}'::jsonb) RETURNING id",
+    )
+    .bind(stranger.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let stranger_home = ctx(&pool, stranger, "vov-stranger").await;
+    let hidden = mk_embedded(
+        &pool,
+        stranger_home,
+        stranger,
+        EntityId::from(stranger_entity),
+        "hidden",
+        "temper://vov/hidden",
+        unit(0),
+    )
+    .await;
+
+    let got = vector_candidates(&pool, owner.uuid(), &unit(0), 100).await;
+    let ids: Vec<Uuid> = got.iter().map(|(id, _)| *id).collect();
+    assert!(
+        ids.contains(&visible.uuid()),
+        "the farther-but-visible resource survives the post-ANN visibility join"
+    );
+    assert!(
+        !ids.contains(&hidden.uuid()),
+        "the nearer non-visible resource (top ANN hit) is dropped by the post-ANN visibility join"
+    );
+}
+
 // ── Graph candidates ────────────────────────────────────────────────────────────────────────────
 
 use temper_substrate::affinity::EdgeKind;
@@ -388,6 +450,88 @@ async fn graph_expand_decay_and_max_over_paths(pool: sqlx::PgPool) {
     assert!(
         (score(c.uuid()).unwrap() - 0.25).abs() < 1e-5,
         "hop2: γ^2·w = 0.25 (bidirectional walk reached c)"
+    );
+}
+
+/// MAX-over-paths actually CHOOSES between competing paths (the linear-chain test above never does —
+/// every node has exactly one path). Diamond: seed `a`; `d` is reachable two ways of DIFFERENT score
+/// — a strong 2-hop path `a—b—d` (both edges weight 1.0 ⇒ γ²·1·1 = 0.25) and a weak direct `a—d`
+/// (weight 0.4 ⇒ γ¹·0.4 = 0.2). Assert `d`'s graph_score == 0.25: the BETTER path wins, not the
+/// direct-but-weaker 0.2, and not the sum 0.45.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn graph_expand_max_chooses_best_of_two_paths(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "gd").await;
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://gd/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://gd/b", unit(1)).await;
+    let d = mk_embedded(&pool, home, owner, emitter, "d", "temper://gd/d", unit(2)).await;
+    // Strong path: a—b—d, both weight 1.0 ⇒ d at hop2, score γ²·1·1 = 0.25.
+    edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    edge(&pool, b, d, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    // Weak path: direct a—d, weight 0.4 ⇒ d at hop1, score γ¹·0.4 = 0.2.
+    edge(&pool, a, d, home, emitter, EdgeKind::LeadsTo, 0.4).await;
+
+    let got = graph_expand(&pool, owner.uuid(), &[a.uuid()], 2, &[], 0.5).await;
+    let d_score = got
+        .iter()
+        .find(|(g, _)| *g == d.uuid())
+        .map(|(_, s)| *s)
+        .expect("d reached");
+    assert!(
+        (d_score - 0.25).abs() < 1e-5,
+        "MAX over paths: the strong 2-hop path (0.25) wins over the weak direct path (0.2), \
+         not their sum (0.45); got {d_score}"
+    );
+}
+
+/// Folded edges are excluded from graph traversal (the `NOT e.is_folded` predicate in `adj`).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn graph_expand_excludes_folded_edges(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "gfold").await;
+    let a = mk_embedded(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "a",
+        "temper://gfold/a",
+        unit(0),
+    )
+    .await;
+    let b = mk_embedded(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "b",
+        "temper://gfold/b",
+        unit(1),
+    )
+    .await;
+    edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+
+    // Sanity: with the edge live, b is reachable from the seed a.
+    let before = graph_expand(&pool, owner.uuid(), &[a.uuid()], 2, &[], 0.5).await;
+    assert!(
+        before.iter().any(|(id, _)| *id == b.uuid()),
+        "unfolded edge reaches b"
+    );
+
+    // Fold the edge directly — a sanctioned fixture mutation (no edge-id plumbing needed).
+    sqlx::query("UPDATE kb_edges SET is_folded = true WHERE source_id = $1 AND target_id = $2")
+        .bind(a.uuid())
+        .bind(b.uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let after = graph_expand(&pool, owner.uuid(), &[a.uuid()], 2, &[], 0.5).await;
+    assert!(
+        after.iter().all(|(id, _)| *id != b.uuid()),
+        "folded edge is excluded from `adj` — b is no longer reachable"
     );
 }
 
@@ -516,6 +660,20 @@ async fn blend_self_seeding_boosts_structural_neighbor(pool: sqlx::PgPool) {
     )
     .await;
     edge(&pool, core, neighbor, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    // Control: like `neighbor` it does NOT match the text, but it is edged to NOTHING. With no
+    // FTS/vector/graph signal it never enters the candidate set — so "neighbor ranks above the
+    // control" is the strongest form: present vs absent. This proves the EDGE (not some artifact)
+    // is what surfaces `neighbor`.
+    let control = mk_embedded(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "totally disconnected wording",
+        "temper://ss/ctrl",
+        unit(2),
+    )
+    .await;
 
     let on = readback::unified_search(
         &pool,
@@ -530,6 +688,10 @@ async fn blend_self_seeding_boosts_structural_neighbor(pool: sqlx::PgPool) {
     assert!(
         on.iter().any(|h| h.resource_id == neighbor.uuid()),
         "graph recall-expansion pulls in the structurally-near non-text-matching neighbor"
+    );
+    assert!(
+        on.iter().all(|h| h.resource_id != control.uuid()),
+        "the no-connection / no-text control never surfaces — neighbor ranks above it (present vs absent)"
     );
 
     let off = readback::unified_search(
