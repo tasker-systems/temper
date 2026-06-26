@@ -30,6 +30,20 @@ pub(crate) struct ErrorBody {
     error: ErrorDetail,
 }
 
+impl ErrorBody {
+    /// Build a typed error body with no `details` payload — the shape used by
+    /// both `ApiError::into_response` and the router fallback handler.
+    pub(crate) fn new(code: &'static str, message: String) -> Self {
+        Self {
+            error: ErrorDetail {
+                code,
+                message,
+                details: None,
+            },
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 pub(crate) struct ErrorDetail {
     code: &'static str,
