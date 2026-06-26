@@ -59,6 +59,21 @@ async fn l0_write_requires_system_admin(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn l0_is_immutable_when_gating_unconfigured(pool: PgPool) {
+    // Do NOT configure gating — the canonical seed leaves `gating_team_slug` NULL (open mode).
+    // The L0 write gate is fail-CLOSED: the reserved map requires `is_system_admin` unconditionally,
+    // and with gating unconfigured `is_system_admin` is false for everyone — so L0 is denied to all
+    // (immutable) until an operator intentionally configures gating. Without the unconditional L0
+    // branch this would be fail-OPEN (the NULL gating slug would make the root-join branch return Ok).
+    let any_profile = common::fixtures::create_test_profile(&pool, "anyone@example.com").await;
+    let denied = access_service::require_cogmap_write_admin(&pool, any_profile, L0_COGMAP).await;
+    assert!(
+        matches!(denied, Err(ApiError::Forbidden)),
+        "L0 must be immutable (Forbidden to all) when gating is unconfigured, got {denied:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn non_root_cogmap_is_ungated(pool: PgPool) {
     set_gating_team(&pool).await;
 

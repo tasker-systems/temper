@@ -42,14 +42,30 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: Uuid) -> ApiResult<bool>
     Ok(result.unwrap_or(false))
 }
 
-/// Structural write-gate: a write to a cognitive map joined to the gating (root) team requires
-/// `is_system_admin`. A map NOT joined to the gating team is ungated here (returns `Ok`) — its own
-/// access rules apply elsewhere. The L0 system-default map is root-joined, so this gates it.
+/// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is
+/// fail-CLOSED and independent of `gating_team_slug`: the kernel is immutable until an operator
+/// intentionally configures gating + promotes an admin. See [`require_cogmap_write_admin`].
+const L0_KERNEL_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
+
+/// Structural write-gate. A write requires `is_system_admin` when EITHER:
+/// - the target is the reserved **L0 kernel** map (unconditionally — independent of
+///   `gating_team_slug`), OR
+/// - the target cogmap is joined to the gating (root) team.
+///
+/// Otherwise the write is ungated here (returns `Ok`) — its own access rules apply elsewhere.
+///
+/// The L0 special-case is **fail-CLOSED**: when gating is unconfigured (`gating_team_slug` NULL, the
+/// canonical-seed default), the root-join EXISTS finds nothing AND `is_system_admin` is false for
+/// everyone — so L0 is immutable (denied to all) until an operator configures gating. Without the
+/// unconditional L0 branch the gate would be fail-OPEN (any authed user could rewrite the kernel out
+/// of the box), because a NULL `gating_team_slug` makes the root-join branch return `Ok` for everyone.
 pub async fn require_cogmap_write_admin(
     pool: &PgPool,
     profile_id: Uuid,
     cogmap_id: Uuid,
 ) -> ApiResult<()> {
+    let is_reserved = cogmap_id == L0_KERNEL_COGMAP;
+
     let is_root_joined: bool = sqlx::query_scalar!(
         "SELECT EXISTS( \
            SELECT 1 FROM kb_team_cogmaps tc \
@@ -62,8 +78,8 @@ pub async fn require_cogmap_write_admin(
     .await?
     .unwrap_or(false);
 
-    if !is_root_joined {
-        return Ok(()); // gate doesn't apply to non-root-team cogmaps
+    if !is_reserved && !is_root_joined {
+        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
     }
     if is_system_admin(pool, profile_id).await? {
         Ok(())

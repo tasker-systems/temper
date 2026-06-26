@@ -436,35 +436,109 @@ async fn explicit_tombstone_folds_kernel_resource(pool: PgPool) {
     );
 }
 
-// ── (f) mutex: an open admin_reconcile envelope blocks a concurrent reconcile ────────
+// ── (f) FIX #3 fail-fast: an unresolved edge target is rejected with NO writes ───────
+
+/// Count OPEN `admin_reconcile` invocations on L0 — proves the atomic rollback left no stale envelope.
+async fn open_admin_reconcile_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_invocations \
+          WHERE trigger_kind = 'admin_reconcile' AND status = 'open'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("count open admin_reconcile invocations")
+}
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn open_admin_reconcile_blocks_a_concurrent_run(pool: PgPool) {
-    // Manually open an `admin_reconcile` invocation on L0 (the mutex the reconciler checks).
-    let (_, emitter) = temper_substrate::readback::system_actor(&pool)
+async fn unresolved_edge_target_is_rejected_with_no_writes(pool: PgPool) {
+    let be = backend(&pool).await;
+    // One entry whose edge points at a `to_origin_uri` that is NOT present in the request entries and
+    // NOT in the (empty) live slice — a genesis-manifest typo. Pre-flight must reject it BadRequest.
+    let req = request(vec![entry(
+        "temper://kernel/concept/cogmap",
+        "cogmap",
+        "A cognitive map.",
+        0.1,
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![ReconcileEdge {
+            to_origin_uri: "temper://kernel/concept/does-not-exist".to_string(),
+            kind: "express".to_string(),
+            polarity: "forward".to_string(),
+            label: None,
+            weight: 1.0,
+        }],
+    )]);
+
+    let err = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, req))
+        .await
+        .expect_err("an unresolved edge target must be rejected");
+    assert!(
+        matches!(err, temper_core::error::TemperError::BadRequest(_)),
+        "expected BadRequest, got {err:?}"
+    );
+
+    // Pre-flight runs before the transaction opens → nothing was written (no resource, no envelope).
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
         .await
         .unwrap();
-    temper_substrate::writes::open_invocation(
-        &pool,
-        temper_substrate::writes::OpenParams {
-            trigger_kind: "admin_reconcile".to_string(),
-            originating: temper_substrate::ids::CogmapId::from(L0_COGMAP),
-            parent: None,
-            scoped_entity: emitter,
-            emitter,
-        },
-    )
-    .await
-    .expect("open mutex invocation");
-
-    let be = backend(&pool).await;
-    let err = be
-        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![])))
-        .await
-        .expect_err("a second reconcile must be refused while one is open");
     assert!(
-        matches!(err, temper_core::error::TemperError::Conflict(_)),
-        "expected Conflict, got {err:?}"
+        slice.is_empty(),
+        "a rejected manifest must write NO kernel resources (pre-flight + atomicity)"
+    );
+    assert_eq!(
+        open_admin_reconcile_count(&pool).await,
+        0,
+        "a rejected manifest must open NO admin_reconcile envelope"
+    );
+}
+
+// ── (g) atomicity: a mid-transaction failure rolls back EVERYTHING (no partial state) ─
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn failed_reconcile_leaves_no_partial_state(pool: PgPool) {
+    let be = backend(&pool).await;
+    // This request PASSES pre-flight (the edge target resolves — a self-edge), so the envelope opens and
+    // the resource is created in Phase 1; then Phase 2 hits an UNKNOWN edge kind and errors. Because the
+    // whole run is one transaction, the create + the envelope-open both roll back.
+    let req = request(vec![entry(
+        "temper://kernel/concept/cogmap",
+        "cogmap",
+        "A cognitive map.",
+        0.1,
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![ReconcileEdge {
+            to_origin_uri: "temper://kernel/concept/cogmap".to_string(), // resolves (self) → passes pre-flight
+            kind: "not_a_real_edge_kind".to_string(), // rejected mid-tx in Phase 2
+            polarity: "forward".to_string(),
+            label: None,
+            weight: 1.0,
+        }],
+    )]);
+
+    let err = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, req))
+        .await
+        .expect_err("an unknown edge kind must fail the reconcile");
+    assert!(
+        matches!(err, temper_core::error::TemperError::BadRequest(_)),
+        "expected BadRequest (unknown edge kind), got {err:?}"
+    );
+
+    // Atomic rollback: the Phase-1 create is gone AND no admin_reconcile envelope remains open.
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+        .await
+        .unwrap();
+    assert!(
+        slice.is_empty(),
+        "the Phase-1 create must have rolled back with the failed transaction"
+    );
+    assert_eq!(
+        open_admin_reconcile_count(&pool).await,
+        0,
+        "the opened envelope must have rolled back — no stale open invocation"
     );
 }
 

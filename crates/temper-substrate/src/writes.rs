@@ -164,14 +164,24 @@ pub struct UpdateParams<'a> {
 
 pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    update_resource_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(())
+}
 
+/// In-transaction variant of [`update_resource`] — fires on a caller-supplied connection (no
+/// begin/commit). The body-block lookup runs on `&mut *conn` so it shares the caller's transaction.
+pub async fn update_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: UpdateParams<'_>,
+) -> Result<()> {
     if let Some(body) = p.body {
         // resolve the resource's single non-folded body block (CONFORM scenario runner revise).
         let block_ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
         )
         .bind(p.resource.uuid())
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut *conn)
         .await?;
         let block_id = match block_ids.as_slice() {
             [one] => *one,
@@ -194,7 +204,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
             );
         }
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::BlockMutate {
                 block: crate::ids::BlockId::from(block_id),
                 chunks: &prepared.chunks,
@@ -206,7 +216,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
 
     for (key, value) in p.properties {
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::PropertySet {
                 resource: p.resource,
                 key,
@@ -220,7 +230,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
 
     if p.title.is_some() || p.origin_uri.is_some() {
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::ResourceUpdate {
                 resource: p.resource,
                 title: p.title,
@@ -233,7 +243,7 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
 
     if let Some(dest) = p.rehome_to {
         fire(
-            &mut tx,
+            &mut *conn,
             SeedAction::ResourceRehome {
                 resource: p.resource,
                 home: AnchorRef::context(dest),
@@ -243,15 +253,25 @@ pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
         .await?;
     }
 
-    tx.commit().await?;
     Ok(())
 }
 
 /// Soft-delete a resource.
 pub async fn delete_resource(pool: &PgPool, resource: ResourceId, emitter: EntityId) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fire(&mut tx, SeedAction::ResourceDelete { resource, emitter }).await?;
+    delete_resource_in_tx(&mut tx, resource, emitter).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`delete_resource`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn delete_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    emitter: EntityId,
+) -> Result<()> {
+    fire(conn, SeedAction::ResourceDelete { resource, emitter }).await?;
     Ok(())
 }
 
@@ -280,14 +300,25 @@ pub async fn create_kernel_resource(
     pool: &PgPool,
     p: KernelCreateParams<'_>,
 ) -> Result<ResourceId> {
+    let mut tx = begin_scoped(pool).await?;
+    let new_id = create_kernel_resource_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(new_id)
+}
+
+/// In-transaction variant of [`create_kernel_resource`] — fires on a caller-supplied connection (no
+/// begin/commit) so the L0 reconcile can run every mutation in ONE serializable transaction.
+pub async fn create_kernel_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: KernelCreateParams<'_>,
+) -> Result<ResourceId> {
     let block = match p.chunks {
         Some(chunks) => prepare_block_from_chunks(0, None, chunks),
         None => prepare_block(0, None, p.body)?,
     };
     let blocks = [block];
-    let mut tx = begin_scoped(pool).await?;
     let new_id = fire(
-        &mut tx,
+        conn,
         SeedAction::ResourceCreate {
             title: p.title,
             origin_uri: p.origin_uri,
@@ -304,7 +335,6 @@ pub async fn create_kernel_resource(
     )
     .await?
     .resource()?;
-    tx.commit().await?;
     Ok(new_id)
 }
 
@@ -320,8 +350,21 @@ pub async fn set_facet(
     emitter: EntityId,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    set_facet_in_tx(&mut tx, resource, values, weight, emitter).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`set_facet`] — fires on a caller-supplied connection (no begin/commit).
+pub async fn set_facet_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    values: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+) -> Result<()> {
     fire(
-        &mut tx,
+        conn,
         SeedAction::FacetSet {
             resource,
             values,
@@ -330,7 +373,6 @@ pub async fn set_facet(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -345,8 +387,21 @@ pub async fn set_property(
     emitter: EntityId,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    set_property_in_tx(&mut tx, resource, key, value, emitter).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`set_property`] — fires on a caller-supplied connection (no begin/commit).
+pub async fn set_property_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    key: &str,
+    value: &serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
     fire(
-        &mut tx,
+        conn,
         SeedAction::PropertySet {
             resource,
             key,
@@ -356,7 +411,6 @@ pub async fn set_property(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -398,8 +452,19 @@ pub struct KernelEdgeParams<'a> {
 
 pub async fn assert_kernel_edge(pool: &PgPool, p: KernelEdgeParams<'_>) -> Result<EdgeId> {
     let mut tx = begin_scoped(pool).await?;
+    let edge = assert_kernel_edge_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(edge)
+}
+
+/// In-transaction variant of [`assert_kernel_edge`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn assert_kernel_edge_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: KernelEdgeParams<'_>,
+) -> Result<EdgeId> {
     let edge = fire(
-        &mut tx,
+        conn,
         SeedAction::RelationshipAssert {
             src: p.src,
             tgt: p.tgt,
@@ -413,7 +478,6 @@ pub async fn assert_kernel_edge(pool: &PgPool, p: KernelEdgeParams<'_>) -> Resul
     )
     .await?
     .relationship()?;
-    tx.commit().await?;
     Ok(edge)
 }
 
@@ -501,8 +565,21 @@ pub async fn fold_relationship(
     emitter: EntityId,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    fold_relationship_in_tx(&mut tx, edge, reason, emitter).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`fold_relationship`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn fold_relationship_in_tx(
+    conn: &mut sqlx::PgConnection,
+    edge: EdgeId,
+    reason: Option<&str>,
+    emitter: EntityId,
+) -> Result<()> {
     fire(
-        &mut tx,
+        conn,
         SeedAction::RelationshipFold {
             edge,
             reason,
@@ -510,7 +587,6 @@ pub async fn fold_relationship(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -530,10 +606,21 @@ pub struct OpenParams {
 
 /// Open an invocation envelope, returning the minted invocation id.
 pub async fn open_invocation(pool: &PgPool, p: OpenParams) -> Result<InvocationId> {
-    let invocation = InvocationId::from(Uuid::now_v7());
     let mut tx = begin_scoped(pool).await?;
+    let opened = open_invocation_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(opened)
+}
+
+/// In-transaction variant of [`open_invocation`] — fires on a caller-supplied connection (no
+/// begin/commit) so the open + the reconcile body + the close share ONE serializable transaction.
+pub async fn open_invocation_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: OpenParams,
+) -> Result<InvocationId> {
+    let invocation = InvocationId::from(Uuid::now_v7());
     let opened = fire(
-        &mut tx,
+        conn,
         SeedAction::InvocationOpen {
             invocation,
             trigger_kind: &p.trigger_kind,
@@ -545,7 +632,6 @@ pub async fn open_invocation(pool: &PgPool, p: OpenParams) -> Result<InvocationI
     )
     .await?
     .invocation()?;
-    tx.commit().await?;
     Ok(opened)
 }
 
@@ -562,8 +648,31 @@ pub async fn close_invocation(
     emitter: EntityId,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fire(
+    close_invocation_in_tx(
         &mut tx,
+        invocation,
+        originating,
+        disposition,
+        outcome,
+        emitter,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`close_invocation`] — fires on a caller-supplied connection (no
+/// begin/commit).
+pub async fn close_invocation_in_tx(
+    conn: &mut sqlx::PgConnection,
+    invocation: InvocationId,
+    originating: CogmapId,
+    disposition: payloads::Disposition,
+    outcome: serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
+    fire(
+        conn,
         SeedAction::InvocationClose {
             invocation,
             disposition,
@@ -573,6 +682,5 @@ pub async fn close_invocation(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }

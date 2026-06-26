@@ -687,7 +687,10 @@ pub struct KernelSliceRow {
 /// (`kb_resources`/`kb_resource_homes`/`kb_properties`), its `.sqlx` cache prepared with
 /// `search_path=temper_next` (`cargo make prepare-next`); at runtime the connection search_path points
 /// at the one schema post-collapse.
-pub async fn kernel_slice(pool: &PgPool, cogmap_id: Uuid) -> Result<Vec<KernelSliceRow>> {
+pub async fn kernel_slice(
+    executor: impl sqlx::PgExecutor<'_>,
+    cogmap_id: Uuid,
+) -> Result<Vec<KernelSliceRow>> {
     let rows = sqlx::query!(
         r#"SELECT r.id              AS "resource_id!",
                   r.origin_uri      AS "origin_uri!",
@@ -708,7 +711,7 @@ pub async fn kernel_slice(pool: &PgPool, cogmap_id: Uuid) -> Result<Vec<KernelSl
             ORDER BY r.origin_uri"#,
         cogmap_id,
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(rows
@@ -742,29 +745,34 @@ pub async fn system_actor(pool: &PgPool) -> Result<(ProfileId, EntityId)> {
     Ok((ProfileId::from(row.owner), EntityId::from(row.emitter)))
 }
 
-/// Is there an OPEN invocation of `trigger_kind` on `cogmap_id`? The reconcile mutex: an in-flight
-/// `admin_reconcile` envelope on a cogmap serializes a second reconcile against it (the open-row
-/// check the spec §7 mandates before opening a new envelope).
+/// Resolve a live (non-folded) resource→resource edge by `(source, target, kind)` over `kb_edges`,
+/// returning its id or `None`. The L0 reconcile's Phase-3 edge-fold uses this to find the edge a
+/// `fold_edges` tombstone targets. Substrate SQL lives in the substrate (CLAUDE.md "Service layer owns
+/// SQL") — the reconciler in `db_backend.rs` calls this rather than inlining the query.
+///
+/// Casts the column to text (`edge_kind::text = $3`) and binds the SQL enum label, so the compile-time
+/// macro needs no custom `edge_kind` Rust type. Takes `impl sqlx::PgExecutor` so the reconciler can run
+/// it on its serializable transaction connection.
 ///
 /// Compile-time macro (`temper_next` `.sqlx` cache, `cargo make prepare-next`).
-pub async fn has_open_invocation(
-    pool: &PgPool,
-    cogmap_id: Uuid,
-    trigger_kind: &str,
-) -> Result<bool> {
-    let exists = sqlx::query_scalar!(
-        r#"SELECT EXISTS(
-              SELECT 1 FROM kb_invocations
-               WHERE originating_cogmap_id = $1
-                 AND trigger_kind = $2
-                 AND status = 'open'
-           ) AS "exists!""#,
-        cogmap_id,
-        trigger_kind,
+pub async fn find_edge(
+    executor: impl sqlx::PgExecutor<'_>,
+    src: Uuid,
+    tgt: Uuid,
+    kind: &crate::affinity::EdgeKind,
+) -> Result<Option<Uuid>> {
+    let id = sqlx::query_scalar!(
+        r#"SELECT id FROM kb_edges
+            WHERE source_id = $1 AND target_id = $2
+              AND source_table = 'kb_resources' AND target_table = 'kb_resources'
+              AND edge_kind::text = $3 AND NOT is_folded"#,
+        src,
+        tgt,
+        kind.as_sql(),
     )
-    .fetch_one(pool)
+    .fetch_optional(executor)
     .await?;
-    Ok(exists)
+    Ok(id)
 }
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
@@ -917,7 +925,7 @@ pub struct Neighbor {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
+pub async fn neighbors(executor: impl sqlx::PgExecutor<'_>, new_id: Uuid) -> Result<Vec<Neighbor>> {
     // WS2 NOTE — deliberately UNSCOPED (no principal). `neighbors` has no surface caller yet (only
     // the §9 data-parity test reads it), so visibility-scoping it now protects nothing (SG-5: no
     // speculative surface). The leak-safe gate is `edges_visible_to(principal)` (edge-home + both
@@ -946,7 +954,7 @@ pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
             AND NOT e.is_folded",
     )
     .bind(new_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(rows
