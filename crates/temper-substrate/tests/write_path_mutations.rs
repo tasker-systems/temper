@@ -1,9 +1,8 @@
 #![cfg(feature = "artifact-tests")]
 //! WS6 4c write-path mutation functions — the new event-sourced mutations the `NextBackend` dispatches
 //! to: the edge-uniqueness invariant (idempotent `relationship_assert`), `resource_delete`/`update`/
-//! `rehome`, and `relationship_retype`/`reweight`. Each resets the artifact (01+02 via psql), boot-seeds
-//! the system actor, and exercises the mutation through the `events::fire` surface. Serialized via the
-//! `temper-substrate-write` nextest group (it owns the namespace).
+//! `rehome`, and `relationship_retype`/`reweight`. Each boot-seeds the system actor and exercises the
+//! mutation through the `events::fire` surface. Isolated ephemeral DB via `MIGRATOR`.
 
 mod common;
 
@@ -11,18 +10,10 @@ use temper_substrate::content::{PreparedBlock, PreparedChunk};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, ChunkId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
-use temper_substrate::{affinity::EdgeKind, scenario::bootseed, substrate};
+use temper_substrate::{affinity::EdgeKind, scenario::bootseed};
 use uuid::Uuid;
 
 // ── shared helpers ────────────────────────────────────────────────────────────
-
-/// Reset the artifact (01+02), connect, boot-seed the system actor. The standard write-path preamble.
-async fn setup() -> sqlx::PgPool {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    bootseed::seed_system(&pool).await.unwrap();
-    pool
-}
 
 /// The boot-seeded canonical `system` profile + entity (owner + emitter for fixture writes).
 async fn system_actor(pool: &sqlx::PgPool) -> (ProfileId, EntityId) {
@@ -68,7 +59,7 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
     }
 }
 
-/// Create one resource homed in `ctx`, returning its id. Own tx with the search_path discipline.
+/// Create one resource homed in `ctx`, returning its id.
 async fn make_resource(
     pool: &sqlx::PgPool,
     ctx: ContextId,
@@ -79,10 +70,6 @@ async fn make_resource(
 ) -> ResourceId {
     let blocks = vec![one_chunk_block(body)];
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let id = fire(
         &mut tx,
         SeedAction::ResourceCreate {
@@ -105,20 +92,19 @@ async fn make_resource(
     id
 }
 
-/// Fire one action in its own tx (search_path set), returning its `Fired` record.
+/// Fire one action in its own tx, returning its `Fired` record.
 async fn fire_one(pool: &sqlx::PgPool, action: SeedAction<'_>) -> temper_substrate::events::Fired {
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let fired = fire(&mut tx, action).await.unwrap();
     tx.commit().await.unwrap();
     fired
 }
 
-/// Assert one edge `src → tgt`, returning its id. Own tx with the search_path discipline.
-#[allow(clippy::too_many_arguments)]
+/// Assert one edge `src → tgt`, returning its id.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test fixture — all params define the edge under test"
+)]
 async fn assert_edge(
     pool: &sqlx::PgPool,
     src: ResourceId,
@@ -130,10 +116,6 @@ async fn assert_edge(
     emitter: EntityId,
 ) -> EdgeId {
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let id = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
@@ -159,9 +141,9 @@ async fn assert_edge(
 
 /// Re-asserting the same active (src,tgt,kind,label) updates the existing edge's weight rather than
 /// creating a duplicate active edge (spec 4c: keep production's no-duplicate-active-edge invariant).
-#[tokio::test]
-async fn reassert_active_edge_is_idempotent() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn reassert_active_edge_is_idempotent(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "edges").await;
     let a = make_resource(&pool, ctx, owner, emitter, "temper://e/a", "alpha").await;
@@ -192,7 +174,7 @@ async fn reassert_active_edge_is_idempotent() {
 
     assert_eq!(e1, e2, "re-assert must return the SAME edge id");
     let (count, weight): (i64, f64) = sqlx::query_as(
-        "SELECT count(*), max(weight) FROM temper_next.kb_edges \
+        "SELECT count(*), max(weight) FROM kb_edges \
          WHERE source_id=$1 AND target_id=$2 AND NOT is_folded",
     )
     .bind(a.uuid())
@@ -206,9 +188,9 @@ async fn reassert_active_edge_is_idempotent() {
 
 /// A folded edge does NOT block a fresh active assert of the same relationship: the partial unique
 /// index excludes folded rows, so the second assert mints a NEW active edge.
-#[tokio::test]
-async fn reassert_after_fold_creates_fresh_edge() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn reassert_after_fold_creates_fresh_edge(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "edges").await;
     let a = make_resource(&pool, ctx, owner, emitter, "temper://e/a", "alpha").await;
@@ -218,10 +200,6 @@ async fn reassert_after_fold_creates_fresh_edge() {
 
     // fold e1
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     fire(
         &mut tx,
         SeedAction::RelationshipFold {
@@ -239,7 +217,7 @@ async fn reassert_after_fold_creates_fresh_edge() {
 
     let (active, folded): (i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE NOT is_folded), count(*) FILTER (WHERE is_folded) \
-         FROM temper_next.kb_edges WHERE source_id=$1 AND target_id=$2",
+         FROM kb_edges WHERE source_id=$1 AND target_id=$2",
     )
     .bind(a.uuid())
     .bind(b.uuid())
@@ -252,9 +230,9 @@ async fn reassert_after_fold_creates_fresh_edge() {
 
 // ── Task 1.3: resource_delete ───────────────────────────────────────────────────
 
-#[tokio::test]
-async fn resource_delete_sets_inactive() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resource_delete_sets_inactive(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "del").await;
     let r = make_resource(&pool, ctx, owner, emitter, "temper://d/r", "body").await;
@@ -268,20 +246,19 @@ async fn resource_delete_sets_inactive() {
     )
     .await;
 
-    let active: bool =
-        sqlx::query_scalar("SELECT is_active FROM temper_next.kb_resources WHERE id=$1")
-            .bind(r.uuid())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let active: bool = sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id=$1")
+        .bind(r.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert!(!active, "resource_delete must flip is_active to false");
 }
 
 // ── Task 1.4: resource_update ───────────────────────────────────────────────────
 
-#[tokio::test]
-async fn resource_update_changes_title_only() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resource_update_changes_title_only(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "upd").await;
     // make_resource sets title == origin_uri == "temper://u/r"
@@ -299,7 +276,7 @@ async fn resource_update_changes_title_only() {
     .await;
 
     let (title, uri): (String, String) =
-        sqlx::query_as("SELECT title, origin_uri FROM temper_next.kb_resources WHERE id=$1")
+        sqlx::query_as("SELECT title, origin_uri FROM kb_resources WHERE id=$1")
             .bind(r.uuid())
             .fetch_one(&pool)
             .await
@@ -313,9 +290,9 @@ async fn resource_update_changes_title_only() {
 
 // ── Task 1.5: resource_rehome ───────────────────────────────────────────────────
 
-#[tokio::test]
-async fn resource_rehome_moves_to_destination_context() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resource_rehome_moves_to_destination_context(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx_a = make_context(&pool, owner, "ctx-a").await;
     let ctx_b = make_context(&pool, owner, "ctx-b").await;
@@ -331,13 +308,12 @@ async fn resource_rehome_moves_to_destination_context() {
     )
     .await;
 
-    let anchor: Uuid = sqlx::query_scalar(
-        "SELECT anchor_id FROM temper_next.kb_resource_homes WHERE resource_id=$1",
-    )
-    .bind(r.uuid())
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let anchor: Uuid =
+        sqlx::query_scalar("SELECT anchor_id FROM kb_resource_homes WHERE resource_id=$1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(
         anchor,
         ctx_b.uuid(),
@@ -347,9 +323,9 @@ async fn resource_rehome_moves_to_destination_context() {
 
 // ── Task 1.6: relationship_retype ───────────────────────────────────────────────
 
-#[tokio::test]
-async fn relationship_retype_changes_kind() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn relationship_retype_changes_kind(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "rt").await;
     let a = make_resource(&pool, ctx, owner, emitter, "temper://rt/a", "alpha").await;
@@ -367,20 +343,19 @@ async fn relationship_retype_changes_kind() {
     )
     .await;
 
-    let kind: String =
-        sqlx::query_scalar("SELECT edge_kind::text FROM temper_next.kb_edges WHERE id=$1")
-            .bind(edge.uuid())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let kind: String = sqlx::query_scalar("SELECT edge_kind::text FROM kb_edges WHERE id=$1")
+        .bind(edge.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(kind, "contains", "edge_kind retyped");
 }
 
 // ── Task 1.7: relationship_reweight ─────────────────────────────────────────────
 
-#[tokio::test]
-async fn relationship_reweight_changes_weight() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn relationship_reweight_changes_weight(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "rw").await;
     let a = make_resource(&pool, ctx, owner, emitter, "temper://rw/a", "alpha").await;
@@ -397,7 +372,7 @@ async fn relationship_reweight_changes_weight() {
     )
     .await;
 
-    let weight: f64 = sqlx::query_scalar("SELECT weight FROM temper_next.kb_edges WHERE id=$1")
+    let weight: f64 = sqlx::query_scalar("SELECT weight FROM kb_edges WHERE id=$1")
         .bind(edge.uuid())
         .fetch_one(&pool)
         .await
@@ -410,10 +385,10 @@ async fn relationship_reweight_changes_weight() {
 /// Fire every new mutation, then reset + replay the ledger through the SAME `_project_*` halves and
 /// prove the projections come back byte-identical (replay-is-the-same-code-path, spec §0/§3). Also
 /// covers the relationship_folded replay arm wired alongside the 4c ones.
-#[tokio::test]
-async fn mutations_replay_byte_identically() {
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn mutations_replay_byte_identically(pool: sqlx::PgPool) {
     use temper_substrate::replay;
-    let pool = setup().await;
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx_a = make_context(&pool, owner, "rp-a").await;
     let ctx_b = make_context(&pool, owner, "rp-b").await;
@@ -489,7 +464,7 @@ async fn mutations_replay_byte_identically() {
 
     let before = replay::dump_projections(&pool).await.unwrap();
     let snap = replay::snapshot(&pool).await.unwrap();
-    common::reset_artifact();
+    common::reset_schema(&pool).await;
     replay::replay(&pool, &snap).await.unwrap();
     let after = replay::dump_projections(&pool).await.unwrap();
 
@@ -504,9 +479,9 @@ async fn mutations_replay_byte_identically() {
 /// Setting a single-valued key repeatedly (incl. revert-to-a-prior-value) leaves exactly one ACTIVE
 /// row at the latest value, with the prior values folded as history — and never trips the active
 /// uniqueness index.
-#[tokio::test]
-async fn property_set_supersedes_prior_value() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn property_set_supersedes_prior_value(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "ps").await;
     let r = make_resource(&pool, ctx, owner, emitter, "temper://ps/r", "body").await;
@@ -526,7 +501,7 @@ async fn property_set_supersedes_prior_value() {
     }
 
     let active: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM temper_next.kb_properties \
+        "SELECT count(*) FROM kb_properties \
          WHERE owner_id=$1 AND property_key='temper-stage' AND NOT is_folded",
     )
     .bind(r.uuid())
@@ -539,7 +514,7 @@ async fn property_set_supersedes_prior_value() {
     );
 
     let val: serde_json::Value = sqlx::query_scalar(
-        "SELECT property_value FROM temper_next.kb_properties \
+        "SELECT property_value FROM kb_properties \
          WHERE owner_id=$1 AND property_key='temper-stage' AND NOT is_folded",
     )
     .bind(r.uuid())
@@ -553,7 +528,7 @@ async fn property_set_supersedes_prior_value() {
     );
 
     let total: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM temper_next.kb_properties \
+        "SELECT count(*) FROM kb_properties \
          WHERE owner_id=$1 AND property_key='temper-stage'",
     )
     .bind(r.uuid())
@@ -567,10 +542,10 @@ async fn property_set_supersedes_prior_value() {
 
 /// create_resource + update_resource through the typed write ops, observed via readback — proves the
 /// composition (block + single-valued properties + title + rehome) lands at the §9 read floor.
-#[tokio::test]
-async fn writes_create_then_update_reflected_in_readback() {
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
     use temper_substrate::{readback, writes};
-    let pool = setup().await;
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "w").await;
     let ctx2 = make_context(&pool, owner, "w2").await;
@@ -620,28 +595,27 @@ async fn writes_create_then_update_reflected_in_readback() {
         "stage superseded, single current value"
     );
 
-    let body: String = sqlx::query_scalar("SELECT temper_next.resource_body_text($1)")
+    let body: String = sqlx::query_scalar("SELECT resource_body_text($1)")
         .bind(r.uuid())
         .fetch_one(&pool)
         .await
         .unwrap();
     assert!(body.contains("revised"), "body revised: {body:?}");
 
-    let anchor: Uuid = sqlx::query_scalar(
-        "SELECT anchor_id FROM temper_next.kb_resource_homes WHERE resource_id=$1",
-    )
-    .bind(r.uuid())
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let anchor: Uuid =
+        sqlx::query_scalar("SELECT anchor_id FROM kb_resource_homes WHERE resource_id=$1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(anchor, ctx2.uuid(), "rehomed to ctx2");
 }
 
 /// The natural-key resolvers find an entity + context by their synthesis-written keys.
-#[tokio::test]
-async fn writes_resolvers_find_context_and_emitter() {
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn writes_resolvers_find_context_and_emitter(pool: sqlx::PgPool) {
     use temper_substrate::writes;
-    let pool = setup().await;
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, _sys) = system_actor(&pool).await;
     // a context named "My Ctx" → slug "my-ctx"; the owner's per-surface emitter entity is named
     // `<handle>@<surface>` (the de-hardcoded resolver) — the owner is the boot-seeded `system` actor,
@@ -650,10 +624,6 @@ async fn writes_resolvers_find_context_and_emitter() {
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'system@cli')")
         .bind(owner.uuid())
         .execute(&mut *tx)
@@ -665,7 +635,7 @@ async fn writes_resolvers_find_context_and_emitter() {
         .await
         .unwrap();
     let exists: bool = sqlx::query_scalar(
-        "SELECT exists(SELECT 1 FROM temper_next.kb_contexts WHERE id=$1 AND slug='my-ctx')",
+        "SELECT exists(SELECT 1 FROM kb_contexts WHERE id=$1 AND slug='my-ctx')",
     )
     .bind(ctx.uuid())
     .fetch_one(&pool)
@@ -677,7 +647,7 @@ async fn writes_resolvers_find_context_and_emitter() {
     );
 
     let emitter = writes::resolve_emitter(&pool, owner, "cli").await.unwrap();
-    let name: String = sqlx::query_scalar("SELECT name FROM temper_next.kb_entities WHERE id=$1")
+    let name: String = sqlx::query_scalar("SELECT name FROM kb_entities WHERE id=$1")
         .bind(emitter.uuid())
         .fetch_one(&pool)
         .await

@@ -1,7 +1,7 @@
 -- Canonical system boot-seed (spec §2): what any temper system needs. Namespace-free —
--- every statement resolves against the connection-default schema (`public` in production; a
--- `temper_next` test namespace under the proving-ground harness wrapper). Mirrors
--- temper_next::scenario::bootseed::seed_system, translated to a plain migration.
+-- every statement resolves against the connection-default schema (`public` in production;
+-- ephemeral `public`-schema databases via `#[sqlx::test]` in artifact tests). Mirrors
+-- temper_substrate::scenario::bootseed::seed_system, translated to a plain migration.
 
 -- 1. The canonical system actor. Events require a NOT NULL emitter. kb_profiles.handle is UNIQUE;
 --    kb_entities has no unique constraint on (profile_id, name), so mirror bootseed's

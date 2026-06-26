@@ -17,7 +17,7 @@ const SYSTEM_SEED: &str = concat!(
 
 /// The canonical event-type names from the system boot-seed (the ledger vocabulary), exposed so the
 /// migration's synthesis bootstrap can seed the registry by name without the full [`seed_system`]
-/// (which also writes the system actor + global lenses and needs a `temper_next`-bound pool). One
+/// (which also writes the system actor + global lenses and needs a substrate pool). One
 /// source of truth for the vocabulary — `tests/fixtures/seeds/system.yaml`.
 pub fn system_event_type_names() -> Result<Vec<String>> {
     let boot: BootSeed = serde_yaml::from_str(&std::fs::read_to_string(SYSTEM_SEED)?)?;

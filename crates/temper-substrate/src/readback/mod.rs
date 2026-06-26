@@ -1,4 +1,4 @@
-//! WS6 §9 chunk-3 read surface over `temper_next.*` — read-only parity tooling.
+//! WS6 §9 chunk-3 read surface over the substrate tables — read-only parity tooling.
 //!
 //! This module ports the production read paths (list / meta / body / FTS / vector / neighbors) onto
 //! the synthesized substrate so each can be asserted against the production read for the same logical
@@ -15,11 +15,10 @@
 //! gate denies.
 //!
 //! Most reads are runtime `sqlx::query` (the pgvector `::vector` cast forces runtime; the rest follow
-//! for consistency). The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — post-collapse there is
-//! one schema, and the connection carries its search_path (dev: `temper_next,public`; live: `public`
-//! after the rename), so unqualified names and the visibility function's own unqualified internals all
-//! resolve correctly with no per-txn `SET LOCAL`. The lone compile-time macro ([`find_by_body_hash`])
-//! is likewise unqualified — its `.sqlx` cache is prepared with `search_path=temper_next`.
+//! for consistency). The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
+//! (`public`), and the connection's search_path resolves unqualified names and the visibility
+//! function's own unqualified internals correctly with no per-txn `SET LOCAL`. The lone compile-time
+//! macro ([`find_by_body_hash`]) is likewise unqualified and uses the workspace sqlx cache.
 
 use std::collections::HashMap;
 
@@ -84,7 +83,7 @@ impl From<anyhow::Error> for ReadbackError {
     }
 }
 
-/// One projected list row over `temper_next.*` — the readback counterpart of production's
+/// One projected list row over the substrate tables — the readback counterpart of production's
 /// `ResourceRow` for the fields the resource-list projection surfaces (`temper-api`'s
 /// `resource_service::list_visible` via the `vault_resources_browse` view): the resource's
 /// `origin_uri` + `title`, its `doc_type`, and the three workflow fields lifted from `managed_meta`
@@ -109,7 +108,7 @@ pub struct ListRow {
 }
 
 /// Port of production's resource-list projection (`resource_service::list_visible` over the
-/// `vault_resources_browse` view) onto `temper_next.*`: returns every synthesized resource (the §0
+/// `vault_resources_browse` view) onto the substrate tables: returns every synthesized resource (the §0
 /// active set — synthesis never carries soft-deleted rows, so there is no `is_active` filter to apply
 /// here) with the same projected fields production surfaces.
 ///
@@ -143,8 +142,8 @@ async fn ensure_visible(
     new_id: Uuid,
 ) -> std::result::Result<(), ReadbackError> {
     // `resources_visible_to` and its nested `profile_effective_teams`/`team_ancestors` resolve their
-    // unqualified references against the connection search_path — which post-collapse points at the one
-    // schema (dev: `temper_next,public`; live: `public` after the rename), so no per-txn `SET LOCAL`.
+    // unqualified references against the connection search_path (`public` — the one schema), so no
+    // per-txn `SET LOCAL`.
     let visible: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
     )
@@ -203,7 +202,7 @@ pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
         .collect())
 }
 
-/// One enriched list row over `temper_next.*` — the readback counterpart of MCP's `EnrichedResource`
+/// One enriched list row over the substrate tables — the readback counterpart of MCP's `EnrichedResource`
 /// list projection (Task 6 assembles `EnrichedResource` from this). Like [`ListRow`] it carries the
 /// row's display fields + the three workflow keys as typed columns, PLUS the full reconstructed
 /// managed/open frontmatter split (so the MCP enrichment needs no per-row meta round-trip — the §7
@@ -382,7 +381,7 @@ pub struct ReconstructedMeta {
     pub doc_type: String,
 }
 
-/// Port of production's `get_meta` (the meta tier behind `show`) onto `temper_next.*`: reconstruct the
+/// Port of production's `get_meta` (the meta tier behind `show`) onto the substrate tables: reconstruct the
 /// managed/open frontmatter split for one synthesized resource from its `kb_properties` rows — the
 /// inverse of the §7 fate table.
 ///
@@ -446,7 +445,7 @@ pub async fn meta(
     })
 }
 
-/// The migration-invariant subset of production's `ResourceRow`, reconstructed from `temper_next.*`
+/// The migration-invariant subset of production's `ResourceRow`, reconstructed from the substrate tables
 /// for the full-row reads (`show` / `by_uri`). The caller is `native_resource_row` in
 /// `db_backend.rs`, which passes fields through verbatim. Excludes non-invariant fields by
 /// construction: re-minted identity UUIDs (resource id / context id / profile ids) and
@@ -497,7 +496,7 @@ pub struct ResourceRowParity {
 }
 
 /// Port of production's full-row read (`resource_service::get_visible` / `resolve_by_uri`, behind
-/// `show` / `by_uri`) onto `temper_next.*`, at the §9 INVARIANT-FIELD floor. Joins the home (which
+/// `show` / `by_uri`) onto the substrate tables, at the §9 INVARIANT-FIELD floor. Joins the home (which
 /// anchors the context and owner profile), the `doc_type` property, and the workflow properties.
 /// Selects `created`/`updated` from `kb_resources` — populated from `kb_events.occurred_at` at write
 /// time (create sets both to genesis event's `occurred_at`; updates bump `updated`).
@@ -632,9 +631,8 @@ pub async fn body(
 ///
 /// Unlike the rest of this module (runtime, schema-qualified `sqlx::query`), this is a **compile-time
 /// macro** — the one in `readback`. The SQL is UNQUALIFIED (`kb_resources` / `resources_visible_to`):
-/// the per-crate `.sqlx` cache is prepared with `search_path=temper_next` (`cargo make prepare-next`),
-/// and at runtime the connection search_path points at the one schema post-collapse — so the unqualified
-/// table and `resources_visible_to`'s own unqualified internals all resolve correctly.
+/// the workspace sqlx cache covers it, and at runtime the connection search_path (`public`) resolves
+/// the unqualified table and `resources_visible_to`'s own unqualified internals correctly.
 pub async fn find_by_body_hash(
     pool: &PgPool,
     principal: Uuid,
@@ -654,7 +652,7 @@ pub async fn find_by_body_hash(
     Ok(dup)
 }
 
-/// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
+/// Port of production's FTS read (`search_service::search`, FTS-only) onto the substrate tables — the §9
 /// search read floor. Builds, per resource, the §9-REBUILT weighted tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
 ///
@@ -729,7 +727,7 @@ fn format_pgvector(v: &[f32]) -> String {
     out
 }
 
-/// Cosine vector search over `temper_next` chunks (§9 vector floor). Per resource, the best (min-cosine-
+/// Cosine vector search over substrate chunks (§9 vector floor). Per resource, the best (min-cosine-
 /// distance) current chunk decides rank; results ascend by that distance — exactly production's
 /// `vec_hits` (MIN distance per resource, `ORDER BY MIN(embedding <=> query)`). Embeddings carry
 /// verbatim from production (§8), so this ordered output matches production's vector search bit-for-bit
@@ -786,7 +784,7 @@ pub struct Neighbor {
     pub label: Option<String>,
 }
 
-/// Port of production's 1-hop graph-neighbor read onto `temper_next.*` — the §9 graph-neighbors read
+/// Port of production's 1-hop graph-neighbor read onto the substrate tables — the §9 graph-neighbors read
 /// floor. Returns the resource↔resource neighbors of `new_id` over `kb_edges`, in BOTH
 /// directions (the seed as `source_id` → the `target` endpoint; the seed as `target_id` → the `source`
 /// endpoint), with folded edges EXCLUDED (`NOT is_folded`, matching production's gate).

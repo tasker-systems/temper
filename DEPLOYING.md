@@ -62,8 +62,8 @@ Production migrations are **operator-run** against each target's Neon database
   canonical `search_path`. Order relative to deploy is flexible (additive is
   backward-compatible), but back up first.
 - **Big-bang / search-path flip** — an operator-gated cutover: durable backup,
-  cutover, verify, then the coincident redeploy. (The executed `temper_next`→`public`
-  collapse that established this pattern is in git history.)
+  cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
+  that established this pattern is in git history.)
 
 ## Per-target Vercel setup (reference)
 

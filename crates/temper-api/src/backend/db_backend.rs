@@ -1,8 +1,7 @@
 //! `DbBackend` — the substrate backend behind the `Backend` trait (the single backend post-WS6-collapse).
 //!
 //! Reads delegate to `temper_substrate::readback`; writes compose `temper_substrate::writes`. The SQL is
-//! unqualified against the one schema (the connection carries the search_path — dev: `temper_next,public`;
-//! live: `public` after the rename).
+//! unqualified against the one schema (`public`); the connection's search_path resolves all references.
 //!
 //! The full-row read (`show_resource`) maps the substrate readback (`readback::resource_row`) to the
 //! native `ResourceRow` — real timestamps (event-sourced from `kb_events.occurred_at`), name-only
@@ -36,7 +35,7 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 /// Map a typed [`readback::ReadbackError`] to the surface status, splitting the two deny modes the
 /// single-resource reads can return: not-visible is the leak-safe deny → **404** (`NotFound`), never 403
 /// (403 confirms existence) and never 500 (it is not a system failure); a genuine fault stays **500**
-/// (`Api`). Collapsing both into NotFound — the pre-typing behavior on every `temper_next` single-read
+/// (`Api`). Collapsing both into NotFound — the pre-typing behavior on every substrate single-read
 /// surface — masked real faults as 404. Shared by `native_resource_row` and the substrate read's
 /// `get_content`/`get_meta` arms so the mapping lives in exactly one place.
 pub(crate) fn map_readback_err(e: readback::ReadbackError) -> TemperError {
@@ -345,8 +344,8 @@ impl Backend for DbBackend {
         &self,
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        // The inbound id IS the `temper_next` id — synthesis preserves resource ids verbatim, so there
-        // is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
+        // The inbound id IS the substrate resource id — synthesis preserves resource ids verbatim, so
+        // there is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
         let new_id = uuid::Uuid::from(cmd.resource);
         // `native_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
         // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
@@ -360,7 +359,7 @@ impl Backend for DbBackend {
         &self,
         cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        // The inbound id IS the preserved `temper_next` id (native-id addressing — synthesis carries
+        // The inbound id IS the substrate resource id (native-id addressing — synthesis carries
         // resource ids verbatim, so no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): the caller must be able to modify this resource.
@@ -493,7 +492,7 @@ impl Backend for DbBackend {
     }
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
-        // The inbound id IS the preserved `temper_next` id (no origin_uri remap).
+        // The inbound id IS the substrate resource id (no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2).
         self.check_can_modify_next(new_id).await?;
@@ -526,7 +525,7 @@ impl Backend for DbBackend {
                 // slug is §7-dissolved; the list summary uses origin_uri as the stable handle.
                 slug: r.origin_uri,
                 doctype: r.doc_type,
-                // Context scoping over temper_next is a flip prerequisite (WS2); unscoped at the §9 floor.
+                // Context scoping for the list summary (WS2); unscoped at the §9 floor.
                 context: String::new(),
                 title: r.title,
             })
@@ -568,9 +567,9 @@ impl Backend for DbBackend {
         &self,
         cmd: AssertRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
-        // Source and target ids ARE the preserved `temper_next` ids (synthesis carries resource ids
-        // verbatim) — used directly, no origin_uri remap (the prior bimap collapsed empty-origin_uri
-        // resources onto one arbitrary id).
+        // Source and target ids ARE the substrate resource ids (synthesis carries resource ids verbatim)
+        // — used directly, no origin_uri remap (the prior bimap collapsed empty-origin_uri resources
+        // onto one arbitrary id).
         let src_next = uuid::Uuid::from(cmd.source);
         // Auth before any write (WS2): edge mutations gate on the SOURCE resource (production's
         // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
@@ -578,7 +577,7 @@ impl Backend for DbBackend {
 
         let tgt_next = uuid::Uuid::from(cmd.target);
 
-        // The edge homes in the source's temper_next context (its home anchor).
+        // The edge homes in the source's substrate context (its home anchor).
         let home_next: uuid::Uuid = sqlx::query_scalar(
             "SELECT anchor_id FROM kb_resource_homes \
              WHERE resource_id=$1 AND anchor_table='kb_contexts'",
@@ -618,7 +617,7 @@ impl Backend for DbBackend {
         &self,
         cmd: RetypeRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
-        // The edge handle on the next backend IS the temper_next edge id (returned by assert).
+        // The edge handle on the substrate backend IS the substrate edge id (returned by assert).
         // Auth before any write (WS2): gate on the edge's source resource.
         let src = self.edge_source_resource(cmd.edge_handle).await?;
         self.check_can_modify_next(src).await?;

@@ -105,14 +105,10 @@ jobs:
         run: cargo sqlx migrate run
 
       - name: Run integration & E2E tests
-        # temper-substrate is excluded: its sqlx! macros target the temper_next artifact namespace, not the
-        # migrated public schema this job validates against; it is compiled+tested offline in unit-tests.
-        # temper-agents is excluded for the same reason: it depends on temper-substrate unconditionally (the
-        # envelope re-export), so building it here would compile temper-substrate's macros live and fail.
         # --test-threads 1: server-side embedding bakes the bge model into every test binary; running
         # the body-bearing ingest tests concurrently contends on ort and flakes embed_texts (the Embed
         # job serializes for the same reason). Serial keeps the embedding tests deterministic.
-        run: cargo nextest run --workspace --exclude temper-substrate --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --test-threads 1
+        run: cargo nextest run --workspace --exclude temper-cloud --features test-db --locked --no-fail-fast --test-threads 1
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -196,6 +192,13 @@ jobs:
         # PR #94's cloud-only sweep.
         run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'
 
+      - name: Run cognitive-map artifact write-path tests
+        # artifact-tests gates the write-path integration tests: bootseed,
+        # seed/scenario load+roundtrip+equivalence, charter, content, ledger, replay.
+        # These create ephemeral databases via #[sqlx::test] — ONNX Runtime and a
+        # running Postgres service (both present in this job) are the only requirements.
+        run: cargo nextest run -p temper-substrate --features "artifact-tests" --locked --test-threads 1 --no-fail-fast
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -265,9 +268,7 @@ jobs:
       - name: Generate coverage (test-db tier)
         # Mirrors the integration-tests job's tier so the baseline reflects
         # unit + DB integration + e2e (now incl. the server-side embed path).
-        # temper-substrate excluded (temper_next-namespace sqlx! macros; offline-validated in unit-tests).
-        # temper-agents excluded too: unconditional temper-substrate dep (envelope re-export) would compile those macros live here.
-        run: cargo llvm-cov nextest --workspace --exclude temper-substrate --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --test-threads 1 --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest --workspace --exclude temper-cloud --features test-db --locked --no-fail-fast --test-threads 1 --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

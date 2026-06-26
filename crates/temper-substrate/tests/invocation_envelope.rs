@@ -1,7 +1,6 @@
 #![cfg(feature = "artifact-tests")]
-//! Invocation envelope + agent-authorship metadata. Each test resets the artifact (01+02 via psql),
-//! boot-seeds the system actor, and exercises the new substrate. Serialized via the
-//! `temper-substrate-write` nextest group (it owns the namespace).
+//! Invocation envelope + agent-authorship metadata. Each test boot-seeds the system actor and
+//! exercises the new substrate. Isolated ephemeral DB via `MIGRATOR`.
 
 mod common;
 
@@ -12,26 +11,16 @@ use temper_substrate::ids::{BlockId, ChunkId};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::payloads::{AgentAuthorship, ConfidenceBand, EdgePolarity};
 use temper_substrate::replay;
-use temper_substrate::substrate;
+use temper_substrate::scenario::bootseed;
 use uuid::Uuid;
 
-/// Reset the artifact (01+02), connect, boot-seed the system actor. Standard write-path preamble.
-async fn setup() -> sqlx::PgPool {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    temper_substrate::scenario::bootseed::seed_system(&pool)
-        .await
-        .unwrap();
-    pool
-}
-
-#[tokio::test]
-async fn schema_has_invocations_table_and_event_column() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn schema_has_invocations_table_and_event_column(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     // kb_events.invocation_id exists and is nullable UUID
     let col: Option<String> = sqlx::query_scalar(
         "SELECT data_type FROM information_schema.columns \
-         WHERE table_schema='temper_next' AND table_name='kb_events' AND column_name='invocation_id'",
+         WHERE table_schema='public' AND table_name='kb_events' AND column_name='invocation_id'",
     )
     .fetch_optional(&pool)
     .await
@@ -45,7 +34,7 @@ async fn schema_has_invocations_table_and_event_column() {
     // kb_invocations table exists
     let tbl: Option<String> = sqlx::query_scalar(
         "SELECT table_name FROM information_schema.tables \
-         WHERE table_schema='temper_next' AND table_name='kb_invocations'",
+         WHERE table_schema='public' AND table_name='kb_invocations'",
     )
     .fetch_optional(&pool)
     .await
@@ -57,9 +46,9 @@ async fn schema_has_invocations_table_and_event_column() {
     );
 }
 
-#[tokio::test]
-async fn event_append_persists_metadata_and_invocation() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn event_append_persists_metadata_and_invocation(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let emitter: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_entities WHERE name='system'")
         .fetch_one(&pool)
         .await
@@ -124,10 +113,6 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
 async fn genesis(pool: &sqlx::PgPool, owner: ProfileId, emitter: EntityId, name: &str) -> CogmapId {
     let charter = vec![one_chunk_block("telos charter statement")];
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let (cogmap, _telos) = fire(
         &mut tx,
         SeedAction::CogmapGenesis {
@@ -146,9 +131,9 @@ async fn genesis(pool: &sqlx::PgPool, owner: ProfileId, emitter: EntityId, name:
     cogmap
 }
 
-#[tokio::test]
-async fn invocation_open_projects_open_row() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn invocation_open_projects_open_row(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-a").await;
     let inv = Uuid::now_v7();
@@ -178,9 +163,9 @@ async fn invocation_open_projects_open_row() {
     assert!(telos_present, "telos resolved from the cogmap");
 }
 
-#[tokio::test]
-async fn delegation_gate_blocks_unshared_cogmaps() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn delegation_gate_blocks_unshared_cogmaps(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let parent = genesis(&pool, owner, emitter, "parent").await;
     let child = genesis(&pool, owner, emitter, "child").await; // no shared team
@@ -198,9 +183,9 @@ async fn delegation_gate_blocks_unshared_cogmaps() {
     assert!(err.to_string().contains("delegation gate"), "got: {err}");
 }
 
-#[tokio::test]
-async fn invocation_close_sets_terminal_status() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn invocation_close_sets_terminal_status(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-c").await;
     let inv = Uuid::now_v7();
@@ -236,9 +221,9 @@ async fn invocation_close_sets_terminal_status() {
     assert!(closed, "closed_at set");
 }
 
-#[tokio::test]
-async fn invocation_close_rejects_open_disposition() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn invocation_close_rejects_open_disposition(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-reject").await;
     let inv = Uuid::now_v7();
@@ -268,9 +253,9 @@ async fn invocation_close_rejects_open_disposition() {
     );
 }
 
-#[tokio::test]
-async fn authored_resource_create_stamps_metadata_and_invocation_sql() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn authored_resource_create_stamps_metadata_and_invocation_sql(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-auth").await;
     let inv = Uuid::now_v7();
@@ -301,19 +286,15 @@ async fn authored_resource_create_stamps_metadata_and_invocation_sql() {
     assert_eq!(got_inv, Some(inv));
 }
 
-#[tokio::test]
-async fn fire_with_authorship_stamps_metadata_via_rust_path() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fire_with_authorship_stamps_metadata_via_rust_path(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-rust").await;
     let inv = temper_substrate::ids::InvocationId::from(Uuid::now_v7());
 
     // Open the invocation through the typed Rust path.
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let opened = fire(
         &mut tx,
         SeedAction::InvocationOpen {
@@ -335,10 +316,6 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path() {
     // Author a resource under the invocation with authorship metadata.
     let blocks = vec![one_chunk_block("concept body")];
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     fire_with(
         &mut tx,
         SeedAction::ResourceCreate {
@@ -379,19 +356,15 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path() {
     assert_eq!(got_inv, Some(inv.uuid()));
 }
 
-#[tokio::test]
-async fn invocation_and_authorship_survive_replay() {
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn invocation_and_authorship_survive_replay(pool: sqlx::PgPool) {
     const REPLAY_SENTINEL: &str = "REPLAY_AUTHORSHIP_SENTINEL";
-    let pool = setup().await;
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-replay").await;
     let inv = temper_substrate::ids::InvocationId::from(Uuid::now_v7());
 
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     fire(
         &mut tx,
         SeedAction::InvocationOpen {
@@ -449,10 +422,9 @@ async fn invocation_and_authorship_survive_replay() {
 
     let before = replay::dump_projections(&pool).await.unwrap();
     let snap = replay::snapshot(&pool).await.unwrap();
-    common::reset_artifact();
-    let pool2 = substrate::connect().await.unwrap();
-    replay::replay(&pool2, &snap).await.unwrap();
-    let after = replay::dump_projections(&pool2).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
 
     let inv_before = before
         .iter()
@@ -475,7 +447,7 @@ async fn invocation_and_authorship_survive_replay() {
     let survived: i64 =
         sqlx::query_scalar("SELECT count(*) FROM kb_events WHERE metadata->>'reasoning' = $1")
             .bind(REPLAY_SENTINEL)
-            .fetch_one(&pool2)
+            .fetch_one(&pool)
             .await
             .unwrap();
     assert!(
@@ -484,18 +456,14 @@ async fn invocation_and_authorship_survive_replay() {
     );
 }
 
-#[tokio::test]
-async fn authorship_is_invisible_to_affinity_inputs() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-invis").await;
     let inv = temper_substrate::ids::InvocationId::from(Uuid::now_v7());
 
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     fire(
         &mut tx,
         SeedAction::InvocationOpen {
@@ -624,9 +592,9 @@ async fn authorship_is_invisible_to_affinity_inputs() {
     }
 }
 
-#[tokio::test]
-async fn writes_open_then_close_round_trips() {
-    let pool = setup().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn writes_open_then_close_round_trips(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-writes").await;
 

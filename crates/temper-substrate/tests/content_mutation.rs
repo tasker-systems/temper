@@ -9,11 +9,11 @@
 //!    body produces two `kb_block_revisions` rows with the SAME `(block_id, block_body_hash)`; the
 //!    masked-replay dump orders on `created` to break that tie, so fire and replay must still match.
 //!
-//! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
+use temper_substrate::replay;
 use temper_substrate::scenario::{bootseed, model::Scenario, runner};
-use temper_substrate::{replay, substrate};
 
 /// A minimal inline seed with one concept resource (`alpha`) already created — the revise target.
 const SEED_WITH_ALPHA: &str = r#"
@@ -39,18 +39,11 @@ fn scenario_with_steps(extra_steps: &str) -> Scenario {
     serde_yaml::from_str(&yaml).unwrap_or_else(|e| panic!("inline scenario YAML invalid: {e}"))
 }
 
-async fn fresh_pool() -> sqlx::PgPool {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    bootseed::seed_system(&pool).await.unwrap();
-    pool
-}
-
 /// The runner's `revise` arm rejects an empty body before firing — a clean Rust error, no contentless
 /// block written.
-#[tokio::test]
-async fn revise_with_empty_body_is_rejected() {
-    let pool = fresh_pool().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn revise_with_empty_body_is_rejected(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let scenario = scenario_with_steps("  - { do: revise, resource: alpha, body: \"\" }\n");
     let err = runner::run_scenario(&pool, &scenario, std::path::Path::new("."))
         .await
@@ -63,9 +56,9 @@ async fn revise_with_empty_body_is_rejected() {
 }
 
 /// Whitespace-only prose chunks to nothing just like the empty string — also rejected.
-#[tokio::test]
-async fn revise_with_whitespace_only_body_is_rejected() {
-    let pool = fresh_pool().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn revise_with_whitespace_only_body_is_rejected(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let scenario =
         scenario_with_steps("  - { do: revise, resource: alpha, body: \"   \\n\\t  \" }\n");
     runner::run_scenario(&pool, &scenario, std::path::Path::new("."))
@@ -75,9 +68,9 @@ async fn revise_with_whitespace_only_body_is_rejected() {
 
 /// The authoritative guard lives in `block_mutate` itself, so any surface (not just the scenario
 /// runner) is protected: firing it with an empty `chunks` array raises, leaving the block intact.
-#[tokio::test]
-async fn block_mutate_rejects_empty_chunk_set() {
-    let pool = fresh_pool().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn block_mutate_rejects_empty_chunk_set(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     // create alpha so a real block exists
     let scenario = scenario_with_steps("");
     runner::run_scenario(&pool, &scenario, std::path::Path::new("."))
@@ -113,9 +106,9 @@ async fn block_mutate_rejects_empty_chunk_set() {
 /// `kb_block_revisions` rows with the same `(block_id, block_body_hash)`. The masked-replay dump orders
 /// on `created` (the replay-stable event occurred_at) to break that tie deterministically; this drives
 /// the path and proves fire and replay still produce byte-identical projections.
-#[tokio::test]
-async fn revert_to_prior_body_replays_byte_identically() {
-    let pool = fresh_pool().await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn revert_to_prior_body_replays_byte_identically(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let original = "deployment pipeline staging and rollout cadence";
     let extra = format!(
         "  - {{ do: revise, resource: alpha, body: \"an unrelated note about tea brewing temperature and steeping time\" }}\n  \
@@ -142,7 +135,7 @@ async fn revert_to_prior_body_replays_byte_identically() {
     // fire-side projections, then reset + replay the ledger and prove byte-identical projections.
     let before = replay::dump_projections(&pool).await.unwrap();
     let snap = replay::snapshot(&pool).await.unwrap();
-    common::reset_artifact();
+    common::reset_schema(&pool).await;
     replay::replay(&pool, &snap).await.unwrap();
     let after = replay::dump_projections(&pool).await.unwrap();
     for ((table_a, a), (table_b, b)) in before.iter().zip(after.iter()) {

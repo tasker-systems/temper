@@ -8,9 +8,8 @@
 --
 -- Builds the full substrate in the connection-default schema:
 --   • production / dev / e2e → the default search_path, DDL lands in `public`.
---   • temper-next proving-ground tests → a harness wrapper sets
---     `search_path = temper_next, public` first, so the SAME body lands in an
---     isolated `temper_next` test namespace.
+--   • artifact tests → `#[sqlx::test]` applies this to an ephemeral `public`-schema
+--     database per test; no harness wrapper or parallel namespace needed.
 --
 -- Namespace-free by construction: NO `CREATE SCHEMA` / `DROP SCHEMA` /
 -- `SET search_path` in the body. Every statement is unqualified and resolves
@@ -42,9 +41,9 @@
 -- Every table below defaults its `id` to `uuid_generate_v7()`. In the legacy
 -- lineage the generator was provisioned by `20260420000012_uuidv7_portability.sql`
 -- and lived in `public`; the former `schema-artifact/` excluded it because it ran
--- inside a `temper_next` test namespace that resolved it from a host `public`. The
--- canonical baseline IS `public`, so it must self-provide the generator (and an
--- sqlx-applied `#[sqlx::test(migrations=…)]` has no pre-step to inject it).
+-- inside an ephemeral `#[sqlx::test]` database. The canonical baseline IS `public`,
+-- so it must self-provide the generator (and an sqlx-applied `#[sqlx::test(migrations=…)]`
+-- has no pre-step to inject it).
 --
 -- Version-portable across PG17/PG18 (matches the repo's 17/18 portability rule):
 --   • PG17 (Neon prod) → the `pg_uuidv7` extension supplies `uuid_generate_v7()`.
