@@ -285,8 +285,8 @@ pub(crate) struct ClampedSearch {
     pub limit: i64,
 }
 
-/// graph_depth → [1,3] (deep traversal is a Surface-B concern; a 10-hop fan-out would threaten the DB);
-/// limit → [1,50] (the documented API ceiling). Defaults: depth 2, limit 10.
+/// graph_depth → \[1,3\] (deep traversal is a Surface-B concern; a 10-hop fan-out would threaten the DB);
+/// limit → \[1,50\] (the documented API ceiling). Defaults: depth 2, limit 10.
 pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
     ClampedSearch {
         depth: params.graph_depth.unwrap_or(2).clamp(1, 3),
@@ -361,24 +361,6 @@ pub async fn search_select(
     Ok(out)
 }
 
-#[cfg(test)]
-mod clamp_tests {
-    use super::*;
-    use temper_core::types::api::SearchParams;
-
-    #[test]
-    fn clamps_depth_and_limit_to_surface_a_caps() {
-        let p = SearchParams { graph_depth: Some(10), limit: Some(999), ..SearchParams::default() };
-        let c = clamp_search_params(&p);
-        assert_eq!(c.depth, 3, "graph_depth capped at 3 for Surface A");
-        assert_eq!(c.limit, 50, "limit capped at 50");
-
-        let d = clamp_search_params(&SearchParams::default());
-        assert_eq!(d.depth, 2, "default depth 2");
-        assert_eq!(d.limit, 10, "default limit 10");
-    }
-}
-
 /// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
 /// `doc_type` in SQL via `readback::enriched_list` (WS2-scoped). Returns always-compiled temper-core
 /// types so the MCP consumer needs no feature gate. Native rows: real timestamps (event-sourced
@@ -420,4 +402,26 @@ pub async fn list_enriched_select(
         out.push((row, managed, open));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod clamp_tests {
+    use super::*;
+    use temper_core::types::api::SearchParams;
+
+    #[test]
+    fn clamps_depth_and_limit_to_surface_a_caps() {
+        let p = SearchParams {
+            graph_depth: Some(10),
+            limit: Some(999),
+            ..SearchParams::default()
+        };
+        let c = clamp_search_params(&p);
+        assert_eq!(c.depth, 3, "graph_depth capped at 3 for Surface A");
+        assert_eq!(c.limit, 50, "limit capped at 50");
+
+        let d = clamp_search_params(&SearchParams::default());
+        assert_eq!(d.depth, 2, "default depth 2");
+        assert_eq!(d.limit, 10, "default limit 10");
+    }
 }
