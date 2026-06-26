@@ -149,3 +149,68 @@ async fn vector_ann_uses_hnsw_index(pool: sqlx::PgPool) {
     assert!(text.contains("idx_kb_chunks_embedding"),
         "ANN candidate path must use the HNSW index; plan was:\n{text}");
 }
+
+// ── Graph candidates ────────────────────────────────────────────────────────────────────────────
+
+use temper_substrate::affinity::EdgeKind;
+use temper_substrate::events::EdgeHome;
+use temper_substrate::payloads::EdgePolarity;
+
+/// Assert one weighted edge src→tgt of `kind`, returning nothing.
+async fn edge(pool: &sqlx::PgPool, src: ResourceId, tgt: ResourceId, home: ContextId,
+              emitter: EntityId, kind: EdgeKind, weight: f64) {
+    let mut tx = pool.begin().await.unwrap();
+    fire(&mut tx, SeedAction::RelationshipAssert {
+        src, tgt, kind, polarity: EdgePolarity::Forward, label: Some("rel"),
+        weight, home: EdgeHome::Context(home), emitter,
+    }).await.unwrap().relationship().unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn graph_expand(pool: &sqlx::PgPool, principal: Uuid, seeds: &[Uuid], depth: i32,
+                      edge_types: &[&str], gamma: f64) -> Vec<(Uuid, f32)> {
+    use sqlx::Row;
+    let et: Vec<String> = edge_types.iter().map(|s| s.to_string()).collect();
+    sqlx::query("SELECT resource_id, graph_score FROM search_graph_expand($1, $2::uuid[], $3, $4::text[], $5)")
+        .bind(principal).bind(seeds).bind(depth).bind(et).bind(gamma)
+        .fetch_all(pool).await.unwrap()
+        .iter().map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("graph_score"))).collect()
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn graph_expand_decay_and_max_over_paths(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "g").await;
+    // a — b — c  (a is the seed; b at hop 1, c at hop 2), all weight 1.0
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://g/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://g/b", unit(1)).await;
+    let c = mk_embedded(&pool, home, owner, emitter, "c", "temper://g/c", unit(2)).await;
+    edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    edge(&pool, b, c, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+
+    let got = graph_expand(&pool, owner.uuid(), &[a.uuid()], 2, &[], 0.5).await;
+    let score = |id: Uuid| got.iter().find(|(g, _)| *g == id).map(|(_, s)| *s);
+    assert_eq!(score(a.uuid()), Some(1.0), "seed scored 1.0 at hop 0");
+    assert!((score(b.uuid()).unwrap() - 0.5).abs() < 1e-5, "hop1: γ^1·w = 0.5");
+    assert!((score(c.uuid()).unwrap() - 0.25).abs() < 1e-5, "hop2: γ^2·w = 0.25 (bidirectional walk reached c)");
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn graph_expand_filters_and_scope(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "gf").await;
+    let a = mk_embedded(&pool, home, owner, emitter, "a", "temper://gf/a", unit(0)).await;
+    let b = mk_embedded(&pool, home, owner, emitter, "b", "temper://gf/b", unit(1)).await;
+    edge(&pool, a, b, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+
+    // edge_types filter excludes the only edge ⇒ b unreached.
+    let filtered = graph_expand(&pool, owner.uuid(), &[a.uuid()], 2, &["depends_on"], 0.5).await;
+    assert!(filtered.iter().all(|(id, _)| *id != b.uuid()), "edge_types filter excludes non-matching kinds");
+
+    // A second profile that cannot see these resources gets no neighbors (visibility scoping).
+    let stranger = Uuid::now_v7();
+    let unscoped = graph_expand(&pool, stranger, &[a.uuid()], 2, &[], 0.5).await;
+    assert!(unscoped.is_empty(), "a principal who cannot see the seeds/neighbors gets nothing");
+}

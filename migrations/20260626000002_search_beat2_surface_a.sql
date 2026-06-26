@@ -39,3 +39,46 @@ LANGUAGE sql STABLE AS $$
     JOIN resources_visible_to(p_principal) v   ON v.resource_id = a.resource_id
    GROUP BY a.resource_id;
 $$;
+
+-- ── Structural candidates: scoped, weighted, bidirectional multi-hop expansion from seeds.
+-- Mirrors graph_traverse's `visible` CTE scoping (canonical_functions.sql:1308) but is purpose-built:
+-- BIDIRECTIONAL (follow an edge from either endpoint), WEIGHTED (γ^hop · Π edge_weight), SCORED with
+-- MAX-over-paths (hub-robust: best path wins), and edge_kind-filtered. Surface A scope: kb_resources
+-- endpoints only, NOT is_folded, every endpoint joined through resources_visible_to. Seeds = hop 0,
+-- score 1.0. A path array gives the cycle guard (and bounds termination alongside p_depth).
+CREATE FUNCTION search_graph_expand(
+  p_principal uuid, p_seed_ids uuid[], p_depth int, p_edge_types text[], p_gamma double precision)
+RETURNS TABLE (resource_id uuid, graph_score real)
+LANGUAGE sql STABLE AS $$
+  WITH RECURSIVE visible AS (
+    SELECT rv.resource_id AS id FROM resources_visible_to(p_principal) rv
+  ),
+  adj AS (   -- undirected adjacency over visible, unfolded, kb_resources edges (optional kind filter)
+    SELECT e.source_id AS a, e.target_id AS b, e.weight
+      FROM kb_edges e
+     WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+       AND NOT e.is_folded
+       AND (p_edge_types IS NULL OR array_length(p_edge_types, 1) IS NULL
+            OR e.edge_kind::text = ANY(p_edge_types))
+       AND e.source_id IN (SELECT id FROM visible)
+       AND e.target_id IN (SELECT id FROM visible)
+  ),
+  walk AS (
+    SELECT s.id AS node, 1.0::double precision AS score, 0 AS hop, ARRAY[s.id] AS path
+      FROM unnest(p_seed_ids) AS s(id)
+     WHERE s.id IN (SELECT id FROM visible)
+    UNION ALL
+    SELECT nb.node, w.score * p_gamma * nb.weight, w.hop + 1, w.path || nb.node
+      FROM walk w
+      JOIN LATERAL (
+        SELECT adj.b AS node, adj.weight FROM adj WHERE adj.a = w.node
+        UNION ALL
+        SELECT adj.a AS node, adj.weight FROM adj WHERE adj.b = w.node
+      ) nb ON true
+     WHERE w.hop < p_depth
+       AND NOT nb.node = ANY(w.path)
+  )
+  SELECT node, MAX(score)::real
+    FROM walk
+   GROUP BY node;
+$$;
