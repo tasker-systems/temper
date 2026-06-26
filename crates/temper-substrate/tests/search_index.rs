@@ -5,6 +5,7 @@
 
 mod common;
 
+use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes;
 use uuid::Uuid;
@@ -239,4 +240,83 @@ async fn backfill_covers_preexisting_rows(pool: sqlx::PgPool) {
         index_matches(&pool, r.uuid(), "corpus").await,
         "backfilled/maintained term matches"
     );
+}
+
+/// The stored-index `fts_search` returns the SAME id set as the legacy inline build for title/body
+/// terms. The inline query below is the pre-swap recipe verbatim (the behavior-preservation gate).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "p").await;
+    for (t, b, u) in [
+        (
+            "Quenching furnace",
+            "tempering steel at temperature",
+            "temper://p/1",
+        ),
+        (
+            "Annealing notes",
+            "slow cooling relieves stress",
+            "temper://p/2",
+        ),
+        ("Unrelated doc", "nothing about metal here", "temper://p/3"),
+    ] {
+        writes::create_resource(
+            &pool,
+            writes::CreateParams {
+                title: t,
+                origin_uri: u,
+                body: b,
+                doc_type: "concept",
+                home,
+                owner,
+                originator: owner,
+                emitter,
+                properties: &[],
+                chunks: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // Legacy inline recipe (pre-swap), inlined here as the parity oracle.
+    async fn inline_fts(pool: &sqlx::PgPool, principal: Uuid, q: &str) -> Vec<Uuid> {
+        let rows = sqlx::query(
+            "WITH doc AS (
+               SELECT r.id,
+                      setweight(to_tsvector('english', r.title), 'A') ||
+                      setweight(to_tsvector('english', COALESCE(string_agg(cc.content, ' '), '')), 'B')
+                        AS search_vector
+                 FROM kb_resources r
+                 JOIN resources_visible_to($1) v ON v.resource_id = r.id
+                 LEFT JOIN kb_chunks c ON c.resource_id = r.id AND c.is_current
+                 LEFT JOIN kb_chunk_content cc ON cc.chunk_id = c.id
+                GROUP BY r.id, r.title)
+             SELECT id FROM doc
+              WHERE search_vector @@ plainto_tsquery('english', $2)
+              ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC")
+            .bind(principal).bind(q).fetch_all(pool).await.unwrap();
+        rows.iter()
+            .map(|r| sqlx::Row::get::<Uuid, _>(r, "id"))
+            .collect()
+    }
+
+    for q in [
+        "tempering",
+        "cooling",
+        "metal",
+        "quenching steel",
+        "furnace",
+    ] {
+        let mut want = inline_fts(&pool, owner.uuid(), q).await;
+        let mut got = readback::fts_search(&pool, owner.uuid(), q).await.unwrap();
+        want.sort();
+        got.sort();
+        assert_eq!(
+            got, want,
+            "stored-index fts_search set parity for query {q:?}"
+        );
+    }
 }
