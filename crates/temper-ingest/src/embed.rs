@@ -239,6 +239,7 @@ pub fn tokenize(tokenizer: &Tokenizer, texts: &[&str]) -> Result<Vec<Encoding>> 
 // ---- Tensor construction ----
 
 /// Input tensors for the ONNX model.
+#[derive(Debug)]
 pub struct InputTensors {
     pub input_ids: Array2<i64>,
     pub attention_mask: Array2<i64>,

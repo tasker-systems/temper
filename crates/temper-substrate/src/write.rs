@@ -12,6 +12,7 @@ use sqlx::{PgConnection, PgPool};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct MaterializeOutcome {
     pub regions: usize,
     pub membership_fingerprint: String,

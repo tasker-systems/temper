@@ -38,6 +38,7 @@ pub struct ShowCacheParams<'a> {
     pub debounce: Duration,
 }
 
+#[derive(Debug)]
 pub struct ShowCacheResult {
     pub content: String,
     pub source: FreshnessTier,

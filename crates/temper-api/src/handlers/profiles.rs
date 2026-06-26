@@ -9,7 +9,7 @@ use crate::middleware::auth::AuthUser;
 use crate::services::{access_service, profile_service};
 use crate::state::AppState;
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct ProfileWithEntitlements {
     #[serde(flatten)]
     pub profile: Profile,
