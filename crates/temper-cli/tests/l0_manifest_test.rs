@@ -111,7 +111,7 @@ fn committed_l0_manifest_parses_with_22_landmarks_and_resolvable_edges() {
     assert_eq!(edge_total, 15, "expected 15 authored edges");
 }
 
-#[cfg(feature = "embed")]
+#[cfg(feature = "test-embed")]
 #[test]
 fn committed_l0_manifest_translates_to_embedded_request() {
     use temper_cli::actions::reconcile::manifest_to_request;
