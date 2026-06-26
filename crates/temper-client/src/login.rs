@@ -55,11 +55,21 @@ pub fn generate_pkce_pair() -> (String, String) {
 /// Uses `CLI_CALLBACK_URL` as the redirect_uri and passes the localhost port
 /// via the OAuth2 `state` parameter. The callback relay on temperkb.io reads
 /// the port from `state` and redirects the authorization code to localhost.
-pub fn build_authorize_url(config: &OAuthConfig, port: u16, code_challenge: &str) -> String {
+pub fn build_authorize_url(
+    config: &OAuthConfig,
+    port: u16,
+    code_challenge: &str,
+) -> crate::error::Result<String> {
     let scope = config.scopes.join(" ");
 
-    let mut url =
-        url::Url::parse(&config.authorize_url).expect("authorize_url must be a valid URL");
+    // `authorize_url` comes from user config (config.toml / provider) — a malformed value is a
+    // configuration fault, not a programming bug, so propagate it instead of panicking.
+    let mut url = url::Url::parse(&config.authorize_url).map_err(|e| {
+        crate::error::ClientError::NotConfigured(format!(
+            "authorize_url is not a valid URL ({:?}): {e}",
+            config.authorize_url
+        ))
+    })?;
 
     url.query_pairs_mut()
         .append_pair("response_type", "code")
@@ -74,7 +84,7 @@ pub fn build_authorize_url(config: &OAuthConfig, port: u16, code_challenge: &str
         url.query_pairs_mut().append_pair("audience", audience);
     }
 
-    url.to_string()
+    Ok(url.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +155,7 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
 
     // Build authorization URL and open browser.
     // The redirect_uri points to temperkb.io which relays the code to localhost.
-    let auth_url = build_authorize_url(config, port, &code_challenge);
+    let auth_url = build_authorize_url(config, port, &code_challenge)?;
 
     info!("Opening browser for authentication...");
     open::that(&auth_url)
@@ -351,7 +361,7 @@ mod tests {
             ],
         };
         let (_verifier, challenge) = generate_pkce_pair();
-        let url = build_authorize_url(&config, 12345, &challenge);
+        let url = build_authorize_url(&config, 12345, &challenge).unwrap();
         assert!(url.contains("response_type=code"));
         assert!(url.contains("client_id=test-client-id"));
         assert!(url.contains("code_challenge_method=S256"));
@@ -373,7 +383,7 @@ mod tests {
             scopes: vec!["openid".to_string()],
         };
         let (_verifier, challenge) = generate_pkce_pair();
-        let url = build_authorize_url(&config, 9999, &challenge);
+        let url = build_authorize_url(&config, 9999, &challenge).unwrap();
         assert!(!url.contains("audience="));
     }
 
