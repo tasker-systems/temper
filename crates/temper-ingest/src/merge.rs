@@ -250,30 +250,43 @@ pub fn attempt_merge(local: &str, remote: &str) -> MergeResult {
 
     let regions = diff_paragraphs(local, remote);
 
-    // Check if there are any Replace regions.
+    // Pure insert/delete/equal — reassemble without conflict handling.
     let has_replace = regions
         .iter()
         .any(|r| matches!(r, DiffRegion::Replace { .. }));
-
     if !has_replace {
-        // Pure insert/delete/equal — reassemble.
-        let content = reassemble_non_conflicting(&regions);
         return MergeResult::AutoMerged {
-            content,
+            content: reassemble_non_conflicting(&regions),
             strategy: MergeStrategy::NonConflicting,
         };
     }
 
-    // Process regions, escalating Replace regions to semantic chunk level.
+    // Replace regions present: resolve each (escalating to semantic chunk
+    // level) and assemble the final result.
+    build_merge_result(resolve_regions(&regions))
+}
+
+/// Outcome of resolving every diff region: the assembled paragraphs plus how
+/// they were resolved (how many stayed conflicts, whether any used the
+/// semantic resolver).
+struct ResolvedRegions {
+    parts: Vec<String>,
+    conflict_count: usize,
+    used_semantic: bool,
+}
+
+/// Resolve each region, escalating `Replace` regions to the semantic chunk
+/// resolver. Equal/Insert/Delete regions pass through verbatim.
+fn resolve_regions(regions: &[DiffRegion]) -> ResolvedRegions {
     let mut parts = Vec::new();
     let mut conflict_count = 0;
     let mut used_semantic = false;
 
-    for region in &regions {
+    for region in regions {
         match region {
-            DiffRegion::Equal(text) => parts.push(text.clone()),
-            DiffRegion::Insert(text) => parts.push(text.clone()),
-            DiffRegion::Delete(text) => parts.push(text.clone()),
+            DiffRegion::Equal(text) | DiffRegion::Insert(text) | DiffRegion::Delete(text) => {
+                parts.push(text.clone());
+            }
             DiffRegion::Replace { local, remote } => match resolve_replace_region(local, remote) {
                 ReplaceResolution::Resolved(text) => {
                     used_semantic = true;
@@ -287,20 +300,28 @@ pub fn attempt_merge(local: &str, remote: &str) -> MergeResult {
         }
     }
 
+    ResolvedRegions {
+        parts,
+        conflict_count,
+        used_semantic,
+    }
+}
+
+/// Assemble the resolved regions into a `MergeResult`: annotated conflict when
+/// any region stayed a conflict, otherwise an auto-merge tagged by whether the
+/// semantic resolver was used.
+fn build_merge_result(resolved: ResolvedRegions) -> MergeResult {
+    let ResolvedRegions {
+        parts,
+        conflict_count,
+        used_semantic,
+    } = resolved;
     let content = parts.join("\n\n");
 
     if conflict_count > 0 {
-        if used_semantic {
-            // Mixed: some resolved via semantic, some conflicts.
-            MergeResult::ConflictAnnotated {
-                content,
-                conflict_count,
-            }
-        } else {
-            MergeResult::ConflictAnnotated {
-                content,
-                conflict_count,
-            }
+        MergeResult::ConflictAnnotated {
+            content,
+            conflict_count,
         }
     } else {
         MergeResult::AutoMerged {
