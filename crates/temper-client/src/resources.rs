@@ -131,11 +131,7 @@ impl<'a> ResourceClient<'a> {
     /// The server reconciles frontmatter-provenance edges from the new
     /// open_meta on success; errors during reconciliation are logged
     /// server-side and do not fail this call.
-    pub async fn update_meta(
-        &self,
-        id: Uuid,
-        payload: &MetaUpdatePayload,
-    ) -> Result<serde_json::Value> {
+    pub async fn update_meta(&self, id: Uuid, payload: &MetaUpdatePayload) -> Result<ResourceRow> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}/meta");
         let req = self.http.put(&path).json(payload);
