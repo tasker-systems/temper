@@ -778,7 +778,7 @@ pub async fn find_edge(
 }
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto the substrate tables — the §9
-/// search read floor. Builds, per resource, the §9-REBUILT weighted tsvector and returns the matching
+/// search read floor. Reads the stored `kb_resource_search_index` tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
 ///
 /// Returns the preserved resource id (not `origin_uri`): `origin_uri` is NOT unique (empty for
@@ -807,24 +807,19 @@ pub async fn find_edge(
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
 pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<Uuid>> {
+    // Beat-1 hardcode: all rows use 'english' tsquery/tsvector today (every resource is indexed with
+    // the 'english' config in `rebuild_resource_search_vector`). A future multilingual rollout will
+    // store a per-row `search_config` in `kb_resource_search_index` — when that lands, this query
+    // MUST read the stored config per row instead of hardcoding 'english', or non-English rows will
+    // silently fail to match (the stored tsvector and the query will use mismatched configurations).
     let rows = sqlx::query(
-        "WITH doc AS (
-           SELECT r.id,
-                  setweight(to_tsvector('english', r.title), 'A') ||
-                  setweight(to_tsvector('english', COALESCE(string_agg(cc.content, ' '), '')), 'B')
-                    AS search_vector
-             FROM kb_resources r
-             JOIN resources_visible_to($1) v ON v.resource_id = r.id
-             LEFT JOIN kb_chunks c
-               ON c.resource_id = r.id AND c.is_current
-             LEFT JOIN kb_chunk_content cc
-               ON cc.chunk_id = c.id
-            GROUP BY r.id, r.title
-         )
-         SELECT id
-           FROM doc
-          WHERE search_vector @@ plainto_tsquery('english', $2)
-          ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC",
+        "SELECT r.id
+           FROM kb_resource_search_index si
+           JOIN kb_resources r             ON r.id = si.resource_id
+           JOIN resources_visible_to($1) v ON v.resource_id = r.id
+          WHERE r.is_active
+            AND si.search_vector @@ plainto_tsquery('english', $2)
+          ORDER BY ts_rank(si.search_vector, plainto_tsquery('english', $2)) DESC",
     )
     .bind(principal)
     .bind(query)
