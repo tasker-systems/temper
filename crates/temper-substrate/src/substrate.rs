@@ -3,6 +3,7 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct Substrate {
     pub nodes: Vec<Uuid>,
     pub edges: Vec<Edge>,

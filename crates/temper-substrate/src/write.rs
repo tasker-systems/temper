@@ -12,6 +12,7 @@ use sqlx::{PgConnection, PgPool};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct MaterializeOutcome {
     pub regions: usize,
     pub membership_fingerprint: String,
@@ -414,7 +415,10 @@ async fn create_component(
 
 /// Insert one region (linked to its component), its members, then populate the SQL readouts. The
 /// region id is pre-generated (identity-as-input) and already recorded in the payload.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal region-upsert helper; a params struct is tracked as a separate decomposition chunk"
+)]
 async fn assert_region(
     tx: &mut PgConnection,
     cogmap: Uuid,

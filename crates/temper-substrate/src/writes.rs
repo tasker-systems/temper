@@ -85,6 +85,7 @@ async fn begin_scoped(pool: &PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postg
 
 /// Create a resource: one body block (chunked + embedded inline) homed in `home`, then one property
 /// per `(key, value)` pair. Returns the new resource id.
+#[derive(Debug)]
 pub struct CreateParams<'a> {
     pub title: &'a str,
     pub origin_uri: &'a str,
@@ -144,6 +145,7 @@ pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<Resou
 }
 
 /// A partial resource update — only the fields present in the command are written.
+#[derive(Debug)]
 pub struct UpdateParams<'a> {
     pub resource: ResourceId,
     /// New body prose; revises the resource's single non-folded block (re-chunked + re-embedded).
@@ -281,6 +283,7 @@ pub async fn delete_resource_in_tx(
 /// `originator: None` (kernel content's originator COALESCEs to `owner` = system). The post-create
 /// property loop of `create_resource` is intentionally omitted: kernel facets/provenance are stamped
 /// by the caller via [`set_property`] / [`set_facet`].
+#[derive(Debug)]
 pub struct KernelCreateParams<'a> {
     pub cogmap: CogmapId,
     /// The STABLE landmark identity the resource is minted under (the reconcile diff key). Supplying it
@@ -443,6 +446,7 @@ pub async fn mutate_block(
 /// Assert (or idempotently re-assert) a **cogmap-homed** edge `src → tgt`, returning its id. Mirrors
 /// [`assert_relationship`] but homes `EdgeHome::Cogmap(p.cogmap)` (kernel landmarks home to the map,
 /// not a context).
+#[derive(Debug)]
 pub struct KernelEdgeParams<'a> {
     pub cogmap: CogmapId,
     pub src: ResourceId,
@@ -488,6 +492,7 @@ pub async fn assert_kernel_edge_in_tx(
 // ── relationship writes ──────────────────────────────────────────────────────────
 
 /// Assert (or idempotently re-assert) an edge `src → tgt`, returning its id.
+#[derive(Debug)]
 pub struct AssertParams<'a> {
     pub src: ResourceId,
     pub tgt: ResourceId,

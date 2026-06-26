@@ -57,6 +57,7 @@ pub trait SyncProgress {
 // ---------------------------------------------------------------------------
 
 /// A no-op progress reporter — all methods are empty.
+#[derive(Debug)]
 pub struct NoopProgress;
 
 impl SyncProgress for NoopProgress {
@@ -134,6 +135,7 @@ pub enum ProgressEvent {
 }
 
 /// A progress reporter that collects events for test assertions.
+#[derive(Debug)]
 pub struct CollectingProgress {
     events: std::sync::Mutex<Vec<ProgressEvent>>,
 }
@@ -293,6 +295,7 @@ impl SyncProgress for CollectingProgress {
 // ---------------------------------------------------------------------------
 
 /// A progress reporter that writes styled output to the terminal.
+#[derive(Debug)]
 pub struct TerminalProgress {
     use_progress: bool,
 }

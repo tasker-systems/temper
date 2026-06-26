@@ -65,12 +65,6 @@ pub enum TemperError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
-    /// A code path that is wired but not yet available (e.g. the `next`
-    /// backend before WS6 4b lands `NextBackend`). Distinct from `Api` —
-    /// it is a deliberate, temporary "not here yet", not an upstream failure.
-    #[error("not implemented: {0}")]
-    NotImplemented(String),
-
     #[error("Forbidden")]
     Forbidden,
 

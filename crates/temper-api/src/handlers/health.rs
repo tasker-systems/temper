@@ -15,6 +15,8 @@ use crate::error::ApiResult;
 pub async fn health_check() -> ApiResult<Json<HealthResponse>> {
     Ok(Json(HealthResponse {
         status: "ok",
-        version: "0.1.0",
+        // Sourced from Cargo at compile time so the reported version can never
+        // drift from the crate's actual version.
+        version: env!("CARGO_PKG_VERSION"),
     }))
 }

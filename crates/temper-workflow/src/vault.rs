@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Owns layout rules for a specific vault root. Construct once per operation;
 /// methods are pure functions of the inputs.
+#[derive(Debug)]
 pub struct Vault<'a> {
     vault_root: &'a Path,
 }

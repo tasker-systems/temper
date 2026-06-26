@@ -37,6 +37,16 @@ pub struct TemperMcpService {
     profile: Arc<Mutex<Option<Profile>>>,
 }
 
+// Manual impl: `ToolRouter` does not implement Debug, so `tool_router` is omitted.
+impl std::fmt::Debug for TemperMcpService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemperMcpService")
+            .field("api_state", &self.api_state)
+            .field("profile", &self.profile)
+            .finish_non_exhaustive()
+    }
+}
+
 #[tool_router]
 impl TemperMcpService {
     pub fn new(api_state: AppState) -> Self {

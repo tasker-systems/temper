@@ -148,7 +148,7 @@ impl JwksKeyStore {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppState {
     pub pool: PgPool,
     pub jwks_store: Arc<JwksKeyStore>,

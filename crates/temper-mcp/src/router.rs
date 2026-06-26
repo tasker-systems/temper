@@ -19,7 +19,7 @@ use crate::middleware::require_mcp_auth;
 use crate::service::TemperMcpService;
 
 /// Shared state for discovery handlers and the MCP middleware.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct McpAppState {
     pub api_state: AppState,
     pub mcp_config: McpConfig,

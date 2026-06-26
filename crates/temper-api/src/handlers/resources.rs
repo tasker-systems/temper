@@ -37,23 +37,6 @@ impl axum::response::IntoResponse for ListResourcesResponse {
     }
 }
 
-/// Derive a URL-safe slug from a title.
-///
-/// Lowercases, replaces non-alphanumeric chars with hyphens, collapses runs
-/// of hyphens, and strips leading/trailing hyphens. Matches the pattern
-/// enforced by doc-type schema validation (`^[a-z0-9][a-z0-9-]*$`).
-fn slugify_title(title: &str) -> String {
-    let raw: String = title
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-    raw.split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 #[utoipa::path(
     get,
     path = "/api/resources",
@@ -164,7 +147,9 @@ pub async fn create(
 
     // When slug is absent, derive one from the title so the create path's
     // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.
-    let slug = req.slug.unwrap_or_else(|| slugify_title(&req.title));
+    let slug = req
+        .slug
+        .unwrap_or_else(|| temper_substrate::text::slugify(&req.title));
 
     let cmd = CreateResource {
         context: context_name,
