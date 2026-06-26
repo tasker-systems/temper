@@ -300,6 +300,9 @@ impl DbBackend {
             match live_by_uri.get(entry.origin_uri.as_str()) {
                 None => {
                     // CREATE — the resource itself, then STAMP provenance, then the clustering facets.
+                    // `body` is empty: the reconcile wire carries no raw prose — `chunks` is always
+                    // `Some` here, so the wrapper builds the block from the chunks and ignores `body`
+                    // (the `body` param is only the no-chunks server-embed fallback, never taken here).
                     let chunks = Some(incoming_chunks);
                     let rid = writes::create_kernel_resource_in_tx(
                         &mut *conn,
@@ -308,7 +311,7 @@ impl DbBackend {
                             title: &entry.title,
                             origin_uri: &entry.origin_uri,
                             doc_type: &entry.doc_type,
-                            body: &entry.body,
+                            body: "",
                             chunks,
                             owner,
                             emitter,
@@ -349,7 +352,10 @@ impl DbBackend {
                         &mut *conn,
                         writes::UpdateParams {
                             resource: temper_substrate::ids::ResourceId::from(row.resource_id),
-                            body: Some(&entry.body),
+                            // `Some("")` requests a body re-block (the re-block fires iff body is
+                            // `Some`); the content comes from `chunks` (always `Some` here), so the
+                            // empty string is never embedded — see the CREATE arm's note.
+                            body: Some(""),
                             title: None,
                             origin_uri: None,
                             properties: &[],
@@ -378,14 +384,16 @@ impl DbBackend {
             if entry.edges.is_empty() {
                 continue;
             }
-            // The resource's existing 1-hop neighbors (target origin_uri + kind) — re-asserting an edge
-            // that already exists would append an event (`relationship_assert` fires unconditionally), so
-            // we skip present ones. `neighbors` is unscoped 1-hop; the system actor sees all (fine here).
-            let existing: HashSet<(String, String)> = readback::neighbors(&mut *conn, src)
+            // The resource's existing 1-hop neighbors keyed (target origin_uri, kind, polarity) — an edge
+            // is identified by all three, so a forward and an inverse edge of the same kind to the same
+            // target are distinct (and both deliverable). Re-asserting an edge that already exists would
+            // append an event (`relationship_assert` fires unconditionally), so we skip present ones.
+            // `neighbors` is unscoped 1-hop; the system actor sees all (fine here).
+            let existing: HashSet<(String, String, String)> = readback::neighbors(&mut *conn, src)
                 .await
                 .map_err(api_err)?
                 .into_iter()
-                .map(|n| (n.origin_uri, n.edge_kind))
+                .map(|n| (n.origin_uri, n.edge_kind, n.polarity))
                 .collect();
             for e in &entry.edges {
                 // Pre-flight (in `reconcile_cognitive_map`) guaranteed every `to_origin_uri` resolves
@@ -397,7 +405,8 @@ impl DbBackend {
                         e.to_origin_uri
                     ))
                 })?;
-                if existing.contains(&(e.to_origin_uri.clone(), e.kind.clone())) {
+                if existing.contains(&(e.to_origin_uri.clone(), e.kind.clone(), e.polarity.clone()))
+                {
                     continue; // already present — re-assert would break idempotency
                 }
                 let kind =

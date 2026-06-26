@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 /// One kernel landmark in a reconcile request — **pre-embedded** by the CLI.
 ///
 /// `chunks_packed` is the `compute_body_chunks` output (the same packed-blob wire format as
-/// `IngestPayload::chunks_packed`) and is the AUTHORITATIVE body content for the diff. `content_hash`
+/// `IngestPayload::chunks_packed`) and is the SOLE, AUTHORITATIVE body content — the entry carries no
+/// raw `body` (the chunks already hold the prose; the authored prose lives in the manifest the CLI
+/// reads). The diff/store both derive from `chunks_packed`, so there is no second body to disagree with.
+/// `content_hash`
 /// is ADVISORY only: the reconcile diff recomputes the body merkle server-side from `chunks_packed`
 /// (the same `body_hash_from_chunk_hashes` the substrate stores) and never trusts this field — the CLI
 /// fills it via `compute_body_hash` (a whole-body `sha256:`-prefixed hash) which does not equal the
@@ -25,7 +28,6 @@ pub struct ReconcileEntry {
     pub origin_uri: String,
     pub title: String,
     pub doc_type: String,
-    pub body: String,
     pub content_hash: String,
     pub chunks_packed: String,
     pub facets: serde_json::Value,
@@ -93,7 +95,6 @@ mod tests {
                 origin_uri: "temper://kernel/concept/cogmap".into(),
                 title: "cogmap".into(),
                 doc_type: "kernel_landmark".into(),
-                body: "A cognitive map: a bounded, telos-governed view.".into(),
                 content_hash: "deadbeef".into(),
                 chunks_packed: "[]".into(),
                 facets: serde_json::json!({ "provenance": "kernel", "layer": "concept" }),

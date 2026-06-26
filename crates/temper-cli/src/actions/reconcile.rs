@@ -107,7 +107,6 @@ pub fn manifest_to_request(
             origin_uri: e.origin_uri.clone(),
             title: e.title.clone(),
             doc_type: e.doc_type.clone(),
-            body: e.body.clone(),
             content_hash,
             chunks_packed,
             facets: e.facets.clone(),

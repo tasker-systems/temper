@@ -69,7 +69,6 @@ fn entry(
         origin_uri: origin_uri.to_string(),
         title: title.to_string(),
         doc_type: "kernel_landmark".to_string(),
-        body: body.to_string(),
         content_hash,
         chunks_packed,
         facets,
