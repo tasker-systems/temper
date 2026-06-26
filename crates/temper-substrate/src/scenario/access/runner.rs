@@ -64,13 +64,9 @@ async fn eval_access_check(pool: &PgPool, loaded: &LoadedAccess, c: &AccessCheck
             expect,
         } => {
             let p = profile_id(loaded, profile)?;
-            let eid = sqlx::query_scalar!(
-                "SELECT id FROM kb_edges WHERE label=$1 AND NOT is_folded",
-                edge,
-            )
-            .fetch_optional(pool)
-            .await?
-            .with_context(|| format!("edge_visible_to: no edge labelled {edge:?}"))?;
+            // Resolve by the edge's stable id (captured at load under its `key`), NOT by the
+            // non-unique `label` — a label lookup silently matches the wrong row when labels collide.
+            let eid = edge_id(loaded, edge)?;
             let got = sqlx::query_scalar!(
                 "SELECT EXISTS(SELECT 1 FROM edges_visible_to($1) e WHERE e.edge_id=$2)",
                 p,
@@ -145,6 +141,12 @@ fn resource_id(l: &LoadedAccess, k: &str) -> Result<Uuid> {
         .get(k)
         .copied()
         .with_context(|| format!("unknown resource key {k}"))
+}
+fn edge_id(l: &LoadedAccess, k: &str) -> Result<Uuid> {
+    l.edges
+        .get(k)
+        .copied()
+        .with_context(|| format!("unknown edge key {k}"))
 }
 fn cogmap_id(l: &LoadedAccess, n: &str) -> Result<Uuid> {
     l.cogmaps
