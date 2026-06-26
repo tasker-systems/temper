@@ -3,15 +3,13 @@
 //! context), `set_property` stamps the per-key `provenance: kernel`, `set_facet` writes the
 //! clustering `layer` facet, and `assert_kernel_edge` homes an edge to the cogmap. Read back through
 //! `kernel_slice` (which filters `property_key='provenance' = 'kernel'`) to confirm both kernel
-//! resources land, keyed by `origin_uri`. Owns the `temper_next` namespace (resets + seeds),
-//! serialized via the `temper-next-write` nextest group.
-mod common;
+//! resources land, keyed by `origin_uri`. Runs against an isolated `#[sqlx::test]` ephemeral DB
+//! (MIGRATOR-applied canonical schema + seed).
 
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::payloads::EdgePolarity;
 use temper_substrate::scenario::{loader, model::Seed};
-use temper_substrate::substrate;
 use temper_substrate::writes::{self, KernelCreateParams, KernelEdgeParams};
 
 /// A minimal seed that just genesises a cogmap (with telos) and the system world; no scenario
@@ -29,14 +27,10 @@ resources: []
 uses_lenses: [telos-default]
 "#;
 
-#[tokio::test]
-async fn create_kernel_resource_homes_to_cogmap_with_facet_and_edge() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    temper_substrate::scenario::bootseed::seed_system(&pool)
-        .await
-        .unwrap();
-
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn create_kernel_resource_homes_to_cogmap_with_facet_and_edge(pool: sqlx::PgPool) {
+    // The MIGRATOR ephemeral DB already carries the canonical seed (the `system` profile/entity); the
+    // scenario seed below genesises the cogmap.
     let s: Seed = serde_yaml::from_str(SEED).unwrap();
     let loaded = loader::load_seed(&pool, &s).await.unwrap();
     let cogmap = CogmapId::from(loaded.cogmap);

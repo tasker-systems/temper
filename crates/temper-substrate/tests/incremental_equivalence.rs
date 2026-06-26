@@ -16,14 +16,12 @@ mod common;
 use std::path::Path;
 use temper_substrate::scenario::runner::MaterializeMode;
 use temper_substrate::scenario::{bootseed, model::Scenario, runner};
-use temper_substrate::substrate;
 
 /// Run a growth runbook end-to-end in the given mode against a freshly reset namespace, verify the
 /// ledger roundtrips, and return the final telos-default partition signature.
-async fn run_growth(file: &str, mode: MaterializeMode) -> String {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    bootseed::seed_system(&pool).await.unwrap();
+async fn run_growth(file: &str, mode: MaterializeMode, pool: &sqlx::PgPool) -> String {
+    common::reset_schema(pool).await;
+    bootseed::seed_system(pool).await.unwrap();
     let path = format!(
         "{}/tests/fixtures/scenarios/{file}",
         env!("CARGO_MANIFEST_DIR")
@@ -31,34 +29,34 @@ async fn run_growth(file: &str, mode: MaterializeMode) -> String {
     let scenario: Scenario =
         serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let base = Path::new(&path).parent().unwrap();
-    runner::run_scenario_with(&pool, &scenario, base, mode)
+    runner::run_scenario_with(pool, &scenario, base, mode)
         .await
         .unwrap_or_else(|e| panic!("{file} ({mode:?}) runbook failed: {e:#}"));
-    temper_substrate::payloads::verify_ledger_roundtrip(&pool)
+    temper_substrate::payloads::verify_ledger_roundtrip(pool)
         .await
         .expect("ledger roundtrip");
 
     // exactly one (non-system) cogmap per growth scenario — bootseed creates only global lenses.
     let cogmaps: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM kb_cogmaps")
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await
         .unwrap();
     assert_eq!(cogmaps.len(), 1, "expected exactly one cogmap for {file}");
-    common::telos_default_partition(&pool, cogmaps[0]).await
+    common::telos_default_partition(pool, cogmaps[0]).await
 }
 
-async fn assert_incremental_equals_full(file: &str) {
-    let full = run_growth(file, MaterializeMode::Full).await;
-    let incremental = run_growth(file, MaterializeMode::Incremental).await;
+async fn assert_incremental_equals_full(file: &str, pool: &sqlx::PgPool) {
+    let full = run_growth(file, MaterializeMode::Full, pool).await;
+    let incremental = run_growth(file, MaterializeMode::Incremental, pool).await;
     assert_eq!(
         full, incremental,
         "{file}: incremental partition must be byte-identical to full"
     );
 }
 
-#[tokio::test]
-async fn storyteller_growth_incremental_equals_full() {
-    assert_incremental_equals_full("storyteller-growth.yaml").await
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn storyteller_growth_incremental_equals_full(pool: sqlx::PgPool) {
+    assert_incremental_equals_full("storyteller-growth.yaml", &pool).await
 }
 
 /// Byte-identical output is necessary but not sufficient: a bug that silently does a FULL recompute
@@ -66,10 +64,8 @@ async fn storyteller_growth_incremental_equals_full() {
 /// persona region is REUSED (still bears the first materialize's event), while the recomputed
 /// commitment region bears the second. So the live regions span ≥2 distinct materialize events; a
 /// degenerate fold-everything path would leave them all on one.
-#[tokio::test]
-async fn incremental_actually_reuses_the_untouched_component() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn incremental_actually_reuses_the_untouched_component(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
         "{}/tests/fixtures/scenarios/storyteller-growth.yaml",
@@ -97,17 +93,16 @@ async fn incremental_actually_reuses_the_untouched_component() {
     );
 }
 
-#[tokio::test]
-async fn learning_maths_growth_incremental_equals_full() {
-    assert_incremental_equals_full("learning-maths-growth.yaml").await
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn learning_maths_growth_incremental_equals_full(pool: sqlx::PgPool) {
+    assert_incremental_equals_full("learning-maths-growth.yaml", &pool).await
 }
 
 /// Run a scenario end-to-end in the given mode against a freshly reset namespace, verify the ledger
 /// roundtrips, and return the final telos-default READOUT signature (membership + readout values).
-async fn run_readout_scenario(file: &str, mode: MaterializeMode) -> String {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    bootseed::seed_system(&pool).await.unwrap();
+async fn run_readout_scenario(file: &str, mode: MaterializeMode, pool: &sqlx::PgPool) -> String {
+    common::reset_schema(pool).await;
+    bootseed::seed_system(pool).await.unwrap();
     let path = format!(
         "{}/tests/fixtures/scenarios/{file}",
         env!("CARGO_MANIFEST_DIR")
@@ -115,29 +110,33 @@ async fn run_readout_scenario(file: &str, mode: MaterializeMode) -> String {
     let scenario: Scenario =
         serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let base = Path::new(&path).parent().unwrap();
-    runner::run_scenario_with(&pool, &scenario, base, mode)
+    runner::run_scenario_with(pool, &scenario, base, mode)
         .await
         .unwrap_or_else(|e| panic!("{file} ({mode:?}) failed: {e:#}"));
-    temper_substrate::payloads::verify_ledger_roundtrip(&pool)
+    temper_substrate::payloads::verify_ledger_roundtrip(pool)
         .await
         .expect("ledger roundtrip");
     let cogmaps: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM kb_cogmaps")
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await
         .unwrap();
     assert_eq!(cogmaps.len(), 1);
-    common::telos_default_readout_signature(&pool, cogmaps[0]).await
+    common::telos_default_readout_signature(pool, cogmaps[0]).await
 }
 
 /// Slice 3b acceptance: after a body REVISION (a readout-only change), incremental materialization
 /// must produce the same readout values as a full recompute — it may reuse a component's membership
 /// AND region ids, but it must re-run that region's readouts over the moved embedding, not serve the
 /// stale ones. A regression here means incremental served a reused region's pre-revision readouts.
-#[tokio::test]
-async fn readout_refresh_incremental_equals_full() {
-    let full = run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Full).await;
-    let incremental =
-        run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Incremental).await;
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn readout_refresh_incremental_equals_full(pool: sqlx::PgPool) {
+    let full = run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Full, &pool).await;
+    let incremental = run_readout_scenario(
+        "storyteller-readout.yaml",
+        MaterializeMode::Incremental,
+        &pool,
+    )
+    .await;
     assert_eq!(
         full, incremental,
         "after a body revision, incremental readouts must match a full recompute (not reuse stale readouts)"
@@ -152,10 +151,8 @@ async fn readout_refresh_incremental_equals_full() {
 /// incremental the second materialize must touch ONLY the persona region's readouts — the commitment
 /// region keeps the FIRST materialize as its `last_event_id` (never re-stamped). A blanket refresh
 /// would advance both regions' `last_event_id` to the second materialize.
-#[tokio::test]
-async fn readout_refresh_is_scoped_to_the_region_whose_member_moved() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn readout_refresh_is_scoped_to_the_region_whose_member_moved(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let path = format!(
         "{}/tests/fixtures/scenarios/storyteller-readout.yaml",

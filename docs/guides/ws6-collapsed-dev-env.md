@@ -7,16 +7,14 @@ developed and tested TDD-style against the post-collapse world.
 
 ## The idea
 
-Post-collapse there is **one** schema. The live cutover renamed the already-live
-`temper_next` substrate to the canonical `public` (executed; procedure in git
-history). The collapsed *code* carries no
-`temper_next.`-qualified SQL and no per-connection search_path hooks — it issues
-plain unqualified SQL against the connection default.
+Post-collapse there is **one** schema (`public`). The live cutover renamed the
+old substrate schema to `public` (executed; procedure in git history). The collapsed
+*code* carries no schema-qualified SQL and no per-connection search_path hooks — it
+issues plain unqualified SQL against the connection default.
 
-To develop that code locally before the rename, we point the **connection default**
-at the substrate (`temper_next`) instead of `public`. De-qualified SQL then resolves
-to the substrate exactly as it will resolve to `public` after the rename. The legacy
-`public.*` schema stays present in the dev DB but is unreferenced.
+This guide describes the pre-rename dev loop used during WS6 development. The rename
+is executed; the current dev env uses `public` directly (the standard `DATABASE_URL`).
+The legacy `public.*` schema was retired with the cutover.
 
 ## The dev loop
 
@@ -27,31 +25,26 @@ to the substrate exactly as it will resolve to `public` after the rename. The le
    ```
 
    This runs `00_namespace_reset` + `01_schema` + `02_functions` (the substrate
-   install), the same load preamble `prepare-next` uses.
+   install), the same load preamble used before the rename.
 
-2. Export the collapsed `DATABASE_URL` — the connection default search_path is the
-   substrate:
+2. Export the collapsed `DATABASE_URL` — the connection default search_path pointed
+   at the substrate (pre-rename):
 
    ```bash
-   export DATABASE_URL="postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public"
+   export DATABASE_URL="postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dpublic"
    ```
 
 3. Build/check/test as usual (`cargo make check`, focused `cargo nextest`). Every
    `sqlx::query!` macro and runtime query resolves against the substrate, because it
-   is the connection default — no `temper_next.` qualification, no `SET LOCAL
-   search_path` needed.
+   is the connection default — no schema qualification, no `SET LOCAL search_path`
+   needed.
 
 ## Why this mirrors the runbook
 
-This is the local stand-in for the post-rename production state:
+This described the local stand-in for the post-rename production state. The rename is
+now executed — the substrate lives in `public` everywhere (local, CI, production).
+The current standard `DATABASE_URL` (`postgresql://temper:temper@localhost:5437/temper_development`)
+is the dev default; no search_path option is needed.
 
-| Local (this guide)                              | Production (after the runbook)                 |
-|-------------------------------------------------|------------------------------------------------|
-| substrate lives in `temper_next`                | substrate renamed to `public`                  |
-| connection default = `temper_next,public`       | connection default = `public` (bare pool)      |
-| de-qualified SQL → resolves to substrate         | de-qualified SQL → resolves to substrate        |
-| legacy `public.*` present, unreferenced          | legacy renamed to `public_legacy`, then dropped |
-
-The substrate is the substrate in both cases; only the *name* the connection defaults
-to differs, and de-qualified SQL is indifferent to that name. So code that passes
-locally against this collapsed env is the code the runbook's redeploy step ships.
+De-qualified SQL is indifferent to the schema name, so code that passed against the
+pre-rename collapsed env ships identically post-rename.

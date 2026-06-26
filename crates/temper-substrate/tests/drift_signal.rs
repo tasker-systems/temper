@@ -13,7 +13,7 @@ use temper_substrate::drift::{self, DriftTier};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::scenario::{bootseed, loader, model::Seed};
-use temper_substrate::{content, embed, substrate, write};
+use temper_substrate::{content, embed, write};
 
 const SEED: &str = r#"
 name: drift-signal-test
@@ -33,10 +33,10 @@ edges:
 uses_lenses: [telos-default]
 "#;
 
-#[tokio::test]
-async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
+    pool: sqlx::PgPool,
+) {
     bootseed::seed_system(&pool).await.unwrap();
     let seed: Seed = serde_yaml::from_str(SEED).unwrap();
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();

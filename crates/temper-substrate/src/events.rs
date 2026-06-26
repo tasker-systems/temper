@@ -14,9 +14,9 @@
 //! `as_canonical_name` values) so unifying the two at deliverable 6 is a mechanical merge — but
 //! temper-substrate deliberately does **not** depend on temper-events: its `kb_events` shape is incommensurate
 //! with the artifact's (`emitter_entity_id`/`producing_anchor_*` vs `profile_id`/`topic_id`/`scope_id`),
-//! and temper-events' live sqlx macros can't co-compile under the `temper_next` search_path during
-//! `prepare-next`. temper-substrate keeps its own SQL-function write path; this enum is the typed source for
-//! the canonical names only.
+//! and temper-events' live sqlx macros are incompatible with the substrate's sqlx cache preparation.
+//! temper-substrate keeps its own SQL-function write path; this enum is the typed source for the
+//! canonical names only.
 
 use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};

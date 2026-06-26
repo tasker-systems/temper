@@ -8,8 +8,8 @@
 --
 -- Namespace-free by construction (same as migration 1): NO `SET search_path`;
 -- every statement is unqualified and resolves against the connection's
--- search_path — `public` in production / dev / e2e, an isolated `temper_next`
--- test namespace under the proving-ground harness wrapper.
+-- search_path — `public` in production / dev / e2e / artifact tests (each test
+-- gets an ephemeral `public`-schema database via `#[sqlx::test]`).
 --
 -- Principal sum type (access §4, CS-1): a substrate read carries ONE principal.
 --   Profile(uuid) — a person reading        → resources_visible_to        (consumer axis)

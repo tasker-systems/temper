@@ -32,10 +32,9 @@ extend = "./tools/cargo-make/main.toml"
 env_files = ["./.env"]
 
 [env]
-# Compile sqlx query! macros against the committed per-crate .sqlx caches, not the live DB — matches CI
-# (which sets SQLX_OFFLINE=true) and is REQUIRED for temper-substrate, whose macros target the `temper_next`
-# artifact namespace that isn't on the dev DB's default search_path. Compile-time only; runtime DB tests
-# (test-db/test-e2e) still connect normally. `prepare-next` overrides this (it must introspect live).
+# Compile sqlx query! macros against the committed workspace .sqlx cache, not the live DB — matches CI
+# (which also sets SQLX_OFFLINE=true). Compile-time only; runtime DB tests (test-db/test-e2e) still
+# connect normally. prepare-api and prepare-e2e override this (they must introspect the live DB).
 SQLX_OFFLINE = "true"
 
 [config]
@@ -74,35 +73,9 @@ echo ""
 echo "Run 'cargo make --list-all-steps' for all tasks"
 '''
 
-[tasks.prepare-next]
-description = "Regenerate temper-substrate's per-crate .sqlx cache against the loaded temper_next artifact"
-env = { SQLX_OFFLINE = "false" }   # prepare must introspect the LIVE artifact to build the cache
-script = '''
-# temper-substrate's sqlx! macros resolve against the temper_next artifact NAMESPACE (not the migrated
-# public schema), so prepare needs the artifact loaded + search_path set. Per-crate (run from the
-# crate dir) — NOT `--workspace`, which clobbers per-crate caches.
-DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
-# Build the temper_next namespace from the canonical baseline, mirroring the test harness'
-# load_files (tests/common/mod.rs): the test-only namespace-reset fixture owns the DROP/CREATE, then
-# the namespace-free baseline body files from migrations/ are loaded under PGOPTIONS so their
-# unqualified DDL lands in temper_next (not public).
-FIX="crates/temper-substrate/tests/fixtures"
-psql "$DB" -v ON_ERROR_STOP=1 -f "$FIX/00_namespace_reset.sql" >/dev/null
-for f in migrations/20260624000001_canonical_schema.sql migrations/20260624000002_canonical_functions.sql; do
-  PGOPTIONS="-csearch_path=temper_next,public" psql "$DB" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
-done
-cd crates/temper-substrate
-DATABASE_URL="${DB}?options=-csearch_path%3Dtemper_next,public" cargo sqlx prepare
-'''
-
-[tasks.test-next]
-description = "Run temper-substrate scenario write-path artifact-tests in an isolated temper_next namespace."
-# The tests load the canonical baseline (migrations/) into a temper_next test namespace and reset it
-# per test. Post-collapse `substrate::connect()` uses the connection-default search_path (public, the
-# production shape), so the test runtime MUST point the pool at temper_next via the search_path option
-# — otherwise the pool resolves against the public substrate and writes collide. SQLX_OFFLINE uses the
-# committed temper_next-bound cache (regenerate with `cargo make prepare-next` after touching SQL).
-env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public" }
+[tasks.test-artifacts]
+description = "Run temper-substrate write-path artifact tests on ephemeral per-test databases (public schema). Needs Docker Postgres + ONNX."
+env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development" }
 script = '''
 cargo nextest run -p temper-substrate --features artifact-tests
 '''

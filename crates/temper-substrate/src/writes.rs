@@ -1,10 +1,10 @@
-//! Typed write composition over the `temper_next` mutation functions (WS6 4c live write path).
+//! Typed write composition over the substrate mutation functions (WS6 4c live write path).
 //!
 //! The `DbBackend` (temper-api) calls these. Identity is resolved by **natural key** (handle /
 //! entity-name / context-slug) — the same keys synthesis writes by — so no old→new id-map table is
 //! needed. Each op opens one transaction and fires through the single [`crate::events::fire`] surface;
-//! the connection carries the schema search_path (dev: `temper_next,public`; live: `public` after the
-//! rename), so the SQL functions + triggers resolve their unqualified references correctly.
+//! the connection carries the schema search_path (`public`), so the SQL functions + triggers resolve
+//! their unqualified references correctly.
 //!
 //! Resolver SQL is runtime `sqlx::query` (not the compile-time macro) so it needs no `.sqlx` cache
 //! entry — the macro cache is reserved for the substrate read/mutation queries.
@@ -75,9 +75,8 @@ pub async fn resolve_context(pool: &PgPool, owner: ProfileId, name: &str) -> Res
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Begin a write transaction. Post-collapse the connection carries the schema search_path (dev:
-/// `temper_next,public`; live: `public` after the rename), so the SQL functions + triggers resolve
-/// their unqualified references correctly with no per-txn `SET LOCAL`.
+/// Begin a write transaction. The connection carries the schema search_path (`public`), so the SQL
+/// functions + triggers resolve their unqualified references correctly with no per-txn `SET LOCAL`.
 async fn begin_scoped(pool: &PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
     Ok(pool.begin().await?)
 }

@@ -11,7 +11,7 @@
 //! The standalone path also re-runs the replay proof (payload spec §7) unchanged: the replay
 //! machinery introduced for the scenario path must hold for a seed instantiated with no runbook.
 //!
-//! Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 
@@ -25,11 +25,10 @@ const SEED_PATH: &str = concat!(
     "/tests/fixtures/seeds/onboarding-cogmap.yaml"
 );
 
-#[tokio::test]
-async fn seed_standalone_and_via_scenario_memberships_match() {
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn seed_standalone_and_via_scenario_memberships_match(pool: sqlx::PgPool) {
     // Path A — standalone: parse the seed document, load it, one telos-default materialize.
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+    common::reset_schema(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
 
     let seed: Seed = serde_yaml::from_str(&std::fs::read_to_string(SEED_PATH).unwrap()).unwrap();
@@ -44,7 +43,7 @@ async fn seed_standalone_and_via_scenario_memberships_match() {
     // clean namespace, walk the same _project_* halves, and the projections come back byte-identical.
     let before = replay::dump_projections(&pool).await.unwrap();
     let snap = replay::snapshot(&pool).await.unwrap();
-    common::reset_artifact();
+    common::reset_schema(&pool).await;
     replay::replay(&pool, &snap).await.unwrap();
     let after = replay::dump_projections(&pool).await.unwrap();
     for ((table_a, a), (table_b, b)) in before.iter().zip(after.iter()) {
@@ -57,8 +56,7 @@ async fn seed_standalone_and_via_scenario_memberships_match() {
 
     // Path B — through a scenario: the same seed document referenced by path, runbook = one
     // materialize of the same lens.
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+    common::reset_schema(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
 
     let seed_dir = Path::new(SEED_PATH).parent().unwrap();

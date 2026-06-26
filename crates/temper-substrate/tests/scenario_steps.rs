@@ -2,10 +2,10 @@
 //! D1 acceptance: the new step vocabulary (create_resource / set_facet / assert_edge / fold_edge)
 //! drives a real mutation runbook end-to-end. A fold + a competing edge demonstrably change region
 //! membership across two materializes — the substrate drift detection (WS5) will later consume.
+//! Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
 use temper_substrate::scenario::{bootseed, model::Scenario, runner};
-use temper_substrate::substrate;
 
 const SCENARIO: &str = r#"
 name: steps-acceptance
@@ -35,10 +35,8 @@ steps:
   - { do: assert, checks: [{ check: co_region, lens: telos-default, members: [alpha, gamma], expect: true }] }
 "#;
 
-#[tokio::test]
-async fn step_vocabulary_drives_a_mutation_runbook() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn step_vocabulary_drives_a_mutation_runbook(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let scenario: Scenario = serde_yaml::from_str(SCENARIO).unwrap();
     runner::run_scenario(&pool, &scenario, std::path::Path::new("."))

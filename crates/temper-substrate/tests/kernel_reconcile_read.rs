@@ -1,19 +1,17 @@
 #![cfg(feature = "artifact-tests")]
 //! Reconcile diff-read: `kernel_slice` returns only `provenance: kernel` resources homed to the
-//! cogmap, keyed by `origin_uri`, carrying `body_hash` and the merged facet object. Owns the
-//! `temper_next` namespace (resets + seeds), serialized via the `temper-next-write` nextest group.
+//! cogmap, keyed by `origin_uri`, carrying `body_hash` and the merged facet object. Runs against an
+//! isolated `#[sqlx::test]` ephemeral DB (MIGRATOR-applied canonical schema + seed).
 //!
 //! Provenance is a per-KEY frontmatter property (`property_key='provenance'`), the same per-key shape
 //! `resource_row`/`meta` read (and the inverse of WS6 §7's one-row-per-key synthesis) — NOT the
 //! scenario-DSL `facets:` map (which `FacetSet` folds into a single `property_key='facet'` object for
 //! region clustering). So the seed DSL stands up the cogmap + bodies, and the provenance/layer markers
 //! are fired as per-key `PropertyAssert`s, exactly as the reconcile applier will write them.
-mod common;
 
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{EntityId, ResourceId};
 use temper_substrate::scenario::{loader, model::Seed};
-use temper_substrate::substrate;
 
 const SEED: &str = r#"
 name: kernel-slice-test
@@ -54,14 +52,10 @@ async fn assert_property(
     tx.commit().await.unwrap();
 }
 
-#[tokio::test]
-async fn kernel_slice_returns_only_kernel_provenance() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    temper_substrate::scenario::bootseed::seed_system(&pool)
-        .await
-        .unwrap();
-
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn kernel_slice_returns_only_kernel_provenance(pool: sqlx::PgPool) {
+    // The MIGRATOR ephemeral DB already carries the canonical seed (the `system` profile/entity); the
+    // scenario seed below stands up the cogmap + bodies.
     let s: Seed = serde_yaml::from_str(SEED).unwrap();
     let loaded = loader::load_seed(&pool, &s).await.unwrap();
 

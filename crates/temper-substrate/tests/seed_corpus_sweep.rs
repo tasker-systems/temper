@@ -7,18 +7,17 @@
 //! their own tests — they prove machinery. This sweep proves charters, and grows automatically as
 //! corpus seeds land (charter-bootstrapping design, §5).
 //!
-//! Resets the artifact per seed, ONNX-dependent, serialized via the temper-substrate-write group.
+//! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 
 use temper_substrate::scenario::model::Seed;
 use temper_substrate::scenario::{bootseed, loader};
-use temper_substrate::substrate;
 
 const SEEDS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/seeds");
 
-#[tokio::test]
-async fn every_corpus_seed_loads_and_charter_roundtrips() {
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn every_corpus_seed_loads_and_charter_roundtrips(pool: sqlx::PgPool) {
     let mut paths: Vec<_> = std::fs::read_dir(SEEDS_DIR)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -33,8 +32,7 @@ async fn every_corpus_seed_loads_and_charter_roundtrips() {
         let seed: Seed = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap())
             .unwrap_or_else(|e| panic!("{name}: does not parse as a Seed: {e}"));
 
-        common::reset_artifact();
-        let pool = substrate::connect().await.unwrap();
+        common::reset_schema(&pool).await;
         bootseed::seed_system(&pool).await.unwrap();
         let loaded = loader::load_seed(&pool, &seed)
             .await

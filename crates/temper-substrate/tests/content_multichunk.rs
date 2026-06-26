@@ -4,13 +4,13 @@
 //! resource, with real sha256 content hashes, inline bge-768 embeddings, and a correct merkle body_hash.
 //!
 //! Chunking + embedding happen Rust-side via `content::prepare_blocks` (borrowing temper-ingest); the SQL
-//! function only persists. Resets the artifact, ONNX-dependent, serialized via the temper-substrate-write group.
+//! function only persists. ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
+use temper_substrate::content;
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::scenario::bootseed;
-use temper_substrate::{content, substrate};
 use uuid::Uuid;
 
 /// Minimal owner profile + emitter entity so `cogmap_genesis` (unchanged) can mint a home cogmap.
@@ -32,10 +32,8 @@ async fn seed_actor(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
     (profile, entity)
 }
 
-#[tokio::test]
-async fn resource_create_persists_multi_block_multi_chunk_nesting() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resource_create_persists_multi_block_multi_chunk_nesting(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = seed_actor(&pool).await;
 

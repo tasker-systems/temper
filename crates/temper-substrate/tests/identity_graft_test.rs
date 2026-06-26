@@ -8,21 +8,17 @@
 //! that column does not exist in the substrate). These are additive: nothing references them until the
 //! surface ports land (Tasks B–E); the legacy `public` copies are untouched.
 //!
-//! Owns the `temper_next` namespace (resets 01+02), so it is serialized via the `temper-substrate-write`
-//! nextest group.
+//! Each test runs on an ephemeral `public`-schema database via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`.
 
 mod common;
-
-use temper_substrate::substrate;
 
 /// Seed a clean artifact (01+02), the singleton `kb_system_settings (access_mode='open')`, and one
 /// profile; assert the two grafted system-access functions evaluate (open mode grants any profile),
 /// `kb_profiles` carries `email`/`preferences`, and each of the 7 grafted infra tables is queryable.
-#[tokio::test]
-async fn identity_graft_resolves() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn identity_graft_resolves(pool: sqlx::PgPool) {
+    // Reset to clean 01+02 baseline — L0 kernel migration seeds kb_system_settings(id=1).
+    common::reset_schema(&pool).await;
     // The instance-access singleton in 'open' mode, plus one profile to gate.
     sqlx::query("INSERT INTO kb_system_settings (id, access_mode) VALUES (1, 'open')")
         .execute(&pool)

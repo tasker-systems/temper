@@ -1,13 +1,12 @@
 #![cfg(feature = "artifact-tests")]
 //! WS6 collapse: `graph_traverse` / `graph_subgraph_nodes` resolve against the substrate.
 //!
-//! These functions are ported from the legacy `public` graph functions onto the `temper_next` shape
-//! (context via `kb_resource_homes`→`kb_contexts`; doc_type/stage via `kb_properties`; first_chunk via
-//! `kb_chunks`→`kb_content_blocks`→`kb_chunk_content`; edges via `kb_edges`; slug derived from title).
+//! These functions are ported from the legacy synthesis-layer graph functions onto the substrate
+//! shape (context via `kb_resource_homes`→`kb_contexts`; doc_type/stage via `kb_properties`; first_chunk
+//! via `kb_chunks`→`kb_content_blocks`→`kb_chunk_content`; edges via `kb_edges`; slug derived from title).
 //! Additive — nothing calls them until the surface ports land; the legacy copies are untouched.
 //!
-//! Owns the `temper_next` namespace (resets 01+02, seeds a context + two edged concept resources), so
-//! it is serialized via the `temper-substrate-write` nextest group.
+//! Uses an isolated ephemeral DB via `MIGRATOR` (seeds a context + two edged concept resources).
 
 mod common;
 
@@ -15,18 +14,10 @@ use temper_substrate::content::{PreparedBlock, PreparedChunk};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, ChunkId, ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
-use temper_substrate::{affinity::EdgeKind, scenario::bootseed, substrate};
+use temper_substrate::{affinity::EdgeKind, scenario::bootseed};
 use uuid::Uuid;
 
 // ── shared helpers (mirrors write_path_mutations.rs) ────────────────────────────
-
-/// Reset the artifact (01+02), connect, boot-seed the system actor. The standard write-path preamble.
-async fn setup() -> sqlx::PgPool {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    bootseed::seed_system(&pool).await.unwrap();
-    pool
-}
 
 /// The boot-seeded canonical `system` profile + entity (owner + emitter for fixture writes).
 async fn system_actor(pool: &sqlx::PgPool) -> (ProfileId, EntityId) {
@@ -72,8 +63,7 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
     }
 }
 
-/// Create one `concept` resource homed in `ctx`, returning its id. Own tx with the search_path
-/// discipline.
+/// Create one `concept` resource homed in `ctx`, returning its id.
 async fn make_resource(
     pool: &sqlx::PgPool,
     ctx: ContextId,
@@ -85,10 +75,6 @@ async fn make_resource(
 ) -> ResourceId {
     let blocks = vec![one_chunk_block(body)];
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let id = fire(
         &mut tx,
         SeedAction::ResourceCreate {
@@ -111,7 +97,7 @@ async fn make_resource(
     id
 }
 
-/// Assert one edge `src → tgt`, returning its id. Own tx with the search_path discipline.
+/// Assert one edge `src → tgt`, returning its id.
 async fn assert_edge(
     pool: &sqlx::PgPool,
     src: ResourceId,
@@ -120,10 +106,6 @@ async fn assert_edge(
     emitter: EntityId,
 ) -> Uuid {
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
     let id = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
@@ -150,10 +132,10 @@ async fn assert_edge(
 /// Seed a context with two `concept` resources joined by one edge, then assert
 /// `graph_subgraph_nodes($profile, $context, ['concept'], depth)` returns the seeded aggregators with
 /// the legacy output shape (resource_id / slug / doc_type / edge_count …). Proves the ported functions
-/// resolve against the `temper_next` shape.
-#[tokio::test]
-async fn subgraph_nodes_returns_seeded_resources() {
-    let pool = setup().await;
+/// resolve against the substrate shape.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn subgraph_nodes_returns_seeded_resources(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let ctx = make_context(&pool, owner, "temper").await;
     let a = make_resource(
