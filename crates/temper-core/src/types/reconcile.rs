@@ -11,6 +11,12 @@ use serde::{Deserialize, Serialize};
 
 /// One kernel landmark in a reconcile request — **pre-embedded** by the CLI.
 ///
+/// `id` is the landmark's STABLE identity: a pre-generated uuidv7 the manifest author assigns once and
+/// never changes. The reconcile diff matches manifest entry ↔ live resource by THIS id (never by
+/// `origin_uri`), and on CREATE the resource is minted under it — so a duplicate id is a primary-key
+/// conflict (fail-loud), not a silent twin. `origin_uri` stays as pure ATTRIBUTION (intentionally loose,
+/// non-unique) and is set on the created resource, but it is NEVER a key.
+///
 /// `chunks_packed` is the `compute_body_chunks` output (the same packed-blob wire format as
 /// `IngestPayload::chunks_packed`) and is the SOLE, AUTHORITATIVE body content — the entry carries no
 /// raw `body` (the chunks already hold the prose; the authored prose lives in the manifest the CLI
@@ -25,6 +31,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReconcileEntry {
+    pub id: uuid::Uuid,
     pub origin_uri: String,
     pub title: String,
     pub doc_type: String,
@@ -35,31 +42,32 @@ pub struct ReconcileEntry {
     pub edges: Vec<ReconcileEdge>,
 }
 
-/// An outgoing edge from a kernel landmark, keyed by the target's `origin_uri`
-/// (resolved server-side to the target resource id).
+/// An outgoing edge from a kernel landmark, keyed by the target landmark's stable `id` (the same
+/// uuidv7 the target entry carries — no server-side resolution needed).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReconcileEdge {
-    pub to_origin_uri: String,
+    pub to: uuid::Uuid,
     pub kind: String,
     pub polarity: String,
     pub label: Option<String>,
     pub weight: f64,
 }
 
-/// Explicit resource-removal tombstone (O3: absence alone never folds).
+/// Explicit resource-removal tombstone, keyed by the landmark's stable `id` (O3: absence alone never
+/// folds).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReconcileTombstone {
-    pub origin_uri: String,
+    pub id: uuid::Uuid,
 }
 
-/// Explicit edge-removal tombstone, keyed by source + target `origin_uri` + kind.
+/// Explicit edge-removal tombstone, keyed by source + target landmark `id` + kind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReconcileEdgeTombstone {
-    pub from_origin_uri: String,
-    pub to_origin_uri: String,
+    pub from: uuid::Uuid,
+    pub to: uuid::Uuid,
     pub kind: String,
 }
 
@@ -90,8 +98,10 @@ mod tests {
 
     #[test]
     fn request_round_trips_through_json() {
+        let telos_id = uuid::Uuid::now_v7();
         let req = ReconcileCogmapRequest {
             entries: vec![ReconcileEntry {
+                id: uuid::Uuid::now_v7(),
                 origin_uri: "temper://kernel/concept/cogmap".into(),
                 title: "cogmap".into(),
                 doc_type: "kernel_landmark".into(),
@@ -99,7 +109,7 @@ mod tests {
                 chunks_packed: "[]".into(),
                 facets: serde_json::json!({ "provenance": "kernel", "layer": "concept" }),
                 edges: vec![ReconcileEdge {
-                    to_origin_uri: "temper://kernel/concept/telos".into(),
+                    to: telos_id,
                     kind: "express".into(),
                     polarity: "forward".into(),
                     label: Some("governs".into()),

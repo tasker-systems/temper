@@ -61,6 +61,7 @@ async fn create_kernel_resource_homes_to_cogmap_with_facet_and_edge() {
         &pool,
         KernelCreateParams {
             cogmap,
+            resource_id: uuid::Uuid::now_v7(),
             title: "cogmap",
             origin_uri: "temper://kernel/concept/cogmap",
             doc_type: "kernel_landmark",
@@ -96,6 +97,7 @@ async fn create_kernel_resource_homes_to_cogmap_with_facet_and_edge() {
         &pool,
         KernelCreateParams {
             cogmap,
+            resource_id: uuid::Uuid::now_v7(),
             title: "telos",
             origin_uri: "temper://kernel/concept/telos",
             doc_type: "kernel_landmark",

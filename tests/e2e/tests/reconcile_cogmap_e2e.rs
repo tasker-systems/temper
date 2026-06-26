@@ -43,14 +43,15 @@ fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
     sha256_hex(&sha256_hex(&concat))
 }
 
-/// Build a pre-embedded reconcile entry with a single synthetic chunk. `hash_seed` fixes the chunk's
-/// content hash (and thus the body merkle), so a re-delivery with the same `hash_seed` is hash-equal —
-/// the idempotency precondition.
+/// Build a pre-embedded reconcile entry with a single synthetic chunk. `id` is the STABLE landmark
+/// identity (the diff key). `hash_seed` fixes the chunk's content hash (and thus the body merkle), so a
+/// re-delivery with the same `id` + `hash_seed` is hash-equal — the idempotency precondition. The
+/// chunk's embedding is an inert constant fill — these e2e cases never read it.
 fn entry(
+    id: Uuid,
     origin_uri: &str,
     title: &str,
     body: &str,
-    fill: f32,
     hash_seed: &str,
     facets: serde_json::Value,
     edges: Vec<ReconcileEdge>,
@@ -61,11 +62,12 @@ fn entry(
         heading_depth: 0,
         content: body.to_string(),
         content_hash: format!("{hash_seed:0>64}"),
-        embedding: vec![fill; 768],
+        embedding: vec![0.1; 768],
     };
     let content_hash = body_hash_from_chunk_hashes(std::slice::from_ref(&chunk.content_hash));
     let chunks_packed = pack_chunks(std::slice::from_ref(&chunk)).expect("pack");
     ReconcileEntry {
+        id,
         origin_uri: origin_uri.to_string(),
         title: title.to_string(),
         doc_type: "kernel_landmark".to_string(),
@@ -76,19 +78,22 @@ fn entry(
     }
 }
 
-/// A two-entry desired-state manifest (cogmap + telos, with a governing edge between them).
+/// A two-entry desired-state manifest (cogmap + telos, with a governing edge between them). Ids are
+/// fixed (not random) so a re-PUT delivers the SAME ids → matched by id → idempotent.
 fn two_entry_request() -> ReconcileCogmapRequest {
+    let cogmap_id = Uuid::from_u128(0x019f03f4_2ace_76cb_b1fc_260239dd16a5);
+    let telos_id = Uuid::from_u128(0x019f03f4_2acf_7c45_bd12_a2a7152644a1);
     ReconcileCogmapRequest {
         entries: vec![
             entry(
+                cogmap_id,
                 "temper://kernel/concept/cogmap",
                 "cogmap",
                 "A cognitive map: a bounded, telos-governed view.",
-                0.1,
                 "aa",
                 serde_json::json!({ "layer": "concept" }),
                 vec![ReconcileEdge {
-                    to_origin_uri: "temper://kernel/concept/telos".to_string(),
+                    to: telos_id,
                     kind: "express".to_string(),
                     polarity: "forward".to_string(),
                     label: Some("governs".to_string()),
@@ -96,10 +101,10 @@ fn two_entry_request() -> ReconcileCogmapRequest {
                 }],
             ),
             entry(
+                telos_id,
                 "temper://kernel/concept/telos",
                 "telos",
                 "A telos: the governing purpose of a map.",
-                0.2,
                 "bb",
                 serde_json::json!({ "layer": "concept" }),
                 vec![],

@@ -40,10 +40,13 @@ fn committed_l0_manifest_parses_with_22_landmarks_and_resolvable_edges() {
         "first delivery carries no edge tombstones"
     );
 
-    // origin_uris are unique; build the resolution set + a per-layer histogram.
+    // Stable landmark ids are the diff key — build the resolution set (and assert uniqueness); also
+    // confirm origin_uris are unique (attribution, not a key) + a per-layer histogram.
+    let mut ids: HashSet<uuid::Uuid> = HashSet::new();
     let mut uris: HashSet<String> = HashSet::new();
     let mut layer_counts: HashMap<String, usize> = HashMap::new();
     for e in &doc.entries {
+        assert!(ids.insert(e.id), "duplicate landmark id {}", e.id);
         assert!(
             uris.insert(e.origin_uri.clone()),
             "duplicate origin_uri {}",
@@ -92,15 +95,15 @@ fn committed_l0_manifest_parses_with_22_landmarks_and_resolvable_edges() {
     );
     assert_eq!(layer_counts.len(), 4, "exactly four layer categories");
 
-    // Every authored edge target resolves to one of the 22 landmarks.
+    // Every authored edge target (a stable id) resolves to one of the 22 landmarks.
     let mut edge_total = 0;
     for e in &doc.entries {
         for edge in &e.edges {
             assert!(
-                uris.contains(&edge.to_origin_uri),
+                ids.contains(&edge.to),
                 "edge {} -> {} target unresolved",
                 e.origin_uri,
-                edge.to_origin_uri
+                edge.to
             );
             edge_total += 1;
         }

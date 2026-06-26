@@ -745,14 +745,17 @@ pub async fn system_actor(pool: &PgPool) -> Result<(ProfileId, EntityId)> {
     Ok((ProfileId::from(row.owner), EntityId::from(row.emitter)))
 }
 
-/// Resolve a live (non-folded) resource→resource edge by `(source, target, kind)` over `kb_edges`,
-/// returning its id or `None`. The L0 reconcile's Phase-3 edge-fold uses this to find the edge a
-/// `fold_edges` tombstone targets. Substrate SQL lives in the substrate (CLAUDE.md "Service layer owns
-/// SQL") — the reconciler in `db_backend.rs` calls this rather than inlining the query.
+/// Resolve a live (non-folded) resource→resource edge by `(source, target, kind[, polarity])` over
+/// `kb_edges`, returning its id or `None`. The L0 reconcile uses this both for Phase-2 idempotent
+/// edge dedup (polarity-aware — a forward and an inverse edge of the same kind to the same target are
+/// distinct, so pass `Some(polarity)`) and for the Phase-3 edge-fold a `fold_edges` tombstone targets
+/// (kind only — pass `None` to match any polarity). Substrate SQL lives in the substrate (CLAUDE.md
+/// "Service layer owns SQL") — the reconciler in `db_backend.rs` calls this rather than inlining.
 ///
-/// Casts the column to text (`edge_kind::text = $3`) and binds the SQL enum label, so the compile-time
-/// macro needs no custom `edge_kind` Rust type. Takes `impl sqlx::PgExecutor` so the reconciler can run
-/// it on its serializable transaction connection.
+/// Casts the columns to text (`edge_kind::text = $3`, `polarity::text = $4`) and binds the SQL enum
+/// labels, so the compile-time macro needs no custom enum Rust types. The `polarity` clause is a
+/// NULL-passthrough — `$4::text IS NULL` matches any polarity (the fold path). Takes
+/// `impl sqlx::PgExecutor` so the reconciler can run it on its serializable transaction connection.
 ///
 /// Compile-time macro (`temper_next` `.sqlx` cache, `cargo make prepare-next`).
 pub async fn find_edge(
@@ -760,15 +763,18 @@ pub async fn find_edge(
     src: Uuid,
     tgt: Uuid,
     kind: &crate::affinity::EdgeKind,
+    polarity: Option<&str>,
 ) -> Result<Option<Uuid>> {
     let id = sqlx::query_scalar!(
         r#"SELECT id FROM kb_edges
             WHERE source_id = $1 AND target_id = $2
               AND source_table = 'kb_resources' AND target_table = 'kb_resources'
-              AND edge_kind::text = $3 AND NOT is_folded"#,
+              AND edge_kind::text = $3 AND NOT is_folded
+              AND ($4::text IS NULL OR polarity::text = $4)"#,
         src,
         tgt,
         kind.as_sql(),
+        polarity,
     )
     .fetch_optional(executor)
     .await?;

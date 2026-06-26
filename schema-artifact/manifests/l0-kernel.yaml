@@ -14,148 +14,176 @@
 # `cogmap_genesis` and is not a `provenance: kernel` homed resource the reconciler manages. The telos
 # charter is delivered separately (deferred follow-up), NOT through this manifest.
 #
+# IDENTITY: each entry carries a pre-generated, stable `id` (uuidv7) — the landmark's substrate
+# identity. The reconcile diff matches manifest entry <-> live resource by this `id`, and edges
+# reference their target by `id` (the `# -> name` comment names it). `origin_uri` is pure attribution
+# (loose, non-unique by design — never a key). These ids are permanent once shipped; a future landmark
+# gets a freshly-generated uuidv7. (Pre-gen by hand for now; a scenario read/re-export tool comes later.)
+#
 # First delivery is all-additive: no `fold_resources` / `fold_edges`.
 entries:
   # --- concept-landmarks (Q2 vocabulary) ---
   - origin_uri: "temper://kernel/concept/cogmap"
+    id: "019f03f4-2ace-76cb-b1fc-260239dd16a5"
     title: "cogmap"
     doc_type: "kernel_landmark"
     body: "A cognitive map: a bounded, telos-governed view of resources and their relationships. An agent works inside one map's frame at a time."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/region", kind: contains, label: holds }
+      - { to: "019f03f4-2ad3-7663-b196-55ec482efba3", kind: contains, label: holds }  # -> region
   - origin_uri: "temper://kernel/concept/telos"
+    id: "019f03f4-2acf-7c45-bd12-a2a7152644a1"
     title: "telos"
     doc_type: "kernel_landmark"
     body: "A map's telos: its declared purpose, held as a charter (statement + questions-with-context + framing). The telos is the perspective under which salience is judged — salience is never universal."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/cogmap", kind: express, label: governs }
+      - { to: "019f03f4-2ace-76cb-b1fc-260239dd16a5", kind: express, label: governs }  # -> cogmap
   - origin_uri: "temper://kernel/concept/resource"
+    id: "019f03f4-2ad0-7f06-ae22-e53b2fb9b99f"
     title: "resource"
     doc_type: "kernel_landmark"
     body: "A resource: the named, findable unit of content in a map. Addressed by ref; its body is content blocks."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/edge", kind: near, label: graph-grain }
+      - { to: "019f03f4-2ad1-723f-a534-68e587e71220", kind: near, label: graph-grain }  # -> edge
   - origin_uri: "temper://kernel/concept/edge"
+    id: "019f03f4-2ad1-723f-a534-68e587e71220"
     title: "edge"
     doc_type: "kernel_landmark"
     body: "An edge: a declared, typed relationship between resources (express, contains, leads_to, near). Edges are authored, never inferred."
     facets: { layer: concept }
   - origin_uri: "temper://kernel/concept/facet"
+    id: "019f03f4-2ad2-7e87-961b-a9f94d1138cd"
     title: "facet"
     doc_type: "kernel_landmark"
     body: "A facet: a key/value property on a resource (e.g. layer: concept). Facet overlap binds resources into families and is an affinity input."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/region", kind: express, label: binds-into }
+      - { to: "019f03f4-2ad3-7663-b196-55ec482efba3", kind: express, label: binds-into }  # -> region
   - origin_uri: "temper://kernel/concept/region"
+    id: "019f03f4-2ad3-7663-b196-55ec482efba3"
     title: "region"
     doc_type: "kernel_landmark"
     body: "A region: a materialized cluster of resources under a lens. Regions are the substrate's pure function over edges + facets — agents never assign them."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/lens", kind: express, label: shaped-by }
+      - { to: "019f03f4-2ad4-75b5-a39c-1de621ee588b", kind: express, label: shaped-by }  # -> lens
   - origin_uri: "temper://kernel/concept/lens"
+    id: "019f03f4-2ad4-75b5-a39c-1de621ee588b"
     title: "lens"
     doc_type: "kernel_landmark"
     body: "A lens: a weighting over edge-kinds and salience that shapes how a map materializes into regions. The same map yields different regions under different lenses."
     facets: { layer: concept }
   - origin_uri: "temper://kernel/concept/event"
+    id: "019f03f4-2ad5-7321-9492-334e8b0c8cf2"
     title: "event"
     doc_type: "kernel_landmark"
     body: "An event: the append-only record of a mutation, projected to state. The ledger, not the row, is the source of truth."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/invocation", kind: near, label: ledger-grain }
+      - { to: "019f03f4-2ad6-7226-af5f-f0eb16c346e4", kind: near, label: ledger-grain }  # -> invocation
   - origin_uri: "temper://kernel/concept/invocation"
+    id: "019f03f4-2ad6-7226-af5f-f0eb16c346e4"
     title: "invocation"
     doc_type: "kernel_landmark"
     body: "An invocation: one accountable agent run — its trigger, its scope (a cogmap's telos), the mutation events it produced, and a terminal outcome."
     facets: { layer: concept }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/steward", kind: express, label: run-by }
+      - { to: "019f03f4-2ad7-7252-bac9-ddc6655be043", kind: express, label: run-by }  # -> steward
   - origin_uri: "temper://kernel/concept/steward"
+    id: "019f03f4-2ad7-7252-bac9-ddc6655be043"
     title: "steward"
     doc_type: "kernel_landmark"
     body: "A steward: an agent that tends a map's declared structure under its telos — creating resources, asserting edges, setting facets — but never clustering."
     facets: { layer: concept }
   # --- invariant-landmarks (Q3) ---
   - origin_uri: "temper://kernel/invariant/event-as-primary"
+    id: "019f03f4-2ad8-7737-b05c-c3e5d80223ce"
     title: "event-as-primary"
     doc_type: "kernel_landmark"
     body: "Always: every mutation is an event appended to the ledger and projected to state. Never edit state directly; the ledger is authoritative and replayable."
     facets: { layer: invariant }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/event", kind: express, label: governs }
+      - { to: "019f03f4-2ad5-7321-9492-334e8b0c8cf2", kind: express, label: governs }  # -> event
   - origin_uri: "temper://kernel/invariant/access-floor"
+    id: "019f03f4-2ad9-7029-b962-6b1bb6c0ba43"
     title: "access-floor"
     doc_type: "kernel_landmark"
     body: "Always: you operate as a scoped principal. You can only read and write within your map's visibility; the substrate enforces this — you cannot reach beyond your bounds even by mistake."
     facets: { layer: invariant }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/resource", kind: express, label: governs }
+      - { to: "019f03f4-2ad0-7f06-ae22-e53b2fb9b99f", kind: express, label: governs }  # -> resource
   - origin_uri: "temper://kernel/invariant/tend-not-cluster"
+    id: "019f03f4-2ada-75f4-a3cb-584976bccf25"
     title: "tend-not-cluster"
     doc_type: "kernel_landmark"
     body: "Always tend declared structure (resources, edges, facets). Never compute regions or assign salience — region formation is the substrate's pure function on materialize."
     facets: { layer: invariant }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/region", kind: express, label: governs }
+      - { to: "019f03f4-2ad3-7663-b196-55ec482efba3", kind: express, label: governs }  # -> region
   - origin_uri: "temper://kernel/invariant/attribution"
+    id: "019f03f4-2adb-747e-bb2d-dba22dbf5e82"
     title: "attribution"
     doc_type: "kernel_landmark"
     body: "Always: your structural acts carry attribution — a reason and a confidence band — so every act is reviewable and reversible."
     facets: { layer: invariant }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/invocation", kind: express, label: governs }
+      - { to: "019f03f4-2ad6-7226-af5f-f0eb16c346e4", kind: express, label: governs }  # -> invocation
   - origin_uri: "temper://kernel/invariant/promotion-gated"
+    id: "019f03f4-2adc-7b1c-b7cd-6ac30a26a8c9"
     title: "promotion-gated"
     doc_type: "kernel_landmark"
     body: "Lifting a concept across into a different map (promotion-translation) is human-gated: it means something different under the target telos. Never promote autonomously."
     facets: { layer: invariant }
   # --- wayfinding references (Q4/Q5) ---
   - origin_uri: "temper://kernel/reference/search"
+    id: "019f03f4-2add-7621-88c1-d1d58d771047"
     title: "search"
     doc_type: "kernel_landmark"
     body: "To find what already exists by meaning or graph-nearness, reach for the search tool. Start here before creating anything."
     facets: { layer: reference }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/resource", kind: leads_to, label: to-find }
+      - { to: "019f03f4-2ad0-7f06-ae22-e53b2fb9b99f", kind: leads_to, label: to-find }  # -> resource
   - origin_uri: "temper://kernel/reference/create"
+    id: "019f03f4-2ade-7166-b06a-1a6524013ae6"
     title: "create"
     doc_type: "kernel_landmark"
     body: "To add a resource reach for resource_create; to relate two, relationship_assert; to tag one, facet_set. Compose them: create, then relate, then facet."
     facets: { layer: reference }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/resource", kind: leads_to, label: to-add }
+      - { to: "019f03f4-2ad0-7f06-ae22-e53b2fb9b99f", kind: leads_to, label: to-add }  # -> resource
   - origin_uri: "temper://kernel/reference/materialize"
+    id: "019f03f4-2adf-77fc-86cf-868cecf9dce6"
     title: "materialize"
     doc_type: "kernel_landmark"
     body: "To see the map's current regions, reach for request_materialize under a lens. Read the regions to orient before acting."
     facets: { layer: reference }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/region", kind: leads_to, label: to-see }
+      - { to: "019f03f4-2ad3-7663-b196-55ec482efba3", kind: leads_to, label: to-see }  # -> region
   - origin_uri: "temper://kernel/reference/charter"
+    id: "019f03f4-2ae0-74f9-ada7-d1a43a768047"
     title: "charter"
     doc_type: "kernel_landmark"
     body: "To understand a map's purpose and the edge of your mandate, read its telos-charter. The questions-with-context tell you what belongs and what doesn't."
     facets: { layer: reference }
     edges:
-      - { to_origin_uri: "temper://kernel/concept/telos", kind: leads_to, label: to-understand }
+      - { to: "019f03f4-2acf-7c45-bd12-a2a7152644a1", kind: leads_to, label: to-understand }  # -> telos
   # --- boundary-landmarks (Q6) ---
   - origin_uri: "temper://kernel/boundary/hitl"
+    id: "019f03f4-2ae1-7194-8f91-1f96802a9630"
     title: "hitl"
     doc_type: "kernel_landmark"
     body: "Out of bounds without a human: cross-map promotion, founding a new map's identity, and changing a settled commitment. Pause and ask."
     facets: { layer: boundary }
   - origin_uri: "temper://kernel/boundary/leak"
+    id: "019f03f4-2ae2-7218-bfeb-3abf8693ff4e"
     title: "leak"
     doc_type: "kernel_landmark"
     body: "You cannot read another team's material into a lower map — the access floor forbids it structurally. If a read returns nothing, it may be out of scope, not absent."
     facets: { layer: boundary }
   - origin_uri: "temper://kernel/boundary/mandate"
+    id: "019f03f4-2ae3-7550-8ef2-6146cc6b7a94"
     title: "mandate"
     doc_type: "kernel_landmark"
     body: "Read the charter's questions to find the edge of your mandate: if material is depth for a more-specific map, route it there rather than elaborating it here."

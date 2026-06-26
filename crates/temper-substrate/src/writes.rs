@@ -284,6 +284,10 @@ pub async fn delete_resource_in_tx(
 /// by the caller via [`set_property`] / [`set_facet`].
 pub struct KernelCreateParams<'a> {
     pub cogmap: CogmapId,
+    /// The STABLE landmark identity the resource is minted under (the reconcile diff key). Supplying it
+    /// (rather than minting) makes a duplicate create a PRIMARY-KEY conflict — fail-loud, never a silent
+    /// twin.
+    pub resource_id: Uuid,
     pub title: &'a str,
     pub origin_uri: &'a str,
     pub doc_type: &'a str,
@@ -322,8 +326,9 @@ pub async fn create_kernel_resource_in_tx(
         SeedAction::ResourceCreate {
             title: p.title,
             origin_uri: p.origin_uri,
-            // A genuinely new kernel resource — mint a fresh id.
-            resource_id: None,
+            // Mint under the caller's STABLE landmark id (the diff key) — so a duplicate create is a
+            // primary-key conflict, never a silent twin.
+            resource_id: Some(ResourceId::from(p.resource_id)),
             home: AnchorRef::cogmap(p.cogmap),
             owner: p.owner,
             // Kernel content's originator COALESCEs to owner (= system).

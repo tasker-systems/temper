@@ -25,6 +25,9 @@ pub struct ManifestDoc {
 /// One authored kernel landmark (pre-embed: body is raw prose).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct ManifestEntry {
+    /// The STABLE landmark identity (pre-generated uuidv7) — the reconcile diff key. `origin_uri` is
+    /// pure attribution, never a key.
+    pub id: uuid::Uuid,
     pub origin_uri: String,
     pub title: String,
     #[serde(default = "default_doc_type")]
@@ -37,10 +40,10 @@ pub struct ManifestEntry {
     pub edges: Vec<ManifestEdge>,
 }
 
-/// An outgoing edge keyed by the target's `origin_uri`.
+/// An outgoing edge keyed by the target landmark's stable `id`.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct ManifestEdge {
-    pub to_origin_uri: String,
+    pub to: uuid::Uuid,
     pub kind: String,
     #[serde(default = "default_polarity")]
     pub polarity: String,
@@ -50,17 +53,17 @@ pub struct ManifestEdge {
     pub weight: f64,
 }
 
-/// Explicit resource-removal tombstone (absence alone never folds).
+/// Explicit resource-removal tombstone, keyed by the landmark's stable `id` (absence alone never folds).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct ManifestTombstone {
-    pub origin_uri: String,
+    pub id: uuid::Uuid,
 }
 
-/// Explicit edge-removal tombstone, keyed by source + target `origin_uri` + kind.
+/// Explicit edge-removal tombstone, keyed by source + target landmark `id` + kind.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct ManifestEdgeTombstone {
-    pub from_origin_uri: String,
-    pub to_origin_uri: String,
+    pub from: uuid::Uuid,
+    pub to: uuid::Uuid,
     pub kind: String,
 }
 
@@ -104,6 +107,7 @@ pub fn manifest_to_request(
             chunks_packed,
         } = compute_body_chunks(&e.body)?;
         entries.push(ReconcileEntry {
+            id: e.id,
             origin_uri: e.origin_uri.clone(),
             title: e.title.clone(),
             doc_type: e.doc_type.clone(),
@@ -114,7 +118,7 @@ pub fn manifest_to_request(
                 .edges
                 .iter()
                 .map(|x| ReconcileEdge {
-                    to_origin_uri: x.to_origin_uri.clone(),
+                    to: x.to,
                     kind: x.kind.clone(),
                     polarity: x.polarity.clone(),
                     label: x.label.clone(),
@@ -127,16 +131,14 @@ pub fn manifest_to_request(
     let fold_resources = doc
         .fold_resources
         .iter()
-        .map(|t| ReconcileTombstone {
-            origin_uri: t.origin_uri.clone(),
-        })
+        .map(|t| ReconcileTombstone { id: t.id })
         .collect();
     let fold_edges = doc
         .fold_edges
         .iter()
         .map(|t| ReconcileEdgeTombstone {
-            from_origin_uri: t.from_origin_uri.clone(),
-            to_origin_uri: t.to_origin_uri.clone(),
+            from: t.from,
+            to: t.to,
             kind: t.kind.clone(),
         })
         .collect();
@@ -152,18 +154,22 @@ pub fn manifest_to_request(
 mod tests {
     use super::*;
 
+    const TELOS_ID: &str = "019f03f4-2acf-7c45-bd12-a2a7152644a1";
+
     const SAMPLE_YAML: &str = r#"
 entries:
-  - origin_uri: "temper://kernel/concept/cogmap"
+  - id: "019f03f4-2ace-76cb-b1fc-260239dd16a5"
+    origin_uri: "temper://kernel/concept/cogmap"
     title: "cogmap"
     body: "A cognitive map: a bounded, telos-governed view."
     facets:
       layer: concept
     edges:
-      - to_origin_uri: "temper://kernel/concept/telos"
+      - to: "019f03f4-2acf-7c45-bd12-a2a7152644a1"
         kind: express
         label: governs
-  - origin_uri: "temper://kernel/concept/telos"
+  - id: "019f03f4-2acf-7c45-bd12-a2a7152644a1"
+    origin_uri: "temper://kernel/concept/telos"
     title: "telos"
     body: "A telos: the governing purpose a map expresses."
 "#;
@@ -176,11 +182,11 @@ entries:
         // doc_type defaults to "kernel_landmark".
         assert_eq!(doc.entries[0].doc_type, "kernel_landmark");
         assert_eq!(doc.entries[0].facets["layer"], "concept");
-        // One edge, with defaulted polarity/weight.
+        // One edge, with defaulted polarity/weight, keyed on the target landmark's stable id.
         assert_eq!(doc.entries[0].edges.len(), 1);
         assert_eq!(
-            doc.entries[0].edges[0].to_origin_uri,
-            "temper://kernel/concept/telos"
+            doc.entries[0].edges[0].to,
+            TELOS_ID.parse::<uuid::Uuid>().unwrap()
         );
         assert_eq!(doc.entries[0].edges[0].polarity, "forward");
         assert_eq!(doc.entries[0].edges[0].weight, 1.0);

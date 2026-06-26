@@ -241,16 +241,19 @@ impl DbBackend {
     /// any `Err` is propagated and the caller drops the transaction → Postgres rolls back EVERYTHING
     /// (every mutation AND the envelope open), so a partial reconcile is structurally impossible.
     ///
-    /// Idempotency (the headline invariant) holds because: an entry whose `content_hash` equals the live
-    /// `body_hash` does NOTHING (zero events); an edge is asserted only when ABSENT (checked via
-    /// `neighbors`); the clustering facet + `provenance` stamp are written only on CREATE. Re-running the
-    /// same request therefore fires zero new mutation events. (Facet-delta + edge-reweight on EXISTING
-    /// entries are DEFERRED for v1 — kernel landmarks are born with their facets/edges and rarely change
-    /// them; re-asserting either appends an event unconditionally, which would break idempotency.)
+    /// The diff keys on the STABLE landmark `id` (the entry's pre-generated uuidv7), NEVER on
+    /// `origin_uri` (which stays as loose, non-unique attribution). Idempotency (the headline invariant)
+    /// holds because: an entry whose body merkle equals the live `body_hash` does NOTHING (zero events);
+    /// an edge is asserted only when ABSENT (checked via a polarity-aware `find_edge`); the clustering
+    /// facet + `provenance` stamp are written only on CREATE. Re-running the same request therefore fires
+    /// zero new mutation events. (Facet-delta + edge-reweight on EXISTING entries are DEFERRED for v1 —
+    /// kernel landmarks are born with their facets/edges and rarely change them; re-asserting either
+    /// appends an event unconditionally, which would break idempotency.)
     ///
-    /// Edge targets are guaranteed to resolve: `reconcile_cognitive_map` pre-flight-validates every
-    /// `to_origin_uri` against `request.entries` ∪ the live slice BEFORE opening the transaction, so an
-    /// unresolved target is a hard `BadRequest` with no writes — not a silent skip.
+    /// Edge endpoints are stable ids needing no resolution (`entry.id` source, `edge.to` target);
+    /// `reconcile_cognitive_map` pre-flight-validates every `edge.to` against the ids of
+    /// `request.entries` ∪ the live slice BEFORE opening the transaction, so an unresolved target is a
+    /// hard `BadRequest` with no writes — not a silent skip.
     async fn reconcile_apply(
         &self,
         conn: &mut sqlx::PgConnection,
@@ -259,25 +262,18 @@ impl DbBackend {
         owner: temper_substrate::ids::ProfileId,
         emitter: temper_substrate::ids::EntityId,
     ) -> Result<ReconcileOutcome, TemperError> {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::HashMap;
 
         let cogmap_uuid = cogmap.uuid();
 
-        // The diff source: the current `provenance: kernel` slice, indexed by `origin_uri`. Read on the
-        // SAME transaction so the diff sees a consistent snapshot under SERIALIZABLE.
+        // The diff source: the current `provenance: kernel` slice, indexed by the STABLE resource id (the
+        // diff key — `origin_uri` is pure attribution, never a key). Read on the SAME transaction so the
+        // diff sees a consistent snapshot under SERIALIZABLE.
         let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
             .await
             .map_err(api_err)?;
-        let live_by_uri: HashMap<&str, &readback::KernelSliceRow> =
-            live.iter().map(|r| (r.origin_uri.as_str(), r)).collect();
-
-        // `origin_uri` → resource id, seeded with live rows AND extended with rows created this run, so
-        // Phase-2 edges can resolve targets minted in the same pass (first delivery creates everything,
-        // then wires the edges).
-        let mut id_by_uri: HashMap<String, uuid::Uuid> = live
-            .iter()
-            .map(|r| (r.origin_uri.clone(), r.resource_id))
-            .collect();
+        let live_by_id: HashMap<uuid::Uuid, &readback::KernelSliceRow> =
+            live.iter().map(|r| (r.resource_id, r)).collect();
 
         let mut outcome = ReconcileOutcome::default();
 
@@ -297,17 +293,20 @@ impl DbBackend {
             let incoming_body_hash =
                 temper_substrate::content::body_hash_from_chunk_hashes(&chunk_hashes);
 
-            match live_by_uri.get(entry.origin_uri.as_str()) {
+            match live_by_id.get(&entry.id) {
                 None => {
-                    // CREATE — the resource itself, then STAMP provenance, then the clustering facets.
-                    // `body` is empty: the reconcile wire carries no raw prose — `chunks` is always
-                    // `Some` here, so the wrapper builds the block from the chunks and ignores `body`
-                    // (the `body` param is only the no-chunks server-embed fallback, never taken here).
+                    // CREATE — the resource itself (minted under the STABLE landmark id), then STAMP
+                    // provenance, then the clustering facets. `body` is empty: the reconcile wire carries
+                    // no raw prose — `chunks` is always `Some` here, so the wrapper builds the block from
+                    // the chunks and ignores `body` (the `body` param is only the no-chunks server-embed
+                    // fallback, never taken here). `origin_uri` is still set on the resource as
+                    // attribution.
                     let chunks = Some(incoming_chunks);
                     let rid = writes::create_kernel_resource_in_tx(
                         &mut *conn,
                         writes::KernelCreateParams {
                             cogmap,
+                            resource_id: entry.id,
                             title: &entry.title,
                             origin_uri: &entry.origin_uri,
                             doc_type: &entry.doc_type,
@@ -341,7 +340,9 @@ impl DbBackend {
                             .map_err(api_err)?;
                     }
 
-                    id_by_uri.insert(entry.origin_uri.clone(), rid.uuid());
+                    // `rid` equals `entry.id` (the create minted under it); the diff already keys edges
+                    // on `entry.id`, so there is no id-by-uri map to maintain.
+                    debug_assert_eq!(rid.uuid(), entry.id);
                     outcome.created += 1;
                 }
                 Some(row) if row.body_hash.as_deref() != Some(incoming_body_hash.as_str()) => {
@@ -375,40 +376,13 @@ impl DbBackend {
             }
         }
 
-        // PHASE 2 — edges (idempotent: assert only those not already present). Targets now resolvable.
+        // PHASE 2 — edges (idempotent: assert only those not already present). Both endpoints are stable
+        // landmark ids (`entry.id` source, `edge.to` target) — NO lookup; pre-flight already proved each
+        // `edge.to` resolves to a kernel resource.
         for entry in &request.entries {
-            let src = match id_by_uri.get(&entry.origin_uri) {
-                Some(id) => *id,
-                None => continue, // folded/absent this run — nothing to wire from
-            };
-            if entry.edges.is_empty() {
-                continue;
-            }
-            // The resource's existing 1-hop neighbors keyed (target origin_uri, kind, polarity) — an edge
-            // is identified by all three, so a forward and an inverse edge of the same kind to the same
-            // target are distinct (and both deliverable). Re-asserting an edge that already exists would
-            // append an event (`relationship_assert` fires unconditionally), so we skip present ones.
-            // `neighbors` is unscoped 1-hop; the system actor sees all (fine here).
-            let existing: HashSet<(String, String, String)> = readback::neighbors(&mut *conn, src)
-                .await
-                .map_err(api_err)?
-                .into_iter()
-                .map(|n| (n.origin_uri, n.edge_kind, n.polarity))
-                .collect();
+            let src = entry.id;
             for e in &entry.edges {
-                // Pre-flight (in `reconcile_cognitive_map`) guaranteed every `to_origin_uri` resolves
-                // against `entries` ∪ live, and every entry lands in `id_by_uri` after Phase 1 — so a
-                // miss here is an internal invariant break, never a silent under-delivery (FIX #3).
-                let tgt = *id_by_uri.get(&e.to_origin_uri).ok_or_else(|| {
-                    TemperError::Api(format!(
-                        "reconcile: edge target {} unresolved after pre-flight (internal invariant)",
-                        e.to_origin_uri
-                    ))
-                })?;
-                if existing.contains(&(e.to_origin_uri.clone(), e.kind.clone(), e.polarity.clone()))
-                {
-                    continue; // already present — re-assert would break idempotency
-                }
+                let tgt = e.to;
                 let kind =
                     temper_substrate::affinity::EdgeKind::from_sql(&e.kind).ok_or_else(|| {
                         TemperError::BadRequest(format!("unknown edge kind: {}", e.kind))
@@ -417,6 +391,18 @@ impl DbBackend {
                     .ok_or_else(|| {
                         TemperError::BadRequest(format!("unknown edge polarity: {}", e.polarity))
                     })?;
+                // Per-edge existence check, polarity-aware (a forward and an inverse edge of the same
+                // kind to the same target are distinct, both deliverable). Re-asserting a present edge
+                // would append an event (`relationship_assert` fires unconditionally) and break
+                // idempotency, so skip when already present. The kernel has ~15 edges; per-edge
+                // `find_edge` is fine.
+                let present = readback::find_edge(&mut *conn, src, tgt, &kind, Some(&e.polarity))
+                    .await
+                    .map_err(api_err)?
+                    .is_some();
+                if present {
+                    continue; // already present — re-assert would break idempotency
+                }
                 writes::assert_kernel_edge_in_tx(
                     &mut *conn,
                     writes::KernelEdgeParams {
@@ -435,9 +421,9 @@ impl DbBackend {
             }
         }
 
-        // PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds).
+        // PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds). Keyed on the stable id.
         for t in &request.fold_resources {
-            if let Some(row) = live_by_uri.get(t.origin_uri.as_str()) {
+            if let Some(row) = live_by_id.get(&t.id) {
                 writes::delete_resource_in_tx(
                     &mut *conn,
                     temper_substrate::ids::ResourceId::from(row.resource_id),
@@ -449,17 +435,12 @@ impl DbBackend {
             }
         }
         for t in &request.fold_edges {
-            let (Some(&src), Some(&tgt)) = (
-                id_by_uri.get(&t.from_origin_uri),
-                id_by_uri.get(&t.to_origin_uri),
-            ) else {
-                continue; // an endpoint isn't a known kernel resource — nothing to fold
-            };
             let kind = temper_substrate::affinity::EdgeKind::from_sql(&t.kind)
                 .ok_or_else(|| TemperError::BadRequest(format!("unknown edge kind: {}", t.kind)))?;
-            // Resolve the live edge by (src, tgt, kind) over `kb_edges` — substrate SQL lives in the
-            // substrate (`readback::find_edge`), run on this transaction's connection.
-            let edge_id = readback::find_edge(&mut *conn, src, tgt, &kind)
+            // Resolve the live edge by (from, to, kind) over `kb_edges` (any polarity → `None`) —
+            // substrate SQL lives in the substrate (`readback::find_edge`), run on this transaction's
+            // connection.
+            let edge_id = readback::find_edge(&mut *conn, t.from, t.to, &kind, None)
                 .await
                 .map_err(api_err)?;
             if let Some(edge_id) = edge_id {
@@ -1040,36 +1021,36 @@ impl DbBackend {
             .await
             .map_err(api_err)?;
 
-        // The resolvable set: live origin_uris ∪ this request's entry origin_uris.
-        let mut known: HashSet<&str> = HashSet::new();
+        // The resolvable set: stable ids of live resources ∪ this request's entry ids.
+        let mut known: HashSet<uuid::Uuid> = HashSet::new();
         for r in &live {
-            known.insert(r.origin_uri.as_str());
+            known.insert(r.resource_id);
         }
         for e in &request.entries {
-            known.insert(e.origin_uri.as_str());
+            known.insert(e.id);
         }
 
-        let unresolved = |uri: &str| {
+        let unresolved = |id: uuid::Uuid| {
             TemperError::BadRequest(format!(
-                "reconcile: edge target {uri} resolves to no kernel resource"
+                "reconcile: edge target {id} resolves to no kernel resource"
             ))
         };
 
         // Every outgoing edge's target must resolve.
         for entry in &request.entries {
             for edge in &entry.edges {
-                if !known.contains(edge.to_origin_uri.as_str()) {
-                    return Err(unresolved(&edge.to_origin_uri));
+                if !known.contains(&edge.to) {
+                    return Err(unresolved(edge.to));
                 }
             }
         }
         // Every fold_edges endpoint (both ends) must resolve.
         for t in &request.fold_edges {
-            if !known.contains(t.from_origin_uri.as_str()) {
-                return Err(unresolved(&t.from_origin_uri));
+            if !known.contains(&t.from) {
+                return Err(unresolved(t.from));
             }
-            if !known.contains(t.to_origin_uri.as_str()) {
-                return Err(unresolved(&t.to_origin_uri));
+            if !known.contains(&t.to) {
+                return Err(unresolved(t.to));
             }
         }
         Ok(())
