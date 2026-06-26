@@ -1,6 +1,6 @@
 #![cfg(feature = "artifact-tests")]
 //! Loader integration test: boot-seed + load a minimal seed, then confirm `substrate::load` reads
-//! the homed nodes + edges back. Resets the artifact first (owns the namespace; serialized).
+//! the homed nodes + edges back. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 mod common;
 
 use temper_substrate::scenario::{loader, model::Seed};
@@ -24,10 +24,8 @@ edges:
 uses_lenses: [telos-default]
 "#;
 
-#[tokio::test]
-async fn loads_minimal_seed_into_readable_substrate() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn loads_minimal_seed_into_readable_substrate(pool: sqlx::PgPool) {
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
         .unwrap();
@@ -52,10 +50,8 @@ async fn loads_minimal_seed_into_readable_substrate() {
 
 /// Guard: a resource keyed `telos` would silently shadow the implicit charter key and corrupt the
 /// charter read. The loader rejects it fast with a clear collision error.
-#[tokio::test]
-async fn resource_key_colliding_with_reserved_telos_is_rejected() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resource_key_colliding_with_reserved_telos_is_rejected(pool: sqlx::PgPool) {
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
         .unwrap();

@@ -11,6 +11,27 @@
 
 #![allow(dead_code)]
 
+/// Reset the substrate schema IN THE CURRENT DATABASE to a clean, unseeded `01+02` baseline
+/// (the public-schema analog of the retired `temper_next` `reset_artifact`). Use as a test's
+/// first line when the production seed from `MIGRATOR` would perturb a global count or a
+/// replay/projection diff, or to re-clean between snapshot→replay phases.
+pub async fn reset_schema(pool: &sqlx::PgPool) {
+    use sqlx::Executor;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    pool.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        .await
+        .expect("drop/recreate public schema");
+    for f in [
+        "migrations/20260624000001_canonical_schema.sql",
+        "migrations/20260624000002_canonical_functions.sql",
+    ] {
+        let sql = std::fs::read_to_string(format!("{root}/{f}")).expect("read canonical sql");
+        pool.execute(sql.as_str())
+            .await
+            .unwrap_or_else(|e| panic!("apply {f}: {e}"));
+    }
+}
+
 /// Drop + reload the canonical baseline schema and functions into a clean (un-seeded) `temper_next`.
 /// `00_namespace_reset.sql` (a test-only fixture) carries the destructive DROP/CREATE preamble; the
 /// two baseline body files come from `migrations/` and land in `temper_next` via the PGOPTIONS wrapper.
