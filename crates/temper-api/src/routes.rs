@@ -147,22 +147,14 @@ pub fn create_app(state: AppState) -> Router {
 }
 
 async fn fallback_handler(req: axum::extract::Request) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
     tracing::warn!(path = %path, method = %method, "unmatched route");
-    axum::response::Response::builder()
-        .status(404)
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(
-            serde_json::json!({
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": format!("No route matches {method} {path}")
-                }
-            })
-            .to_string(),
-        ))
-        .expect("fallback response")
+    let body =
+        crate::error::ErrorBody::new("NOT_FOUND", format!("No route matches {method} {path}"));
+    (axum::http::StatusCode::NOT_FOUND, axum::Json(body)).into_response()
 }
 
 fn cors_layer(state: &AppState) -> CorsLayer {
