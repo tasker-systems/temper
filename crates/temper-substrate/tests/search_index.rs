@@ -203,9 +203,10 @@ async fn title_only_update_updates_index(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn backfill_covers_preexisting_rows(pool: sqlx::PgPool) {
-    // The migration's backfill is upsert + idempotent; re-running it must (a) cover every active
-    // resource and (b) leave already-maintained rows correct. We assert coverage: every active
-    // resource has an index row, and a known term matches.
+    // The migration's backfill (20260626000001) runs after 20260625000001, which seeds the L0 kernel
+    // telos resource. This test asserts that both the pre-existing telos resource AND a freshly
+    // created resource have index rows — i.e. the backfill covered all active resources, not just
+    // those created after the migration ran.
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home = ctx(&pool, owner, "idx").await;
@@ -239,6 +240,67 @@ async fn backfill_covers_preexisting_rows(pool: sqlx::PgPool) {
     assert!(
         index_matches(&pool, r.uuid(), "corpus").await,
         "backfilled/maintained term matches"
+    );
+}
+
+/// Soft-deleted resources are excluded from `fts_search` via the `WHERE r.is_active` clause added
+/// in Beat 1. The index ROW persists (the delete-trigger does not remove it); the active-resource
+/// JOIN filters it out at read time.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn soft_deleted_resource_excluded_from_fts_search(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "del").await;
+    let r = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            title: "Phlogiston study",
+            origin_uri: "temper://del/r",
+            body: "phlogiston theory explains combustion",
+            doc_type: "concept",
+            home,
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Pre-delete: resource is found by FTS.
+    let before = readback::fts_search(&pool, owner.uuid(), "phlogiston")
+        .await
+        .unwrap();
+    assert!(
+        before.contains(&r.uuid()),
+        "resource must appear in FTS results before soft-delete"
+    );
+
+    // Soft-delete via writes surface (sets kb_resources.is_active = false).
+    writes::delete_resource(&pool, r, emitter).await.unwrap();
+
+    // Post-delete: WHERE r.is_active filters the resource out of FTS results.
+    let after = readback::fts_search(&pool, owner.uuid(), "phlogiston")
+        .await
+        .unwrap();
+    assert!(
+        !after.contains(&r.uuid()),
+        "soft-deleted resource must be absent from FTS results (WHERE r.is_active)"
+    );
+
+    // The index row persists — delete is soft, not cascaded to the search index.
+    // The filter happens at read time, not at delete time (stale-row-is-harmless property).
+    let index_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_resource_search_index WHERE resource_id = $1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        index_count, 1,
+        "index row persists after soft-delete (filtered at read time, not deleted)"
     );
 }
 

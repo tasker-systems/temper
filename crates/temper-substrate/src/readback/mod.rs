@@ -682,6 +682,11 @@ pub async fn find_by_body_hash(
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
 pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<Uuid>> {
+    // Beat-1 hardcode: all rows use 'english' tsquery/tsvector today (every resource is indexed with
+    // the 'english' config in `rebuild_resource_search_vector`). A future multilingual rollout will
+    // store a per-row `search_config` in `kb_resource_search_index` — when that lands, this query
+    // MUST read the stored config per row instead of hardcoding 'english', or non-English rows will
+    // silently fail to match (the stored tsvector and the query will use mismatched configurations).
     let rows = sqlx::query(
         "SELECT r.id
            FROM kb_resource_search_index si
