@@ -265,11 +265,11 @@ world:
         home: { anchor: context, name: research }, owner: alice,
         grants: [{ to: { anchor: profile, handle: alice }, can_read: true }] }
   edges:
-    - { from: c, to: d, kind: leads_to, label: "c->d", home: { anchor: cogmap, name: side-map }, emitter: carol-agent }
+    - { key: c-d, from: c, to: d, kind: leads_to, label: "c->d", home: { anchor: cogmap, name: side-map }, emitter: carol-agent }
 checks:
   - { check: visible_to, profile: alice, resource: c, expect: true }
   - { check: producer_reach, cogmap: side-map, resource: c, expect: true }
-  - { check: edge_visible_to, profile: alice, edge: "c->d", expect: true }
+  - { check: edge_visible_to, profile: alice, edge: c-d, expect: true }
   - { check: cogmaps_share_team, a: side-map, b: onb, expect: true }
   - { check: charter_blocks_visible, cogmap: onb, profile: nomad, expect_count: 0 }
   - { check: can_modify, profile: alice, resource: c, expect: true }
