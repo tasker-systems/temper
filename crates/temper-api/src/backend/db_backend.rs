@@ -195,6 +195,16 @@ pub struct DbBackend {
     profile_id: ProfileId,
 }
 
+/// The invariant attribution carried through every reconcile phase: which cognitive map, on whose
+/// behalf (`owner`), and under which event `emitter`. Bundled so each phase helper takes one context
+/// argument instead of threading three identical ids — and to stay under the params-struct threshold.
+#[derive(Clone, Copy, Debug)]
+struct ReconcileCtx {
+    cogmap: temper_substrate::ids::CogmapId,
+    owner: temper_substrate::ids::ProfileId,
+    emitter: temper_substrate::ids::EntityId,
+}
+
 impl DbBackend {
     pub fn new(pool: PgPool, profile_id: ProfileId) -> Self {
         Self { pool, profile_id }
@@ -261,26 +271,56 @@ impl DbBackend {
         owner: temper_substrate::ids::ProfileId,
         emitter: temper_substrate::ids::EntityId,
     ) -> Result<ReconcileOutcome, TemperError> {
-        use std::collections::HashMap;
+        let ctx = ReconcileCtx {
+            cogmap,
+            owner,
+            emitter,
+        };
 
-        let cogmap_uuid = cogmap.uuid();
-
-        // The diff source: the current `provenance: kernel` slice, indexed by the STABLE resource id (the
-        // diff key — `origin_uri` is pure attribution, never a key). Read on the SAME transaction so the
-        // diff sees a consistent snapshot under SERIALIZABLE.
-        let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
-            .await
-            .map_err(api_err)?;
-        let live_by_id: HashMap<uuid::Uuid, &readback::KernelSliceRow> =
-            live.iter().map(|r| (r.resource_id, r)).collect();
+        // The diff source: the live `provenance: kernel` slice, indexed by the STABLE resource id
+        // (the diff key — `origin_uri` is loose, non-unique attribution, NEVER a key). Read on the
+        // SAME transaction so the diff sees a consistent snapshot under SERIALIZABLE.
+        let live_by_id = Self::read_kernel_index(&mut *conn, cogmap.uuid()).await?;
 
         let mut outcome = ReconcileOutcome::default();
 
-        // PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist).
+        // Phase order is load-bearing: resources first (an edge's target must already exist), then
+        // edges, then explicit tombstones. Every phase runs on the one transaction — any `Err`
+        // propagates and the caller drops the tx, so Postgres rolls back the WHOLE reconcile (every
+        // mutation AND the envelope open). A partial reconcile is structurally impossible.
+        Self::apply_resource_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
+        Self::apply_edge_phase(&mut *conn, request, ctx).await?;
+        Self::apply_tombstone_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
+
+        Ok(outcome)
+    }
+
+    /// Read the live `provenance: kernel` slice and index it by the STABLE resource id — the diff
+    /// key. (`origin_uri` is loose, non-unique attribution and is NEVER a key.) Owns the rows so the
+    /// index outlives the read without borrowing the source vec.
+    async fn read_kernel_index(
+        conn: &mut sqlx::PgConnection,
+        cogmap_uuid: uuid::Uuid,
+    ) -> Result<std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>, TemperError> {
+        let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
+            .await
+            .map_err(api_err)?;
+        Ok(live.into_iter().map(|r| (r.resource_id, r)).collect())
+    }
+
+    /// PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist). Keyed on
+    /// the stable id via `live_by_id`; the merkle compare drives create/update/unchanged.
+    async fn apply_resource_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        live_by_id: &std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>,
+        ctx: ReconcileCtx,
+        outcome: &mut ReconcileOutcome,
+    ) -> Result<(), TemperError> {
         for entry in &request.entries {
             // Unpack the supplied (client-embedded) chunks once. The body merkle the substrate WILL
             // store for them is computed the SAME way the create-dedup path does
-            // (`body_hash_from_chunk_hashes`, see :304), so it byte-matches the stored `body_hash`. The
+            // (`body_hash_from_chunk_hashes`), so it byte-matches the stored `body_hash`. The
             // diff keys on THIS merkle — never the wire `content_hash`, which the CLI derives
             // differently (whole-body `sha256:`-prefixed hash, not the chunk-merkle) and which the
             // server therefore does not trust. Trusting it would make every re-run re-block every entry.
@@ -304,15 +344,15 @@ impl DbBackend {
                     let rid = writes::create_kernel_resource_in_tx(
                         &mut *conn,
                         writes::KernelCreateParams {
-                            cogmap,
+                            cogmap: ctx.cogmap,
                             resource_id: entry.id,
                             title: &entry.title,
                             origin_uri: &entry.origin_uri,
                             doc_type: &entry.doc_type,
                             body: "",
                             chunks,
-                            owner,
-                            emitter,
+                            owner: ctx.owner,
+                            emitter: ctx.emitter,
                         },
                     )
                     .await
@@ -325,7 +365,7 @@ impl DbBackend {
                         rid,
                         "provenance",
                         &serde_json::json!("kernel"),
-                        emitter,
+                        ctx.emitter,
                     )
                     .await
                     .map_err(api_err)?;
@@ -334,7 +374,7 @@ impl DbBackend {
                     // never clustered). Skip the write entirely when there's nothing to cluster.
                     let facets = strip_provenance_facet(&entry.facets);
                     if facet_is_nonempty(&facets) {
-                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, emitter)
+                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, ctx.emitter)
                             .await
                             .map_err(api_err)?;
                     }
@@ -361,7 +401,7 @@ impl DbBackend {
                             properties: &[],
                             chunks: Some(incoming_chunks),
                             rehome_to: None,
-                            emitter,
+                            emitter: ctx.emitter,
                         },
                     )
                     .await
@@ -374,10 +414,17 @@ impl DbBackend {
                 }
             }
         }
+        Ok(())
+    }
 
-        // PHASE 2 — edges (idempotent: assert only those not already present). Both endpoints are stable
-        // landmark ids (`entry.id` source, `edge.to` target) — NO lookup; pre-flight already proved each
-        // `edge.to` resolves to a kernel resource.
+    /// PHASE 2 — edges (idempotent: assert only those not already present). Both endpoints are stable
+    /// landmark ids (`entry.id` source, `edge.to` target) — NO lookup; pre-flight already proved each
+    /// `edge.to` resolves to a kernel resource. Edges never touch `outcome` (no edge counter by design).
+    async fn apply_edge_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        ctx: ReconcileCtx,
+    ) -> Result<(), TemperError> {
         for entry in &request.entries {
             let src = entry.id;
             for e in &entry.edges {
@@ -405,28 +452,37 @@ impl DbBackend {
                 writes::assert_kernel_edge_in_tx(
                     &mut *conn,
                     writes::KernelEdgeParams {
-                        cogmap,
+                        cogmap: ctx.cogmap,
                         src: temper_substrate::ids::ResourceId::from(src),
                         tgt: temper_substrate::ids::ResourceId::from(tgt),
                         kind,
                         polarity,
                         label: e.label.as_deref(),
                         weight: e.weight,
-                        emitter,
+                        emitter: ctx.emitter,
                     },
                 )
                 .await
                 .map_err(api_err)?;
             }
         }
+        Ok(())
+    }
 
-        // PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds). Keyed on the stable id.
+    /// PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds). Keyed on the stable id.
+    async fn apply_tombstone_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        live_by_id: &std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>,
+        ctx: ReconcileCtx,
+        outcome: &mut ReconcileOutcome,
+    ) -> Result<(), TemperError> {
         for t in &request.fold_resources {
             if let Some(row) = live_by_id.get(&t.id) {
                 writes::delete_resource_in_tx(
                     &mut *conn,
                     temper_substrate::ids::ResourceId::from(row.resource_id),
-                    emitter,
+                    ctx.emitter,
                 )
                 .await
                 .map_err(api_err)?;
@@ -447,15 +503,14 @@ impl DbBackend {
                     &mut *conn,
                     temper_substrate::ids::EdgeId::from(edge_id),
                     Some("reconcile fold"),
-                    emitter,
+                    ctx.emitter,
                 )
                 .await
                 .map_err(api_err)?;
                 outcome.folded += 1;
             }
         }
-
-        Ok(outcome)
+        Ok(())
     }
 }
 
