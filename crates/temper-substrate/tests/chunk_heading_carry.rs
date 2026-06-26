@@ -4,10 +4,8 @@
 mod common;
 use sqlx::Row;
 
-#[tokio::test]
-async fn chunk_carries_header_path_and_heading_depth() {
-    common::reset_artifact();
-    let pool = temper_substrate::substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn chunk_carries_header_path_and_heading_depth(pool: sqlx::PgPool) {
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
         .unwrap();

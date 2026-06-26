@@ -10,7 +10,7 @@ use temper_substrate::drift::{self, DriftTier};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, EntityId};
 use temper_substrate::scenario::{bootseed, loader, model::Seed};
-use temper_substrate::{content, embed, substrate, write};
+use temper_substrate::{content, embed, write};
 use uuid::Uuid;
 
 const SEED: &str = r#"
@@ -31,10 +31,8 @@ edges:
 uses_lenses: [telos-default]
 "#;
 
-#[tokio::test]
-async fn revise_reaches_readout_tier_no_component_changes() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn revise_reaches_readout_tier_no_component_changes(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let seed: Seed = serde_yaml::from_str(SEED).unwrap();
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
