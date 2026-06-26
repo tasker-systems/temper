@@ -214,3 +214,78 @@ async fn graph_expand_filters_and_scope(pool: sqlx::PgPool) {
     let unscoped = graph_expand(&pool, stranger, &[a.uuid()], 2, &[], 0.5).await;
     assert!(unscoped.is_empty(), "a principal who cannot see the seeds/neighbors gets nothing");
 }
+
+use temper_substrate::readback::{self, UnifiedSearchQuery};
+
+fn q<'a>(principal: Uuid) -> UnifiedSearchQuery<'a> {
+    UnifiedSearchQuery {
+        principal, query: None, embedding: None, seed_ids: &[], depth: 2,
+        edge_types: &[], context_id: None, doc_type: None, graph_expand: true,
+        limit: 10, offset: 0,
+    }
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn blend_term_zeroing_and_either_or_dissolved(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "bl").await;
+    let r = mk_embedded(&pool, home, owner, emitter, "tempering steel", "temper://bl/r", unit(0)).await;
+
+    // Text-only: vector term is 0, fts term drives the score.
+    let text_only = readback::unified_search(&pool, UnifiedSearchQuery {
+        query: Some("tempering"), ..q(owner.uuid())
+    }).await.unwrap();
+    let hit = text_only.iter().find(|h| h.resource_id == r.uuid()).expect("found by text");
+    assert!(hit.fts_score > 0.0 && hit.vector_score == 0.0, "text-only ⇒ vector term zero");
+
+    // Vector-only: fts term is 0.
+    let vec_only = readback::unified_search(&pool, UnifiedSearchQuery {
+        embedding: Some(&unit(0)), ..q(owner.uuid())
+    }).await.unwrap();
+    let hit = vec_only.iter().find(|h| h.resource_id == r.uuid()).expect("found by vector");
+    assert!(hit.vector_score > 0.0 && hit.fts_score == 0.0, "vector-only ⇒ fts term zero");
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn blend_self_seeding_boosts_structural_neighbor(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "ss").await;
+    // `core` matches the query; `neighbor` does NOT match text but is edged to `core`.
+    let core = mk_embedded(&pool, home, owner, emitter, "tempering furnace", "temper://ss/core", unit(0)).await;
+    let neighbor = mk_embedded(&pool, home, owner, emitter, "unrelated wording", "temper://ss/nbr", unit(1)).await;
+    edge(&pool, core, neighbor, home, emitter, EdgeKind::LeadsTo, 1.0).await;
+
+    let on = readback::unified_search(&pool, UnifiedSearchQuery {
+        query: Some("tempering"), graph_expand: true, ..q(owner.uuid())
+    }).await.unwrap();
+    assert!(on.iter().any(|h| h.resource_id == neighbor.uuid()),
+        "graph recall-expansion pulls in the structurally-near non-text-matching neighbor");
+
+    let off = readback::unified_search(&pool, UnifiedSearchQuery {
+        query: Some("tempering"), graph_expand: false, ..q(owner.uuid())
+    }).await.unwrap();
+    assert!(off.iter().all(|h| h.resource_id != neighbor.uuid()),
+        "graph_expand=false ⇒ pure FTS∪vector, neighbor absent");
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn blend_context_and_doctype_filters(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "flt").await;
+    let r = mk(&pool, home, owner, emitter, "tempering one", "body tempering", "temper://flt/r").await;
+
+    // doc_type filter that excludes 'concept' ⇒ no hits.
+    let none = readback::unified_search(&pool, UnifiedSearchQuery {
+        query: Some("tempering"), doc_type: Some("session"), ..q(owner.uuid())
+    }).await.unwrap();
+    assert!(none.iter().all(|h| h.resource_id != r), "doc_type filter restricts the corpus");
+
+    // doc_type='concept' keeps it.
+    let some = readback::unified_search(&pool, UnifiedSearchQuery {
+        query: Some("tempering"), doc_type: Some("concept"), ..q(owner.uuid())
+    }).await.unwrap();
+    assert!(some.iter().any(|h| h.resource_id == r), "matching doc_type passes the filter");
+}
