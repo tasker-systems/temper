@@ -127,6 +127,9 @@ pub struct UnifiedSearchResultRow {
     pub doc_type: String,
     pub fts_score: f32,
     pub vector_score: f32,
+    /// Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the
+    /// candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
+    pub graph_score: f32,
     pub combined_score: f32,
     pub origin: String,
 }

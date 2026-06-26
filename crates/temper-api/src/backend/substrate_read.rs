@@ -318,6 +318,7 @@ pub async fn search_select(
             doc_type: row.doc_type_name,
             fts_score: 0.0,
             vector_score: 0.0,
+            graph_score: 0.0,
             combined_score: 0.0,
             origin: origin.to_string(),
         });

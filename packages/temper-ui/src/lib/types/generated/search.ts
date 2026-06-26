@@ -16,4 +16,9 @@ origin_uri: string, context: string | null, doc_type: string, score: number, sni
 /**
  * A unified search result combining FTS and vector scores.
  */
-export type UnifiedSearchResultRow = { resource_id: string, title: string, slug: string, kb_uri: string, origin_uri: string, context: string | null, doc_type: string, fts_score: number, vector_score: number, combined_score: number, origin: string, };
+export type UnifiedSearchResultRow = { resource_id: string, title: string, slug: string, kb_uri: string, origin_uri: string, context: string | null, doc_type: string, fts_score: number, vector_score: number, 
+/**
+ * Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the
+ * candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
+ */
+graph_score: number, combined_score: number, origin: string, };
