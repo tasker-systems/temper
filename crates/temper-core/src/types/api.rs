@@ -50,7 +50,10 @@ pub struct SearchParams {
     /// (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     #[serde(default = "default_search_config")]
     pub search_config: String,
-    /// Filter by context name (resolved to UUID server-side).
+    /// Filter by context name. NOTE: not currently honored by `/api/search` — resolving a context by
+    /// bare name is ambiguous (names collide across owners; uniqueness is on `slug` per owner). Context
+    /// filtering is deferred to the context-ref addressing arc (UUID-primary + decorated `@owner/slug`),
+    /// which converts every surface together. `unified_search` retains a dormant `p_context_id` for it.
     pub context_name: Option<String>,
     /// Filter by document type.
     pub doc_type: Option<String>,
