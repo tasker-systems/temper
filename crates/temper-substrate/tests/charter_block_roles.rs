@@ -9,7 +9,7 @@ use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{EntityId, ProfileId};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::scenario::model::{QuestionDef, TelosDef};
-use temper_substrate::{content, substrate};
+use temper_substrate::content;
 use uuid::Uuid;
 
 async fn seed_actor(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
@@ -30,10 +30,8 @@ async fn seed_actor(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
     (profile, entity)
 }
 
-#[tokio::test]
-async fn framing_never_projects_as_a_question() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn framing_never_projects_as_a_question(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = seed_actor(&pool).await;
 

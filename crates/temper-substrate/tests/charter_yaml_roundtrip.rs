@@ -11,7 +11,6 @@ mod common;
 
 use temper_substrate::scenario::model::Seed;
 use temper_substrate::scenario::{bootseed, loader};
-use temper_substrate::substrate;
 use uuid::Uuid;
 
 const SEED_YAML: &str = r#"
@@ -46,10 +45,8 @@ async fn role_blocks(pool: &sqlx::PgPool, telos: Uuid, cogmap: Uuid, role: &str)
         .unwrap()
 }
 
-#[tokio::test]
-async fn charter_yaml_reproduces_exactly_through_role_filtered_reads() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn charter_yaml_reproduces_exactly_through_role_filtered_reads(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
 
     let seed: Seed = serde_yaml::from_str(SEED_YAML).unwrap();
