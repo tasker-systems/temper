@@ -5,12 +5,10 @@
 
 mod common;
 
-use temper_substrate::{scenario::bootseed, substrate};
+use temper_substrate::scenario::bootseed;
 
-#[tokio::test]
-async fn ledger_is_append_only_and_roots_self_correlate() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn ledger_is_append_only_and_roots_self_correlate(pool: sqlx::PgPool) {
     // the boot-seed fires lens_created events through _event_append — real ledger rows to test against
     bootseed::seed_system(&pool).await.unwrap();
 

@@ -7,7 +7,6 @@ mod common;
 
 use temper_substrate::scenario::access::{self, model::AccessScenario};
 use temper_substrate::scenario::bootseed;
-use temper_substrate::substrate;
 
 const ACCESS_SCENARIO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -27,10 +26,9 @@ fn load_context_share_yaml() -> AccessScenario {
     serde_yaml::from_str(&std::fs::read_to_string(CONTEXT_SHARE_SCENARIO).unwrap()).unwrap()
 }
 
-#[tokio::test]
-async fn loads_topology_row_counts() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn loads_topology_row_counts(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
 
     let doc = load_access_yaml();
@@ -68,10 +66,9 @@ async fn loads_topology_row_counts() {
     assert_eq!(nomad_teams, 1);
 }
 
-#[tokio::test]
-async fn proves_all_access_invariants() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn proves_all_access_invariants(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
 
     access::run_access_scenario(&pool, &load_access_yaml())
@@ -79,10 +76,9 @@ async fn proves_all_access_invariants() {
         .expect("all S1-S5 access checks pass");
 }
 
-#[tokio::test]
-async fn proves_context_share_invariants() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn proves_context_share_invariants(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
 
     access::run_access_scenario(&pool, &load_context_share_yaml())
@@ -90,13 +86,9 @@ async fn proves_context_share_invariants() {
         .expect("all context-share leak-safety checks pass");
 }
 
-#[tokio::test]
-async fn s8_capability_check_rejects_write_without_read() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-    bootseed::seed_system(&pool).await.unwrap();
-
-    // Minimal anchors. 'none' avoids the root-join trigger (no temper-system team in a bare reset).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn s8_capability_check_rejects_write_without_read(pool: sqlx::PgPool) {
+    // Minimal anchors. 'none' avoids the root-join trigger.
     let pid: uuid::Uuid = sqlx::query_scalar(
         "INSERT INTO kb_profiles (handle, display_name, system_access) \
          VALUES ('s8user','S8','none') RETURNING id",

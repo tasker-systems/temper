@@ -13,16 +13,13 @@
 
 mod common;
 
-use temper_substrate::substrate;
-
 /// Seed a clean artifact (01+02), the singleton `kb_system_settings (access_mode='open')`, and one
 /// profile; assert the two grafted system-access functions evaluate (open mode grants any profile),
 /// `kb_profiles` carries `email`/`preferences`, and each of the 7 grafted infra tables is queryable.
-#[tokio::test]
-async fn identity_graft_resolves() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
-
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn identity_graft_resolves(pool: sqlx::PgPool) {
+    // Reset to clean 01+02 baseline — L0 kernel migration seeds kb_system_settings(id=1).
+    common::reset_schema(&pool).await;
     // The instance-access singleton in 'open' mode, plus one profile to gate.
     sqlx::query("INSERT INTO kb_system_settings (id, access_mode) VALUES (1, 'open')")
         .execute(&pool)
