@@ -73,18 +73,6 @@ echo ""
 echo "Run 'cargo make --list-all-steps' for all tasks"
 '''
 
-[tasks.test-next]
-description = "Run temper-substrate scenario write-path artifact-tests in an isolated temper_next namespace."
-# The tests load the canonical baseline (migrations/) into a temper_next test namespace and reset it
-# per test. Post-collapse `substrate::connect()` uses the connection-default search_path (public, the
-# production shape), so the test runtime MUST point the pool at temper_next via the search_path option
-# — otherwise the pool resolves against the public substrate and writes collide. SQLX_OFFLINE uses the
-# committed temper_next-bound cache (regenerate with `cargo make prepare-next` after touching SQL).
-env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public" }
-script = '''
-cargo nextest run -p temper-substrate --features artifact-tests
-'''
-
 [tasks.test-artifacts]
 description = "Run temper-substrate write-path artifact tests on ephemeral per-test databases (public schema). Needs Docker Postgres + ONNX."
 env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development" }

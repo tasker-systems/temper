@@ -12,8 +12,9 @@ pub struct Substrate {
 }
 
 pub async fn connect() -> Result<PgPool> {
-    // The connection string carries the schema search_path (dev: `temper_next,public`; live: `public`
-    // after the rename), so no per-connection `SET search_path` is needed.
+    // The connection's search_path is the database default (`public`) in production, dev, and
+    // tests. No per-connection `SET search_path` is needed. In tests, ephemeral databases are
+    // provided by `#[sqlx::test]` with `temper_substrate::MIGRATOR` applied to `public`.
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://temper:temper@localhost:5437/temper_development".into());
     Ok(PgPool::connect(&url).await?)

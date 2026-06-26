@@ -1,19 +1,17 @@
-//! Shared setup for the scenario write-path artifact tests.
+//! Shared setup helpers for the temper-substrate artifact tests.
 //!
-//! These tests OWN the `temper_next` namespace: each resets it to a clean canonical baseline (the
-//! `00_namespace_reset` fixture drops+recreates the schema, then the namespace-free baseline body
-//! files from `migrations/` are loaded under a `search_path=temper_next,public` PGOPTIONS wrapper),
-//! then boot-seeds + loads its own scenario. The tests are serialized via the `temper-substrate-write`
-//! nextest test-group so resets never race a sibling's queries.
+//! Tests use `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]` to receive an isolated
+//! ephemeral database with the canonical schema already applied. Each test owns its ephemeral
+//! database — no serialization group and no shared namespace teardown needed.
 //!
-//! (The legacy read-path tests — materialize/substrate_read/embed_job — instead assume `03_seed.sql`
-//! is loaded, so the two suites are run separately. M2 retires the legacy path.)
+//! `reset_schema` is provided for tests that need to drop and re-apply the baseline within
+//! a single test run (e.g. snapshot→replay phases). All other setup goes through the
+//! `MIGRATOR`-driven ephemeral DB.
 
 #![allow(dead_code)]
 
-/// Reset the substrate schema IN THE CURRENT DATABASE to a clean, unseeded `01+02` baseline
-/// (the public-schema analog of the retired `temper_next` `reset_artifact`). Use as a test's
-/// first line when the production seed from `MIGRATOR` would perturb a global count or a
+/// Reset the substrate schema IN THE CURRENT DATABASE to a clean, unseeded `01+02` baseline.
+/// Use as a test's first line when the seed from `MIGRATOR` would perturb a global count or a
 /// replay/projection diff, or to re-clean between snapshot→replay phases.
 pub async fn reset_schema(pool: &sqlx::PgPool) {
     use sqlx::Executor;
@@ -30,28 +28,6 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
             .await
             .unwrap_or_else(|e| panic!("apply {f}: {e}"));
     }
-}
-
-/// Drop + reload the canonical baseline schema and functions into a clean (un-seeded) `temper_next`.
-/// `00_namespace_reset.sql` (a test-only fixture) carries the destructive DROP/CREATE preamble; the
-/// two baseline body files come from `migrations/` and land in `temper_next` via the PGOPTIONS wrapper.
-pub fn reset_artifact() {
-    load_files(&[
-        "00_namespace_reset",
-        "20260624000001_canonical_schema",
-        "20260624000002_canonical_functions",
-    ]);
-}
-
-/// Like [`reset_artifact`] but also loads the hand-written `03_seed.sql` (the legacy SQL-seed path) —
-/// used by the cross-path equivalence test to materialize the SQL-seeded onboarding-cogmap.
-pub fn reset_artifact_with_seed() {
-    load_files(&[
-        "00_namespace_reset",
-        "20260624000001_canonical_schema",
-        "20260624000002_canonical_functions",
-        "03_seed",
-    ]);
 }
 
 /// Fire a cogmap genesis + one `resource_create` homed in it, whose single chunk's sidecar entry
@@ -151,14 +127,12 @@ pub async fn fire_resource_with_headed_chunk(
     fired.resource().unwrap().uuid()
 }
 
-/// Insert one `temper_next.kb_profiles` row by handle (display_name = handle, `system_access` defaults
-/// to `'none'`), returning its new id. Runs inside a `SET LOCAL search_path TO temper_next, public`
-/// transaction so the `sync_personal_team` / `sync_system_membership` AFTER-INSERT triggers resolve
-/// their unqualified table references into `temper_next` (same discipline as `synthesis::bootstrap`).
-/// Runtime `sqlx::query` (a test-fixture insert) so it needs no offline-cache entry.
+/// Insert one `kb_profiles` row by handle (display_name = handle, `system_access` defaults
+/// to `'none'`), returning its new id. Runtime `sqlx::query` (a test-fixture insert) so it
+/// needs no offline-cache entry.
 pub async fn insert_profile(pool: &sqlx::PgPool, handle: &str) -> uuid::Uuid {
     let mut tx = pool.begin().await.expect("begin");
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
+    sqlx::query("SET LOCAL search_path TO public")
         .execute(&mut *tx)
         .await
         .expect("set search_path");
@@ -173,9 +147,8 @@ pub async fn insert_profile(pool: &sqlx::PgPool, handle: &str) -> uuid::Uuid {
     id
 }
 
-/// Insert one owner-scoped `temper_next.kb_contexts` row, returning its new id (or the DB error if it
-/// violates `UNIQUE(owner_table, owner_id, slug)`). Wrapped in a `SET LOCAL search_path` transaction
-/// for parity with the other temper_next writers. Runtime `sqlx::query` (a test-fixture insert).
+/// Insert one owner-scoped `kb_contexts` row, returning its new id (or the DB error if it
+/// violates `UNIQUE(owner_table, owner_id, slug)`). Runtime `sqlx::query` (a test-fixture insert).
 pub async fn insert_context(
     pool: &sqlx::PgPool,
     owner_table: &str,
@@ -184,7 +157,7 @@ pub async fn insert_context(
     name: &str,
 ) -> Result<uuid::Uuid, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
+    sqlx::query("SET LOCAL search_path TO public")
         .execute(&mut *tx)
         .await?;
     let id: uuid::Uuid = sqlx::query_scalar(
@@ -198,32 +171,6 @@ pub async fn insert_context(
     .await?;
     tx.commit().await?;
     Ok(id)
-}
-
-fn load_files(files: &[&str]) {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    for f in files {
-        // The namespace-free canonical baseline body files live in `migrations/` and won't self-set
-        // search_path, so inject it via PGOPTIONS so their unqualified DDL lands in `temper_next`
-        // (not `public`). The reset + legacy-seed fixtures live in `tests/fixtures/`; the reset is
-        // fully qualified (no search_path needed), `03_seed` self-sets but we wrap it anyway.
-        let (path, set_search_path) = match *f {
-            "00_namespace_reset" => (format!("{fixtures}/00_namespace_reset.sql"), false),
-            "03_seed" => (format!("{fixtures}/03_seed.sql"), true),
-            other => (format!("{root}/migrations/{other}.sql"), true),
-        };
-        let mut cmd = std::process::Command::new("psql");
-        if set_search_path {
-            cmd.env("PGOPTIONS", "-csearch_path=temper_next,public");
-        }
-        let status = cmd
-            .args([url.as_str(), "-q", "-v", "ON_ERROR_STOP=1", "-f", &path])
-            .status()
-            .expect("failed to run psql (is it on PATH?)");
-        assert!(status.success(), "psql -f {f}.sql failed during reset");
-    }
 }
 
 /// Canonical, UUID-INDEPENDENT region partition signature for a cogmap at lens `telos-default`:
