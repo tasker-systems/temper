@@ -17,3 +17,25 @@ LANGUAGE sql STABLE AS $$
      AND r.is_active
      AND si.search_vector @@ plainto_tsquery('english', p_query);
 $$;
+
+-- ── Semantic candidates: HNSW over-fetch-then-filter. The inner `ann` CTE carries ONLY the
+-- index's own predicate (is_current) + ORDER BY <=> LIMIT, so idx_kb_chunks_embedding engages.
+-- Visibility/active filtering happens AFTER (applying it inside the ANN would force a seq-scan and
+-- defeat the index — the exact bug in the legacy GROUP BY/MIN-over-a-join shape). Over-fetch (p_k»limit)
+-- absorbs the post-ANN attrition. Best chunk per resource decides rank; vec_norm = 1 - dist/2 ∈ [0,1].
+CREATE FUNCTION search_vector_candidates(p_principal uuid, p_emb vector, p_k int)
+RETURNS TABLE (resource_id uuid, vec_norm real)
+LANGUAGE sql STABLE AS $$
+  WITH ann AS (
+    SELECT c.resource_id, (c.embedding <=> p_emb) AS dist
+      FROM kb_chunks c
+     WHERE p_emb IS NOT NULL AND c.is_current
+     ORDER BY c.embedding <=> p_emb
+     LIMIT p_k
+  )
+  SELECT a.resource_id, (1.0 - MIN(a.dist) / 2.0)::real
+    FROM ann a
+    JOIN kb_resources r                       ON r.id = a.resource_id AND r.is_active
+    JOIN resources_visible_to(p_principal) v   ON v.resource_id = a.resource_id
+   GROUP BY a.resource_id;
+$$;
