@@ -198,7 +198,7 @@ entries:
         assert!(doc.fold_edges.is_empty());
     }
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "test-embed")]
     #[test]
     fn manifest_to_request_embeds_each_entry() {
         let doc = parse_manifest(SAMPLE_YAML).unwrap();
