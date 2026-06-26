@@ -181,10 +181,25 @@ mod tests {
 
     #[test]
     fn test_require_device_id_returns_error_when_not_logged_in() {
-        let result = require_device_id();
-        // In test environment, no device_id file exists — should return Config error.
-        // The important thing is it doesn't panic.
-        assert!(result.is_ok() || result.is_err());
+        // Isolate from a real login (auth.json) and from a leaked TEMPER_TOKEN in the dev shell:
+        // point the auth file at a nonexistent path and clear the token so the not-authenticated
+        // path is genuinely exercised. (The prior `is_ok() || is_err()` was a tautology — always
+        // true for any Result — giving zero coverage of the contract this test names.)
+        let dir = tempfile::tempdir().unwrap();
+        let missing_auth = dir.path().join("nonexistent-auth.json");
+        temp_env::with_vars(
+            [
+                ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AUTH_PATH", Some(missing_auth.to_str().unwrap())),
+            ],
+            || {
+                let result = require_device_id();
+                assert!(
+                    matches!(result, Err(TemperError::Config(_))),
+                    "expected Config error when not logged in, got: {result:?}"
+                );
+            },
+        );
     }
 
     #[test]

@@ -63,10 +63,10 @@ world:
   edges:
     # context-homed edge between PUBLIC endpoints — the §3 re-proof: bob reads both
     # endpoints (root grant) but NOT the edge (home context unshared to team-b).
-    - { from: pub1, to: pub2, kind: near, label: "pub1~pub2(research)",
+    - { key: pub1-pub2, from: pub1, to: pub2, kind: near, label: "pub1~pub2(research)",
         home: { anchor: context, name: research }, emitter: alice-agent }
     # cogmap-homed edge unchanged by the amendment (control).
-    - { from: rdoc, to: rnote, kind: leads_to, label: "rdoc->rnote",
+    - { key: rdoc-rnote, from: rdoc, to: rnote, kind: leads_to, label: "rdoc->rnote",
         home: { anchor: cogmap, name: map-a }, emitter: alice-agent }
 
 checks:
@@ -83,9 +83,9 @@ checks:
   - { check: producer_reach, cogmap: map-a,     resource: cnote, expect: false }  # personal share never leaks cross-team
   - { check: producer_reach, cogmap: map-a,     resource: sdoc,  expect: false }  # unshared context unreachable by any map
   # S3 — edge-home protection, re-proven with a context home
-  - { check: edge_visible_to, profile: alice, edge: "pub1~pub2(research)", expect: true }
-  - { check: edge_visible_to, profile: bob,   edge: "pub1~pub2(research)", expect: false }  # endpoints public, HOME unshared
-  - { check: edge_visible_to, profile: alice, edge: "rdoc->rnote", expect: true }           # cogmap-homed control
+  - { check: edge_visible_to, profile: alice, edge: pub1-pub2, expect: true }
+  - { check: edge_visible_to, profile: bob,   edge: pub1-pub2, expect: false }  # endpoints public, HOME unshared
+  - { check: edge_visible_to, profile: alice, edge: rdoc-rnote, expect: true }  # cogmap-homed control
   # S6 — write axis (WS2): can_modify_resource. Context-share is read-reach only, NOT a write path.
   - { check: can_modify, profile: carol, resource: rdoc, expect: true }    # owner can modify
   - { check: can_modify, profile: alice, resource: rdoc, expect: false }   # reaches rdoc for READ via the share, no write grant

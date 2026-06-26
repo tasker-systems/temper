@@ -8,6 +8,8 @@ target/
 # Uses `.claude/*` rather than `.claude/` so the negation below can re-include.
 .claude/*
 !.claude/settings.json
+# Shared, committed multi-agent workflows (resolvable by name at runtime).
+!.claude/workflows/
 .env
 .vercel
 node_modules

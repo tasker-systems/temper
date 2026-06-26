@@ -151,6 +151,55 @@ fn properties_from_meta(
     out
 }
 
+/// Parameters for [`validate_managed_meta_pipeline`] — the shared create/update validation gate.
+struct ManagedValidationParams<'a> {
+    /// The caller-supplied managed_meta as a JSON value (pre-strip).
+    raw_managed: serde_json::Value,
+    doc_type: &'a str,
+    title: &'a str,
+    /// Slug for canonical IDENTITY-KEY injection: `None` removes `temper-slug` (create's empty-slug
+    /// case); `Some` injects it (update derives it from the effective title).
+    identity_slug: Option<&'a str>,
+    /// Slug seeded into the schema validator (create: the raw command slug; update: the effective slug).
+    validator_slug: &'a str,
+    context_name: &'a str,
+    /// Validation-document id + created stamp — NOT persisted from here (the substrate mints the
+    /// real resource id); they only seed the validation document.
+    id: uuid::Uuid,
+    created: chrono::DateTime<Utc>,
+}
+
+/// The shared managed-meta validation pipeline used by BOTH `create_resource` and `update_resource`:
+/// strip caller-echoed system keys → apply doc-type defaults → inject the canonical identity keys →
+/// validate against the doc-type schema (PROPAGATING the typed `BadRequest`, never swallowing it).
+///
+/// Returns the assembled (defaulted + identity-injected) managed-meta value: create writes it as
+/// properties; update validates with it but persists only the raw caller keys (a partial PATCH), so
+/// it discards the return. Centralizing this closes the drift vector of two hand-mirrored copies (the
+/// prior `update_resource` comment literally said "mirror create's pipeline").
+fn validate_managed_meta_pipeline(
+    params: ManagedValidationParams<'_>,
+) -> Result<serde_json::Value, TemperError> {
+    let mut managed = temper_workflow::operations::strip_system_managed_fields(params.raw_managed);
+    temper_workflow::operations::apply_defaults_value(params.doc_type, &mut managed);
+    temper_workflow::operations::ensure_managed_identity_keys(
+        &mut managed,
+        params.title,
+        params.identity_slug,
+    );
+    let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
+        id: params.id,
+        created: params.created,
+        doc_type: params.doc_type,
+        managed_meta: Some(&managed),
+        slug: params.validator_slug,
+        title: params.title,
+        context_name: params.context_name,
+    };
+    temper_workflow::operations::validate_managed_meta(&validate_params)?;
+    Ok(managed)
+}
+
 /// Maps the substrate readback (`readback::resource_row`) to the native `ResourceRow` — real
 /// timestamps (event-sourced from `kb_events.occurred_at`), name-only doc type, no fabrication.
 /// Shared by `show_resource` and the read selector arms (`list_select`, `show_select`,
@@ -193,6 +242,16 @@ pub struct DbBackend {
     /// The caller profile — the substrate principal directly (a preserved profile id). Reads scope
     /// through `resources_visible_to`; writes gate through `can_modify_resource` (WS2).
     profile_id: ProfileId,
+}
+
+/// The invariant attribution carried through every reconcile phase: which cognitive map, on whose
+/// behalf (`owner`), and under which event `emitter`. Bundled so each phase helper takes one context
+/// argument instead of threading three identical ids — and to stay under the params-struct threshold.
+#[derive(Clone, Copy, Debug)]
+struct ReconcileCtx {
+    cogmap: temper_substrate::ids::CogmapId,
+    owner: temper_substrate::ids::ProfileId,
+    emitter: temper_substrate::ids::EntityId,
 }
 
 impl DbBackend {
@@ -261,26 +320,56 @@ impl DbBackend {
         owner: temper_substrate::ids::ProfileId,
         emitter: temper_substrate::ids::EntityId,
     ) -> Result<ReconcileOutcome, TemperError> {
-        use std::collections::HashMap;
+        let ctx = ReconcileCtx {
+            cogmap,
+            owner,
+            emitter,
+        };
 
-        let cogmap_uuid = cogmap.uuid();
-
-        // The diff source: the current `provenance: kernel` slice, indexed by the STABLE resource id (the
-        // diff key — `origin_uri` is pure attribution, never a key). Read on the SAME transaction so the
-        // diff sees a consistent snapshot under SERIALIZABLE.
-        let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
-            .await
-            .map_err(api_err)?;
-        let live_by_id: HashMap<uuid::Uuid, &readback::KernelSliceRow> =
-            live.iter().map(|r| (r.resource_id, r)).collect();
+        // The diff source: the live `provenance: kernel` slice, indexed by the STABLE resource id
+        // (the diff key — `origin_uri` is loose, non-unique attribution, NEVER a key). Read on the
+        // SAME transaction so the diff sees a consistent snapshot under SERIALIZABLE.
+        let live_by_id = Self::read_kernel_index(&mut *conn, cogmap.uuid()).await?;
 
         let mut outcome = ReconcileOutcome::default();
 
-        // PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist).
+        // Phase order is load-bearing: resources first (an edge's target must already exist), then
+        // edges, then explicit tombstones. Every phase runs on the one transaction — any `Err`
+        // propagates and the caller drops the tx, so Postgres rolls back the WHOLE reconcile (every
+        // mutation AND the envelope open). A partial reconcile is structurally impossible.
+        Self::apply_resource_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
+        Self::apply_edge_phase(&mut *conn, request, ctx).await?;
+        Self::apply_tombstone_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
+
+        Ok(outcome)
+    }
+
+    /// Read the live `provenance: kernel` slice and index it by the STABLE resource id — the diff
+    /// key. (`origin_uri` is loose, non-unique attribution and is NEVER a key.) Owns the rows so the
+    /// index outlives the read without borrowing the source vec.
+    async fn read_kernel_index(
+        conn: &mut sqlx::PgConnection,
+        cogmap_uuid: uuid::Uuid,
+    ) -> Result<std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>, TemperError> {
+        let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
+            .await
+            .map_err(api_err)?;
+        Ok(live.into_iter().map(|r| (r.resource_id, r)).collect())
+    }
+
+    /// PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist). Keyed on
+    /// the stable id via `live_by_id`; the merkle compare drives create/update/unchanged.
+    async fn apply_resource_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        live_by_id: &std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>,
+        ctx: ReconcileCtx,
+        outcome: &mut ReconcileOutcome,
+    ) -> Result<(), TemperError> {
         for entry in &request.entries {
             // Unpack the supplied (client-embedded) chunks once. The body merkle the substrate WILL
             // store for them is computed the SAME way the create-dedup path does
-            // (`body_hash_from_chunk_hashes`, see :304), so it byte-matches the stored `body_hash`. The
+            // (`body_hash_from_chunk_hashes`), so it byte-matches the stored `body_hash`. The
             // diff keys on THIS merkle — never the wire `content_hash`, which the CLI derives
             // differently (whole-body `sha256:`-prefixed hash, not the chunk-merkle) and which the
             // server therefore does not trust. Trusting it would make every re-run re-block every entry.
@@ -304,15 +393,15 @@ impl DbBackend {
                     let rid = writes::create_kernel_resource_in_tx(
                         &mut *conn,
                         writes::KernelCreateParams {
-                            cogmap,
+                            cogmap: ctx.cogmap,
                             resource_id: entry.id,
                             title: &entry.title,
                             origin_uri: &entry.origin_uri,
                             doc_type: &entry.doc_type,
                             body: "",
                             chunks,
-                            owner,
-                            emitter,
+                            owner: ctx.owner,
+                            emitter: ctx.emitter,
                         },
                     )
                     .await
@@ -325,7 +414,7 @@ impl DbBackend {
                         rid,
                         "provenance",
                         &serde_json::json!("kernel"),
-                        emitter,
+                        ctx.emitter,
                     )
                     .await
                     .map_err(api_err)?;
@@ -334,7 +423,7 @@ impl DbBackend {
                     // never clustered). Skip the write entirely when there's nothing to cluster.
                     let facets = strip_provenance_facet(&entry.facets);
                     if facet_is_nonempty(&facets) {
-                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, emitter)
+                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, ctx.emitter)
                             .await
                             .map_err(api_err)?;
                     }
@@ -361,7 +450,7 @@ impl DbBackend {
                             properties: &[],
                             chunks: Some(incoming_chunks),
                             rehome_to: None,
-                            emitter,
+                            emitter: ctx.emitter,
                         },
                     )
                     .await
@@ -374,10 +463,17 @@ impl DbBackend {
                 }
             }
         }
+        Ok(())
+    }
 
-        // PHASE 2 — edges (idempotent: assert only those not already present). Both endpoints are stable
-        // landmark ids (`entry.id` source, `edge.to` target) — NO lookup; pre-flight already proved each
-        // `edge.to` resolves to a kernel resource.
+    /// PHASE 2 — edges (idempotent: assert only those not already present). Both endpoints are stable
+    /// landmark ids (`entry.id` source, `edge.to` target) — NO lookup; pre-flight already proved each
+    /// `edge.to` resolves to a kernel resource. Edges never touch `outcome` (no edge counter by design).
+    async fn apply_edge_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        ctx: ReconcileCtx,
+    ) -> Result<(), TemperError> {
         for entry in &request.entries {
             let src = entry.id;
             for e in &entry.edges {
@@ -405,28 +501,37 @@ impl DbBackend {
                 writes::assert_kernel_edge_in_tx(
                     &mut *conn,
                     writes::KernelEdgeParams {
-                        cogmap,
+                        cogmap: ctx.cogmap,
                         src: temper_substrate::ids::ResourceId::from(src),
                         tgt: temper_substrate::ids::ResourceId::from(tgt),
                         kind,
                         polarity,
                         label: e.label.as_deref(),
                         weight: e.weight,
-                        emitter,
+                        emitter: ctx.emitter,
                     },
                 )
                 .await
                 .map_err(api_err)?;
             }
         }
+        Ok(())
+    }
 
-        // PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds). Keyed on the stable id.
+    /// PHASE 3 — explicit tombstones only (O3: absence alone NEVER folds). Keyed on the stable id.
+    async fn apply_tombstone_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        live_by_id: &std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>,
+        ctx: ReconcileCtx,
+        outcome: &mut ReconcileOutcome,
+    ) -> Result<(), TemperError> {
         for t in &request.fold_resources {
             if let Some(row) = live_by_id.get(&t.id) {
                 writes::delete_resource_in_tx(
                     &mut *conn,
                     temper_substrate::ids::ResourceId::from(row.resource_id),
-                    emitter,
+                    ctx.emitter,
                 )
                 .await
                 .map_err(api_err)?;
@@ -447,15 +552,14 @@ impl DbBackend {
                     &mut *conn,
                     temper_substrate::ids::EdgeId::from(edge_id),
                     Some("reconcile fold"),
-                    emitter,
+                    ctx.emitter,
                 )
                 .await
                 .map_err(api_err)?;
                 outcome.folded += 1;
             }
         }
-
-        Ok(outcome)
+        Ok(())
     }
 }
 
@@ -495,42 +599,23 @@ impl Backend for DbBackend {
                 None => None,
             };
 
-        // Create-time guards (WS6 collapse Task F). The substrate create path applies the same
-        // strip → defaults → identity-keys → validate → body-hash-dedup pipeline the legacy
-        // `ingest_service::ingest` ran (`:433-502`), calling the surviving pure helpers WHERE THEY
-        // LIVE (no helper move — the flip owns relocation). Purely additive over the prior no-guard
-        // create.
-        let mut managed =
-            serde_json::to_value(&cmd.managed_meta).map_err(|e| TemperError::Api(e.to_string()))?;
-        // 1. Strip identity / tier-1 system keys a caller may have echoed back from a prior read.
-        managed = temper_workflow::operations::strip_system_managed_fields(managed);
-        // 2. Apply doc-type managed-tier defaults (e.g. task → `temper-stage: backlog`).
-        temper_workflow::operations::apply_defaults_value(&cmd.doctype, &mut managed);
-        // 3. Inject the canonical identity keys (`temper-title`/`temper-slug`) before validation, the
-        //    same send/receive-symmetric discipline ingest uses. An empty slug removes `temper-slug`
-        //    (mirrors ingest's `injected_slug` at `:444-453`).
+        // Create-time guards (WS6 collapse Task F): the shared strip → defaults → identity-keys →
+        // validate pipeline (see `validate_managed_meta_pipeline`), the same one the legacy
+        // `ingest_service::ingest` ran. A fresh canonical id + `now()` seed the validation document
+        // (not persisted — the substrate mints the real id in `writes::create_resource`). An empty
+        // slug removes `temper-slug` (mirrors ingest's `injected_slug`). Body-hash dedup follows.
         let injected_slug = (!cmd.slug.is_empty()).then_some(cmd.slug.as_str());
-        temper_workflow::operations::ensure_managed_identity_keys(
-            &mut managed,
-            &cmd.title,
-            injected_slug,
-        );
-        // 4. Validate the assembled managed_meta against the doc-type schema; PROPAGATE the typed
-        //    validation error (never swallow it). A fresh canonical id + `now()` seed the validation
-        //    document exactly as ingest does (`:457-467`); that id is not persisted from here — the
-        //    substrate mints the resource id in `writes::create_resource`.
-        let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
+        let managed = validate_managed_meta_pipeline(ManagedValidationParams {
+            raw_managed: serde_json::to_value(&cmd.managed_meta)
+                .map_err(|e| TemperError::Api(e.to_string()))?,
+            doc_type: &cmd.doctype,
+            title: &cmd.title,
+            identity_slug: injected_slug,
+            validator_slug: &cmd.slug,
+            context_name: &cmd.context,
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
-            doc_type: &cmd.doctype,
-            managed_meta: Some(&managed),
-            slug: &cmd.slug,
-            title: &cmd.title,
-            context_name: &cmd.context,
-        };
-        // `validate_managed_meta` returns a typed `TemperError::BadRequest` on a caller-input fault;
-        // propagate it directly (PROPAGATE, never swallow).
-        temper_workflow::operations::validate_managed_meta(&validate_params)?;
+        })?;
 
         // 5. Body-hash dedup (non-empty body only, matching legacy `:497-502`): if a visible active
         //    resource already carries the same substrate body_hash merkle, return IT instead of
@@ -665,30 +750,23 @@ impl Backend for DbBackend {
                 .unwrap_or_else(|| current.title.clone());
             let effective_slug = temper_workflow::operations::sluggify(&effective_title);
 
-            // Build the COMPLETE validation document (strip system keys → doc-type defaults →
-            // identity keys) and validate it; PROPAGATE the typed BadRequest (an out-of-enum
-            // value or an unknown doc_type → 400, the create contract). Every schema-required
-            // field is supplied by identity (temper-slug/title) or a default (task temper-stage /
-            // goal temper-status), so a partial update never false-rejects — no merge with the
-            // current managed_meta is needed.
-            let mut validation =
-                temper_workflow::operations::strip_system_managed_fields(incoming.clone());
-            temper_workflow::operations::apply_defaults_value(&effective_doc_type, &mut validation);
-            temper_workflow::operations::ensure_managed_identity_keys(
-                &mut validation,
-                &effective_title,
-                Some(effective_slug.as_str()),
-            );
-            let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
+            // Validate via the SHARED pipeline (see `validate_managed_meta_pipeline`) — the same
+            // strip → defaults → identity → validate as create; PROPAGATE the typed BadRequest (an
+            // out-of-enum value or an unknown doc_type → 400, the create contract). Every
+            // schema-required field is supplied by identity (temper-slug/title) or a default (task
+            // temper-stage / goal temper-status), so a partial update never false-rejects — no merge
+            // with the current managed_meta is needed. The assembled set is for validation only;
+            // update persists the raw caller keys (partial PATCH), so the return is discarded.
+            validate_managed_meta_pipeline(ManagedValidationParams {
+                raw_managed: incoming.clone(),
+                doc_type: &effective_doc_type,
+                title: &effective_title,
+                identity_slug: Some(effective_slug.as_str()),
+                validator_slug: &effective_slug,
+                context_name: &effective_context,
                 id: new_id,
                 created: current.created,
-                doc_type: &effective_doc_type,
-                managed_meta: Some(&validation),
-                slug: &effective_slug,
-                title: &effective_title,
-                context_name: &effective_context,
-            };
-            temper_workflow::operations::validate_managed_meta(&validate_params)?;
+            })?;
 
             // Write only the caller-supplied keys (PATCH is a partial merge; `PropertySet`
             // asserts per key, so unsupplied keys are untouched — DON'T write the defaulted
