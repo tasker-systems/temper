@@ -217,6 +217,33 @@ audited item under this lens.
 
 ---
 
+## 6. Rule index (audit checklist)
+
+Stable IDs for citing rules in reviews and for the audit harness (each finding cites one). A
+violation is "what it looks like in the wild" — the trigger an auditor greps/reads for.
+
+| ID | Rule (§) | A violation looks like |
+|----|----------|------------------------|
+| **CQ-1** | Single responsibility / length (§1.1) | A function past ~60 lines, or one that reads "phase 1 … phase 2 …", or whose summary needs an "and". |
+| **CQ-2** | Keys unique-by-construction, not loose markers (§1.2) | Diffing/dedup/joining on a non-unique marker (e.g. `origin_uri`); identity keys not injected from one typed source on both sides of a boundary. |
+| **CQ-3** | Parse, don't validate (§1.3) | Bare `Uuid`/`String` where a newtype belongs; revalidation scattered downstream instead of parse-at-boundary; `&String`/`&Vec<T>` params. |
+| **CQ-4** | Names carry responsibility (§1.4) | A *type* named `Manager`/`Helper`/`Service`/`Factory`/`Util`; a stringly-typed `match "literal"` over a bounded set the code owns. |
+| **CQ-5** | Params structs (§1.5) | >5 domain params on a fn; `#[expect(clippy::too_many_arguments)]`. |
+| **CQ-6** | Error handling & escalation (§1.6) | `.unwrap()`/`.expect()` on a fallible runtime value in a library path; write-then-check (auth after mutation); panic for a recoverable condition; a softened contract/assertion. |
+| **CQ-7** | Lint & suppression discipline (§1.7) | Bare `#[allow]` (vs `#[expect(reason=…)]`); a public type without `Debug`; a magic constant with no explaining comment. |
+| **CQ-8** | No "for now" / no premature compat/abstraction (§1.8) | Dead code kept "for compat"; a placeholder/"for now" workaround; a one-use abstraction. |
+| **CQ-9** | Typed structs over inline JSON (§2) | `serde_json::json!()` for data with a known shape. |
+| **CQ-10** | Shared types at boundaries (§2) | A zod schema (or other hand-mirror) duplicating a Rust struct instead of the `ts-rs`-generated type. |
+| **CQ-11** | Persistence is its own layer (§2, §3) | Inline `sqlx::query!()` in a handler/MCP tool/CLI action; persistence CRUD interleaved with behavior code. |
+| **CQ-12** | Auth before writes / profile scoping (§1.6, §2) | A data query not scoped through `resources_visible_to`/`can_modify_resource`; a mutation before its authorization check. |
+| **CQ-13** | SQL discipline (§3) | Runtime `query` where a macro works; multi-table JOINs copy-pasted across fns (→ view); filter predicates duplicated across queries (→ shared builder). |
+| **CQ-14** | Testing (§4) | A removed/weakened assertion; a missing `test-db`/`test-embed` gate on `#[sqlx::test]`/embed tests; a direct-call test where a production-caller e2e is needed; a non-descriptive test name. |
+
+This index is **rubric-shaped, not lens-specific**: a later security sweep gets its own `SEC-*`
+index in its own doc and runs the same audit harness against it.
+
+---
+
 ## References
 
 - tasker-core (sibling project) — `docs/development/best-practices-rust.md`
