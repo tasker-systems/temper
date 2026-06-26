@@ -11,11 +11,6 @@ publish = false
 # locally: `cargo nextest run -p temper-substrate --features artifact-tests`. Pure core tests (affinity,
 # cluster) are ungated and run in CI.
 artifact-tests = []
-# Gates the LEGACY read-path tests (materialize/substrate_read/embed_job) — they instead need
-# `03_seed.sql` loaded and do NOT reset, so they MUST NOT co-run with the self-resetting write-path
-# tests (a reset would DROP SCHEMA out from under them). Kept on a separate feature so a single
-# `--features` run can never include both. M2 retires this path. Run after loading 01+02+03_seed.
-artifact-tests-legacy = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
 scenario-schema = ["schemars"]
 
