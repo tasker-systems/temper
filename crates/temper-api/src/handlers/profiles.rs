@@ -4,7 +4,7 @@ use axum::Json;
 use temper_core::types::access_gate::Entitlements;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::{access_service, profile_service};
 use crate::state::AppState;
@@ -57,19 +57,13 @@ pub async fn update(
 ) -> ApiResult<Json<Profile>> {
     profile_service::validate_preferences_size(req.preferences.as_ref())?;
 
-    let vault_config_value = req
-        .vault_config
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|e| ApiError::BadRequest(format!("Invalid vault_config: {e}")))?;
-
+    // `req.vault_config` is intentionally ignored: it is substrate-dropped
+    // (synthesized on read), so there is nothing to persist.
     profile_service::update(
         &state.pool,
         auth.0.profile.id,
         req.display_name.as_deref(),
         req.preferences.as_ref(),
-        vault_config_value.as_ref(),
     )
     .await
     .map(Json)

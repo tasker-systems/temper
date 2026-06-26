@@ -163,7 +163,6 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
             TemperError::Conflict(s) => ApiError::Conflict(s),
             TemperError::Api(s) => ApiError::Internal(s),
-            TemperError::NotImplemented(s) => ApiError::Internal(format!("not implemented: {s}")),
             TemperError::SystemAccessRequired(details) => {
                 // Round-trip the join_request_status string back to the enum.
                 // The inbound conversion stringified it as `format!("{s:?}").to_lowercase()`,

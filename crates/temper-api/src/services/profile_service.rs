@@ -245,15 +245,14 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
 }
 
 /// Update mutable profile fields. Only provided (`Some`) values are written.
-/// `vault_config` is accepted for call-site/signature parity but is
-/// substrate-dropped (synthesized on read) — it cannot be persisted, so it is
-/// ignored here.
+///
+/// `vault_config` is intentionally not a parameter: it is substrate-dropped
+/// (synthesized on read), so there is nothing to persist.
 pub async fn update(
     pool: &PgPool,
     id: Uuid,
     display_name: Option<&str>,
     preferences: Option<&Value>,
-    _vault_config: Option<&Value>,
 ) -> ApiResult<Profile> {
     let current = get_by_id(pool, id).await?;
 
