@@ -164,6 +164,7 @@ mod tests {
             doc_type: "task".to_string(),
             fts_score: 0.5,
             vector_score: 0.0,
+            graph_score: 0.0,
             combined_score: 0.5,
             origin: "fts".to_string(),
         }];

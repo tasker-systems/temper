@@ -279,50 +279,77 @@ pub async fn get_meta_batch_select(
     Ok(map)
 }
 
-/// `search` — vector when an embedding is supplied, else FTS over the text query (§9 search floor). The
-/// matching SET is the invariant; scores are not (emitted 0.0). Each match reconstructs to a full row.
+/// Surface A caps resolved once, before the SQL call (pure → unit-tested).
+pub(crate) struct ClampedSearch {
+    pub depth: i32,
+    pub limit: i64,
+}
+
+/// graph_depth → \[1,3\] (deep traversal is a Surface-B concern; a 10-hop fan-out would threaten the DB);
+/// limit → \[1,50\] (the documented API ceiling). Defaults: depth 2, limit 10.
+pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
+    ClampedSearch {
+        depth: params.graph_depth.unwrap_or(2).clamp(1, 3),
+        limit: params.limit.unwrap_or(10).clamp(1, 50),
+    }
+}
+
+/// `search` — Surface A general search (Beat 2): one composed `unified_search` readback blending FTS +
+/// vector + graph into ranked, scored hits, then per-row display enrichment. Replaces the either/or,
+/// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
 pub async fn search_select(
     pool: &PgPool,
     profile_id: Uuid,
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
-    // The search readbacks JOIN `resources_visible_to(principal)`, so the result set is already scoped.
-    let (ids, origin) = if let Some(embedding) = params.embedding.as_ref() {
-        (
-            readback::vector_search(pool, profile_id, embedding)
-                .await
-                .map_err(api_err)?,
-            "vector",
-        )
-    } else if let Some(query) = params.query.as_ref() {
-        (
-            readback::fts_search(pool, profile_id, query)
-                .await
-                .map_err(api_err)?,
-            "fts",
-        )
-    } else {
-        (Vec::new(), "fts")
-    };
+    let clamped = clamp_search_params(&params);
+    // Context filtering is intentionally NOT wired in Beat 2. Resolving a context by `name` is
+    // ambiguous — a principal can see several same-named contexts across teams + self — so it
+    // belongs to the dedicated context-ref addressing arc (UUID-primary + decorated @owner/slug),
+    // which converts every surface (UI/CLI/MCP/API/skill) together to keep their assumptions
+    // compatible. Until then `search` does not filter by context: `unified_search` keeps its
+    // `p_context_id` parameter, exercised here as `None` (no filter). The `doc_type` filter, which
+    // is unambiguous, stays wired. See `SearchParams.context_name`'s note.
 
-    let mut hits = Vec::with_capacity(ids.len());
-    for new_id in ids {
-        let row = native_resource_row(pool, profile_id, new_id).await?;
-        hits.push(UnifiedSearchResultRow {
-            resource_id: new_id,
+    let hits = readback::unified_search(
+        pool,
+        readback::UnifiedSearchQuery {
+            principal: profile_id,
+            query: params.query.as_deref(),
+            embedding: params.embedding.as_deref(),
+            seed_ids: params.seed_ids.as_deref().unwrap_or(&[]),
+            depth: clamped.depth,
+            edge_types: params.edge_types.as_deref().unwrap_or(&[]),
+            context_id: None, // deferred to the context-ref addressing arc (see note above)
+            doc_type: params.doc_type.as_deref(),
+            graph_expand: params.graph_expand,
+            limit: clamped.limit,
+            offset: params.offset.unwrap_or(0),
+        },
+    )
+    .await
+    .map_err(api_err)?;
+
+    let mut out = Vec::with_capacity(hits.len());
+    for h in hits {
+        // Per-row display enrichment (unchanged from the pre-Beat-2 path; the candidate set is ≤ limit).
+        let row = native_resource_row(pool, profile_id, h.resource_id).await?;
+        out.push(UnifiedSearchResultRow {
+            resource_id: h.resource_id,
             title: row.title,
             slug: String::new(),
             kb_uri: row.origin_uri.clone(),
             origin_uri: row.origin_uri,
             context: Some(row.context_name),
             doc_type: row.doc_type_name,
-            fts_score: 0.0,
-            vector_score: 0.0,
-            combined_score: 0.0,
-            origin: origin.to_string(),
+            fts_score: h.fts_score,
+            vector_score: h.vector_score,
+            graph_score: h.graph_score,
+            combined_score: h.combined_score,
+            origin: "unified".to_string(),
         });
     }
-    Ok(hits)
+    Ok(out)
 }
 
 /// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
@@ -366,4 +393,26 @@ pub async fn list_enriched_select(
         out.push((row, managed, open));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod clamp_tests {
+    use super::*;
+    use temper_core::types::api::SearchParams;
+
+    #[test]
+    fn clamps_depth_and_limit_to_surface_a_caps() {
+        let p = SearchParams {
+            graph_depth: Some(10),
+            limit: Some(999),
+            ..SearchParams::default()
+        };
+        let c = clamp_search_params(&p);
+        assert_eq!(c.depth, 3, "graph_depth capped at 3 for Surface A");
+        assert_eq!(c.limit, 50, "limit capped at 50");
+
+        let d = clamp_search_params(&SearchParams::default());
+        assert_eq!(d.depth, 2, "default depth 2");
+        assert_eq!(d.limit, 10, "default limit 10");
+    }
 }

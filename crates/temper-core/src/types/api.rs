@@ -45,9 +45,15 @@ pub struct SearchParams {
     #[serde(default)]
     pub query: Option<String>,
     /// Postgres text-search configuration (default "english").
+    ///
+    /// NOTE: reserved/inert in Surface A — FTS is hardcoded `'english'` in `search_fts_candidates`
+    /// (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     #[serde(default = "default_search_config")]
     pub search_config: String,
-    /// Filter by context name (resolved to UUID server-side).
+    /// Filter by context name. NOTE: not currently honored by `/api/search` — resolving a context by
+    /// bare name is ambiguous (names collide across owners; uniqueness is on `slug` per owner). Context
+    /// filtering is deferred to the context-ref addressing arc (UUID-primary + decorated `@owner/slug`),
+    /// which converts every surface together. `unified_search` retains a dormant `p_context_id` for it.
     pub context_name: Option<String>,
     /// Filter by document type.
     pub doc_type: Option<String>,
@@ -62,7 +68,7 @@ pub struct SearchParams {
     /// Edge type filter for graph expansion (empty = all types).
     #[serde(default)]
     pub edge_types: Option<Vec<String>>,
-    /// Max hops for graph traversal (default 2, max 10).
+    /// Max hops for graph traversal (default 2, max 3 — clamped for Surface A).
     #[serde(default)]
     pub graph_depth: Option<i32>,
     /// Whether to expand results via graph edges (default true).
@@ -127,6 +133,9 @@ pub struct UnifiedSearchResultRow {
     pub doc_type: String,
     pub fts_score: f32,
     pub vector_score: f32,
+    /// Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the
+    /// candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
+    pub graph_score: f32,
     pub combined_score: f32,
     pub origin: String,
 }

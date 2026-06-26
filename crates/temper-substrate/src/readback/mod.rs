@@ -978,3 +978,58 @@ pub(crate) async fn neighbors(
         })
         .collect())
 }
+
+/// One scored hit from Surface A unified search (Beat 2). The scores are the real blended sub-scores —
+/// the either/or path's 0.0 placeholders are gone.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ScoredHit {
+    pub resource_id: Uuid,
+    pub fts_score: f32,
+    pub vector_score: f32,
+    pub graph_score: f32,
+    pub combined_score: f32,
+}
+
+/// Request parameters for [`unified_search`] (params struct — 11 domain fields). Borrowed views; the
+/// caller owns the underlying `SearchParams`. Empty `seed_ids`/`edge_types` ⇒ no explicit seeds / all
+/// edge kinds. `None` `query`/`embedding` ⇒ that signal's term is zeroed in the blend.
+#[derive(Debug, Clone)]
+pub struct UnifiedSearchQuery<'a> {
+    pub principal: Uuid,
+    pub query: Option<&'a str>,
+    pub embedding: Option<&'a [f32]>,
+    pub seed_ids: &'a [Uuid],
+    pub depth: i32,
+    pub edge_types: &'a [String],
+    pub context_id: Option<Uuid>,
+    pub doc_type: Option<&'a str>,
+    pub graph_expand: bool,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// Surface A general search (Beat 2): one composed SQL statement (`unified_search`) blending FTS +
+/// vector + graph into ranked, scored hits. Runtime `sqlx::query_as` — the `::vector` cast forbids the
+/// compile-time macros (module note). All tuning constants live in the SQL function, not here.
+pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<Vec<ScoredHit>> {
+    let emb_text = q.embedding.map(format_pgvector);
+    let edge_types: Vec<String> = q.edge_types.to_vec();
+    let hits = sqlx::query_as::<_, ScoredHit>(
+        "SELECT resource_id, fts_score, vector_score, graph_score, combined_score
+           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int)",
+    )
+    .bind(q.principal)
+    .bind(q.query)
+    .bind(emb_text)        // NULL when None → p_emb NULL → vector term zeroed
+    .bind(q.seed_ids)
+    .bind(q.depth)
+    .bind(edge_types)
+    .bind(q.context_id)
+    .bind(q.doc_type)
+    .bind(q.graph_expand)
+    .bind(q.limit)
+    .bind(q.offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(hits)
+}
