@@ -161,6 +161,10 @@ pub enum GrantAnchor {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct AccessEdgeDef {
+    /// Unique handle for this edge within the scenario. `edge_visible_to` checks resolve through it
+    /// (the captured `kb_edges.id`), NOT through `label` — `label` is a decorative, non-unique TEXT
+    /// column, so keying a lookup on it silently matches the wrong row when two edges share a label.
+    pub key: String,
     pub from: String,
     pub to: String,
     pub kind: EdgeKind,
@@ -200,9 +204,11 @@ pub enum AccessCheck {
         resource: String,
         expect: bool,
     },
-    /// S3 — edge-home protection: `edges_visible_to(profile)` ∋ edge (resolved by label).
+    /// S3 — edge-home protection: `edges_visible_to(profile)` ∋ edge (resolved by the edge's `key`,
+    /// its captured `kb_edges.id` — NOT by the non-unique `label`).
     EdgeVisibleTo {
         profile: String,
+        /// The target edge's `key` (see [`AccessEdgeDef::key`]).
         edge: String,
         expect: bool,
     },
@@ -259,11 +265,11 @@ world:
         home: { anchor: context, name: research }, owner: alice,
         grants: [{ to: { anchor: profile, handle: alice }, can_read: true }] }
   edges:
-    - { from: c, to: d, kind: leads_to, label: "c->d", home: { anchor: cogmap, name: side-map }, emitter: carol-agent }
+    - { key: c-d, from: c, to: d, kind: leads_to, label: "c->d", home: { anchor: cogmap, name: side-map }, emitter: carol-agent }
 checks:
   - { check: visible_to, profile: alice, resource: c, expect: true }
   - { check: producer_reach, cogmap: side-map, resource: c, expect: true }
-  - { check: edge_visible_to, profile: alice, edge: "c->d", expect: true }
+  - { check: edge_visible_to, profile: alice, edge: c-d, expect: true }
   - { check: cogmaps_share_team, a: side-map, b: onb, expect: true }
   - { check: charter_blocks_visible, cogmap: onb, profile: nomad, expect_count: 0 }
   - { check: can_modify, profile: alice, resource: c, expect: true }

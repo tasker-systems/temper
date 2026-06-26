@@ -151,6 +151,55 @@ fn properties_from_meta(
     out
 }
 
+/// Parameters for [`validate_managed_meta_pipeline`] — the shared create/update validation gate.
+struct ManagedValidationParams<'a> {
+    /// The caller-supplied managed_meta as a JSON value (pre-strip).
+    raw_managed: serde_json::Value,
+    doc_type: &'a str,
+    title: &'a str,
+    /// Slug for canonical IDENTITY-KEY injection: `None` removes `temper-slug` (create's empty-slug
+    /// case); `Some` injects it (update derives it from the effective title).
+    identity_slug: Option<&'a str>,
+    /// Slug seeded into the schema validator (create: the raw command slug; update: the effective slug).
+    validator_slug: &'a str,
+    context_name: &'a str,
+    /// Validation-document id + created stamp — NOT persisted from here (the substrate mints the
+    /// real resource id); they only seed the validation document.
+    id: uuid::Uuid,
+    created: chrono::DateTime<Utc>,
+}
+
+/// The shared managed-meta validation pipeline used by BOTH `create_resource` and `update_resource`:
+/// strip caller-echoed system keys → apply doc-type defaults → inject the canonical identity keys →
+/// validate against the doc-type schema (PROPAGATING the typed `BadRequest`, never swallowing it).
+///
+/// Returns the assembled (defaulted + identity-injected) managed-meta value: create writes it as
+/// properties; update validates with it but persists only the raw caller keys (a partial PATCH), so
+/// it discards the return. Centralizing this closes the drift vector of two hand-mirrored copies (the
+/// prior `update_resource` comment literally said "mirror create's pipeline").
+fn validate_managed_meta_pipeline(
+    params: ManagedValidationParams<'_>,
+) -> Result<serde_json::Value, TemperError> {
+    let mut managed = temper_workflow::operations::strip_system_managed_fields(params.raw_managed);
+    temper_workflow::operations::apply_defaults_value(params.doc_type, &mut managed);
+    temper_workflow::operations::ensure_managed_identity_keys(
+        &mut managed,
+        params.title,
+        params.identity_slug,
+    );
+    let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
+        id: params.id,
+        created: params.created,
+        doc_type: params.doc_type,
+        managed_meta: Some(&managed),
+        slug: params.validator_slug,
+        title: params.title,
+        context_name: params.context_name,
+    };
+    temper_workflow::operations::validate_managed_meta(&validate_params)?;
+    Ok(managed)
+}
+
 /// Maps the substrate readback (`readback::resource_row`) to the native `ResourceRow` — real
 /// timestamps (event-sourced from `kb_events.occurred_at`), name-only doc type, no fabrication.
 /// Shared by `show_resource` and the read selector arms (`list_select`, `show_select`,
@@ -550,42 +599,23 @@ impl Backend for DbBackend {
                 None => None,
             };
 
-        // Create-time guards (WS6 collapse Task F). The substrate create path applies the same
-        // strip → defaults → identity-keys → validate → body-hash-dedup pipeline the legacy
-        // `ingest_service::ingest` ran (`:433-502`), calling the surviving pure helpers WHERE THEY
-        // LIVE (no helper move — the flip owns relocation). Purely additive over the prior no-guard
-        // create.
-        let mut managed =
-            serde_json::to_value(&cmd.managed_meta).map_err(|e| TemperError::Api(e.to_string()))?;
-        // 1. Strip identity / tier-1 system keys a caller may have echoed back from a prior read.
-        managed = temper_workflow::operations::strip_system_managed_fields(managed);
-        // 2. Apply doc-type managed-tier defaults (e.g. task → `temper-stage: backlog`).
-        temper_workflow::operations::apply_defaults_value(&cmd.doctype, &mut managed);
-        // 3. Inject the canonical identity keys (`temper-title`/`temper-slug`) before validation, the
-        //    same send/receive-symmetric discipline ingest uses. An empty slug removes `temper-slug`
-        //    (mirrors ingest's `injected_slug` at `:444-453`).
+        // Create-time guards (WS6 collapse Task F): the shared strip → defaults → identity-keys →
+        // validate pipeline (see `validate_managed_meta_pipeline`), the same one the legacy
+        // `ingest_service::ingest` ran. A fresh canonical id + `now()` seed the validation document
+        // (not persisted — the substrate mints the real id in `writes::create_resource`). An empty
+        // slug removes `temper-slug` (mirrors ingest's `injected_slug`). Body-hash dedup follows.
         let injected_slug = (!cmd.slug.is_empty()).then_some(cmd.slug.as_str());
-        temper_workflow::operations::ensure_managed_identity_keys(
-            &mut managed,
-            &cmd.title,
-            injected_slug,
-        );
-        // 4. Validate the assembled managed_meta against the doc-type schema; PROPAGATE the typed
-        //    validation error (never swallow it). A fresh canonical id + `now()` seed the validation
-        //    document exactly as ingest does (`:457-467`); that id is not persisted from here — the
-        //    substrate mints the resource id in `writes::create_resource`.
-        let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
+        let managed = validate_managed_meta_pipeline(ManagedValidationParams {
+            raw_managed: serde_json::to_value(&cmd.managed_meta)
+                .map_err(|e| TemperError::Api(e.to_string()))?,
+            doc_type: &cmd.doctype,
+            title: &cmd.title,
+            identity_slug: injected_slug,
+            validator_slug: &cmd.slug,
+            context_name: &cmd.context,
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
-            doc_type: &cmd.doctype,
-            managed_meta: Some(&managed),
-            slug: &cmd.slug,
-            title: &cmd.title,
-            context_name: &cmd.context,
-        };
-        // `validate_managed_meta` returns a typed `TemperError::BadRequest` on a caller-input fault;
-        // propagate it directly (PROPAGATE, never swallow).
-        temper_workflow::operations::validate_managed_meta(&validate_params)?;
+        })?;
 
         // 5. Body-hash dedup (non-empty body only, matching legacy `:497-502`): if a visible active
         //    resource already carries the same substrate body_hash merkle, return IT instead of
@@ -720,30 +750,23 @@ impl Backend for DbBackend {
                 .unwrap_or_else(|| current.title.clone());
             let effective_slug = temper_workflow::operations::sluggify(&effective_title);
 
-            // Build the COMPLETE validation document (strip system keys → doc-type defaults →
-            // identity keys) and validate it; PROPAGATE the typed BadRequest (an out-of-enum
-            // value or an unknown doc_type → 400, the create contract). Every schema-required
-            // field is supplied by identity (temper-slug/title) or a default (task temper-stage /
-            // goal temper-status), so a partial update never false-rejects — no merge with the
-            // current managed_meta is needed.
-            let mut validation =
-                temper_workflow::operations::strip_system_managed_fields(incoming.clone());
-            temper_workflow::operations::apply_defaults_value(&effective_doc_type, &mut validation);
-            temper_workflow::operations::ensure_managed_identity_keys(
-                &mut validation,
-                &effective_title,
-                Some(effective_slug.as_str()),
-            );
-            let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
+            // Validate via the SHARED pipeline (see `validate_managed_meta_pipeline`) — the same
+            // strip → defaults → identity → validate as create; PROPAGATE the typed BadRequest (an
+            // out-of-enum value or an unknown doc_type → 400, the create contract). Every
+            // schema-required field is supplied by identity (temper-slug/title) or a default (task
+            // temper-stage / goal temper-status), so a partial update never false-rejects — no merge
+            // with the current managed_meta is needed. The assembled set is for validation only;
+            // update persists the raw caller keys (partial PATCH), so the return is discarded.
+            validate_managed_meta_pipeline(ManagedValidationParams {
+                raw_managed: incoming.clone(),
+                doc_type: &effective_doc_type,
+                title: &effective_title,
+                identity_slug: Some(effective_slug.as_str()),
+                validator_slug: &effective_slug,
+                context_name: &effective_context,
                 id: new_id,
                 created: current.created,
-                doc_type: &effective_doc_type,
-                managed_meta: Some(&validation),
-                slug: &effective_slug,
-                title: &effective_title,
-                context_name: &effective_context,
-            };
-            temper_workflow::operations::validate_managed_meta(&validate_params)?;
+            })?;
 
             // Write only the caller-supplied keys (PATCH is a partial merge; `PropertySet`
             // asserts per key, so unsupplied keys are untouched — DON'T write the defaulted

@@ -141,7 +141,12 @@ pub async fn read_resource(
                 })?;
 
         // Return metadata as JSON + content as markdown.
-        let meta_json = serde_json::to_string_pretty(&row).unwrap_or_default();
+        let meta_json = serde_json::to_string_pretty(&row).map_err(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to serialize resource metadata: {e}"),
+                None,
+            )
+        })?;
         return Ok(ReadResourceResult::new(vec![
             ResourceContents::text(meta_json, uri).with_mime_type("application/json"),
             ResourceContents::text(content.markdown, uri).with_mime_type("text/markdown"),
@@ -182,7 +187,9 @@ pub async fn read_resource(
                     )
                 })?;
 
-        let json = serde_json::to_string_pretty(&response.rows).unwrap_or_default();
+        let json = serde_json::to_string_pretty(&response.rows).map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to serialize resource list: {e}"), None)
+        })?;
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
             json, uri,
         )

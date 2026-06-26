@@ -77,7 +77,7 @@ world:
   edges:
     # The directors' PRIVATE edge between two PUBLIC concepts, homed in directors-map => invisible to
     # anyone who can't read that map, even though both endpoints are public (edge-home protection, S3).
-    - { from: concept_sprint, to: concept_formal, kind: leads_to,
+    - { key: sprint-formalization, from: concept_sprint, to: concept_formal, kind: leads_to,
         label: "sprint-rituals->formalization", home: { anchor: cogmap, name: directors-map }, emitter: carol-agent }
 checks:
   # S1 - consumer axis
@@ -95,9 +95,9 @@ checks:
   - { check: producer_reach, cogmap: bridge-map, resource: r_profile_shared, expect: false }  # profile grant never enters vis(T)
   - { check: producer_reach, cogmap: side-map,   resource: r_profile_shared, expect: false }  # leak-safe even in the grantee's own team's map
   # S3 - edge-home protection
-  - { check: edge_visible_to, profile: carol, edge: "sprint-rituals->formalization", expect: true  }
-  - { check: edge_visible_to, profile: alice, edge: "sprint-rituals->formalization", expect: false }
-  - { check: edge_visible_to, profile: nomad, edge: "sprint-rituals->formalization", expect: false }
+  - { check: edge_visible_to, profile: carol, edge: sprint-formalization, expect: true  }
+  - { check: edge_visible_to, profile: alice, edge: sprint-formalization, expect: false }
+  - { check: edge_visible_to, profile: nomad, edge: sprint-formalization, expect: false }
   # S4 - charter-block gating (positive anchors the negative: dave owns the telos, sees all 4 blocks;
   #       nomad cannot read the map => 0. Without the positive, expect_count:0 could pass vacuously.)
   - { check: charter_blocks_visible, cogmap: onboarding-cogmap, profile: dave,  expect_count: 4 }

@@ -226,10 +226,14 @@ pub fn write_resource_file_from_parts(
 
     let slug = ingest::slug_from_title(&row.title);
 
+    // Propagate a serialization failure rather than writing `null` into the projected file's
+    // frontmatter — a silent `unwrap_or(Null)` here would corrupt the on-disk managed meta.
     let managed_value = content
         .managed_meta
         .as_ref()
-        .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| TemperError::Config(format!("projection serialize managed_meta: {e}")))?;
 
     let fm = ingest::build_frontmatter_from_resource(
         row,

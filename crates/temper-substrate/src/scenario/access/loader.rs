@@ -17,13 +17,15 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Resolved identity maps for the check-evaluator (edges are resolved by label at eval time).
+/// Resolved identity maps for the check-evaluator. Edges are keyed by their scenario `key` and carry
+/// the `kb_edges.id` captured at fire time (NOT resolved by the non-unique `label` at eval time).
 pub struct LoadedAccess {
     pub profiles: HashMap<String, Uuid>,  // handle -> id
     pub teams: HashMap<String, Uuid>,     // slug -> id (incl. trigger-created personal teams)
     pub contexts: HashMap<String, Uuid>,  // name -> id
     pub cogmaps: HashMap<String, Uuid>,   // name -> id
     pub resources: HashMap<String, Uuid>, // key -> id
+    pub edges: HashMap<String, Uuid>,     // edge key -> kb_edges.id
 }
 
 pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
@@ -318,7 +320,9 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         resources.insert(r.key.clone(), rid);
     }
 
-    // 9. Edges: homed in a named cogmap, fired through relationship_assert.
+    // 9. Edges: homed in a named cogmap, fired through relationship_assert. Capture each fired
+    //    `kb_edges.id` under the edge's `key` so checks resolve by stable id, not by non-unique label.
+    let mut edges: HashMap<String, Uuid> = HashMap::new();
     for e in &world.edges {
         let src = ResourceId::from(
             *resources
@@ -347,7 +351,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                 .get(&e.emitter)
                 .with_context(|| format!("edge emitter {} not in world.entities", e.emitter))?,
         );
-        fire(
+        let edge_id = fire(
             &mut tx,
             SeedAction::RelationshipAssert {
                 src,
@@ -360,7 +364,11 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                 emitter,
             },
         )
-        .await?;
+        .await?
+        .relationship()?;
+        if edges.insert(e.key.clone(), Uuid::from(edge_id)).is_some() {
+            anyhow::bail!("duplicate edge key {}", e.key);
+        }
     }
 
     tx.commit().await?;
@@ -370,5 +378,6 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         contexts,
         cogmaps,
         resources,
+        edges,
     })
 }
