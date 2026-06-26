@@ -654,12 +654,14 @@ pub async fn find_by_body_hash(
 }
 
 /// One row of L0's reconcile diff source: a `provenance: kernel` resource homed to a cogmap, keyed
-/// (by the caller) on `origin_uri`, carrying its body merkle and merged facet object.
+/// (by the caller) on `resource_id`, carrying its body merkle and merged facet object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelSliceRow {
-    /// The resource id (the reconcile applier addresses blocks/edges by it).
+    /// The diff key — the resource's STABLE id (UUIDv7). The reconcile applier keys its diff index on
+    /// this and addresses blocks/edges by it. `origin_uri` is loose provenance, NEVER the key.
     pub resource_id: Uuid,
-    /// The diff key — verbatim `kb_resources.origin_uri` (a kernel landmark's stable identity).
+    /// Verbatim `kb_resources.origin_uri` — a provenance/display marker, NOT unique and NOT the diff
+    /// key (that is `resource_id`). Empty for CLI/agent-created resources.
     pub origin_uri: String,
     /// The body merkle — `kb_resources.body_hash`, IDENTICAL to the expression `resource_row` reads
     /// (the bare column; the structural sha256 over chunk content-hashes), so the reconcile diff can
@@ -671,7 +673,7 @@ pub struct KernelSliceRow {
     pub facets: serde_json::Value,
 }
 
-/// All `provenance: kernel` resources homed to `cogmap_id`, keyed (by the caller) on `origin_uri`,
+/// All `provenance: kernel` resources homed to `cogmap_id`, keyed (by the caller) on `resource_id`,
 /// each with its body merkle (`body_hash`) and merged facet object. The reconcile diff source: the
 /// orchestration ([`crate`]'s temper-api caller) compares these against the incoming desired-state
 /// entries to plan create/update/fold.
@@ -922,7 +924,19 @@ pub struct Neighbor {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn neighbors(executor: impl sqlx::PgExecutor<'_>, new_id: Uuid) -> Result<Vec<Neighbor>> {
+///
+/// `pub(crate)`, NOT `pub`: this is an UNSCOPED read (no principal — see the body note), so exposing it
+/// across the crate boundary would let any external caller pull cross-profile graph structure. Keeping
+/// it crate-private closes that leak surface until the graph-neighbor surface is wired with the
+/// access-model amendment that makes scoping correct.
+#[expect(
+    dead_code,
+    reason = "§9 graph-neighbors read floor; wired (and scoped) with the graph-neighbor surface — see the body note. No caller today."
+)]
+pub(crate) async fn neighbors(
+    executor: impl sqlx::PgExecutor<'_>,
+    new_id: Uuid,
+) -> Result<Vec<Neighbor>> {
     // WS2 NOTE — deliberately UNSCOPED (no principal). `neighbors` has no surface caller yet (only
     // the §9 data-parity test reads it), so visibility-scoping it now protects nothing (SG-5: no
     // speculative surface). The leak-safe gate is `edges_visible_to(principal)` (edge-home + both
