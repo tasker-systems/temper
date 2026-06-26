@@ -8,6 +8,9 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::format::{render, OutputFormat};
 
+/// Cap on the most-recent session body injected into the warmup primer. Bounds
+/// how much of a long session note lands in a new agent's context window —
+/// enough to carry the narrative, short of dominating the primer.
 const MAX_SESSION_LINES: usize = 500;
 
 /// How many recent sessions to surface in the warmup primer.

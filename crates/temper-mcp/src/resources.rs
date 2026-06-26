@@ -14,6 +14,11 @@ use uuid::Uuid;
 use temper_api::state::AppState;
 use temper_core::types::Profile;
 
+/// Page size for the resource-browsing list calls. MCP resource listing is a
+/// flat browse surface (no client-driven pagination), so we cap each fetch at a
+/// reasonable ceiling rather than streaming the whole vault.
+const MCP_RESOURCE_BROWSE_LIMIT: i64 = 200;
+
 /// List all resources visible to the authenticated user as MCP resources.
 ///
 /// Returns a flat list: one `Resource` per active knowledge base resource.
@@ -25,7 +30,7 @@ pub async fn list_resources(
 ) -> Result<ListResourcesResult, rmcp::ErrorData> {
     // Fetch all visible resources (no filters, reasonable limit for browsing).
     let params = temper_workflow::types::resource::ResourceListParams {
-        limit: Some(200),
+        limit: Some(MCP_RESOURCE_BROWSE_LIMIT),
         ..Default::default()
     };
 
@@ -173,7 +178,7 @@ pub async fn read_resource(
 
         let params = temper_workflow::types::resource::ResourceListParams {
             kb_context_id: Some(uuid::Uuid::from(context.id)),
-            limit: Some(200),
+            limit: Some(MCP_RESOURCE_BROWSE_LIMIT),
             ..Default::default()
         };
 

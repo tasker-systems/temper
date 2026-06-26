@@ -28,6 +28,11 @@ const MAX_ATTEMPTS: u32 = 3;
 /// instance/DB finish warming between attempts.
 const RETRY_BASE_DELAY_MS: u64 = 200;
 
+/// Per-request timeout. Generous enough to ride out a Vercel cold-start / Neon
+/// compute-resume (which the retry logic above also guards), but bounded so a
+/// truly hung connection fails rather than blocking the CLI indefinitely.
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
+
 /// Backoff to wait after `after_attempt` (1-indexed) has failed, before the
 /// next attempt. Doubles each retry. Pure so the schedule is unit-testable.
 fn retry_delay(after_attempt: u32) -> Duration {
@@ -107,7 +112,7 @@ impl HttpClient {
         token_store: Option<Arc<dyn TokenStore>>,
     ) -> Self {
         let inner = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client");
 
