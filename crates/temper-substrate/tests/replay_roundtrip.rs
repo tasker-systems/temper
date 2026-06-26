@@ -9,7 +9,7 @@
 mod common;
 
 use temper_substrate::{
-    replay, scenario::bootseed, scenario::model::Scenario, scenario::runner, substrate, write,
+    replay, scenario::bootseed, scenario::model::Scenario, scenario::runner, write,
 };
 
 const ONBOARDING: &str = concat!(
@@ -17,10 +17,9 @@ const ONBOARDING: &str = concat!(
     "/tests/fixtures/scenarios/onboarding-cogmap.yaml"
 );
 
-#[tokio::test]
-async fn replay_reproduces_projections_byte_identically() {
-    common::reset_artifact();
-    let pool = substrate::connect().await.unwrap();
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
 
     let scenario: Scenario =
@@ -41,7 +40,7 @@ async fn replay_reproduces_projections_byte_identically() {
     );
 
     // reset to a clean, UN-seeded namespace; replay the ledger through the projection halves
-    common::reset_artifact();
+    common::reset_schema(&pool).await;
     replay::replay(&pool, &snap).await.unwrap();
 
     let after = replay::dump_projections(&pool).await.unwrap();
