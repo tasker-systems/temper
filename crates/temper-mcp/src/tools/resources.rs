@@ -6,6 +6,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::{substrate_read, DbBackend};
+use temper_api::services::context_service::resolve_context_ref;
+use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
@@ -18,8 +20,9 @@ use crate::service::TemperMcpService;
 /// MCP input for create_resource.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateResourceInput {
-    /// Human-readable context name (must already exist).
-    pub context_name: String,
+    /// Context ref (UUID or `@owner/slug`), resolved server-side.
+    /// Bare names (no `@` prefix, not a UUID) are rejected.
+    pub context_ref: String,
     /// Human-readable doc type name (e.g. "task", "session", "research").
     pub doc_type_name: String,
     /// Resource title.
@@ -290,6 +293,13 @@ pub async fn create_resource(
         }
     }
 
+    // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
+    let cref = parse_context_ref(&input.context_ref)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None))?;
+    let context = resolve_context_ref(pool, profile_id, &cref)
+        .await
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+
     // Build slug from title if not provided
     let slug = input.slug.unwrap_or_else(|| {
         input
@@ -336,7 +346,7 @@ pub async fn create_resource(
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
-        context: input.context_name,
+        context,
         title: input.title,
         body,
         managed_meta,
@@ -685,7 +695,7 @@ mod tests {
     #[test]
     fn create_resource_input_accepts_object_valued_managed_meta() {
         let raw = serde_json::json!({
-            "context_name": "demo",
+            "context_ref": "@me/demo",
             "doc_type_name": "task",
             "title": "Demo Task",
             "managed_meta": { "temper-stage": "backlog", "temper-mode": "build" },

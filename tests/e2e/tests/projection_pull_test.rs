@@ -34,7 +34,7 @@ async fn seed_resource(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: doc_type.to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
         slug,

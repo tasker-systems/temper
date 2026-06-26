@@ -29,6 +29,9 @@ pub struct CloudBackend {
                   so the resolve-by-uri owner is no longer read on the write path"
     )]
     pub(crate) owner: String,
+    /// Context ref for the create path. Sent verbatim as `IngestPayload.context_ref`;
+    /// the server parses+resolves it (UUID or @owner/slug) at the ingest boundary.
+    pub(crate) context_ref: String,
     #[expect(
         dead_code,
         reason = "kept for forward-compat (per-request profile resolution); \
@@ -44,6 +47,7 @@ impl CloudBackend {
         Self {
             client: ctx.client,
             owner: ctx.owner,
+            context_ref: ctx.context_ref,
             config: ctx.config,
             surface: ctx.surface,
         }
@@ -73,7 +77,7 @@ mod embed_impl {
             &self,
             cmd: CreateResource,
         ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-            let payload = cmd_to_ingest_payload(&cmd)?;
+            let payload = cmd_to_ingest_payload(&cmd, &self.context_ref)?;
             let row = self
                 .client
                 .ingest()
@@ -248,6 +252,7 @@ mod embed_impl {
             let ctx = CloudBackendCtx {
                 client: make_test_client(),
                 owner: "@me".to_string(),
+                context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
                 surface: Surface::CliCloud,
             };
@@ -266,6 +271,7 @@ mod embed_impl {
             let ctx = CloudBackendCtx {
                 client: client.clone(),
                 owner: "@me".to_string(),
+                context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
                 surface: Surface::CliCloud,
             };

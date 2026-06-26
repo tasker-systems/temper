@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::types::managed_meta::ManagedMeta;
-use temper_core::types::ids::ResourceId;
+use temper_core::types::ids::{ContextId, ResourceId};
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -25,7 +25,9 @@ use super::{
 pub struct CreateResource {
     pub slug: String,
     pub doctype: String,
-    pub context: String,
+    /// Resolved context ID. Surfaces must parse+resolve the context ref before
+    /// building this command — bare names are not accepted here.
+    pub context: ContextId,
     pub title: String,
     pub body: Option<BodyUpdate>,
     /// Caller-supplied managed_meta. Backends will apply doctype defaults
@@ -222,7 +224,7 @@ mod tests {
         let cmd = CreateResource {
             slug: "new-task".to_string(),
             doctype: "task".to_string(),
-            context: "temper".to_string(),
+            context: temper_core::types::ids::ContextId::new(),
             title: "New task".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),

@@ -569,7 +569,9 @@ impl Backend for DbBackend {
         &self,
         cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        // Resolve the caller's synthesized identity (natural-key) and the home context.
+        // Resolve the caller's synthesized identity (natural-key).
+        // `cmd.context` is a pre-resolved ContextId — surfaces parse+resolve the ref
+        // before building the command, so no `writes::resolve_context` call is needed here.
         let prod_profile: uuid::Uuid = *self.profile_id;
         let owner = writes::resolve_profile(&self.pool, prod_profile)
             .await
@@ -577,9 +579,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        let home = writes::resolve_context(&self.pool, owner, &cmd.context)
-            .await
-            .map_err(api_err)?;
+        // cmd.context is temper_core::types::ids::ContextId (pre-resolved at the surface);
+        // writes::CreateParams.home expects temper_substrate::ids::ContextId. Convert via Uuid.
+        let home = temper_substrate::ids::ContextId::from(uuid::Uuid::from(cmd.context));
 
         let body = cmd
             .body
@@ -612,7 +614,7 @@ impl Backend for DbBackend {
             title: &cmd.title,
             identity_slug: injected_slug,
             validator_slug: &cmd.slug,
-            context_name: &cmd.context,
+            context_name: &cmd.context.to_string(),
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
         })?;

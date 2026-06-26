@@ -26,7 +26,7 @@ fn test_payload(
     IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://e2e/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "research".to_string(),
         content_hash: Some(
             format!("{slug}-body-hash-{pad}", pad = "0".repeat(64))[..64].to_string(),

@@ -23,7 +23,7 @@ async fn ingest_with_chunks(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://fts/{slug}"),
-        context_name: context_name.to_string(),
+        context_ref: format!("@me/{context_name}"),
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64x}", title.len())),
         slug: slug.to_string(),

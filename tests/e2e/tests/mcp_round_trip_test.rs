@@ -112,7 +112,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Round-Trip Search Concept".to_string(),
         origin_uri: "mcp://test/round-trip-search".to_string(),
-        context_name: "round-trip-search".to_string(),
+        context_ref: "@me/round-trip-search".to_string(),
         doc_type_name: "concept".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(content))),
         slug: "round-trip-search-concept".to_string(),
@@ -168,7 +168,7 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Validation Test Task".to_string(),
         origin_uri: "mcp://test/validation".to_string(),
-        context_name: "validation-test".to_string(),
+        context_ref: "@me/validation-test".to_string(),
         doc_type_name: "task".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex("validation test content"))),
         slug: "validation-test-task".to_string(),
@@ -238,7 +238,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Content Round-Trip Test".to_string(),
         origin_uri: "mcp://test/content-round-trip".to_string(),
-        context_name: "content-round-trip".to_string(),
+        context_ref: "@me/content-round-trip".to_string(),
         doc_type_name: "session".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
         slug: "content-round-trip-test".to_string(),
@@ -397,7 +397,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Reindex Test Resource".to_string(),
         origin_uri: "mcp://test/reindex".to_string(),
-        context_name: "update-reindex-test".to_string(),
+        context_ref: "@me/update-reindex-test".to_string(),
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(original_content))),
         slug: "reindex-test-resource".to_string(),
@@ -533,7 +533,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let payload = temper_core::types::ingest::IngestPayload {
         title: "MCP Meta Parity".to_string(),
         origin_uri: "mcp://test/meta-parity".to_string(),
-        context_name: "mcp-meta-parity".to_string(),
+        context_ref: "@me/mcp-meta-parity".to_string(),
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(content))),
         slug: "mcp-meta-parity".to_string(),
@@ -653,7 +653,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Gap6 Merge Task".to_string(),
         origin_uri: "mcp://test/gap6".to_string(),
-        context_name: "gap6-merge".to_string(),
+        context_ref: "@me/gap6-merge".to_string(),
         doc_type_name: "task".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
         slug: "gap6-merge-task".to_string(),
@@ -750,7 +750,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Gap5 Validate Task".to_string(),
         origin_uri: "mcp://test/gap5".to_string(),
-        context_name: "gap5-validate".to_string(),
+        context_ref: "@me/gap5-validate".to_string(),
         doc_type_name: "task".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
         slug: "gap5-validate-task".to_string(),
@@ -845,7 +845,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Selector Route Doc".to_string(),
         origin_uri: "mcp://test/selector-route".to_string(),
-        context_name: "selector-route".to_string(),
+        context_ref: "@me/selector-route".to_string(),
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
         slug: "selector-route-doc".to_string(),
@@ -993,7 +993,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         let payload = temper_core::types::ingest::IngestPayload {
             title: title.to_string(),
             origin_uri: origin_uri.to_string(),
-            context_name: "list-selector".to_string(),
+            context_ref: "@me/list-selector".to_string(),
             doc_type_name: doc_type_name.to_string(),
             content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
             slug: slug.to_string(),

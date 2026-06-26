@@ -163,26 +163,22 @@ pub async fn resolve_context_ref(
         ContextRef::OwnerSlug { owner, slug } => match owner {
             ContextOwnerRef::Me => lookup_profile_context(pool, *principal, slug).await,
             ContextOwnerRef::Handle(handle) => {
-                let owner_id = sqlx::query_scalar!(
-                    "SELECT id FROM kb_profiles WHERE handle = $1",
-                    handle
-                )
-                .fetch_optional(pool)
-                .await?
-                .ok_or(ApiError::NotFound)?;
+                let owner_id =
+                    sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE handle = $1", handle)
+                        .fetch_optional(pool)
+                        .await?
+                        .ok_or(ApiError::NotFound)?;
                 // Resolve the context, then gate visibility to the principal.
                 let cid = lookup_profile_context(pool, owner_id, slug).await?;
                 ensure_context_visible(pool, *principal, *cid).await?;
                 Ok(cid)
             }
             ContextOwnerRef::Team(team_slug) => {
-                let team_id = sqlx::query_scalar!(
-                    "SELECT id FROM kb_teams WHERE slug = $1",
-                    team_slug
-                )
-                .fetch_optional(pool)
-                .await?
-                .ok_or(ApiError::NotFound)?;
+                let team_id =
+                    sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", team_slug)
+                        .fetch_optional(pool)
+                        .await?
+                        .ok_or(ApiError::NotFound)?;
                 // Membership gate — non-member gets Forbidden, not NotFound.
                 let is_member = sqlx::query_scalar!(
                     r#"SELECT EXISTS(
@@ -251,7 +247,11 @@ async fn ensure_context_visible(
     )
     .fetch_one(pool)
     .await?;
-    if visible { Ok(()) } else { Err(ApiError::NotFound) }
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
 }
 
 /// Pick a slug for a new context, unique within `(owner_table, owner_id, slug)`.

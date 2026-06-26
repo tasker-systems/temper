@@ -12,6 +12,7 @@ use crate::services::resource_service::{
 };
 use crate::state::AppState;
 
+use temper_core::context_ref::ContextRef;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
@@ -156,18 +157,21 @@ pub async fn create(
     auth: AuthUser,
     Json(req): Json<ResourceCreateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    // Resolve the context ID → name for the operations command. The visibility
-    // gate is enforced downstream by the backend create path (via
-    // `context_service::resolve_by_name`, which is visibility-gated). The
-    // doc-type arrives as a name on the wire and passes straight through.
-    let context_name = context_service::resolve_name_by_id(&state.pool, req.kb_context_id).await?;
+    // Resolve the context UUID from the request — visibility-gated to the principal.
+    // `ContextRef::Id` does the profile-visibility check without needing a name lookup.
+    let context = context_service::resolve_context_ref(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        &ContextRef::Id(req.kb_context_id),
+    )
+    .await?;
 
     // When slug is absent, derive one from the title so the create path's
     // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.
     let slug = req.slug.unwrap_or_else(|| slugify_title(&req.title));
 
     let cmd = CreateResource {
-        context: context_name,
+        context,
         doctype: req.doc_type,
         slug,
         title: req.title,

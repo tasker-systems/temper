@@ -249,7 +249,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     let payload = IngestPayload {
         title: "Meta-Only Update Test".to_string(),
         origin_uri: "kb://myapp/session/meta-only-update-test".to_string(),
-        context_name: "myapp".to_string(),
+        context_ref: "@me/myapp".to_string(),
         doc_type_name: "session".to_string(),
         content_hash: Some(body_hash.clone()),
         slug: "meta-only-update-test".to_string(),
@@ -404,7 +404,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     let payload = IngestPayload {
         title: "Body+Meta Update Test".to_string(),
         origin_uri: "kb://myapp/session/body-and-meta-update-test".to_string(),
-        context_name: "myapp".to_string(),
+        context_ref: "@me/myapp".to_string(),
         doc_type_name: "session".to_string(),
         content_hash: Some(initial_hash.clone()),
         slug: "body-and-meta-update-test".to_string(),
@@ -569,7 +569,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
     let payload = IngestPayload {
         title: "Body-Only Update Test".to_string(),
         origin_uri: "kb://myapp/session/body-only-update-test".to_string(),
-        context_name: "myapp".to_string(),
+        context_ref: "@me/myapp".to_string(),
         doc_type_name: "session".to_string(),
         content_hash: Some(initial_hash.clone()),
         slug: "body-only-update-test".to_string(),
@@ -717,7 +717,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
     let payload = IngestPayload {
         title: "Body Empty Guard Test".to_string(),
         origin_uri: "kb://myapp/session/body-empty-guard-test".to_string(),
-        context_name: "myapp".to_string(),
+        context_ref: "@me/myapp".to_string(),
         doc_type_name: "session".to_string(),
         content_hash: Some(initial_hash.clone()),
         slug: "body-empty-guard-test".to_string(),
@@ -1008,7 +1008,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
         let payload = IngestPayload {
             title: format!("Cloud Only {i}"),
             origin_uri: format!("kb://myapp/session/cloud-only-resource-{i}"),
-            context_name: "myapp".to_string(),
+            context_ref: "@me/myapp".to_string(),
             doc_type_name: "session".to_string(),
             content_hash: Some(hash),
             slug: format!("cloud-only-resource-{i}"),
@@ -1475,7 +1475,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
         .create(&IngestPayload {
             title: "Edges Resolve Test".to_string(),
             origin_uri: "kb://edgesctx/research/edges-resolve-test".to_string(),
-            context_name: "edgesctx".to_string(),
+            context_ref: "@me/edgesctx".to_string(),
             doc_type_name: "research".to_string(),
             content_hash: None,
             slug: "edges-resolve-test".to_string(),
@@ -1562,7 +1562,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
         .create(&IngestPayload {
             title: "Decorated Ref Target".to_string(),
             origin_uri: "kb://myapp/research/decorated-ref-target".to_string(),
-            context_name: "myapp".to_string(),
+            context_ref: "@me/myapp".to_string(),
             doc_type_name: "research".to_string(),
             content_hash: None,
             slug: "decorated-ref-target".to_string(),

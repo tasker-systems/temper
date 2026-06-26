@@ -26,7 +26,10 @@ pub enum ContextRef {
     /// Canonical: the `kb_contexts.id` UUID.
     Id(Uuid),
     /// Decorated: resolved via the `(owner_table, owner_id, slug)` natural key.
-    OwnerSlug { owner: ContextOwnerRef, slug: String },
+    OwnerSlug {
+        owner: ContextOwnerRef,
+        slug: String,
+    },
 }
 
 /// Why a context ref string could not be parsed.
@@ -87,7 +90,10 @@ pub fn parse_context_ref(s: &str) -> Result<ContextRef, ContextRefError> {
         ContextOwnerRef::Team(owner_part[1..].to_owned())
     };
 
-    Ok(ContextRef::OwnerSlug { owner, slug: slug.to_owned() })
+    Ok(ContextRef::OwnerSlug {
+        owner,
+        slug: slug.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -98,13 +104,22 @@ mod tests {
     #[test]
     fn parses_bare_uuid() {
         let u = Uuid::now_v7();
-        assert_eq!(parse_context_ref(&u.to_string()).unwrap(), ContextRef::Id(u));
+        assert_eq!(
+            parse_context_ref(&u.to_string()).unwrap(),
+            ContextRef::Id(u)
+        );
     }
 
     #[test]
     fn parses_me_slug() {
         let r = parse_context_ref("@me/temper").unwrap();
-        assert_eq!(r, ContextRef::OwnerSlug { owner: ContextOwnerRef::Me, slug: "temper".into() });
+        assert_eq!(
+            r,
+            ContextRef::OwnerSlug {
+                owner: ContextOwnerRef::Me,
+                slug: "temper".into()
+            }
+        );
     }
 
     #[test]
@@ -112,7 +127,10 @@ mod tests {
         let r = parse_context_ref("@j-cole-taylor/temper").unwrap();
         assert_eq!(
             r,
-            ContextRef::OwnerSlug { owner: ContextOwnerRef::Handle("j-cole-taylor".into()), slug: "temper".into() }
+            ContextRef::OwnerSlug {
+                owner: ContextOwnerRef::Handle("j-cole-taylor".into()),
+                slug: "temper".into()
+            }
         );
     }
 
@@ -121,19 +139,31 @@ mod tests {
         let r = parse_context_ref("+tasker-systems/general").unwrap();
         assert_eq!(
             r,
-            ContextRef::OwnerSlug { owner: ContextOwnerRef::Team("tasker-systems".into()), slug: "general".into() }
+            ContextRef::OwnerSlug {
+                owner: ContextOwnerRef::Team("tasker-systems".into()),
+                slug: "general".into()
+            }
         );
     }
 
     #[test]
     fn rejects_bare_name() {
-        assert!(matches!(parse_context_ref("temper"), Err(ContextRefError::BareName(_))));
+        assert!(matches!(
+            parse_context_ref("temper"),
+            Err(ContextRefError::BareName(_))
+        ));
     }
 
     #[test]
     fn rejects_owner_without_slug() {
-        assert!(matches!(parse_context_ref("@me"), Err(ContextRefError::MissingSlug(_))));
-        assert!(matches!(parse_context_ref("+team"), Err(ContextRefError::MissingSlug(_))));
+        assert!(matches!(
+            parse_context_ref("@me"),
+            Err(ContextRefError::MissingSlug(_))
+        ));
+        assert!(matches!(
+            parse_context_ref("+team"),
+            Err(ContextRefError::MissingSlug(_))
+        ));
     }
 
     #[test]
@@ -152,7 +182,10 @@ mod tests {
     fn trims_whitespace() {
         assert_eq!(
             parse_context_ref("  @me/temper  ").unwrap(),
-            ContextRef::OwnerSlug { owner: ContextOwnerRef::Me, slug: "temper".into() }
+            ContextRef::OwnerSlug {
+                owner: ContextOwnerRef::Me,
+                slug: "temper".into()
+            }
         );
     }
 }

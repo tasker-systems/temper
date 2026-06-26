@@ -58,7 +58,10 @@ fn resolve_create_body(
 /// **`origin_uri`:** empty string today — server constructs the canonical
 /// URI from `(owner, context, doctype, slug)`.
 #[cfg(feature = "embed")]
-pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayload> {
+pub(crate) fn cmd_to_ingest_payload(
+    cmd: &CreateResource,
+    context_ref: &str,
+) -> Result<IngestPayload> {
     use temper_workflow::operations::ensure_managed_identity_keys;
 
     // Resolve body content (verbatim when provided; placeholder otherwise).
@@ -93,7 +96,7 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
     Ok(IngestPayload {
         title: cmd.title.clone(),
         origin_uri: String::new(),
-        context_name: cmd.context.clone(),
+        context_ref: context_ref.to_owned(),
         doc_type_name: cmd.doctype.clone(),
         content_hash,
         slug: cmd.slug.clone(),
@@ -216,7 +219,7 @@ mod tests {
         CreateResource {
             slug: "2026-05-18-test".to_string(),
             doctype: "task".to_string(),
-            context: "temper".to_string(),
+            context: temper_core::types::ids::ContextId::new(),
             title: "Test task".to_string(),
             body: Some(BodyUpdate {
                 content: "# Test\n\nBody.\n".to_string(),
@@ -244,10 +247,10 @@ mod tests {
     #[test]
     fn cmd_to_ingest_payload_round_trips_basic_fields() {
         let cmd = sample_cmd();
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         assert_eq!(payload.slug, "2026-05-18-test");
         assert_eq!(payload.title, "Test task");
-        assert_eq!(payload.context_name, "temper");
+        assert_eq!(payload.context_ref, "@me/temper");
         assert_eq!(payload.doc_type_name, "task");
         assert_eq!(payload.content, "# Test\n\nBody.\n");
         assert!(payload.chunks_packed.is_some());
@@ -258,7 +261,7 @@ mod tests {
     #[test]
     fn cmd_to_ingest_payload_serializes_managed_meta_to_json() {
         let cmd = sample_cmd();
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         let mm = payload
             .managed_meta
             .expect("managed_meta should be present");
@@ -273,7 +276,7 @@ mod tests {
     fn cmd_to_ingest_payload_synthesizes_body_when_absent() {
         let mut cmd = sample_cmd();
         cmd.body = None;
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         assert_eq!(
             payload.content, "# Test task\n",
             "placeholder body uses title"
@@ -288,7 +291,7 @@ mod tests {
         // injected from the typed cmd.
         let mut cmd = sample_cmd();
         cmd.managed_meta = ManagedMeta::default();
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         let mm = payload
             .managed_meta
             .expect("identity keys make managed_meta non-default by construction");
@@ -304,7 +307,7 @@ mod tests {
         let mut cmd = sample_cmd();
         cmd.managed_meta.title = Some("Drift!".to_string());
         cmd.managed_meta.slug = Some("drift-slug".to_string());
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         let mm = payload.managed_meta.expect("present");
         assert_eq!(
             mm["temper-title"], "Test task",

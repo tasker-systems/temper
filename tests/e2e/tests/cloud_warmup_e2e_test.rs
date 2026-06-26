@@ -75,7 +75,7 @@ async fn seed_session(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("kb://{context}/session/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "session".to_string(),
         content_hash: Some(content_hash),
         slug: slug.to_string(),
@@ -111,7 +111,7 @@ async fn seed_task(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "task".to_string(),
         content_hash: None,
         slug: slug.to_string(),

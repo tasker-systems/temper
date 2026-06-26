@@ -55,7 +55,7 @@ async fn seed_resource(
         .create(&IngestPayload {
             title: slug.to_string(),
             origin_uri: format!("mcp://test/{slug}"),
-            context_name: context_name.to_string(),
+            context_ref: format!("@me/{context_name}"),
             doc_type_name: "research".to_string(),
             content_hash: Some(format!("sha256:{}", sha2_hex(slug))),
             slug: slug.to_string(),

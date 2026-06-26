@@ -40,7 +40,7 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "task".to_string(),
         content_hash: None,
         slug: slug.to_string(),

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use temper_client::TemperClient;
 use temper_workflow::operations::Surface;
+use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
@@ -20,6 +21,10 @@ use crate::error::{Result, TemperError};
 pub struct CloudBackendCtx {
     pub client: Arc<TemperClient>,
     pub owner: String,
+    /// Context ref string for the create path — either the raw `@owner/slug` /
+    /// UUID form supplied by the caller, or `@me/<context>` constructed from a
+    /// bare context name. Sent as `IngestPayload.context_ref` verbatim.
+    pub context_ref: String,
     pub config: Arc<Config>,
     pub surface: Surface,
 }
@@ -49,9 +54,22 @@ pub fn assemble_cloud_backend(
 
     let owner = config.owner_for_context(context);
 
+    // Build the context ref for the ingest create path: if the caller already
+    // provided a decorated ref (UUID or @owner/slug), use it verbatim.
+    // Otherwise synthesize `@me/<context>` from the bare context name so
+    // existing CLI invocations (`--context temper`) continue to work.
+    let context_ref =
+        if context.starts_with('@') || context.starts_with('+') || Uuid::parse_str(context).is_ok()
+        {
+            context.to_owned()
+        } else {
+            format!("{owner}/{context}")
+        };
+
     let ctx = CloudBackendCtx {
         client: Arc::new(client),
         owner,
+        context_ref,
         config: Arc::new(config.clone()),
         surface: Surface::CliCloud,
     };

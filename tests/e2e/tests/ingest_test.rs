@@ -28,7 +28,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
     let payload = IngestPayload {
         title: "E2E Test Document".to_string(),
         origin_uri: "test://e2e/ingest-test".to_string(),
-        context_name: "e2e-test".to_string(),
+        context_ref: "@me/e2e-test".to_string(),
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "e2e0test00000000000000000000000000000000000000000000000000000000".to_string(),

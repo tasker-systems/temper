@@ -128,7 +128,10 @@ async fn resolves_two_same_name_contexts_by_distinct_slug(pool: PgPool) {
     let result_b = context_service::resolve_context_ref(&pool, principal, &r_b)
         .await
         .expect("should resolve @me/temper-2 to context B");
-    assert_eq!(*result_b, context_b_id, "@me/temper-2 should give context B");
+    assert_eq!(
+        *result_b, context_b_id,
+        "@me/temper-2 should give context B"
+    );
 
     assert_ne!(*result_a, *result_b, "the two resolutions must be distinct");
 }
@@ -138,8 +141,7 @@ async fn resolves_two_same_name_contexts_by_distinct_slug(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn resolves_team_context_for_member(pool: PgPool) {
     let email = format!("team-member-{}@example.com", Uuid::new_v4());
-    let (profile_id, _) =
-        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
     let principal = ProfileId::from(profile_id);
 
     let team_slug = format!("test-team-{}", &Uuid::new_v4().simple().to_string()[..8]);
@@ -160,8 +162,7 @@ async fn resolves_team_context_for_member(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn team_context_non_member_gets_forbidden(pool: PgPool) {
     let email = format!("team-nonmember-{}@example.com", Uuid::new_v4());
-    let (profile_id, _) =
-        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
     let principal = ProfileId::from(profile_id);
 
     let team_slug = format!("test-team-nm-{}", &Uuid::new_v4().simple().to_string()[..8]);
