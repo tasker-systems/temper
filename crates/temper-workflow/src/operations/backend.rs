@@ -114,7 +114,10 @@ mod tests {
 
     /// Verify the trait is object-safe (callable via `dyn Backend`).
     /// If this compiles, dispatch through trait objects works.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "object-safety compile guard; intentionally never invoked"
+    )]
     fn assert_object_safe(_: &dyn Backend) {}
 
     #[test]

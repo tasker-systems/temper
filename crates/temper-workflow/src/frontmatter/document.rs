@@ -20,7 +20,10 @@ pub enum DocType {
     Concept,
 }
 
-#[allow(clippy::should_implement_trait)]
+#[expect(
+    clippy::should_implement_trait,
+    reason = "inherent from_str returns anyhow::Result, not the std FromStr contract"
+)]
 impl DocType {
     /// Every doc-type variant, in canonical order. Single source of truth for
     /// callers that enumerate the known doc types (e.g. the MCP `list_doc_types`
