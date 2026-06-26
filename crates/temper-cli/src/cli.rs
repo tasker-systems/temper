@@ -172,6 +172,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: EdgeAction,
     },
+
+    /// Operate on cognitive maps (admin-gated content reconcile)
+    Cogmap {
+        #[command(subcommand)]
+        cmd: CogmapCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -424,6 +430,21 @@ pub enum TeamAction {
         /// Team slug (default: system gating team)
         #[arg(long)]
         team: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CogmapCmd {
+    /// Reconcile a cognitive map's content to a committed manifest.
+    ///
+    /// Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded
+    /// desired-state request to `/api/cognitive-maps/{id}` (admin-gated, idempotent).
+    Reconcile {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Path to the committed manifest (YAML)
+        #[arg(long)]
+        manifest: String,
     },
 }
 

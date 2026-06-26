@@ -24,8 +24,8 @@ pub use actions::{
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{
     AssertRelationship, CloseInvocation, CreateResource, DeleteResource, FoldRelationship,
-    ListResources, MoveSpec, OpenInvocation, RetypeRelationship, ReweightRelationship,
-    SearchResources, ShowResource, UpdateResource,
+    ListResources, MoveSpec, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
+    ReweightRelationship, SearchResources, ShowResource, UpdateResource,
 };
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};

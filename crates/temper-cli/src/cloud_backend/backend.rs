@@ -55,8 +55,8 @@ mod embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
         AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
-        FoldRelationship, ListResources, RetypeRelationship, ReweightRelationship, SearchResources,
-        ShowResource, UpdateResource,
+        FoldRelationship, ListResources, ReconcileCognitiveMap, RetypeRelationship,
+        ReweightRelationship, SearchResources, ShowResource, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::ResourceRow;
@@ -200,6 +200,19 @@ mod embed_impl {
                 "CloudBackend::fold_relationship not wired until cutover".to_string(),
             ))
         }
+
+        // L0 reconcile is an admin/operator path that PUTs directly via the client (Task 7); the
+        // CLI does not dispatch it through CloudBackend.
+        async fn reconcile_cognitive_map(
+            &self,
+            _cmd: ReconcileCognitiveMap,
+        ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::reconcile_cognitive_map not dispatched through the backend"
+                    .to_string(),
+            ))
+        }
     }
 
     #[cfg(test)]
@@ -274,8 +287,9 @@ mod non_embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
         AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource,
-        FoldRelationship, ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship,
-        SearchHit, SearchResources, ShowResource, UpdateResource,
+        FoldRelationship, ListResources, ReconcileCognitiveMap, ResourceSummary,
+        RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
+        UpdateResource,
     };
     use temper_workflow::types::resource::ResourceRow;
 
@@ -373,6 +387,16 @@ mod non_embed_impl {
             &self,
             _cmd: FoldRelationship,
         ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn reconcile_cognitive_map(
+            &self,
+            _cmd: ReconcileCognitiveMap,
+        ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError>
+        {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

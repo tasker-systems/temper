@@ -26,6 +26,7 @@ pub mod invocation_requests;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
+pub mod reconcile;
 pub mod relationship_events;
 pub mod relationship_requests;
 pub mod search;

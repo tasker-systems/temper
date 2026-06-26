@@ -19,7 +19,8 @@ use temper_core::error::TemperError;
 
 use super::commands::{
     AssertRelationship, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    RetypeRelationship, ReweightRelationship, SearchResources, ShowResource, UpdateResource,
+    ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources, ShowResource,
+    UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -96,6 +97,15 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError>;
+
+    // ── L0 cognitive-map content reconcile (L0 delivery & lifecycle, Task 4) ──
+    // Idempotent, additive-only, provenance-scoped desired-state reconcile of a cognitive map's
+    // kernel slice to a pre-embedded manifest. Dispatched by `PUT /api/cognitive-maps/{id}`.
+
+    async fn reconcile_cognitive_map(
+        &self,
+        cmd: ReconcileCognitiveMap,
+    ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError>;
 }
 
 #[cfg(test)]
