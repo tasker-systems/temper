@@ -1,7 +1,10 @@
 //! Context CRUD service over the substrate.
 //!
-//! Visibility is derived inline (owner OR `kb_team_contexts` share) — there is
-//! no `contexts_visible_to()` SQL function. `kb_owner_table`/`kb_owner_id`/
+//! Visibility is centralized in the `context_visible_to(principal, context)`
+//! SQL function (migration `20260627000001`): own personal context, OR a context
+//! owned by a team the principal is a member of, OR a context explicitly shared
+//! (`kb_team_contexts`) to one of the principal's teams. Every read/resolve site
+//! below calls that one predicate so they cannot drift. `kb_owner_table`/`kb_owner_id`/
 //! `updated` are synthesized to the `ContextRow` shape from the substrate's
 //! `owner_table`/`owner_id`/`created` columns. Resource counts come from
 //! `kb_resource_homes`. Context creation is a plain INSERT (no event emission —
@@ -38,11 +41,7 @@ pub async fn list_visible(
           FROM kb_contexts c
           LEFT JOIN kb_resource_homes rh
                  ON rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id
-         WHERE (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-            OR EXISTS (
-                 SELECT 1 FROM kb_team_contexts tc
-                   JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                  WHERE tc.context_id = c.id AND tm.profile_id = $1)
+         WHERE context_visible_to($1, c.id)
          GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created, c.slug
          ORDER BY c.name
         "#,
@@ -75,11 +74,7 @@ pub async fn get_visible(
                END AS "owner_ref!"
           FROM kb_contexts c
          WHERE c.id = $2
-           AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-                OR EXISTS (
-                     SELECT 1 FROM kb_team_contexts tc
-                       JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                      WHERE tc.context_id = c.id AND tm.profile_id = $1))
+           AND context_visible_to($1, c.id)
         "#,
         *profile_id,
         *context_id
@@ -110,11 +105,7 @@ pub async fn resolve_context_ref(
                 r#"
                 SELECT c.id FROM kb_contexts c
                  WHERE c.id = $2
-                   AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-                        OR EXISTS (
-                             SELECT 1 FROM kb_team_contexts tc
-                               JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                              WHERE tc.context_id = c.id AND tm.profile_id = $1))
+                   AND context_visible_to($1, c.id)
                 "#,
                 *principal,
                 id
@@ -195,16 +186,7 @@ async fn ensure_context_visible(
     context_id: uuid::Uuid,
 ) -> ApiResult<()> {
     let visible = sqlx::query_scalar!(
-        r#"
-        SELECT EXISTS (
-          SELECT 1 FROM kb_contexts c
-           WHERE c.id = $2
-             AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-                  OR EXISTS (
-                       SELECT 1 FROM kb_team_contexts tc
-                         JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                        WHERE tc.context_id = c.id AND tm.profile_id = $1)))
-        AS "ok!""#,
+        r#"SELECT context_visible_to($1, $2) AS "ok!""#,
         principal,
         context_id
     )
