@@ -331,28 +331,19 @@ async fn staleness_fresh_immediately_after_pull(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let ctx = app.client.contexts().create("sfr").await.expect("ctx");
-    // Use the UUID as the context ref for the pull (arc rejects bare names).
-    // After pull, rekey the cursor from UUID→bare-name so that
-    // check_context_staleness("sfr") can find it via name-based resolution.
-    let ctx_uuid = ctx.id.to_string();
+    app.client.contexts().create("sfr").await.expect("ctx");
     seed_resource(&app, "sfr", "research", "Doc").await;
 
+    // Pull and check using the same decorated ref — resolve_context_id now
+    // matches by slug on profile-owned contexts for `@me/…` refs, so no
+    // cursor rekey is needed.
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, &ctx_uuid)
+    temper_cli::projection::pull_context(&app.client, &config, "@me/sfr")
         .await
         .expect("pull");
-    // Rekey cursor: pull_context wrote it under the UUID; check_context_staleness
-    // uses resolve_context_id which matches by name, so the cursor must be keyed
-    // by the bare name "sfr" to be found.
-    let cursor = temper_cli::projection::read_cursor(&config.state_dir, &ctx_uuid)
-        .expect("read uuid-keyed cursor")
-        .expect("cursor must exist after pull");
-    temper_cli::projection::write_cursor(&config.state_dir, "sfr", &cursor)
-        .expect("rekey cursor to bare name");
 
     let outcome =
-        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sfr")
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "@me/sfr")
             .await;
     assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Fresh);
 }
@@ -365,31 +356,20 @@ async fn staleness_stale_after_post_pull_write(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let ctx = app.client.contexts().create("sst").await.expect("ctx");
-    // Use the UUID as the context ref for the pull (arc rejects bare names).
-    // After pull, rekey the cursor from UUID→bare-name so that
-    // check_context_staleness("sst") can find it via name-based resolution.
-    let ctx_uuid = ctx.id.to_string();
+    app.client.contexts().create("sst").await.expect("ctx");
     seed_resource(&app, "sst", "research", "First Doc").await;
 
+    // Pull and check using the same decorated ref — no cursor rekey needed.
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, &ctx_uuid)
+    temper_cli::projection::pull_context(&app.client, &config, "@me/sst")
         .await
         .expect("first pull");
-    // Rekey cursor: pull_context wrote it under the UUID; check_context_staleness
-    // uses resolve_context_id which matches by name, so the cursor must be keyed
-    // by the bare name "sst" to be found.
-    let cursor = temper_cli::projection::read_cursor(&config.state_dir, &ctx_uuid)
-        .expect("read uuid-keyed cursor")
-        .expect("cursor must exist after pull");
-    temper_cli::projection::write_cursor(&config.state_dir, "sst", &cursor)
-        .expect("rekey cursor to bare name");
 
     // A write after the pull advances the context's event stream.
     seed_resource(&app, "sst", "research", "Second Doc").await;
 
     let outcome =
-        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sst")
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "@me/sst")
             .await;
     assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Stale);
 }

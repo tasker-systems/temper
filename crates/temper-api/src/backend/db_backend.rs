@@ -791,9 +791,9 @@ impl Backend for DbBackend {
                 // The ContextId was already resolved and visibility-gated at the
                 // handler boundary (parse_context_ref + resolve_context_ref). Use it
                 // directly; no second DB lookup needed.
-                rehome_to = Some(
-                    temper_substrate::ids::ContextId::from(uuid::Uuid::from(ctx_to))
-                );
+                rehome_to = Some(temper_substrate::ids::ContextId::from(uuid::Uuid::from(
+                    ctx_to,
+                )));
             }
         }
 

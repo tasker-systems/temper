@@ -41,8 +41,8 @@ pub async fn get_subgraph(
     auth: AuthUser,
     Query(query): Query<SubgraphQuery>,
 ) -> ApiResult<Json<SubgraphResponse>> {
-    let cref = parse_context_ref(&query.context_ref)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let cref =
+        parse_context_ref(&query.context_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     let principal = ProfileId::from(auth.0.profile.id);
     let context_id = resolve_context_ref(&state.pool, principal, &cref).await?;

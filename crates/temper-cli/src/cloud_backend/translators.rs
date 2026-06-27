@@ -367,7 +367,10 @@ mod tests {
         );
         // managed_meta must NOT carry a context field (no synthesis from context_ref).
         assert!(
-            req.managed_meta.as_ref().and_then(|m| m.context.as_ref()).is_none(),
+            req.managed_meta
+                .as_ref()
+                .and_then(|m| m.context.as_ref())
+                .is_none(),
             "managed_meta.context must not be set from context_ref"
         );
     }
@@ -383,7 +386,10 @@ mod tests {
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         let mm = req.managed_meta.expect("synthesized from move_to.type_to");
         assert_eq!(mm.doc_type.as_deref(), Some("concept"));
-        assert!(req.context_to.is_none(), "no context_to without context_ref");
+        assert!(
+            req.context_to.is_none(),
+            "no context_to without context_ref"
+        );
     }
 
     #[test]

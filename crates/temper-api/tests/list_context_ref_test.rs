@@ -99,10 +99,7 @@ async fn list_by_context_ref_at_me_slug_returns_only_that_contexts_resources(poo
     let body: serde_json::Value = resp.json().await.expect("list JSON");
     let rows = body["rows"].as_array().expect("rows must be an array");
 
-    let returned_ids: Vec<&str> = rows
-        .iter()
-        .filter_map(|r| r["id"].as_str())
-        .collect();
+    let returned_ids: Vec<&str> = rows.iter().filter_map(|r| r["id"].as_str()).collect();
 
     assert!(
         returned_ids.contains(&id_a.as_str()),
@@ -160,10 +157,7 @@ async fn list_by_context_ref_at_me_slug2_returns_only_that_contexts_resources(po
     let body: serde_json::Value = resp.json().await.expect("list JSON");
     let rows = body["rows"].as_array().expect("rows must be an array");
 
-    let returned_ids: Vec<&str> = rows
-        .iter()
-        .filter_map(|r| r["id"].as_str())
-        .collect();
+    let returned_ids: Vec<&str> = rows.iter().filter_map(|r| r["id"].as_str()).collect();
 
     assert!(
         returned_ids.contains(&id_b.as_str()),
@@ -199,10 +193,9 @@ async fn context_row_ref_round_trips_through_parse_and_resolve(pool: PgPool) {
     .await
     .expect("insert second context");
 
-    let rows =
-        context_service::list_visible(&pool, ProfileId::from(profile_id))
-            .await
-            .expect("list_visible must succeed");
+    let rows = context_service::list_visible(&pool, ProfileId::from(profile_id))
+        .await
+        .expect("list_visible must succeed");
 
     assert!(
         rows.len() >= 2,
@@ -218,17 +211,13 @@ async fn context_row_ref_round_trips_through_parse_and_resolve(pool: PgPool) {
         let cref = parse_context_ref(&full_ref)
             .unwrap_or_else(|e| panic!("parse_context_ref({full_ref:?}) failed: {e}"));
 
-        let resolved = context_service::resolve_context_ref(
-            &pool,
-            ProfileId::from(profile_id),
-            &cref,
-        )
-        .await
-        .unwrap_or_else(|e| panic!("resolve_context_ref({full_ref:?}) failed: {e}"));
+        let resolved =
+            context_service::resolve_context_ref(&pool, ProfileId::from(profile_id), &cref)
+                .await
+                .unwrap_or_else(|e| panic!("resolve_context_ref({full_ref:?}) failed: {e}"));
 
         assert_eq!(
-            *resolved,
-            *row.id,
+            *resolved, *row.id,
             "round-trip ref {full_ref:?} resolved to wrong context"
         );
 

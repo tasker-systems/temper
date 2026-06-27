@@ -89,8 +89,7 @@ async fn filtered_visible_page(
     // ref is resolved via `resolve_context_ref` (visibility-gated).
     let context_id: Option<Uuid> = match params.context_ref.as_deref() {
         Some(s) => {
-            let cref = parse_context_ref(s)
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            let cref = parse_context_ref(s).map_err(|e| ApiError::BadRequest(e.to_string()))?;
             Some(*resolve_context_ref(pool, ProfileId::from(profile_id), &cref).await?)
         }
         None => None,
@@ -331,7 +330,14 @@ pub async fn search_select(
         Some(s) => {
             let cref = temper_core::context_ref::parse_context_ref(s)
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-            Some(*crate::services::context_service::resolve_context_ref(pool, ProfileId::from(profile_id), &cref).await?)
+            Some(
+                *crate::services::context_service::resolve_context_ref(
+                    pool,
+                    ProfileId::from(profile_id),
+                    &cref,
+                )
+                .await?,
+            )
         }
         None => None,
     };

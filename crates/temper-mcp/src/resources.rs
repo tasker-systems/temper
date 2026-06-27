@@ -70,8 +70,11 @@ pub async fn list_resource_templates(
             .with_description("Retrieve only the raw markdown content of a resource.")
             .with_mime_type("text/markdown")
             .no_annotation(),
-        RawResourceTemplate::new("temper://contexts/{name}/resources", "Resources in context")
-            .with_description("List all resources belonging to a named context (workspace).")
+        RawResourceTemplate::new("temper://contexts/{ref}/resources", "Resources in context")
+            .with_description(
+                "List all resources belonging to a context. \
+                 The ref must be a UUID or decorated form `@owner/slug` (e.g. `@me/my-context`).",
+            )
             .with_mime_type("application/json")
             .no_annotation(),
     ];
@@ -88,7 +91,7 @@ pub async fn list_resource_templates(
 /// Supported URI patterns:
 /// - `temper://resources/{id}` — metadata + full markdown content
 /// - `temper://resources/{id}/content` — raw markdown only
-/// - `temper://contexts/{name}/resources` — JSON list of resources in context
+/// - `temper://contexts/{ref}/resources` — JSON list of resources in context (ref = UUID or `@owner/slug`)
 pub async fn read_resource(
     state: &AppState,
     profile: &Profile,
@@ -153,26 +156,32 @@ pub async fn read_resource(
         ]));
     }
 
-    // temper://contexts/{name}/resources
-    if let Some(name) = uri
+    // temper://contexts/{ref}/resources  (ref = UUID or @owner/slug)
+    if let Some(context_ref_str) = uri
         .strip_prefix("temper://contexts/")
         .and_then(|rest| rest.strip_suffix("/resources"))
     {
-        let context = temper_api::services::context_service::resolve_by_name(
+        let r = temper_core::context_ref::parse_context_ref(context_ref_str).map_err(|e| {
+            rmcp::ErrorData::invalid_params(
+                format!("Invalid context ref {context_ref_str:?}: {e}"),
+                None,
+            )
+        })?;
+        let context_id = temper_api::services::context_service::resolve_context_ref(
             &state.pool,
-            temper_core::types::ProfileId::from(profile.id),
-            name,
+            temper_core::types::ids::ProfileId::from(profile.id),
+            &r,
         )
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(
-                format!("Failed to resolve context '{name}': {e}"),
+                format!("Failed to resolve context ref {context_ref_str:?}: {e}"),
                 None,
             )
         })?;
 
         let params = temper_workflow::types::resource::ResourceListParams {
-            context_ref: Some(uuid::Uuid::from(context.id).to_string()),
+            context_ref: Some(uuid::Uuid::from(context_id).to_string()),
             limit: Some(200),
             ..Default::default()
         };

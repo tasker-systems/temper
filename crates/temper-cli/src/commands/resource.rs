@@ -101,10 +101,7 @@ pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
             .get("owner_ref")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
-        let slug = obj
-            .get("slug")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
+        let slug = obj.get("slug").and_then(|v| v.as_str()).map(str::to_owned);
         if let (Some(owner_ref), Some(slug)) = (owner_ref, slug) {
             let decorated = format!("{owner_ref}/{slug}");
             obj.insert("ref".to_string(), serde_json::Value::String(decorated));
@@ -904,10 +901,12 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_workflow::operations::MoveSpec> {
-    params.type_to.map(|tt| temper_workflow::operations::MoveSpec {
-        context_to: None,
-        type_to: Some(String::from(tt)),
-    })
+    params
+        .type_to
+        .map(|tt| temper_workflow::operations::MoveSpec {
+            context_to: None,
+            type_to: Some(String::from(tt)),
+        })
 }
 
 /// Update a resource's frontmatter fields.
@@ -1113,7 +1112,10 @@ mod build_helpers_tests {
         let mut params = empty_update_params("foo");
         params.type_to = Some("concept");
         let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
-        assert_eq!(spec.context_to, None, "MoveSpec.context_to is always None from CLI");
+        assert_eq!(
+            spec.context_to, None,
+            "MoveSpec.context_to is always None from CLI"
+        );
         assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 
@@ -1124,7 +1126,10 @@ mod build_helpers_tests {
         params.context_to = Some("@me/temper");
         params.type_to = Some("concept");
         let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
-        assert_eq!(spec.context_to, None, "context_to never in MoveSpec from CLI");
+        assert_eq!(
+            spec.context_to, None,
+            "context_to never in MoveSpec from CLI"
+        );
         assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 

@@ -89,47 +89,12 @@ pub async fn get_visible(
     .ok_or(ApiError::NotFound)
 }
 
-/// Resolve a context by name within the profile's visible contexts.
-pub async fn resolve_by_name(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    name: &str,
-) -> ApiResult<ContextRow> {
-    sqlx::query_as!(
-        ContextRow,
-        r#"
-        SELECT c.id, c.name,
-               c.owner_table AS "kb_owner_table!",
-               c.owner_id AS "kb_owner_id!",
-               c.created,
-               c.created AS "updated!",
-               c.slug,
-               CASE c.owner_table
-                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
-                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
-               END AS "owner_ref!"
-          FROM kb_contexts c
-         WHERE c.name = $2
-           AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-                OR EXISTS (
-                     SELECT 1 FROM kb_team_contexts tc
-                       JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                      WHERE tc.context_id = c.id AND tm.profile_id = $1))
-        "#,
-        *profile_id,
-        name
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or(ApiError::NotFound)
-}
-
 /// Resolve a context name by ID without a visibility gate.
 ///
 /// Used by handlers that receive a `kb_context_id` UUID on the wire and need
 /// the corresponding name to construct a typed operations command. The
 /// visibility check is enforced downstream by the create path (via
-/// `resolve_by_name`, which is visibility-gated).
+/// `resolve_context_ref`, which is visibility-gated).
 ///
 /// Returns `ApiError::BadRequest` when no context with the given ID exists.
 pub async fn resolve_name_by_id(pool: &PgPool, context_id: uuid::Uuid) -> ApiResult<String> {
@@ -144,8 +109,7 @@ pub async fn resolve_name_by_id(pool: &PgPool, context_id: uuid::Uuid) -> ApiRes
 ///
 /// The single source of truth for context resolution. `@me` uses the caller's
 /// profile; `@handle`/`+team` resolve the owner then the `(owner, slug)` row;
-/// a bare UUID must be visible to the principal. Replaces `resolve_by_name`
-/// (name was ambiguous — two contexts can share a name under distinct slugs).
+/// a bare UUID must be visible to the principal.
 ///
 /// Error taxonomy:
 /// - `Id`/`Handle`/profile-context miss → `NotFound`
@@ -157,7 +121,7 @@ pub async fn resolve_context_ref(
 ) -> ApiResult<ContextId> {
     match r {
         ContextRef::Id(id) => {
-            // Visible-to-principal gate (same predicate as resolve_by_name).
+            // Visible-to-principal gate: profile-owned or team-shared.
             let found = sqlx::query_scalar!(
                 r#"
                 SELECT c.id FROM kb_contexts c

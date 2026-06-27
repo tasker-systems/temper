@@ -245,8 +245,7 @@ pub async fn update(
     // Resolve context_to ref (if present) to a ContextId, gated by principal visibility.
     // parse_context_ref rejects bare names → ApiError::BadRequest (Decision 1).
     let move_to = if let Some(ref ctx_ref) = req.context_to {
-        let r = parse_context_ref(ctx_ref)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let r = parse_context_ref(ctx_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
         let context_id = context_service::resolve_context_ref(
             &state.pool,
             ProfileId::from(auth.0.profile.id),

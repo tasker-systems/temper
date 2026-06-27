@@ -119,7 +119,12 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
     let results = app
         .client
         .search()
-        .text_query("ArgoCD rollouts", Some("@me/fts-body".into()), None, Some(10))
+        .text_query(
+            "ArgoCD rollouts",
+            Some("@me/fts-body".into()),
+            None,
+            Some(10),
+        )
         .await
         .expect("body text search failed");
 
