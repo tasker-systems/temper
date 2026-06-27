@@ -317,7 +317,12 @@ fn resolve_create_body(
     if from_body.is_some() {
         Ok(from_body)
     } else {
-        crate::actions::body_source::resolve_body_source(body_flag, stdin_is_tty, std::io::stdin())
+        crate::actions::body_source::resolve_body_source(
+            body_flag,
+            stdin_is_tty,
+            std::io::stdin(),
+            crate::actions::body_source::stdin_has_input_within,
+        )
     }
 }
 
@@ -989,6 +994,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         params.body.as_deref(),
         stdin_is_tty,
         std::io::stdin(),
+        crate::actions::body_source::stdin_has_input_within,
     )?;
 
     // 4. Build the UpdateResource cmd.
