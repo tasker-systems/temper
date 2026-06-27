@@ -79,7 +79,10 @@ fn compute_excerpt(body: &str) -> Option<String> {
 #[derive(Debug, Clone)]
 pub struct AggregatorSubgraphParams<'a> {
     pub caller_profile_id: Uuid,
-    pub context_name: &'a str,
+    /// Resolved context ID. Callers must resolve the caller-supplied context ref
+    /// (via `parse_context_ref` + `resolve_context_ref`) before constructing this
+    /// struct — the service layer does not perform name or ref resolution.
+    pub context_id: Uuid,
     pub aggregator_types: &'a [DocType],
     pub depth: u32,
 }
@@ -135,7 +138,7 @@ pub async fn aggregator_subgraph(
           FROM graph_subgraph_nodes($1, $2, $3::text[], $4::int)
         "#,
         params.caller_profile_id,
-        params.context_name,
+        params.context_id,
         &aggregator_names,
         depth as i32,
     )

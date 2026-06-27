@@ -6,18 +6,20 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
+use crate::services::context_service::resolve_context_ref;
 use crate::services::graph_service::{aggregator_subgraph, AggregatorSubgraphParams};
 use crate::state::AppState;
+use temper_core::context_ref::parse_context_ref;
+use temper_core::types::ids::ProfileId;
 use temper_workflow::frontmatter::document::DocType;
 use temper_workflow::types::graph::SubgraphResponse;
 
 /// Query parameters for `GET /api/graph/subgraph`.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct SubgraphQuery {
-    /// Profile handle to query. `"@me"` resolves to the caller's profile.
-    pub owner: String,
-    /// Context name (e.g., `"temper"`).
-    pub context: String,
+    /// Context ref in decorated form: `@me/<slug>`, `@<handle>/<slug>`, `+<team-slug>/<slug>`,
+    /// or a bare UUID. Bare context names are rejected — use the decorated form.
+    pub context_ref: String,
 }
 
 #[utoipa::path(
@@ -30,6 +32,8 @@ pub struct SubgraphQuery {
         (status = 200, description = "Concept-centric subgraph", body = SubgraphResponse),
         (status = 400, description = "Bad query parameters", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — caller is not a member of the requested team context", body = ErrorBody),
+        (status = 404, description = "Context not found or not visible to caller", body = ErrorBody),
     )
 )]
 pub async fn get_subgraph(
@@ -37,23 +41,17 @@ pub async fn get_subgraph(
     auth: AuthUser,
     Query(query): Query<SubgraphQuery>,
 ) -> ApiResult<Json<SubgraphResponse>> {
-    // Resolve `owner` — v1 only supports "@me" (caller's own vault).
-    // Multi-owner queries are a v1-scope boundary: expanding requires a
-    // permission-model design that defines who can read whose graph and
-    // how handles resolve to profile IDs. Treat handles other than "@me"
-    // as an invalid query parameter and return 400 (rather than 404).
-    if query.owner != "@me" {
-        return Err(ApiError::BadRequest(format!(
-            "owner handle '{}' not supported — only '@me' in v1",
-            query.owner
-        )));
-    }
+    let cref = parse_context_ref(&query.context_ref)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let principal = ProfileId::from(auth.0.profile.id);
+    let context_id = resolve_context_ref(&state.pool, principal, &cref).await?;
 
     let response = aggregator_subgraph(
         &state.pool,
         AggregatorSubgraphParams {
             caller_profile_id: auth.0.profile.id,
-            context_name: &query.context,
+            context_id: *context_id,
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
