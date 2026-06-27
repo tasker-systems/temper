@@ -786,13 +786,11 @@ pub(crate) async fn neighbors(
     // WS2 NOTE — deliberately UNSCOPED (no principal). `neighbors` has no surface caller yet (only
     // the §9 data-parity test reads it), so visibility-scoping it now protects nothing (SG-5: no
     // speculative surface). The leak-safe gate is `edges_visible_to(principal)` (edge-home + both
-    // endpoints), but that surfaced a real access-model gap: `anchor_readable_by_profile` gates a
-    // context-homed edge ONLY by a `kb_team_contexts` share, and synthesis auto-shares only
-    // TEAM-owned contexts — so an owner cannot traverse edges homed in their own PROFILE-owned
-    // context even though `resources_visible_to` returns the resources. Closing that (a personal-team
-    // share for profile-owned contexts, or an ownership branch in `anchor_readable_by_profile`) is an
-    // access-model amendment that lands with the graph-neighbor SURFACE wiring — tracked, not silent
-    // (no surface reads this today).
+    // endpoints). The profile-owned-context edge-home gap that this note previously flagged —
+    // `anchor_readable_by_profile` admitting a context-homed edge only by team share/ownership, so an
+    // owner could not traverse edges homed in their own PROFILE-owned context — is now CLOSED:
+    // migration `20260627000003` added the profile-owned clause (mirroring `context_visible_to`
+    // clause 1), so `edges_visible_to` admits an owner to the edges in their own context.
     let rows = sqlx::query(
         "SELECT t.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
                 e.polarity::text AS polarity, e.label \
