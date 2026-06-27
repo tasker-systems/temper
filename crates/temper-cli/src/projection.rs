@@ -189,9 +189,14 @@ pub async fn warn_if_context_stale(client: &TemperClient, state_dir: &Path, cont
 
 /// Remove projection `.md` files for resources no longer present in the
 /// context. `keep` is the set of absolute file paths the current pull
-/// wrote. Walks `<vault_root>/<owner>/<context>/<doc_type>/*.md` across
+/// wrote. Walks `<vault_root>/<owner>/<context_name>/<doc_type>/*.md` across
 /// every owner directory. Only `.md` files are considered; other files
 /// and other contexts are never touched. Returns the number of files removed.
+///
+/// `context` must be the **on-disk directory name** (the context's slug/name,
+/// e.g. `"temper"`), not a decorated ref like `@me/temper`. Callers should
+/// derive it from the listed rows' `context_name` field rather than forwarding
+/// the raw command-line ref.
 pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) -> Result<usize> {
     let mut removed = 0usize;
     let owner_iter = match std::fs::read_dir(vault_root) {
@@ -415,7 +420,21 @@ pub async fn pull_context(
     }
 
     // 3. Prune files for resources no longer in the context.
-    let pruned = prune_context(&config.vault_root, context, &keep)?;
+    // The on-disk directory component is the context's `context_name` field (e.g. `"temper"`),
+    // not the raw ref (which may be `"@me/temper"`). Derive it from any listed row; for an empty
+    // context fall back to parsing the slug from the ref so that a context that has been emptied
+    // server-side still prunes its local projection files.
+    let context_dir_name: Option<String> =
+        rows.first().map(|r| r.context_name.clone()).or_else(|| {
+            parse_context_ref(context).ok().and_then(|r| match r {
+                ContextRef::OwnerSlug { slug, .. } => Some(slug),
+                ContextRef::Id(_) => None,
+            })
+        });
+    let pruned = match context_dir_name.as_deref() {
+        Some(name) => prune_context(&config.vault_root, name, &keep)?,
+        None => 0,
+    };
 
     // 4. Record the staleness cursor. The context's UUID comes from any
     //    listed row; an empty context yields no event id.

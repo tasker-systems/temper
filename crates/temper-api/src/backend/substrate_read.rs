@@ -9,9 +9,8 @@
 //!
 //! `list`/`list_meta` filter (context_ref/doc_type_name/stage/owner/`q`-title), sort, and paginate the
 //! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
-//! to a context UUID before filtering so bare names are rejected (spec Decision 1). The enrichment path
-//! (`list_enriched`/MCP) filters by name in SQL via `readback::enriched_list`. Full-text/vector `q` on
-//! the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
+//! to a context UUID before filtering so bare names are rejected (spec Decision 1). Full-text/vector `q`
+//! on the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
 
 use std::collections::HashMap;
 
@@ -25,7 +24,7 @@ use crate::services::resource_service::{ResourceListParams, ResourceListResponse
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -381,51 +380,6 @@ pub async fn search_select(
             context_slug: Some(row.context_slug),
             context_owner_ref: Some(row.context_owner_ref),
         });
-    }
-    Ok(out)
-}
-
-/// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
-/// `doc_type` in SQL via `readback::enriched_list` (WS2-scoped). Returns always-compiled temper-core
-/// types so the MCP consumer needs no feature gate. Native rows: real timestamps (event-sourced
-/// from `kb_events.occurred_at`), name-only doc type, no fabricated fields.
-pub async fn list_enriched_select(
-    pool: &PgPool,
-    profile_id: Uuid,
-    context_name: Option<&str>,
-    doc_type: Option<&str>,
-) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
-    let rows = readback::enriched_list(pool, profile_id, context_name, doc_type)
-        .await
-        .map_err(api_err)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        let row = ResourceRow {
-            id: ResourceId::from(r.new_id),
-            kb_context_id: ContextId::from(Uuid::nil()), // re-minted; unused by build_enriched
-            origin_uri: r.origin_uri,
-            title: r.title,
-            originator_profile_id: ProfileId::from(Uuid::nil()),
-            owner_profile_id: ProfileId::from(Uuid::nil()),
-            is_active: r.is_active,
-            created: r.created,
-            updated: r.updated,
-            context_name: r.context_name,
-            doc_type_name: r.doc_type,
-            owner_handle: "@me".to_string(),
-            context_slug: r.context_slug,
-            context_owner_ref: r.context_owner_ref,
-            stage: r.stage,
-            seq: None,
-            mode: r.mode,
-            effort: r.effort,
-            body_hash: None,
-        };
-        // Propagate a genuine deser failure (don't swallow to None — a malformed managed shape is a fault).
-        let managed: Option<ManagedMeta> =
-            Some(serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?);
-        let open = Some(serde_json::Value::Object(r.open));
-        out.push((row, managed, open));
     }
     Ok(out)
 }

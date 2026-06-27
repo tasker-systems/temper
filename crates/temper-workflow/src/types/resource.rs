@@ -132,6 +132,10 @@ pub struct ResourceListResponse {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceCreateRequest {
+    /// Context addressed by UUID. The API wraps this as `ContextRef::Id` and resolves it through
+    /// `resolve_context_ref` (visibility-gated). Stays UUID-keyed intentionally (spec §7 decision):
+    /// the create path is server-to-server / MCP and always has the UUID at hand; a `context_ref`
+    /// string here would add blast-radius with no practical benefit (deferred).
     pub kb_context_id: Uuid,
     /// Doc-type name (the substrate stores doc-type as a property name; the
     /// backend create path passes it straight through to `CreateResource`).

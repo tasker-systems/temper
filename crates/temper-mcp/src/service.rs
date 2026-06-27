@@ -138,7 +138,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Get a resource by ID or slug. When using slug, provide context_name to disambiguate. Set include_content to true to get the full markdown."
+        description = "Get a resource by its ref (UUID or the decorated `slug-<uuid>` form). Set include_content to true to get the full markdown body."
     )]
     async fn get_resource(
         &self,

@@ -58,6 +58,10 @@ pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -
 }
 
 /// Home context by `(owner profile, slugify(name))` — the owner-scoped shape (§2 amendment).
+///
+/// **Retained for the substrate write-path integration test only** (`tests/write_path_mutations.rs`).
+/// Production resolves contexts via `temper_api::services::context_service::resolve_context_ref`
+/// (visibility-gated, UUID-primary). Do not introduce new callers of this function in production code.
 pub async fn resolve_context(pool: &PgPool, owner: ProfileId, name: &str) -> Result<ContextId> {
     let slug = slugify(name);
     let id: Uuid = sqlx::query(
