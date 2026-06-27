@@ -12,6 +12,7 @@ pub mod access_gate;
 pub mod api;
 pub mod audit;
 pub mod auth;
+pub mod cognitive_maps;
 pub mod config;
 pub mod conflict;
 pub mod context;
