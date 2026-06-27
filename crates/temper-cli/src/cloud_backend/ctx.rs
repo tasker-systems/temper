@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use temper_client::TemperClient;
 use temper_workflow::operations::Surface;
-use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
@@ -21,9 +20,12 @@ use crate::error::{Result, TemperError};
 pub struct CloudBackendCtx {
     pub client: Arc<TemperClient>,
     pub owner: String,
-    /// Context ref string for the create path — either the raw `@owner/slug` /
-    /// UUID form supplied by the caller, or `@me/<context>` constructed from a
-    /// bare context name. Sent as `IngestPayload.context_ref` verbatim.
+    /// Context ref string for the create path. Passed verbatim as
+    /// `IngestPayload.context_ref` — no synthesis, no sigil-prefixing.
+    /// Bare names (no `@`/`+` sigil, no UUID) are intentionally NOT
+    /// prefixed with `@me/`; they reach the server's `parse_context_ref`,
+    /// which rejects them with `BadRequest`. That server-side rejection IS
+    /// the hard-reject for bare names (spec Decision 1).
     pub context_ref: String,
     pub config: Arc<Config>,
     pub surface: Surface,
@@ -54,17 +56,13 @@ pub fn assemble_cloud_backend(
 
     let owner = config.owner_for_context(context);
 
-    // Build the context ref for the ingest create path: if the caller already
-    // provided a decorated ref (UUID or @owner/slug), use it verbatim.
-    // Otherwise synthesize `@me/<context>` from the bare context name so
-    // existing CLI invocations (`--context temper`) continue to work.
-    let context_ref =
-        if context.starts_with('@') || context.starts_with('+') || Uuid::parse_str(context).is_ok()
-        {
-            context.to_owned()
-        } else {
-            format!("{owner}/{context}")
-        };
+    // Pass the context value verbatim as the context ref — no synthesis, no
+    // `@me/<name>` prefixing. Bare names intentionally reach the server where
+    // `parse_context_ref` rejects them with BadRequest (spec Decision 1:
+    // bare names are hard-rejected because they are ambiguous in multi-person
+    // orgs). Users must supply a decorated ref: `@me/slug`, `@handle/slug`,
+    // `+team/slug`, or a UUID.
+    let context_ref = context.to_owned();
 
     let ctx = CloudBackendCtx {
         client: Arc::new(client),
