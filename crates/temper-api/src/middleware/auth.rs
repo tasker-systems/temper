@@ -86,45 +86,8 @@ pub async fn require_auth(
     // 4. Resolve email — present in token claims (custom Auth0 Action),
     //    cached in kb_profile_auth_links from a prior login, or fetched
     //    from the OIDC /userinfo endpoint as a last resort.
-    let (email, email_verified) = match token_data.claims.email {
-        Some(email) => (email, token_data.claims.email_verified),
-        None => {
-            // Check the DB for a previously resolved email before hitting userinfo.
-            let cached = lookup_cached_email(
-                &state.pool,
-                &state.config.auth_provider_name,
-                &token_data.claims.sub,
-            )
-            .await;
-
-            match cached {
-                Some((email, _)) => {
-                    tracing::debug!("resolved email from cached auth link");
-                    (email, Some(true))
-                }
-                None => {
-                    let endpoint = state
-                        .userinfo_endpoint
-                        .get_or_try_init(|| discover_userinfo_endpoint(&state.config.auth_issuer))
-                        .await
-                        .map_err(|e| {
-                            tracing::warn!("OIDC discovery failed: {e}");
-                            ApiError::Unauthorized(
-                                "Token missing email claim and userinfo lookup failed".to_string(),
-                            )
-                        })?;
-                    fetch_email_from_userinfo(endpoint, &token)
-                        .await
-                        .map_err(|e| {
-                            tracing::warn!("Failed to fetch email from userinfo: {e}");
-                            ApiError::Unauthorized(
-                                "Token missing email claim and userinfo lookup failed".to_string(),
-                            )
-                        })?
-                }
-            }
-        }
-    };
+    let (email, email_verified) =
+        resolve_email_from_claims(&state, &token_data.claims, &token).await?;
 
     let claims = AuthClaims {
         provider: state.config.auth_provider_name.clone(),
@@ -158,6 +121,53 @@ pub async fn require_auth(
 
     // 8. Continue.
     Ok(next.run(request).await)
+}
+
+/// Resolve the caller's email (and its verified flag) from JWT claims.
+///
+/// Tries three sources in order: the email claim embedded in the token (custom
+/// Auth0 Action), a previously cached email in `kb_profile_auth_links`, then the
+/// OIDC `/userinfo` endpoint as a last resort. Failure to resolve via userinfo is
+/// surfaced as [`ApiError::Unauthorized`].
+async fn resolve_email_from_claims(
+    state: &AppState,
+    claims: &JwtClaims,
+    token: &str,
+) -> Result<(String, Option<bool>), ApiError> {
+    if let Some(email) = &claims.email {
+        return Ok((email.clone(), claims.email_verified));
+    }
+
+    // Check the DB for a previously resolved email before hitting userinfo.
+    let cached =
+        lookup_cached_email(&state.pool, &state.config.auth_provider_name, &claims.sub).await;
+
+    match cached {
+        Some((email, _)) => {
+            tracing::debug!("resolved email from cached auth link");
+            Ok((email, Some(true)))
+        }
+        None => {
+            let endpoint = state
+                .userinfo_endpoint
+                .get_or_try_init(|| discover_userinfo_endpoint(&state.config.auth_issuer))
+                .await
+                .map_err(|e| {
+                    tracing::warn!("OIDC discovery failed: {e}");
+                    ApiError::Unauthorized(
+                        "Token missing email claim and userinfo lookup failed".to_string(),
+                    )
+                })?;
+            fetch_email_from_userinfo(endpoint, token)
+                .await
+                .map_err(|e| {
+                    tracing::warn!("Failed to fetch email from userinfo: {e}");
+                    ApiError::Unauthorized(
+                        "Token missing email claim and userinfo lookup failed".to_string(),
+                    )
+                })
+        }
+    }
 }
 
 /// Look up the email for a known auth link in the database.

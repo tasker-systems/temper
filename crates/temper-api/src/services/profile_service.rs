@@ -83,8 +83,30 @@ pub async fn generate_profile_handle(pool: &PgPool, display_name: &str) -> ApiRe
 /// 4. If email matches an existing link, create a new auth link pointing to that profile.
 /// 5. Otherwise, create a new profile and a new auth link.
 pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
-    // 1 & 2: direct lookup by provider + external user id
-    let existing_link = sqlx::query_as!(
+    // 1 & 2: direct lookup by provider + external user id; load linked profile.
+    if let Some(link) = lookup_link_by_provider(pool, claims).await? {
+        return get_by_id(pool, ProfileId::from(link.profile_id)).await;
+    }
+
+    // 3 & 4: email reconciliation — attach this provider to an existing profile.
+    if let Some(profile) = reconcile_by_email(pool, claims).await? {
+        return Ok(profile);
+    }
+
+    // 5: brand new profile + auth link, then provision its emitter entities and
+    // default context.
+    let (profile_id, handle) = create_new_profile_and_link(pool, claims).await?;
+    provision_profile_entities(pool, profile_id, &handle).await?;
+
+    get_by_id(pool, ProfileId::from(profile_id)).await
+}
+
+/// Phase 1: direct lookup of an auth link by `(auth_provider, auth_provider_user_id)`.
+async fn lookup_link_by_provider(
+    pool: &PgPool,
+    claims: &AuthClaims,
+) -> ApiResult<Option<ProfileAuthLink>> {
+    let link = sqlx::query_as!(
         ProfileAuthLink,
         r#"
         SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
@@ -98,54 +120,80 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .fetch_optional(pool)
     .await?;
 
-    if let Some(link) = existing_link {
-        return get_by_id(pool, ProfileId::from(link.profile_id)).await;
-    }
+    Ok(link)
+}
 
-    // 3: email reconciliation — only if the new identity's email is verified
-    if claims.email_verified == Some(true) {
-        let reconciled_link = sqlx::query_as!(
-            ProfileAuthLink,
-            r#"
-            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
-              FROM kb_profile_auth_links
-             WHERE email = $1
-             LIMIT 1
-            "#,
-            &claims.email,
-        )
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some(existing) = reconciled_link {
-            // 4: create new auth link for this provider pointing to the existing profile
-            let new_link_id = Uuid::now_v7();
-            sqlx::query!(
-                r#"
-                INSERT INTO kb_profile_auth_links
-                    (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
-                VALUES ($1, $2, $3, $4, $5, false, now())
-                "#,
-                new_link_id,
-                existing.profile_id,
-                &claims.provider,
-                &claims.external_user_id,
-                &claims.email as &str,
-            )
-            .execute(pool)
-            .await?;
-
-            return get_by_id(pool, ProfileId::from(existing.profile_id)).await;
-        }
-    } else {
+/// Phase 3 & 4: email reconciliation. Only verified emails reconcile; when an
+/// existing link shares the email, a new auth link for this provider is created
+/// pointing at that profile and the profile is returned. Returns `None` when the
+/// email is unverified or no existing link matches (caller falls through to
+/// new-profile creation).
+async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Option<Profile>> {
+    if claims.email_verified != Some(true) {
         tracing::warn!(
             provider = %claims.provider,
             external_user_id = %claims.external_user_id,
             "Skipping email reconciliation: email_verified is not true"
         );
+        return Ok(None);
     }
 
-    // 5: brand new profile + auth link
+    let reconciled_link = sqlx::query_as!(
+        ProfileAuthLink,
+        r#"
+            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+              FROM kb_profile_auth_links
+             WHERE email = $1
+             LIMIT 1
+            "#,
+        &claims.email,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(existing) = reconciled_link else {
+        return Ok(None);
+    };
+
+    create_link_for_existing_profile(pool, existing.profile_id, claims).await?;
+
+    Ok(Some(
+        get_by_id(pool, ProfileId::from(existing.profile_id)).await?,
+    ))
+}
+
+/// Phase 4: create a new (non-default) auth link for this provider pointing at
+/// an existing profile.
+async fn create_link_for_existing_profile(
+    pool: &PgPool,
+    profile_id: Uuid,
+    claims: &AuthClaims,
+) -> ApiResult<()> {
+    let new_link_id = Uuid::now_v7();
+    sqlx::query!(
+        r#"
+                INSERT INTO kb_profile_auth_links
+                    (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
+                VALUES ($1, $2, $3, $4, $5, false, now())
+                "#,
+        new_link_id,
+        profile_id,
+        &claims.provider,
+        &claims.external_user_id,
+        &claims.email as &str,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Phase 5a: create a brand-new profile and its default auth link. Returns the
+/// new profile id and the generated handle (the latter feeds emitter provisioning).
+async fn create_new_profile_and_link(
+    pool: &PgPool,
+    claims: &AuthClaims,
+) -> ApiResult<(Uuid, String)> {
     let display_name = claims.email.split('@').next().unwrap_or("user").to_string();
     let handle = generate_profile_handle(pool, &display_name).await?;
 
@@ -181,6 +229,16 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .execute(pool)
     .await?;
 
+    Ok((profile_id, handle))
+}
+
+/// Phase 5b: provision the per-surface emitter entities and the default context
+/// a freshly created profile needs.
+async fn provision_profile_entities(
+    pool: &PgPool,
+    profile_id: Uuid,
+    handle: &str,
+) -> ApiResult<()> {
     // Provision the per-surface emitter entities the write path resolves
     // (`<handle>@<surface>` — `writes::resolve_emitter`). The deleted synthesis
     // bootstrap used to create these; without them an auto-provisioned profile
@@ -212,7 +270,7 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .execute(pool)
     .await?;
 
-    get_by_id(pool, ProfileId::from(profile_id)).await
+    Ok(())
 }
 
 /// Load a profile by ID.

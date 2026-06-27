@@ -28,40 +28,77 @@ pub fn canonicalize(fm: &serde_yaml::Value, doc_type: DocType) -> serde_yaml::Va
         return fm.clone();
     };
 
-    // Look up a key by string in the input mapping.
-    let get = |key: &str| -> Option<serde_yaml::Value> {
-        for (k, v) in input.iter() {
-            if k.as_str().map(|s| s == key).unwrap_or(false) {
-                return Some(v.clone());
-            }
-        }
-        None
-    };
-
     let mut out = serde_yaml::Mapping::new();
     let mut emitted: HashSet<String> = HashSet::new();
 
-    // Tier 1a: identity fields (fixed order).
+    emit_identity(input, &mut out, &mut emitted);
+    emit_system(input, &mut out, &mut emitted);
+    emit_managed(input, &mut out, &mut emitted, doc_type);
+    emit_known_open(input, &mut out, &mut emitted);
+    emit_unknown(input, &mut out, &mut emitted);
+
+    serde_yaml::Value::Mapping(out)
+}
+
+/// Look up a key by string in the input mapping, cloning the matched value.
+fn lookup(input: &serde_yaml::Mapping, key: &str) -> Option<serde_yaml::Value> {
+    for (k, v) in input.iter() {
+        if k.as_str().map(|s| s == key).unwrap_or(false) {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+/// Append `key => value` to `out` and record `key` as emitted.
+fn insert_field(
+    out: &mut serde_yaml::Mapping,
+    emitted: &mut HashSet<String>,
+    key: &str,
+    value: serde_yaml::Value,
+) {
+    out.insert(serde_yaml::Value::String(key.to_string()), value);
+    emitted.insert(key.to_string());
+}
+
+/// Tier 1a: identity fields ([`IDENTITY_FIELDS`]) in fixed order.
+fn emit_identity(
+    input: &serde_yaml::Mapping,
+    out: &mut serde_yaml::Mapping,
+    emitted: &mut HashSet<String>,
+) {
     for &field in IDENTITY_FIELDS {
-        if let Some(v) = get(field) {
-            out.insert(serde_yaml::Value::String(field.to_string()), v);
-            emitted.insert(field.to_string());
+        if let Some(v) = lookup(input, field) {
+            insert_field(out, emitted, field, v);
         }
     }
+}
 
-    // Tier 1b: tier-1 system fields (fixed order).
+/// Tier 1b: tier-1 system fields ([`TIER1_SYSTEM_FIELDS`]) in fixed order.
+fn emit_system(
+    input: &serde_yaml::Mapping,
+    out: &mut serde_yaml::Mapping,
+    emitted: &mut HashSet<String>,
+) {
     for &field in TIER1_SYSTEM_FIELDS {
-        if let Some(v) = get(field) {
-            out.insert(serde_yaml::Value::String(field.to_string()), v);
-            emitted.insert(field.to_string());
+        if let Some(v) = lookup(input, field) {
+            insert_field(out, emitted, field, v);
         }
     }
+}
 
-    // Tier 2: managed fields — temper-title, temper-slug, then schema-declared order.
+/// Tier 2: managed fields — `temper-title`, `temper-slug`, then doc-type schema
+/// properties in schema-declaration order, then any extra `temper-*` keys
+/// alphabetically as a safety net for schema-declared fields we don't know about.
+fn emit_managed(
+    input: &serde_yaml::Mapping,
+    out: &mut serde_yaml::Mapping,
+    emitted: &mut HashSet<String>,
+    doc_type: DocType,
+) {
     for fixed in ["temper-title", "temper-slug"] {
-        if let Some(v) = get(fixed) {
-            out.insert(serde_yaml::Value::String(fixed.to_string()), v);
-            emitted.insert(fixed.to_string());
+        if let Some(v) = lookup(input, fixed) {
+            insert_field(out, emitted, fixed, v);
         }
     }
     let schema_order = schema_property_order(doc_type);
@@ -70,16 +107,12 @@ pub fn canonicalize(fm: &serde_yaml::Value, doc_type: DocType) -> serde_yaml::Va
             continue;
         }
         if !emitted.contains(key) {
-            if let Some(v) = get(key) {
-                out.insert(serde_yaml::Value::String(key.clone()), v);
-                emitted.insert(key.clone());
+            if let Some(v) = lookup(input, key) {
+                insert_field(out, emitted, key, v);
             }
         }
     }
 
-    // Tier 2 (additional): any `temper-*` keys not yet emitted and not in
-    // tier-1 system fields go here, alphabetically, as a safety net for
-    // schema-declared fields we might not know about.
     let mut extra_temper: Vec<String> = input
         .iter()
         .filter_map(|(k, _)| k.as_str())
@@ -88,33 +121,40 @@ pub fn canonicalize(fm: &serde_yaml::Value, doc_type: DocType) -> serde_yaml::Va
         .collect();
     extra_temper.sort();
     for key in extra_temper {
-        if let Some(v) = get(&key) {
-            out.insert(serde_yaml::Value::String(key.clone()), v);
-            emitted.insert(key);
+        if let Some(v) = lookup(input, &key) {
+            insert_field(out, emitted, &key, v);
         }
     }
+}
 
-    // Tier 3: known open fields, registry order.
+/// Tier 3: known open fields ([`KNOWN_OPEN_FIELDS`]) in registry order.
+fn emit_known_open(
+    input: &serde_yaml::Mapping,
+    out: &mut serde_yaml::Mapping,
+    emitted: &mut HashSet<String>,
+) {
     for entry in KNOWN_OPEN_FIELDS {
         let name = entry.canonical;
         if !emitted.contains(name) {
-            if let Some(v) = get(name) {
-                out.insert(serde_yaml::Value::String(name.to_string()), v);
-                emitted.insert(name.to_string());
+            if let Some(v) = lookup(input, name) {
+                insert_field(out, emitted, name, v);
             }
         }
     }
+}
 
-    // Tier 4: unknown open fields in input order.
+/// Tier 4: unknown open fields in original input insertion order.
+fn emit_unknown(
+    input: &serde_yaml::Mapping,
+    out: &mut serde_yaml::Mapping,
+    emitted: &mut HashSet<String>,
+) {
     for (k, v) in input.iter() {
         let Some(name) = k.as_str() else { continue };
         if !emitted.contains(name) {
-            out.insert(serde_yaml::Value::String(name.to_string()), v.clone());
-            emitted.insert(name.to_string());
+            insert_field(out, emitted, name, v.clone());
         }
     }
-
-    serde_yaml::Value::Mapping(out)
 }
 
 /// Schema property order for a doc type, in schema-declaration order.
