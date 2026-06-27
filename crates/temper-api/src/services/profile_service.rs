@@ -2,6 +2,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, Profile, ProfileAuthLink};
 
 use crate::error::{ApiError, ApiResult};
@@ -98,7 +99,7 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .await?;
 
     if let Some(link) = existing_link {
-        return get_by_id(pool, link.profile_id).await;
+        return get_by_id(pool, ProfileId::from(link.profile_id)).await;
     }
 
     // 3: email reconciliation — only if the new identity's email is verified
@@ -134,7 +135,7 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
             .execute(pool)
             .await?;
 
-            return get_by_id(pool, existing.profile_id).await;
+            return get_by_id(pool, ProfileId::from(existing.profile_id)).await;
         }
     } else {
         tracing::warn!(
@@ -211,14 +212,14 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .execute(pool)
     .await?;
 
-    get_by_id(pool, profile_id).await
+    get_by_id(pool, ProfileId::from(profile_id)).await
 }
 
 /// Load a profile by ID.
 ///
 /// The substrate `kb_profiles` has no `is_active`, so there is no soft-delete
 /// predicate (visibility lives elsewhere).
-pub async fn get_by_id(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
+pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
     let profile = sqlx::query_as!(
         Profile,
         r#"
@@ -235,7 +236,7 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
           FROM kb_profiles
          WHERE id = $1
         "#,
-        id,
+        *id,
     )
     .fetch_optional(pool)
     .await?
@@ -250,7 +251,7 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
 /// (synthesized on read), so there is nothing to persist.
 pub async fn update(
     pool: &PgPool,
-    id: Uuid,
+    id: ProfileId,
     display_name: Option<&str>,
     preferences: Option<&Value>,
 ) -> ApiResult<Profile> {
@@ -268,7 +269,7 @@ pub async fn update(
         "#,
         new_display_name,
         new_preferences as &Value,
-        id,
+        *id,
     )
     .execute(pool)
     .await?;
@@ -277,7 +278,10 @@ pub async fn update(
 }
 
 /// List all auth links attached to a profile.
-pub async fn list_auth_links(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<ProfileAuthLink>> {
+pub async fn list_auth_links(
+    pool: &PgPool,
+    profile_id: ProfileId,
+) -> ApiResult<Vec<ProfileAuthLink>> {
     let links = sqlx::query_as!(
         ProfileAuthLink,
         r#"
@@ -286,7 +290,7 @@ pub async fn list_auth_links(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<P
          WHERE profile_id = $1
          ORDER BY linked_at ASC
         "#,
-        profile_id,
+        *profile_id,
     )
     .fetch_all(pool)
     .await?;

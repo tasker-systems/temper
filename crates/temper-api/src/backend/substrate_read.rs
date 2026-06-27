@@ -73,11 +73,11 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
 /// not a static macro.
 async fn filtered_visible_page(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     params: &ResourceListParams,
 ) -> ApiResult<VisiblePage> {
     let owner_self: Option<Uuid> = match params.owner.as_deref() {
-        Some("@me") => Some(profile_id),
+        Some("@me") => Some(*profile_id),
         _ => None,
     };
     let owner_handle: Option<&str> = match params.owner.as_deref() {
@@ -167,13 +167,13 @@ async fn filtered_visible_page(
 /// filtered set.
 pub async fn list_select(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     params: ResourceListParams,
 ) -> ApiResult<ResourceListResponse> {
     let page = filtered_visible_page(pool, profile_id, &params).await?;
     let mut rows: Vec<ResourceRow> = Vec::with_capacity(page.page_ids.len());
     for new_id in page.page_ids {
-        rows.push(native_resource_row(pool, profile_id, new_id).await?);
+        rows.push(native_resource_row(pool, profile_id, ResourceId::from(new_id)).await?);
     }
     Ok(ResourceListResponse {
         rows,
@@ -187,7 +187,11 @@ pub async fn list_select(
 /// `show` — full native resource row by id via `native_resource_row`. The inbound id IS the substrate id.
 /// Visibility is gated inside `native_resource_row` (WS2); the typed `ReadbackError` is split by
 /// `map_readback_err` (not-visible → NotFound/404, fault → Api/500).
-pub async fn show_select(pool: &PgPool, profile_id: Uuid, id: Uuid) -> ApiResult<ResourceRow> {
+pub async fn show_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+) -> ApiResult<ResourceRow> {
     native_resource_row(pool, profile_id, id)
         .await
         .map_err(ApiError::from)
@@ -197,14 +201,14 @@ pub async fn show_select(pool: &PgPool, profile_id: Uuid, id: Uuid) -> ApiResult
 /// (the meta tier is `get_meta`).
 pub async fn get_content_select(
     pool: &PgPool,
-    profile_id: Uuid,
-    resource_id: Uuid,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
 ) -> ApiResult<ContentResponse> {
-    let markdown = readback::body(pool, profile_id, resource_id)
+    let markdown = readback::body(pool, *profile_id, *resource_id)
         .await
         .map_err(|e| ApiError::from(map_readback_err(e)))?;
     Ok(ContentResponse {
-        resource_id: ResourceId::from(resource_id),
+        resource_id,
         markdown,
         managed_meta: None,
         open_meta: None,
@@ -238,15 +242,13 @@ pub async fn get_meta_select(
 /// (the §7 meta tier). `total`/`facets` mirror `list` (the FILTERED set).
 pub async fn list_meta_select(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     params: ResourceListParams,
 ) -> ApiResult<ResourceMetaListResponse> {
     let page = filtered_visible_page(pool, profile_id, &params).await?;
     let mut out = Vec::with_capacity(page.page_ids.len());
     for new_id in page.page_ids {
-        out.push(
-            get_meta_select(pool, ProfileId::from(profile_id), ResourceId::from(new_id)).await?,
-        );
+        out.push(get_meta_select(pool, profile_id, ResourceId::from(new_id)).await?);
     }
     Ok(ResourceMetaListResponse {
         rows: out,
@@ -262,12 +264,12 @@ pub async fn list_meta_select(
 /// batch's "absent = no meta"), while a genuine fault propagates.
 pub async fn get_meta_batch_select(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     ids: &[ResourceId],
 ) -> ApiResult<HashMap<ResourceId, ResourceMetaResponse>> {
     let mut map = HashMap::with_capacity(ids.len());
     for id in ids {
-        match get_meta_select(pool, ProfileId::from(profile_id), *id).await {
+        match get_meta_select(pool, profile_id, *id).await {
             Ok(resp) => {
                 map.insert(*id, resp);
             }
@@ -299,7 +301,7 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
 /// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
 pub async fn search_select(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     let clamped = clamp_search_params(&params);
@@ -314,7 +316,7 @@ pub async fn search_select(
     let hits = readback::unified_search(
         pool,
         readback::UnifiedSearchQuery {
-            principal: profile_id,
+            principal: *profile_id,
             query: params.query.as_deref(),
             embedding: params.embedding.as_deref(),
             seed_ids: params.seed_ids.as_deref().unwrap_or(&[]),
@@ -333,7 +335,7 @@ pub async fn search_select(
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
         // Per-row display enrichment (unchanged from the pre-Beat-2 path; the candidate set is ≤ limit).
-        let row = native_resource_row(pool, profile_id, h.resource_id).await?;
+        let row = native_resource_row(pool, profile_id, ResourceId::from(h.resource_id)).await?;
         out.push(UnifiedSearchResultRow {
             resource_id: h.resource_id,
             title: row.title,
@@ -358,11 +360,11 @@ pub async fn search_select(
 /// from `kb_events.occurred_at`), name-only doc type, no fabricated fields.
 pub async fn list_enriched_select(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     context_name: Option<&str>,
     doc_type: Option<&str>,
 ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
-    let rows = readback::enriched_list(pool, profile_id, context_name, doc_type)
+    let rows = readback::enriched_list(pool, *profile_id, context_name, doc_type)
         .await
         .map_err(api_err)?;
     let mut out = Vec::with_capacity(rows.len());

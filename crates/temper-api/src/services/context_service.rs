@@ -116,8 +116,8 @@ pub async fn resolve_by_name(
 /// `resolve_by_name`, which is visibility-gated).
 ///
 /// Returns `ApiError::BadRequest` when no context with the given ID exists.
-pub async fn resolve_name_by_id(pool: &PgPool, context_id: uuid::Uuid) -> ApiResult<String> {
-    let name = sqlx::query_scalar!("SELECT name FROM kb_contexts WHERE id = $1", context_id)
+pub async fn resolve_name_by_id(pool: &PgPool, context_id: ContextId) -> ApiResult<String> {
+    let name = sqlx::query_scalar!("SELECT name FROM kb_contexts WHERE id = $1", *context_id)
         .fetch_optional(pool)
         .await?;
 

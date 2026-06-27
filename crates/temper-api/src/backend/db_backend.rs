@@ -207,10 +207,10 @@ fn validate_managed_meta_pipeline(
 /// are absent; `doc_type_name` is authoritative.
 pub(crate) async fn native_resource_row(
     pool: &PgPool,
-    principal: uuid::Uuid,
-    new_id: uuid::Uuid,
+    principal: ProfileId,
+    new_id: ResourceId,
 ) -> Result<ResourceRow, TemperError> {
-    let p = readback::resource_row(pool, principal, new_id)
+    let p = readback::resource_row(pool, *principal, *new_id)
         .await
         .map_err(map_readback_err)?;
     Ok(ResourceRow {
@@ -638,7 +638,9 @@ impl Backend for DbBackend {
                     .await
                     .map_err(api_err)?
             {
-                let row = native_resource_row(&self.pool, *self.profile_id, existing).await?;
+                let row =
+                    native_resource_row(&self.pool, self.profile_id, ResourceId::from(existing))
+                        .await?;
                 return Ok(CommandOutput::new(row));
             }
         }
@@ -665,7 +667,8 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let row = native_resource_row(&self.pool, *self.profile_id, new_id.uuid()).await?;
+        let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
+            .await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -680,7 +683,8 @@ impl Backend for DbBackend {
         // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
         // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
         // collapse masked real faults as 404.
-        let row = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
+        let row =
+            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -722,7 +726,8 @@ impl Backend for DbBackend {
             // `current`, `effective_doc_type = incoming.unwrap_or(&current.doc_type_name)`).
             // The current row is reconstructed for these values (already visibility-gated
             // via `check_can_modify_next`).
-            let current = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
+            let current =
+                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
             // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
             // `move_to.type_to` (the file-move path); else the doc type is unchanged.
             let effective_doc_type = incoming
@@ -809,7 +814,8 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let row = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
+        let row =
+            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -869,7 +875,8 @@ impl Backend for DbBackend {
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let mut hits = Vec::with_capacity(ids.len());
         for new_id in ids {
-            let row = native_resource_row(&self.pool, *self.profile_id, new_id).await?;
+            let row =
+                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
             hits.push(SearchHit {
                 summary: ResourceSummary {
                     // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
