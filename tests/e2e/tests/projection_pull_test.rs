@@ -331,13 +331,25 @@ async fn staleness_fresh_immediately_after_pull(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("sfr").await.expect("ctx");
+    let ctx = app.client.contexts().create("sfr").await.expect("ctx");
+    // Use the UUID as the context ref for the pull (arc rejects bare names).
+    // After pull, rekey the cursor from UUID→bare-name so that
+    // check_context_staleness("sfr") can find it via name-based resolution.
+    let ctx_uuid = ctx.id.to_string();
     seed_resource(&app, "sfr", "research", "Doc").await;
 
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, "sfr")
+    temper_cli::projection::pull_context(&app.client, &config, &ctx_uuid)
         .await
         .expect("pull");
+    // Rekey cursor: pull_context wrote it under the UUID; check_context_staleness
+    // uses resolve_context_id which matches by name, so the cursor must be keyed
+    // by the bare name "sfr" to be found.
+    let cursor = temper_cli::projection::read_cursor(&config.state_dir, &ctx_uuid)
+        .expect("read uuid-keyed cursor")
+        .expect("cursor must exist after pull");
+    temper_cli::projection::write_cursor(&config.state_dir, "sfr", &cursor)
+        .expect("rekey cursor to bare name");
 
     let outcome =
         temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sfr")
@@ -353,13 +365,25 @@ async fn staleness_stale_after_post_pull_write(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("sst").await.expect("ctx");
+    let ctx = app.client.contexts().create("sst").await.expect("ctx");
+    // Use the UUID as the context ref for the pull (arc rejects bare names).
+    // After pull, rekey the cursor from UUID→bare-name so that
+    // check_context_staleness("sst") can find it via name-based resolution.
+    let ctx_uuid = ctx.id.to_string();
     seed_resource(&app, "sst", "research", "First Doc").await;
 
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, "sst")
+    temper_cli::projection::pull_context(&app.client, &config, &ctx_uuid)
         .await
         .expect("first pull");
+    // Rekey cursor: pull_context wrote it under the UUID; check_context_staleness
+    // uses resolve_context_id which matches by name, so the cursor must be keyed
+    // by the bare name "sst" to be found.
+    let cursor = temper_cli::projection::read_cursor(&config.state_dir, &ctx_uuid)
+        .expect("read uuid-keyed cursor")
+        .expect("cursor must exist after pull");
+    temper_cli::projection::write_cursor(&config.state_dir, "sst", &cursor)
+        .expect("rekey cursor to bare name");
 
     // A write after the pull advances the context's event stream.
     seed_resource(&app, "sst", "research", "Second Doc").await;
@@ -407,11 +431,14 @@ async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("ectx").await.expect("ctx");
+    let ctx = app.client.contexts().create("ectx").await.expect("ctx");
+    // Use the context UUID as the ref — it is a valid addressable form (no bare
+    // name) and avoids ambiguity in cursor keying.
+    let context_ref = ctx.id.to_string();
 
     // Pull a context that has no resources at all.
     let config = projection_test_config(&app);
-    let summary = temper_cli::projection::pull_context(&app.client, &config, "ectx")
+    let summary = temper_cli::projection::pull_context(&app.client, &config, &context_ref)
         .await
         .expect("pull_context on empty context");
 
@@ -419,7 +446,7 @@ async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
     assert_eq!(summary.pruned, 0, "nothing to prune");
 
     // The cursor sidecar is still written; with no events it records None.
-    let cursor = temper_cli::projection::read_cursor(&config.state_dir, "ectx")
+    let cursor = temper_cli::projection::read_cursor(&config.state_dir, &context_ref)
         .expect("read_cursor")
         .expect("cursor written even for an empty context");
     assert!(

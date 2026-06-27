@@ -71,7 +71,7 @@ async fn fts_text_query_finds_resource(pool: sqlx::PgPool) {
         .search()
         .text_query(
             "kubernetes deployment",
-            Some("fts-test".into()),
+            Some("@me/fts-test".into()),
             None,
             Some(10),
         )
@@ -119,7 +119,7 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
     let results = app
         .client
         .search()
-        .text_query("ArgoCD rollouts", Some("fts-body".into()), None, Some(10))
+        .text_query("ArgoCD rollouts", Some("@me/fts-body".into()), None, Some(10))
         .await
         .expect("body text search failed");
 

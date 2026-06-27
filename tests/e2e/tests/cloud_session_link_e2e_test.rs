@@ -252,7 +252,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title,
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -319,7 +319,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title,
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,

@@ -298,7 +298,7 @@ async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("myapp"))
+            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("@me/myapp"))
                 .expect("build_warmup_result must succeed")
         })
     })
@@ -357,7 +357,7 @@ async fn warmup_truncates_long_session_body(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("myapp"))
+            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("@me/myapp"))
                 .expect("build_warmup_result must succeed")
         })
     })

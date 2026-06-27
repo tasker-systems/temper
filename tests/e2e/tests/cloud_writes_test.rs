@@ -124,7 +124,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title: "Cloud Round-Trip Session",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -1041,7 +1041,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
                 &cli_config,
                 temper_cli::commands::resource::ListParams {
                     doc_type: "session",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     limit: Some(20),
                     stage: None,
                     goal: None,
