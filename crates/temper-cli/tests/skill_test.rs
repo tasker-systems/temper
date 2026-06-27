@@ -212,3 +212,45 @@ fn test_skill_generate_includes_skill_only_commands() {
         );
     });
 }
+
+#[test]
+fn test_skill_generate_uses_decorated_context_ref_form() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        // reference.md should document the decorated ref form, not bare name
+        assert!(
+            content.contains("@me/"),
+            "reference.md should show @me/<ctx> ref form examples"
+        );
+        // Old bare-name error copy must not appear
+        assert!(
+            !content.contains("use --context <name>"),
+            "old bare-name error copy must not appear in reference.md"
+        );
+    });
+}
+
+#[test]
+fn test_skill_md_contexts_section_addresses_by_ref() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        let skill_dir = dir.path().join("skill-output");
+        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        // SKILL.md should explain that contexts are addressed by @me/<slug>
+        assert!(
+            skill_md.contains("@me/"),
+            "SKILL.md should reference @me/<slug> context addressing"
+        );
+        // Examples in SKILL.md should show the decorated form
+        assert!(
+            skill_md.contains("@me/<ctx>"),
+            "SKILL.md workflow examples should use @me/<ctx> form"
+        );
+    });
+}

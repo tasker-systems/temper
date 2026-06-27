@@ -11,6 +11,8 @@ Vault: {{ vault_path }}
 ## Contexts
 {{ context_list }}
 
+Address a context by ref: `@me/<slug>` for your own, `+team-slug/<slug>` for a team. Bare context names are **not accepted**.
+
 ## How This Skill Works
 
 This is a modular skill. SKILL.md (this file) is the router — it tells you what to
@@ -40,13 +42,13 @@ User-created guidance files. Read and apply any files found here.
 > `--type`/`--context` (create writes *into* a context; list filters by them).
 >
 > **CLI sequence**: There is no `task start` command. To start a task:
-> 1. `temper resource list --type task --context <ctx>` — find the task, copy its `ref`
+> 1. `temper resource list --type task --context @me/<ctx>` — find the task, copy its `ref`
 > 2. `temper resource show <ref>` — read the task content
 > 3. `temper resource update <ref> --stage in-progress` — mark it active
 >
 > Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
 
-1. Resolve the task's ref: `temper resource list --type task --context <ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
+1. Resolve the task's ref: `temper resource list --type task --context @me/<ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
 2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
 4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
@@ -61,13 +63,13 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Resume
 
 > **CLI sequence**: To resume a task from a previous session:
-> 1. `temper resource list --type task --context <ctx>` — find the task, copy its `ref`; `temper resource show <ref>` — reload the task content
-> 2. `temper resource list --type session --context <ctx>` — find the most recent session, copy its `ref`
+> 1. `temper resource list --type task --context @me/<ctx>` — find the task, copy its `ref`; `temper resource show <ref>` — reload the task content
+> 2. `temper resource list --type session --context @me/<ctx>` — find the most recent session, copy its `ref`
 > 3. `temper resource show <ref>` — read the session's "Next Steps"
 > 4. Continue from the workflow file for this task's mode/effort
 
-1. Resolve the task's ref via `temper resource list --type task --context <ctx>`, then `temper resource show <ref>` — extract mode, effort, and context
-2. List recent sessions: `temper resource list --type session --context <ctx>`
+1. Resolve the task's ref via `temper resource list --type task --context @me/<ctx>`, then `temper resource show <ref>` — extract mode, effort, and context
+2. List recent sessions: `temper resource list --type session --context @me/<ctx>`
 3. Read the most recent session note: copy the `ref` of the most recent session row, then `temper resource show <ref>`
    - Match the session by its `slug`/`title` column in the `resource list` output (a unique substring is enough), then copy that row's `ref`
 4. If the task is not already in-progress, move it: `temper resource update <ref> --stage in-progress`
@@ -82,8 +84,8 @@ User-created guidance files. Read and apply any files found here.
 > Start a working session without a predefined task. Useful for exploration,
 > ad-hoc work, or when a task hasn't been created yet.
 
-1. If `--context <ctx>` provided, use it. Otherwise ask which context to work in.
-2. List in-progress tasks: `temper resource list --type task --context <ctx>`
+1. If `--context @me/<ctx>` provided, use it. Otherwise ask which context to work in.
+2. List in-progress tasks: `temper resource list --type task --context @me/<ctx>`
 3. If tasks exist, ask: "Working on one of these, or something new?"
    - If existing task: pivot to **On Task Resume** with that slug
    - If new: continue as open session
@@ -92,7 +94,7 @@ User-created guidance files. Read and apply any files found here.
 6. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 7. Proceed with the user's request. At session end, save via:
    ```bash
-   cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
+   cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
    ## Goal
    ...
    EOF
@@ -103,18 +105,18 @@ User-created guidance files. Read and apply any files found here.
 > Guided interactive task creation. Gathers context, title, mode, effort,
 > goal linkage, and acceptance criteria through conversation.
 
-1. If `--context <ctx>` provided, use it. Otherwise list available contexts and ask.
+1. If `--context @me/<ctx>` provided, use it. Otherwise list available contexts and ask.
 2. Ask: "What's the title or problem statement for this task?"
 3. Infer or ask mode:
    - "Is this (a) research/design/discovery (plan) or (b) implementation/building (build)?"
 4. Infer or ask effort:
    - "How big is this? (a) small — single session, (b) medium — multi-step but bounded, (c) large — multi-session, may need decomposition"
-5. List goals in context: `temper resource list --type goal --context <ctx>`
+5. List goals in context: `temper resource list --type goal --context @me/<ctx>`
    - If goals exist, ask: "Link to a goal? [list] or (none)"
 6. Ask: "Any specific acceptance criteria or outcomes?" (optional — user can skip)
 7. Create the task (pipe the problem statement and acceptance criteria via stdin):
    ```bash
-   cat <<'EOF' | temper resource create --type task --title "<title>" --context <ctx> --mode <mode> --effort <effort> [--goal <slug>]
+   cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort> [--goal <slug>]
    # <title>
 
    <problem statement from step 2>
@@ -133,8 +135,8 @@ User-created guidance files. Read and apply any files found here.
 |-------------------|----------|
 | `task start <slug>` | On Task Start |
 | `task resume <slug>` | On Task Resume |
-| `task create [--context <ctx>]` | On Task Create |
-| `session start [--context <ctx>]` | On Session Start |
+| `task create [--context @me/<ctx>]` | On Task Create |
+| `session start [--context @me/<ctx>]` | On Session Start |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Cheap Orientation (read-side projection)
@@ -145,7 +147,7 @@ cheaper, both in tokens and in API work:
 
 - `temper resource show <ref> --meta-only` — frontmatter (managed +
   open) and hashes only; no body. Calls `GET /api/resources/<id>/meta`.
-- `temper resource list --type <t> --context <ctx> --meta-only` — meta tier per
+- `temper resource list --type <t> --context @me/<ctx> --meta-only` — meta tier per
   row instead of full row payloads.
 - `--fields <a,b,c>` on either of the above — subselect top-level response
   keys (the anchor key — `id` or `resource_id` — is always preserved). For

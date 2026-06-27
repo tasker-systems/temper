@@ -120,7 +120,7 @@ fn require_context(context: Option<&str>) -> Result<String> {
     match context {
         Some(ctx) => Ok(ctx.to_string()),
         None => Err(TemperError::Project(
-            "no context specified — use --context <name>".into(),
+            "no context specified — use --context <ref> (e.g. @me/temper, +team/general, or a UUID)".into(),
         )),
     }
 }

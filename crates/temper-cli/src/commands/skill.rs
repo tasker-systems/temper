@@ -78,7 +78,7 @@ deciding whether to read more deeply.
 | Pattern | What it returns |
 |---------|-----------------|
 | `temper resource show <ref> --meta-only` | Frontmatter (managed + open) and hashes; no body. Calls `GET /api/resources/<id>/meta`. |
-| `temper resource list --type <t> --context <ctx> --meta-only` | Meta-tier rows instead of full row payloads. |
+| `temper resource list --type <t> --context @me/<ctx> --meta-only` | Meta-tier rows instead of full row payloads. |
 | `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key (`id` or `resource_id`) is always preserved. Pipe through `jq` for nested projection. |
 | `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
 
@@ -106,7 +106,10 @@ miss. To actually delete a resource server-side, run `temper resource delete
 | `resource delete` | **required** |
 
 Omitting `--context` where it is required surfaces the error
-`Project error: no context specified — use --context <name>`.
+`Project error: no context specified — use --context <ref> (e.g. @me/temper, +team/general, or a UUID)`.
+
+A context is addressed by **ref**: `@me/<slug>` for your own contexts, `+team-slug/<slug>` for
+team contexts, or a bare UUID. Bare context names are **not accepted**.
 
 ## Template Access
 
@@ -193,7 +196,7 @@ fn collect_command_rows(cmd: &clap::Command, prefix: &str, rows: &mut Vec<(Strin
     }
 }
 
-/// Build a syntax string like `temper task create --title <title> [--context <ctx>]`
+/// Build a syntax string like `temper task create --title <title> [--context @me/<ctx>]`
 fn build_syntax(full_name: &str, cmd: &clap::Command) -> String {
     let mut parts = vec![format!("temper {}", full_name)];
 

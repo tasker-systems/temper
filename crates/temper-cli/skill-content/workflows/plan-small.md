@@ -13,7 +13,7 @@ feasibility of an approach.
 2. **Quick research** — gather information from multiple sources:
    - `temper search "<relevant terms>"` to find related documents in the knowledge base
    - Targeted file reads in the codebase
-   - Check recent sessions for prior work: `temper resource list --type session --context <ctx>`
+   - Check recent sessions for prior work: `temper resource list --type session --context @me/<ctx>`
 3. **Write up findings** — produce a clear, concise summary that answers the task's
    question. Include:
    - What was investigated
@@ -21,7 +21,7 @@ feasibility of an approach.
    - Recommendations or conclusions
 4. **Save findings** — persist the research through temper:
    ```bash
-   cat <<'EOF' | temper resource create --type research --title "<title>" --context <ctx>
+   cat <<'EOF' | temper resource create --type research --title "<title>" --context @me/<ctx>
    <findings content>
    EOF
    ```
@@ -31,7 +31,7 @@ feasibility of an approach.
 Pipe the session summary via stdin to save it, then mark the task done:
 
 ```bash
-cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
+cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
 ## Goal
 What we set out to do
 

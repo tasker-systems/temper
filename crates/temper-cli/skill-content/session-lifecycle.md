@@ -4,7 +4,7 @@
 
 1. Check recent sessions for the current context:
    ```bash
-   temper resource list --type session --context <current>
+   temper resource list --type session --context @me/<current>
    ```
 2. If resuming previous work, read the last session note for continuity.
 3. Search for relevant context:
@@ -19,7 +19,7 @@ Always pipe content via stdin. Without stdin, `resource create --type session` c
 placeholder boilerplate that must be edited manually.
 
 ```bash
-cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
+cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
 ## Goal
 What we set out to do
 
