@@ -273,7 +273,7 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
     assert!(stdout.get("facets").is_some(), "envelope missing facets");
 }
 
-/// `temper resource list --type task --context meta-cli --fields origin_uri,stage --format json`
+/// `temper resource list --type task --context @me/meta-cli --fields origin_uri,stage --format json`
 /// (without --meta-only) should filter each ResourceRow in the envelope rows to
 /// include only the anchor field `id` plus the requested fields. Fields not in
 /// the selection (`title`, `created`, `updated`, `body_hash`) must be absent.

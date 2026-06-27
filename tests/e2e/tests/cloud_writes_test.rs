@@ -875,7 +875,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title: "Chunk Dedup Test",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -1122,7 +1122,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "task",
                     title: "Projection Write Test",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -1218,7 +1218,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "task",
                     title: "Update Projection Test",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -1366,7 +1366,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "task",
                     title: "Delete Projection Test",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,

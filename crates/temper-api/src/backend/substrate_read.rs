@@ -332,12 +332,8 @@ pub async fn search_select(
             let cref = temper_core::context_ref::parse_context_ref(s)
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             Some(
-                *crate::services::context_service::resolve_context_ref(
-                    pool,
-                    profile_id,
-                    &cref,
-                )
-                .await?,
+                *crate::services::context_service::resolve_context_ref(pool, profile_id, &cref)
+                    .await?,
             )
         }
         None => None,
