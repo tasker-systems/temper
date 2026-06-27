@@ -812,6 +812,7 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             move_to: None,
+            context_ref: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_update(&cmd).is_ok());

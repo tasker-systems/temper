@@ -123,6 +123,7 @@ pub async fn update(
         managed_meta,
         open_meta: payload.open_meta,
         move_to: None,
+        context_ref: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

@@ -212,8 +212,9 @@ pub async fn update(
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
+    use temper_core::context_ref::parse_context_ref;
     use temper_core::types::ids::ResourceId;
-    use temper_workflow::operations::{BodyUpdate, UpdateResource};
+    use temper_workflow::operations::{BodyUpdate, MoveSpec, UpdateResource};
 
     // Client-supplied chunks_packed (+ content_hash) are HONORED: the client did the
     // extract→chunk→embed locally, so the server carries them verbatim and only embeds
@@ -241,12 +242,32 @@ pub async fn update(
         }
     };
 
+    // Resolve context_to ref (if present) to a ContextId, gated by principal visibility.
+    // parse_context_ref rejects bare names → ApiError::BadRequest (Decision 1).
+    let move_to = if let Some(ref ctx_ref) = req.context_to {
+        let r = parse_context_ref(ctx_ref)
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let context_id = context_service::resolve_context_ref(
+            &state.pool,
+            ProfileId::from(auth.0.profile.id),
+            &r,
+        )
+        .await?;
+        Some(MoveSpec {
+            context_to: Some(context_id),
+            type_to: None,
+        })
+    } else {
+        None
+    };
+
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         body,
         managed_meta,
         open_meta: req.open_meta,
-        move_to: None,
+        move_to,
+        context_ref: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

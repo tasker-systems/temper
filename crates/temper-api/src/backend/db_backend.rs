@@ -736,9 +736,8 @@ impl Backend for DbBackend {
             let effective_context = cmd
                 .move_to
                 .as_ref()
-                .and_then(|m| m.context_to.as_deref())
-                .unwrap_or(current.context_name.as_str())
-                .to_owned();
+                .and_then(|m| m.context_to.map(|id| id.to_string()))
+                .unwrap_or_else(|| current.context_name.clone());
             // temper-title updates the kb_resources.title column when supplied; otherwise the
             // current title carries (and seeds validation). temper-slug is §7-Die (not stored,
             // so `current.slug` is None) — derive the canonical slug from the title so the
@@ -786,11 +785,12 @@ impl Backend for DbBackend {
             if let Some(type_to) = &mv.type_to {
                 properties.push(("doc_type".to_owned(), serde_json::json!(type_to)));
             }
-            if let Some(ctx_to) = &mv.context_to {
+            if let Some(ctx_to) = mv.context_to {
+                // The ContextId was already resolved and visibility-gated at the
+                // handler boundary (parse_context_ref + resolve_context_ref). Use it
+                // directly; no second DB lookup needed.
                 rehome_to = Some(
-                    writes::resolve_context(&self.pool, owner, ctx_to)
-                        .await
-                        .map_err(api_err)?,
+                    temper_substrate::ids::ContextId::from(uuid::Uuid::from(ctx_to))
                 );
             }
         }

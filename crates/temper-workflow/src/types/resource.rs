@@ -167,6 +167,13 @@ pub struct ResourceUpdateRequest {
     /// `content` is `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
+    /// Context move ref: a bare UUID or `@owner/slug` decorated form.
+    /// Bare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the
+    /// server (Decision 1). When present the server resolves the ref to a
+    /// `ContextId` (visibility-gated to the principal) and re-homes the
+    /// resource. Forwarded verbatim from the CLI `--context-to` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_to: Option<String>,
 }
 
 /// Chunk used to reconstitute markdown content.
@@ -299,6 +306,7 @@ mod tests {
             content: Some("# Body\n".to_string()),
             content_hash: Some("sha256:abc".to_string()),
             chunks_packed: Some("base64-blob".to_string()),
+            context_to: Some("@me/knowledge".to_string()),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
@@ -315,6 +323,7 @@ mod tests {
         assert_eq!(parsed.content.as_deref(), Some("# Body\n"));
         assert_eq!(parsed.content_hash.as_deref(), Some("sha256:abc"));
         assert_eq!(parsed.chunks_packed.as_deref(), Some("base64-blob"));
+        assert_eq!(parsed.context_to.as_deref(), Some("@me/knowledge"));
     }
 
     #[test]
@@ -330,10 +339,12 @@ mod tests {
             content: None,
             content_hash: None,
             chunks_packed: None,
+            context_to: None,
         };
         let serialized = serde_json::to_string(&req).unwrap();
         assert!(!serialized.contains("\"title\""));
         assert!(!serialized.contains("\"content\""));
+        assert!(!serialized.contains("\"context_to\""));
         assert!(serialized.contains("\"managed_meta\""));
     }
 }

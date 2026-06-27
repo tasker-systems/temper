@@ -850,19 +850,20 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
     }
 }
 
-/// Build a `MoveSpec` from `--type-to` / `--context-to` CLI flags. Returns
-/// `None` when neither is set; otherwise returns `Some` with whichever fields
-/// were provided. Translates CLI move flags into the `UpdateResource.move_to`
-/// operations field.
+/// Build a `MoveSpec` from the `--type-to` CLI flag. Returns `None` when
+/// `type_to` is not set.
+///
+/// Context moves (`--context-to`) do NOT produce a `MoveSpec` here: the CLI
+/// can't resolve a context ref to a `ContextId` without DB access. Instead,
+/// the raw ref string travels via `UpdateResource.context_ref` and is
+/// forwarded verbatim by the cloud-backend translator as `context_to` in the
+/// HTTP wire payload, where the API handler resolves it server-side.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_workflow::operations::MoveSpec> {
-    if params.context_to.is_none() && params.type_to.is_none() {
-        return None;
-    }
-    Some(temper_workflow::operations::MoveSpec {
-        context_to: params.context_to.map(String::from),
-        type_to: params.type_to.map(String::from),
+    params.type_to.map(|tt| temper_workflow::operations::MoveSpec {
+        context_to: None,
+        type_to: Some(String::from(tt)),
     })
 }
 
@@ -915,12 +916,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     )?;
 
     // 4. Build the UpdateResource cmd.
+    // context_to travels as a raw ref via context_ref (the API handler resolves
+    // it server-side); type_to goes through MoveSpec so the translator can set
+    // managed_meta.doc_type on the wire.
     let cmd = UpdateResource {
         resource: id,
         body: resolved_body.map(BodyUpdate::new),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
+        context_ref: params.context_to.map(String::from),
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
@@ -1045,22 +1050,38 @@ mod build_helpers_tests {
         assert!(build_move_spec_from_args(&params).is_none());
     }
 
+    /// context_to goes via `context_ref` in `UpdateResource`, not through
+    /// `MoveSpec.context_to`: the CLI can't resolve a ref to a ContextId
+    /// without DB access, so MoveSpec.context_to is always None from the CLI.
     #[test]
-    fn build_move_spec_returns_some_with_only_context_to_when_only_context_to_set() {
+    fn build_move_spec_returns_none_when_only_context_to_set() {
         let mut params = empty_update_params("foo");
-        params.context_to = Some("temper");
-        let spec = build_move_spec_from_args(&params).expect("expected Some");
-        assert_eq!(spec.context_to, Some("temper".to_string()));
-        assert_eq!(spec.type_to, None);
+        params.context_to = Some("@me/temper");
+        // MoveSpec is None when only context_to is provided; the ref is
+        // forwarded via UpdateResource.context_ref by the caller instead.
+        assert!(
+            build_move_spec_from_args(&params).is_none(),
+            "context_to alone must not produce a MoveSpec; raw ref goes via context_ref"
+        );
     }
 
     #[test]
-    fn build_move_spec_returns_some_with_both_when_both_set() {
+    fn build_move_spec_returns_some_with_type_to_when_set() {
         let mut params = empty_update_params("foo");
-        params.context_to = Some("temper");
         params.type_to = Some("concept");
-        let spec = build_move_spec_from_args(&params).expect("expected Some");
-        assert_eq!(spec.context_to, Some("temper".to_string()));
+        let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
+        assert_eq!(spec.context_to, None, "MoveSpec.context_to is always None from CLI");
+        assert_eq!(spec.type_to, Some("concept".to_string()));
+    }
+
+    #[test]
+    fn build_move_spec_returns_some_with_type_to_when_both_set() {
+        // context_to goes via context_ref; type_to is still in MoveSpec.
+        let mut params = empty_update_params("foo");
+        params.context_to = Some("@me/temper");
+        params.type_to = Some("concept");
+        let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
+        assert_eq!(spec.context_to, None, "context_to never in MoveSpec from CLI");
         assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 
