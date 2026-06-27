@@ -111,6 +111,11 @@ define_id!(
 );
 
 define_id!(
+    /// A `kb_cogmaps.id` value — a cognitive map.
+    CogmapId
+);
+
+define_id!(
     /// A `kb_resource_audits.id` value.
     ResourceAuditId
 );
