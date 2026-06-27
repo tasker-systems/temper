@@ -6,8 +6,7 @@ const DEFAULT_LIMIT = 50;
 
 export const load: PageServerLoad = async ({ locals, url, params: routeParams }) => {
 	const params = new URLSearchParams(url.searchParams);
-	params.set('owner', routeParams.owner);
-	params.set('context_name', routeParams.context);
+	params.set('context_ref', `${routeParams.owner}/${routeParams.context}`);
 	if (!params.has('limit')) params.set('limit', String(DEFAULT_LIMIT));
 	const resources = await apiGet<ResourceListResponse>(
 		`/api/resources?${params}`,
