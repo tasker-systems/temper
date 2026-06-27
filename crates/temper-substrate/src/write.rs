@@ -86,22 +86,14 @@ pub async fn materialize_cogmap(
 ) -> Result<MaterializeOutcome> {
     let s = substrate::load(pool, cogmap, lens_name).await?;
     let comps = cluster_components(&s);
+    let comp_refs: Vec<&ComponentWork> = comps.iter().collect();
 
     // fingerprint + region ids BEFORE the event (payload-first): the region_materialized payload
-    // records the act's full identity — lens, watermark, membership fingerprint, region ids.
+    // records the act's full identity — lens, watermark, membership fingerprint, region ids. Region
+    // ids are grouped per component (aligned with each ComponentWork.clusters), plus a flat list.
     let all_clusters: Vec<Vec<Uuid>> = comps.iter().flat_map(|c| c.clusters.clone()).collect();
     let fingerprint = membership_fingerprint(&all_clusters);
-    // region ids grouped per component (aligned with each ComponentWork.clusters), plus a flat list
-    // for the event payload.
-    let region_ids: Vec<Vec<RegionId>> = comps
-        .iter()
-        .map(|c| {
-            c.clusters
-                .iter()
-                .map(|_| RegionId::from(Uuid::now_v7()))
-                .collect()
-        })
-        .collect();
+    let region_ids = mint_region_ids(&comp_refs);
     let flat_region_ids: Vec<RegionId> = region_ids.iter().flatten().copied().collect();
 
     let mut tx = pool.begin().await?;
@@ -126,23 +118,9 @@ pub async fn materialize_cogmap(
     fold_live_components(&mut tx, cogmap, s.lens_id, ev).await?;
 
     let zero = zero_centroid();
-    for (comp, comp_region_ids) in comps.iter().zip(&region_ids) {
-        let comp_id = create_component(&mut tx, cogmap, s.lens_id, comp, ev).await?;
-        for (members, region_id) in comp.clusters.iter().zip(comp_region_ids) {
-            assert_region(
-                &mut tx,
-                cogmap,
-                s.lens_id,
-                comp_id,
-                members,
-                region_id.uuid(),
-                ev,
-                &s.lens,
-                &zero,
-            )
-            .await?;
-        }
-    }
+    let work: Vec<(&ComponentWork, &Vec<RegionId>)> =
+        comp_refs.iter().copied().zip(&region_ids).collect();
+    assert_component_regions(&mut tx, cogmap, s.lens_id, &s.lens, &zero, ev, &work).await?;
     // (the materialization watermark on kb_cogmaps is set by _project_region_materialized — the
     // event's projection half — not here.)
     tx.commit().await?;
@@ -183,27 +161,14 @@ pub async fn incremental_materialize_cogmap(
         .map(|c| (c.members.clone(), c.fingerprint.clone()))
         .collect();
     let diff = drift::classify(&current_fps, &priors);
-    let changed_keys: HashSet<&Vec<Uuid>> = diff.changed.iter().collect();
-    let changed: Vec<&ComponentWork> = comps
-        .iter()
-        .filter(|c| changed_keys.contains(&c.members))
-        .collect();
-    let stale_prior: Vec<Uuid> = diff.stale.clone();
+    let changed = changed_components(&comps, &diff);
 
     // membership fingerprint + region count are over the FULL current clustering (reused + changed),
-    // identical to what a full pass at this watermark computes.
+    // identical to what a full pass at this watermark computes. Only the CHANGED components mint new
+    // regions this act; reused regions keep their prior ids.
     let all_clusters: Vec<Vec<Uuid>> = comps.iter().flat_map(|c| c.clusters.clone()).collect();
     let fingerprint = membership_fingerprint(&all_clusters);
-    // only the CHANGED components mint new regions this act; reused regions keep their prior ids.
-    let new_region_ids: Vec<Vec<RegionId>> = changed
-        .iter()
-        .map(|c| {
-            c.clusters
-                .iter()
-                .map(|_| RegionId::from(Uuid::now_v7()))
-                .collect()
-        })
-        .collect();
+    let new_region_ids = mint_region_ids(&changed);
     let flat_new_region_ids: Vec<RegionId> = new_region_ids.iter().flatten().copied().collect();
 
     let mut tx = pool.begin().await?;
@@ -226,36 +191,101 @@ pub async fn incremental_materialize_cogmap(
     .uuid();
 
     // fold the stale components and their regions; leave matched components + their regions live.
-    fold_components(&mut tx, &stale_prior, ev).await?;
+    fold_components(&mut tx, &diff.stale, ev).await?;
 
     let zero = zero_centroid();
-    for (comp, comp_region_ids) in changed.iter().zip(&new_region_ids) {
-        let comp_id = create_component(&mut tx, cogmap, s.lens_id, comp, ev).await?;
+    let work: Vec<(&ComponentWork, &Vec<RegionId>)> =
+        changed.iter().copied().zip(&new_region_ids).collect();
+    assert_component_regions(&mut tx, cogmap, s.lens_id, &s.lens, &zero, ev, &work).await?;
+
+    refresh_moved_region_readouts(pool, &mut tx, cogmap, &s, &zero, &diff.unchanged, ev).await?;
+
+    tx.commit().await?;
+
+    Ok(MaterializeOutcome {
+        regions: all_clusters.len(),
+        membership_fingerprint: fingerprint,
+    })
+}
+
+/// Map the diff's changed member-sets back to their `ComponentWork` (for the clusters). Member-sets
+/// are unique within the partition, so the lookup is unambiguous.
+fn changed_components<'a>(
+    comps: &'a [ComponentWork],
+    diff: &drift::ComponentDiff,
+) -> Vec<&'a ComponentWork> {
+    let changed_keys: HashSet<&Vec<Uuid>> = diff.changed.iter().collect();
+    comps
+        .iter()
+        .filter(|c| changed_keys.contains(&c.members))
+        .collect()
+}
+
+/// Pre-generate a fresh region id (identity-as-input) for every cluster of every given component,
+/// grouped per component (aligned with each `ComponentWork.clusters`).
+fn mint_region_ids(comps: &[&ComponentWork]) -> Vec<Vec<RegionId>> {
+    comps
+        .iter()
+        .map(|c| {
+            c.clusters
+                .iter()
+                .map(|_| RegionId::from(Uuid::now_v7()))
+                .collect()
+        })
+        .collect()
+}
+
+/// Persist each component and assert its regions (members + readouts) in order, sharing the parent's
+/// transaction. `work` pairs each component with its pre-minted per-cluster region ids.
+async fn assert_component_regions(
+    tx: &mut PgConnection,
+    cogmap: Uuid,
+    lens_id: Uuid,
+    lens: &Lens,
+    zero_centroid: &str,
+    ev: Uuid,
+    work: &[(&ComponentWork, &Vec<RegionId>)],
+) -> Result<()> {
+    for &(comp, comp_region_ids) in work {
+        let comp_id = create_component(&mut *tx, cogmap, lens_id, comp, ev).await?;
         for (members, region_id) in comp.clusters.iter().zip(comp_region_ids) {
             assert_region(
-                &mut tx,
-                cogmap,
-                s.lens_id,
-                comp_id,
-                members,
-                region_id.uuid(),
-                ev,
-                &s.lens,
-                &zero,
+                &mut *tx,
+                AssertRegionCtx {
+                    cogmap,
+                    lens_id,
+                    component_id: comp_id,
+                    members,
+                    region_id: region_id.uuid(),
+                    ev,
+                    lens,
+                    zero_centroid,
+                },
             )
             .await?;
         }
     }
+    Ok(())
+}
 
-    // Readout-refresh (drift §1, slice 3b): reused components keep their membership AND their region
-    // ids, but a content revision since the prior materialize moved a member's embedding — so a region
-    // CONTAINING that member has stale readouts. Re-run the readouts over the moved region's fixed
-    // membership (no re-cluster, no new region ids) so incremental matches a full recompute. Scoped to
-    // the reused regions whose own members moved: a moved member shifts only its region's centroid, so
-    // refreshing the others would re-introduce, one layer up, the over-trigger the per-component
-    // decomposition removed — while still matching full (an untouched region's stored readouts already
-    // equal a recompute). `priors` is non-empty here (the empty case returned early to a full pass).
-    let prior_watermark = last_materialize_watermark(&mut tx, cogmap, s.lens_id, ev).await?;
+/// Readout-refresh (drift §1, slice 3b): reused components keep their membership AND their region
+/// ids, but a content revision since the prior materialize moved a member's embedding — so a region
+/// CONTAINING that member has stale readouts. Re-run the readouts over the moved region's fixed
+/// membership (no re-cluster, no new region ids) so incremental matches a full recompute. Scoped to
+/// the reused regions whose own members moved: a moved member shifts only its region's centroid, so
+/// refreshing the others would re-introduce, one layer up, the over-trigger the per-component
+/// decomposition removed — while still matching full (an untouched region's stored readouts already
+/// equal a recompute). Only reached when `priors` is non-empty (the empty case is a full pass).
+async fn refresh_moved_region_readouts(
+    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cogmap: Uuid,
+    s: &Substrate,
+    zero_centroid: &str,
+    unchanged: &[Uuid],
+    ev: Uuid,
+) -> Result<()> {
+    let prior_watermark = last_materialize_watermark(tx, cogmap, s.lens_id, ev).await?;
     let touched_resources = match prior_watermark {
         Some(w) => crate::replay::content_touched_resources_since(pool, cogmap, w).await?,
         None => Vec::new(),
@@ -269,29 +299,23 @@ pub async fn incremental_materialize_cogmap(
              WHERE r.component_id = ANY($1) AND NOT r.is_folded \
                AND m.member_table = 'kb_resources' AND m.member_id = ANY($2)",
         )
-        .bind(&diff.unchanged)
+        .bind(unchanged)
         .bind(&touched_resources)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
         for rid in &region_ids {
-            populate_readouts(&mut tx, *rid, &s.lens, &zero).await?;
+            populate_readouts(tx, *rid, &s.lens, zero_centroid).await?;
         }
         // one batched last_event_id stamp for every refreshed region (same `ev` for all).
         if !region_ids.is_empty() {
             sqlx::query("UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id = ANY($2)")
                 .bind(ev)
                 .bind(&region_ids)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
     }
-
-    tx.commit().await?;
-
-    Ok(MaterializeOutcome {
-        regions: all_clusters.len(),
-        membership_fingerprint: fingerprint,
-    })
+    Ok(())
 }
 
 /// The substrate point-in-time this projection saw (uuidv7 — time-ordered; no max(uuid) in PG). The
@@ -413,24 +437,32 @@ async fn create_component(
     Ok(row.get::<Uuid, _>("id"))
 }
 
-/// Insert one region (linked to its component), its members, then populate the SQL readouts. The
-/// region id is pre-generated (identity-as-input) and already recorded in the payload.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "internal region-upsert helper; a params struct is tracked as a separate decomposition chunk"
-)]
-async fn assert_region(
-    tx: &mut PgConnection,
+/// Parameters for [`assert_region`]. The region id is pre-generated (identity-as-input) and already
+/// recorded in the materialization payload before this is called.
+struct AssertRegionCtx<'a> {
     cogmap: Uuid,
     lens_id: Uuid,
     component_id: Uuid,
-    members: &[Uuid],
+    members: &'a [Uuid],
     region_id: Uuid,
     ev: Uuid,
-    lens: &Lens,
-    zero_centroid: &str,
-) -> Result<()> {
+    lens: &'a Lens,
+    zero_centroid: &'a str,
+}
+
+/// Insert one region (linked to its component), its members, then populate the SQL readouts.
+async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Result<()> {
     use sqlx::Row;
+    let AssertRegionCtx {
+        cogmap,
+        lens_id,
+        component_id,
+        members,
+        region_id,
+        ev,
+        lens,
+        zero_centroid,
+    } = ctx;
     // centroid computed in SQL after members are inserted; insert a placeholder then UPDATE.
     let region: Uuid = sqlx::query(
         "INSERT INTO kb_cogmap_regions \

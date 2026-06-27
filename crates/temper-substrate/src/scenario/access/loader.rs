@@ -13,7 +13,7 @@ use crate::events::{fire, EdgeHome, SeedAction};
 use crate::ids::{CogmapId, ContextId, EntityId, ProfileId, ResourceId};
 use crate::scenario::access::model::*;
 use anyhow::{Context, Result};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -31,9 +31,70 @@ pub struct LoadedAccess {
 pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
     let mut tx = pool.begin().await?;
 
-    // 1. Teams first — the sync_system_membership trigger joins enabled profiles to the
-    //    temper-system root by slug, so the root must exist before any profile insert.
     let mut teams: HashMap<String, Uuid> = HashMap::new();
+    insert_teams(&mut tx, world, &mut teams).await?;
+    insert_team_dag(&mut tx, world, &teams).await?;
+
+    let mut profiles: HashMap<String, Uuid> = HashMap::new();
+    insert_profiles(&mut tx, world, &mut profiles).await?;
+    let mut entities: HashMap<String, Uuid> = HashMap::new();
+    insert_entities(&mut tx, world, &profiles, &mut entities).await?;
+    insert_memberships(&mut tx, world, &teams, &profiles).await?;
+
+    let mut contexts: HashMap<String, Uuid> = HashMap::new();
+    insert_contexts(&mut tx, world, &profiles, &teams, &mut contexts).await?;
+    refresh_team_map(&mut tx, &mut teams).await?;
+    insert_context_shares(&mut tx, world, &contexts, &teams).await?;
+
+    let placeholder_telos = insert_placeholder_telos(&mut tx).await?;
+    let mut cogmaps: HashMap<String, Uuid> = HashMap::new();
+    insert_cogmaps(
+        &mut tx,
+        world,
+        &profiles,
+        &entities,
+        &teams,
+        placeholder_telos,
+        &mut cogmaps,
+    )
+    .await?;
+
+    let mut resources: HashMap<String, Uuid> = HashMap::new();
+    insert_resources(
+        &mut tx,
+        world,
+        &profiles,
+        &cogmaps,
+        &contexts,
+        &teams,
+        &mut resources,
+    )
+    .await?;
+
+    let mut edges: HashMap<String, Uuid> = HashMap::new();
+    insert_edges(
+        &mut tx, world, &resources, &cogmaps, &contexts, &entities, &mut edges,
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(LoadedAccess {
+        profiles,
+        teams,
+        contexts,
+        cogmaps,
+        resources,
+        edges,
+    })
+}
+
+/// 1. Teams first — the sync_system_membership trigger joins enabled profiles to the temper-system
+///    root by slug, so the root must exist before any profile insert.
+async fn insert_teams(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    teams: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for t in &world.teams {
         let id = sqlx::query_scalar!(
             "INSERT INTO kb_teams (slug, name) VALUES ($1,$2) RETURNING id",
@@ -44,7 +105,15 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .await?;
         teams.insert(t.slug.clone(), id);
     }
-    // 2. Teams DAG (child -> parents).
+    Ok(())
+}
+
+/// 2. Teams DAG (child -> parents).
+async fn insert_team_dag(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    teams: &HashMap<String, Uuid>,
+) -> Result<()> {
     for t in &world.teams {
         let child = teams.get(&t.slug).expect("team just inserted");
         for parent in &t.parents {
@@ -60,8 +129,15 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
             .await?;
         }
     }
-    // 3. Profiles (trigger auto-joins the temper-system root for non-'none').
-    let mut profiles: HashMap<String, Uuid> = HashMap::new();
+    Ok(())
+}
+
+/// 3. Profiles (trigger auto-joins the temper-system root for non-'none').
+async fn insert_profiles(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    profiles: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for p in &world.profiles {
         let id = sqlx::query_scalar!(
             "INSERT INTO kb_profiles (handle, display_name, system_access) \
@@ -74,8 +150,16 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .await?;
         profiles.insert(p.handle.clone(), id);
     }
-    // 4. Entities (event emitters).
-    let mut entities: HashMap<String, Uuid> = HashMap::new();
+    Ok(())
+}
+
+/// 4. Entities (event emitters).
+async fn insert_entities(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    profiles: &HashMap<String, Uuid>,
+    entities: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for e in &world.entities {
         let pid = profiles.get(&e.profile).with_context(|| {
             format!("entity {} references unknown profile {}", e.name, e.profile)
@@ -89,7 +173,16 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .await?;
         entities.insert(e.name.clone(), id);
     }
-    // 5. Sub-team memberships (root joins already trigger-maintained).
+    Ok(())
+}
+
+/// 5. Sub-team memberships (root joins already trigger-maintained).
+async fn insert_memberships(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    teams: &HashMap<String, Uuid>,
+    profiles: &HashMap<String, Uuid>,
+) -> Result<()> {
     for m in &world.memberships {
         let tid = teams
             .get(&m.team)
@@ -106,10 +199,19 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .execute(&mut *tx)
         .await?;
     }
-    // 5b. Contexts — real owner-scoped kb_contexts rows (WS6 §2 amendment), referents for named homes
-    //     and shares. Each ContextDef names exactly one owner (a world profile handle or team slug);
-    //     owner is namespace-scoping only — reachability is still via context_shares. slug = slugify(name).
-    let mut contexts: HashMap<String, Uuid> = HashMap::new();
+    Ok(())
+}
+
+/// 5b. Contexts — real owner-scoped kb_contexts rows (WS6 §2 amendment), referents for named homes
+///     and shares. Each ContextDef names exactly one owner (a world profile handle or team slug);
+///     owner is namespace-scoping only — reachability is still via context_shares. slug = slugify(name).
+async fn insert_contexts(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    profiles: &HashMap<String, Uuid>,
+    teams: &HashMap<String, Uuid>,
+    contexts: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for c in &world.contexts {
         let (owner_table, owner_id) = match (&c.owner_profile, &c.owner_team) {
             (Some(handle), None) => (
@@ -147,15 +249,28 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .await?;
         contexts.insert(c.name.clone(), id);
     }
-    // 5c. Refresh the team map from the DB — profile inserts trigger personal teams
-    //     (personal-<handle>) that world.teams never declares.
+    Ok(())
+}
+
+/// 5c. Refresh the team map from the DB — profile inserts trigger personal teams
+///     (`personal-<handle>`) that world.teams never declares.
+async fn refresh_team_map(tx: &mut PgConnection, teams: &mut HashMap<String, Uuid>) -> Result<()> {
     for row in sqlx::query!("SELECT slug, id FROM kb_teams")
         .fetch_all(&mut *tx)
         .await?
     {
         teams.entry(row.slug).or_insert(row.id);
     }
-    // 5d. Context shares (kb_team_contexts) — the team's vis-reach includes the context.
+    Ok(())
+}
+
+/// 5d. Context shares (kb_team_contexts) — the team's vis-reach includes the context.
+async fn insert_context_shares(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    contexts: &HashMap<String, Uuid>,
+    teams: &HashMap<String, Uuid>,
+) -> Result<()> {
     for s in &world.context_shares {
         let cid = contexts
             .get(&s.context)
@@ -171,19 +286,31 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .execute(&mut *tx)
         .await?;
     }
+    Ok(())
+}
 
-    // 6. A single home-less placeholder telos resource for the bare producer maps
-    //    (kb_cogmaps.telos_resource_id is NOT NULL; bare maps carry no charter — mirrors 03_seed's
-    //    shared public telos). Genesis maps create their own telos.
-    let placeholder_telos = sqlx::query_scalar!(
+/// 6. A single home-less placeholder telos resource for the bare producer maps
+///    (kb_cogmaps.telos_resource_id is NOT NULL; bare maps carry no charter — mirrors 03_seed's
+///    shared public telos). Genesis maps create their own telos.
+async fn insert_placeholder_telos(tx: &mut PgConnection) -> Result<Uuid> {
+    Ok(sqlx::query_scalar!(
         "INSERT INTO kb_resources (title, origin_uri) \
          VALUES ('placeholder: bare-cogmap telos','temper://internal/placeholder-telos') RETURNING id",
     )
     .fetch_one(&mut *tx)
-    .await?;
+    .await?)
+}
 
-    // 7. Cogmaps. Bare maps: direct insert + team joins. Telos-bearing maps: cogmap_genesis.
-    let mut cogmaps: HashMap<String, Uuid> = HashMap::new();
+/// 7. Cogmaps. Bare maps: direct insert + team joins. Telos-bearing maps: cogmap_genesis.
+async fn insert_cogmaps(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    profiles: &HashMap<String, Uuid>,
+    entities: &HashMap<String, Uuid>,
+    teams: &HashMap<String, Uuid>,
+    placeholder_telos: Uuid,
+    cogmaps: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for c in &world.cogmaps {
         let cid = match &c.telos {
             None => {
@@ -215,7 +342,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                     specs.iter().map(|(r, p)| (Some(*r), p.as_str())).collect();
                 let blocks = content::prepare_blocks(&refs)?;
                 let (cogmap, _telos) = fire(
-                    &mut tx,
+                    &mut *tx,
                     SeedAction::CogmapGenesis {
                         name: &c.name,
                         telos_title: &telos.title,
@@ -243,9 +370,19 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         }
         cogmaps.insert(c.name.clone(), cid);
     }
+    Ok(())
+}
 
-    // 8. Resources: identity + home (context|cogmap) + explicit grants. Direct inserts (ports 03_seed).
-    let mut resources: HashMap<String, Uuid> = HashMap::new();
+/// 8. Resources: identity + home (context|cogmap) + explicit grants. Direct inserts (ports 03_seed).
+async fn insert_resources(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    profiles: &HashMap<String, Uuid>,
+    cogmaps: &HashMap<String, Uuid>,
+    contexts: &HashMap<String, Uuid>,
+    teams: &HashMap<String, Uuid>,
+    resources: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for r in &world.resources {
         let owner = *profiles.get(&r.owner).with_context(|| {
             format!("resource {} owner {} not in world.profiles", r.key, r.owner)
@@ -319,10 +456,20 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         }
         resources.insert(r.key.clone(), rid);
     }
+    Ok(())
+}
 
-    // 9. Edges: homed in a named cogmap, fired through relationship_assert. Capture each fired
-    //    `kb_edges.id` under the edge's `key` so checks resolve by stable id, not by non-unique label.
-    let mut edges: HashMap<String, Uuid> = HashMap::new();
+/// 9. Edges: homed in a named cogmap, fired through relationship_assert. Capture each fired
+///    `kb_edges.id` under the edge's `key` so checks resolve by stable id, not by non-unique label.
+async fn insert_edges(
+    tx: &mut PgConnection,
+    world: &AccessWorld,
+    resources: &HashMap<String, Uuid>,
+    cogmaps: &HashMap<String, Uuid>,
+    contexts: &HashMap<String, Uuid>,
+    entities: &HashMap<String, Uuid>,
+    edges: &mut HashMap<String, Uuid>,
+) -> Result<()> {
     for e in &world.edges {
         let src = ResourceId::from(
             *resources
@@ -352,7 +499,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                 .with_context(|| format!("edge emitter {} not in world.entities", e.emitter))?,
         );
         let edge_id = fire(
-            &mut tx,
+            &mut *tx,
             SeedAction::RelationshipAssert {
                 src,
                 tgt,
@@ -370,14 +517,5 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
             anyhow::bail!("duplicate edge key {}", e.key);
         }
     }
-
-    tx.commit().await?;
-    Ok(LoadedAccess {
-        profiles,
-        teams,
-        contexts,
-        cogmaps,
-        resources,
-        edges,
-    })
+    Ok(())
 }
