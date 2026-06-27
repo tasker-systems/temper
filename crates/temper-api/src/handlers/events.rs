@@ -7,6 +7,7 @@ use crate::middleware::auth::AuthUser;
 use crate::services::event_service;
 use crate::state::AppState;
 use temper_core::types::api::EventCursorResponse;
+use temper_core::types::ids::{ContextId, ProfileId};
 
 #[utoipa::path(
     get,
@@ -26,8 +27,11 @@ pub async fn cursor(
     auth: AuthUser,
     Path(kb_context_id): Path<Uuid>,
 ) -> ApiResult<Json<EventCursorResponse>> {
-    let latest_event_id =
-        event_service::latest_event_id_for_context(&state.pool, auth.0.profile.id, kb_context_id)
-            .await?;
+    let latest_event_id = event_service::latest_event_id_for_context(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        ContextId::from(kb_context_id),
+    )
+    .await?;
     Ok(Json(EventCursorResponse { latest_event_id }))
 }

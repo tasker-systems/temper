@@ -15,6 +15,7 @@ use temper_core::types::access_gate::{
     Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
     SystemSettings,
 };
+use temper_core::types::ids::{CogmapId, ProfileId};
 
 use crate::error::{ApiError, ApiResult};
 
@@ -25,8 +26,8 @@ use crate::error::{ApiError, ApiResult};
 /// Check if a profile has system-level access.
 /// In `open` mode this always returns true.
 /// In `invite_only` mode the profile must be a member of the gating team.
-pub async fn has_system_access(pool: &PgPool, profile_id: Uuid) -> ApiResult<bool> {
-    let result = sqlx::query_scalar!("SELECT has_system_access($1)", profile_id,)
+pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
+    let result = sqlx::query_scalar!("SELECT has_system_access($1)", *profile_id,)
         .fetch_one(pool)
         .await?;
 
@@ -34,8 +35,8 @@ pub async fn has_system_access(pool: &PgPool, profile_id: Uuid) -> ApiResult<boo
 }
 
 /// Check if a profile is a system admin (owner of the gating team).
-pub async fn is_system_admin(pool: &PgPool, profile_id: Uuid) -> ApiResult<bool> {
-    let result = sqlx::query_scalar!("SELECT is_system_admin($1)", profile_id,)
+pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
+    let result = sqlx::query_scalar!("SELECT is_system_admin($1)", *profile_id,)
         .fetch_one(pool)
         .await?;
 
@@ -45,7 +46,8 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: Uuid) -> ApiResult<bool>
 /// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is
 /// fail-CLOSED and independent of `gating_team_slug`: the kernel is immutable until an operator
 /// intentionally configures gating + promotes an admin. See [`require_cogmap_write_admin`].
-const L0_KERNEL_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
+const L0_KERNEL_COGMAP: CogmapId =
+    CogmapId(Uuid::from_u128(0x00000000_0000_0000_0005_000000000001));
 
 /// Structural write-gate. A write requires `is_system_admin` when EITHER:
 /// - the target is the reserved **L0 kernel** map (unconditionally — independent of
@@ -61,8 +63,8 @@ const L0_KERNEL_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_0000000
 /// of the box), because a NULL `gating_team_slug` makes the root-join branch return `Ok` for everyone.
 pub async fn require_cogmap_write_admin(
     pool: &PgPool,
-    profile_id: Uuid,
-    cogmap_id: Uuid,
+    profile_id: ProfileId,
+    cogmap_id: CogmapId,
 ) -> ApiResult<()> {
     let is_reserved = cogmap_id == L0_KERNEL_COGMAP;
 
@@ -72,7 +74,7 @@ pub async fn require_cogmap_write_admin(
              JOIN kb_teams t ON t.id = tc.team_id \
              JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
             WHERE tc.cogmap_id = $1 )",
-        cogmap_id,
+        *cogmap_id,
     )
     .fetch_one(pool)
     .await?
@@ -117,7 +119,7 @@ pub async fn get_public_settings(pool: &PgPool) -> ApiResult<PublicSystemSetting
 
 /// Parameters for creating a join request.
 pub struct CreateJoinRequestParams {
-    pub profile_id: Uuid,
+    pub profile_id: ProfileId,
     pub message: Option<String>,
     pub source: String,
     pub accepted_terms_version: Option<String>,
@@ -170,7 +172,7 @@ pub async fn create_join_request(
         "#,
         request_id,
         team_id,
-        params.profile_id,
+        *params.profile_id,
         params.message,
         params.source,
         params.accepted_terms_version,
@@ -183,7 +185,10 @@ pub async fn create_join_request(
 }
 
 /// Get the most recent join request for this profile against the gating team.
-pub async fn get_own_request(pool: &PgPool, profile_id: Uuid) -> ApiResult<Option<JoinRequest>> {
+pub async fn get_own_request(
+    pool: &PgPool,
+    profile_id: ProfileId,
+) -> ApiResult<Option<JoinRequest>> {
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -205,7 +210,7 @@ pub async fn get_own_request(pool: &PgPool, profile_id: Uuid) -> ApiResult<Optio
          ORDER BY jr.created DESC
          LIMIT 1
         "#,
-        profile_id,
+        *profile_id,
         gating_slug,
     )
     .fetch_optional(pool)
@@ -215,7 +220,7 @@ pub async fn get_own_request(pool: &PgPool, profile_id: Uuid) -> ApiResult<Optio
 }
 
 /// Withdraw the pending join request for this profile.
-pub async fn withdraw_request(pool: &PgPool, profile_id: Uuid) -> ApiResult<()> {
+pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult<()> {
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -233,7 +238,7 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: Uuid) -> ApiResult<()> 
            AND jr.status = 'pending'
         RETURNING jr.id
         "#,
-        profile_id,
+        *profile_id,
         gating_slug,
     )
     .fetch_optional(pool)
@@ -280,7 +285,7 @@ pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWi
 /// Parameters for reviewing (approving/rejecting) a join request.
 pub struct ReviewRequestParams {
     pub request_id: Uuid,
-    pub reviewer_profile_id: Uuid,
+    pub reviewer_profile_id: ProfileId,
     pub decision: JoinRequestStatus,
     pub decision_note: Option<String>,
 }
@@ -321,7 +326,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         "#,
         params.request_id,
         params.decision as JoinRequestStatus,
-        params.reviewer_profile_id,
+        *params.reviewer_profile_id,
         params.decision_note,
     )
     .fetch_optional(&mut *tx)
@@ -355,7 +360,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
 // ---------------------------------------------------------------------------
 
 /// Build the entitlements object for a profile.
-pub async fn get_entitlements(pool: &PgPool, profile_id: Uuid) -> ApiResult<Entitlements> {
+pub async fn get_entitlements(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Entitlements> {
     let system_access = has_system_access(pool, profile_id).await?;
     let is_admin = is_system_admin(pool, profile_id).await?;
     let request = get_own_request(pool, profile_id).await?;

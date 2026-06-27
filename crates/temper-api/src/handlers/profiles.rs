@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::Json;
 
 use temper_core::types::access_gate::Entitlements;
+use temper_core::types::ids::ProfileId;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
 use crate::error::{ApiResult, ErrorBody};
@@ -30,8 +31,10 @@ pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<ProfileWithEntitlements>> {
-    let profile = profile_service::get_by_id(&state.pool, auth.0.profile.id).await?;
-    let entitlements = access_service::get_entitlements(&state.pool, auth.0.profile.id).await?;
+    let profile =
+        profile_service::get_by_id(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    let entitlements =
+        access_service::get_entitlements(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
 
     Ok(Json(ProfileWithEntitlements {
         profile,
@@ -61,7 +64,7 @@ pub async fn update(
     // (synthesized on read), so there is nothing to persist.
     profile_service::update(
         &state.pool,
-        auth.0.profile.id,
+        ProfileId::from(auth.0.profile.id),
         req.display_name.as_deref(),
         req.preferences.as_ref(),
     )
@@ -83,7 +86,7 @@ pub async fn list_auth_links(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<ProfileAuthLink>>> {
-    profile_service::list_auth_links(&state.pool, auth.0.profile.id)
+    profile_service::list_auth_links(&state.pool, ProfileId::from(auth.0.profile.id))
         .await
         .map(Json)
 }

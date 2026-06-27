@@ -9,6 +9,7 @@ use uuid::Uuid;
 use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
 };
+use temper_core::types::ids::ProfileId;
 
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
@@ -43,7 +44,7 @@ pub async fn create_request(
     Json(body): Json<CreateRequestBody>,
 ) -> ApiResult<(StatusCode, Json<JoinRequest>)> {
     let params = access_service::CreateJoinRequestParams {
-        profile_id: auth.0.profile.id,
+        profile_id: ProfileId::from(auth.0.profile.id),
         message: body.message,
         source: body.source,
         accepted_terms_version: body.accepted_terms_version,
@@ -58,7 +59,8 @@ pub async fn get_own_request(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Option<JoinRequest>>> {
-    let request = access_service::get_own_request(&state.pool, auth.0.profile.id).await?;
+    let request =
+        access_service::get_own_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
     Ok(Json(request))
 }
 
@@ -67,7 +69,7 @@ pub async fn withdraw_request(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<StatusCode> {
-    access_service::withdraw_request(&state.pool, auth.0.profile.id).await?;
+    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -87,7 +89,8 @@ pub async fn list_pending(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<JoinRequestWithProfile>>> {
-    let is_admin = access_service::is_system_admin(&state.pool, auth.0.profile.id).await?;
+    let is_admin =
+        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
     if !is_admin {
         return Err(ApiError::Forbidden);
     }
@@ -104,14 +107,15 @@ pub async fn review_request(
     Path(request_id): Path<Uuid>,
     Json(body): Json<ReviewRequestBody>,
 ) -> ApiResult<Json<JoinRequest>> {
-    let is_admin = access_service::is_system_admin(&state.pool, auth.0.profile.id).await?;
+    let is_admin =
+        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
     if !is_admin {
         return Err(ApiError::Forbidden);
     }
 
     let params = access_service::ReviewRequestParams {
         request_id,
-        reviewer_profile_id: auth.0.profile.id,
+        reviewer_profile_id: ProfileId::from(auth.0.profile.id),
         decision: body.status,
         decision_note: body.decision_note,
     };

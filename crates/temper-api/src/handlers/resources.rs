@@ -12,7 +12,7 @@ use crate::services::resource_service::{
 };
 use crate::state::AppState;
 
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
@@ -56,15 +56,18 @@ pub async fn list(
     if params.meta_only.unwrap_or(false) {
         let response = crate::backend::substrate_read::list_meta_select(
             &state.pool,
-            auth.0.profile.id,
+            ProfileId::from(auth.0.profile.id),
             params,
         )
         .await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
-        let response =
-            crate::backend::substrate_read::list_select(&state.pool, auth.0.profile.id, params)
-                .await?;
+        let response = crate::backend::substrate_read::list_select(
+            &state.pool,
+            ProfileId::from(auth.0.profile.id),
+            params,
+        )
+        .await?;
         Ok(ListResourcesResponse::Default(response))
     }
 }
@@ -115,9 +118,13 @@ pub async fn get_content(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
-    crate::backend::substrate_read::get_content_select(&state.pool, auth.0.profile.id, resource_id)
-        .await
-        .map(Json)
+    crate::backend::substrate_read::get_content_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        ResourceId::from(resource_id),
+    )
+    .await
+    .map(Json)
 }
 
 #[utoipa::path(
@@ -143,7 +150,9 @@ pub async fn create(
     // gate is enforced downstream by the backend create path (via
     // `context_service::resolve_by_name`, which is visibility-gated). The
     // doc-type arrives as a name on the wire and passes straight through.
-    let context_name = context_service::resolve_name_by_id(&state.pool, req.kb_context_id).await?;
+    let context_name =
+        context_service::resolve_name_by_id(&state.pool, ContextId::from(req.kb_context_id))
+            .await?;
 
     // When slug is absent, derive one from the title so the create path's
     // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.

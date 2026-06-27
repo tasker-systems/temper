@@ -5,6 +5,7 @@ use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
+use temper_core::types::ids::ProfileId;
 
 #[utoipa::path(
     post,
@@ -23,7 +24,11 @@ pub async fn search(
     auth: AuthUser,
     Json(params): Json<SearchParams>,
 ) -> ApiResult<Json<Vec<UnifiedSearchResultRow>>> {
-    crate::backend::substrate_read::search_select(&state.pool, auth.0.profile.id, params)
-        .await
-        .map(Json)
+    crate::backend::substrate_read::search_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        params,
+    )
+    .await
+    .map(Json)
 }
