@@ -219,46 +219,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     let stdin_is_tty = std::io::stdin().is_terminal();
 
-    // --from extraction: resolve before body_source so the two are mutually
-    // exclusive. The async extract uses a dedicated tokio runtime (does not
-    // require a cloud client — kreuzberg operates locally on a file path or
-    // fetched tempfile).
-    let from_body: Option<String> = if from.is_some() {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-        rt.block_on(resolve_from_input(
-            from.as_deref(),
-            body_flag.as_deref(),
-            stdin_is_tty,
-        ))?
-    } else {
-        None
-    };
-
     // Body resolution — --from wins; fall back to --body flag + stdin pipe.
-    let body_opt = if from_body.is_some() {
-        from_body
-    } else {
-        crate::actions::body_source::resolve_body_source(
-            body_flag.as_deref(),
-            stdin_is_tty,
-            std::io::stdin(),
-        )?
-    };
+    let body_opt = resolve_create_body(from.as_deref(), body_flag.as_deref(), stdin_is_tty)?;
 
     // Slug derivation (mode-independent — Concept and Goal skip date prefix).
     let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type)?;
-    let slug_resolved = slug.map(String::from).unwrap_or_else(|| {
-        let today = Local::now().format("%Y-%m-%d").to_string();
-        let base_slug = vault::slugify(title);
-        match doctype_enum {
-            // Concept and Goal are identified by name — no date prefix.
-            temper_workflow::frontmatter::DocType::Concept
-            | temper_workflow::frontmatter::DocType::Goal => base_slug,
-            // All other doctypes get a date prefix.
-            _ => format!("{today}-{base_slug}"),
-        }
-    });
+    let slug_resolved = derive_create_slug(slug, title, doctype_enum);
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
@@ -317,61 +283,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Session→task linking. Only reached for sessions (validated fail-fast
     // above). The session resource is already created; the link is a best-
     // effort tail — an unknown task warns and skips rather than failing the
-    // (already-committed) create. `find_task` owns its own runtime via
-    // `with_client`, so it is called outside `runtime.block_on`.
+    // (already-committed) create.
     if let Some(task_slug) = task {
-        // The whole link is best-effort: the session is already committed, so
-        // no failure here (ambiguous/errored task lookup, or a failed assert)
-        // may turn a successful create into a command failure. Each failure
-        // mode warns and the create still succeeds.
-        match crate::actions::task::find_task(config, task_slug, Some(&ctx)) {
-            Ok(Some(task_info)) => {
-                use temper_core::types::graph::{EdgeKind, Polarity};
-                use temper_core::types::relationship_requests::AssertRelationshipRequest;
-
-                // Edge addressing is id-based now: `find_task` carried the task's
-                // resource id off the listing row, so the link asserts by that
-                // held id directly — no slug→id round-trip.
-                let source_id = output.value.id;
-                let target_id = task_info.id;
-                let result = runtime.block_on(async {
-                    let req = AssertRelationshipRequest {
-                        source: source_id,
-                        target: target_id,
-                        edge_kind: EdgeKind::LeadsTo,
-                        polarity: Polarity::Forward,
-                        label: "advances".to_string(),
-                        weight: 1.0,
-                    };
-                    client
-                        .relationships()
-                        .assert(&req)
-                        .await
-                        .map_err(crate::commands::client_err)
-                });
-                match result {
-                    Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
-                    Err(e) => tracing::warn!(
-                        task = task_slug,
-                        error = %e,
-                        "session→task assert failed; session created without link"
-                    ),
-                }
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    task = task_slug,
-                    "task not found for session link; skipping relationship assert"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    task = task_slug,
-                    error = %e,
-                    "task lookup failed for session link; skipping relationship assert"
-                );
-            }
-        }
+        link_session_to_task(config, &runtime, &client, &ctx, output.value.id, task_slug);
     }
 
     let result = CreateActionResult {
@@ -381,6 +295,113 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     let rendered = crate::format::render(&result, format)?;
     println!("{rendered}");
     Ok(())
+}
+
+/// Resolve the create body: `--from <path|url>` wins (extracted via a
+/// dedicated tokio runtime — kreuzberg operates locally), falling back to
+/// the `--body` flag plus stdin pipe. `--from` is mutually exclusive with
+/// `--body`/piped stdin; that conflict is enforced by `resolve_from_input`.
+fn resolve_create_body(
+    from: Option<&str>,
+    body_flag: Option<&str>,
+    stdin_is_tty: bool,
+) -> Result<Option<String>> {
+    let from_body: Option<String> = if from.is_some() {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+        rt.block_on(resolve_from_input(from, body_flag, stdin_is_tty))?
+    } else {
+        None
+    };
+
+    if from_body.is_some() {
+        Ok(from_body)
+    } else {
+        crate::actions::body_source::resolve_body_source(body_flag, stdin_is_tty, std::io::stdin())
+    }
+}
+
+/// Derive a resource slug: an explicit `--slug` is used verbatim; otherwise
+/// derive from the title, date-prefixing every doctype except Concept and
+/// Goal (which are identified by name).
+fn derive_create_slug(
+    slug: Option<&str>,
+    title: &str,
+    doctype: temper_workflow::frontmatter::DocType,
+) -> String {
+    slug.map(String::from).unwrap_or_else(|| {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let base_slug = vault::slugify(title);
+        match doctype {
+            // Concept and Goal are identified by name — no date prefix.
+            temper_workflow::frontmatter::DocType::Concept
+            | temper_workflow::frontmatter::DocType::Goal => base_slug,
+            // All other doctypes get a date prefix.
+            _ => format!("{today}-{base_slug}"),
+        }
+    })
+}
+
+/// Assert the session→task `advances` link after a session create.
+///
+/// Best-effort: the session is already committed, so every failure mode
+/// (unknown/ambiguous/errored task lookup, or a failed assert) warns and
+/// returns rather than failing the create. `find_task` owns its own runtime
+/// via `with_client`, so it is called outside `runtime`.
+fn link_session_to_task(
+    config: &Config,
+    runtime: &tokio::runtime::Runtime,
+    client: &temper_client::TemperClient,
+    ctx: &str,
+    session_id: temper_core::types::ids::ResourceId,
+    task_slug: &str,
+) {
+    match crate::actions::task::find_task(config, task_slug, Some(ctx)) {
+        Ok(Some(task_info)) => {
+            use temper_core::types::graph::{EdgeKind, Polarity};
+            use temper_core::types::relationship_requests::AssertRelationshipRequest;
+
+            // Edge addressing is id-based now: `find_task` carried the task's
+            // resource id off the listing row, so the link asserts by that
+            // held id directly — no slug→id round-trip.
+            let result = runtime.block_on(async {
+                let req = AssertRelationshipRequest {
+                    source: session_id,
+                    target: task_info.id,
+                    edge_kind: EdgeKind::LeadsTo,
+                    polarity: Polarity::Forward,
+                    label: "advances".to_string(),
+                    weight: 1.0,
+                };
+                client
+                    .relationships()
+                    .assert(&req)
+                    .await
+                    .map_err(crate::commands::client_err)
+            });
+            match result {
+                Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
+                Err(e) => tracing::warn!(
+                    task = task_slug,
+                    error = %e,
+                    "session→task assert failed; session created without link"
+                ),
+            }
+        }
+        Ok(None) => {
+            tracing::warn!(
+                task = task_slug,
+                "task not found for session link; skipping relationship assert"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                task = task_slug,
+                error = %e,
+                "task lookup failed for session link; skipping relationship assert"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -909,6 +930,33 @@ fn build_move_spec_from_args(
         })
 }
 
+/// Resolve the update target: parse the ref to an id, read the current
+/// server row (context-free) for its doctype + home context, and validate
+/// the current doctype and any `--type-to` target before the command is
+/// built. Returns the `(id, row)` pair the rest of `update` threads on.
+fn resolve_update_target(
+    params: &UpdateParams<'_>,
+) -> Result<(
+    temper_core::types::ids::ResourceId,
+    temper_workflow::types::resource::ResourceRow,
+)> {
+    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .get(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let _ = temper_workflow::frontmatter::DocType::from_str(&row.doc_type_name)?;
+    if let Some(tt) = params.type_to {
+        let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
+    }
+    Ok((id, row))
+}
+
 /// Update a resource's frontmatter fields.
 ///
 /// Surface responsibilities:
@@ -927,24 +975,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     use temper_workflow::operations::{BodyUpdate, UpdateResource};
 
-    // 1. Resolve the ref to an id, then a context-free read to learn the
-    //    current doctype (for per-flag schema validation) and context (for
-    //    the write backend).
-    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
-    let row = crate::actions::runtime::with_client(|client| {
-        Box::pin(async move {
-            client
-                .resources()
-                .get(uuid::Uuid::from(id))
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
+    // 1. Resolve the ref to an id + the current server row (for its doctype
+    //    and home context), validating the doctype and any `--type-to`.
+    let (id, row) = resolve_update_target(params)?;
     let current_type = row.doc_type_name.clone();
-    let _ = temper_workflow::frontmatter::DocType::from_str(&current_type)?;
-    if let Some(tt) = params.type_to {
-        let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
-    }
 
     // 2. Per-flag schema validation, keyed by the resolved doctype.
     validate_update_args(params, &current_type)?;

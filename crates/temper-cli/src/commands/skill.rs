@@ -352,7 +352,8 @@ fn write_if_changed(dest: &Path, content: &str) -> Result<bool> {
 
 /// Check skill installation status.
 pub fn check(config: &Config) -> Result<()> {
-    // 1. Check skill directory exists
+    // 1. Check skill directory exists — a missing directory short-circuits
+    //    the remaining checks.
     let skill_dir = &config.skill_output;
     if !skill_dir.exists() {
         output::status_icon(
@@ -362,10 +363,17 @@ pub fn check(config: &Config) -> Result<()> {
         output::hint("  Run: temper skill install");
         return Ok(());
     }
-
     output::status_icon(true, format!("Skill directory: {}", skill_dir.display()));
 
-    // 2. Check expected files
+    check_expected_files(skill_dir);
+    check_config_hash_staleness(skill_dir)?;
+    check_command_wrapper();
+
+    Ok(())
+}
+
+/// Report which of the expected skill files are present under `skill_dir`.
+fn check_expected_files(skill_dir: &Path) {
     let expected_files = [
         "SKILL.md",
         "reference.md",
@@ -394,8 +402,11 @@ pub fn check(config: &Config) -> Result<()> {
             format!("All {} skill files present", expected_files.len()),
         );
     }
+}
 
-    // 3. Check config hash staleness in SKILL.md
+/// Compare the config-hash embedded in `SKILL.md` against the current config
+/// hash, reporting up-to-date / stale / unknown status.
+fn check_config_hash_staleness(skill_dir: &Path) -> Result<()> {
     let skill_md_path = skill_dir.join("SKILL.md");
     if skill_md_path.exists() {
         let existing = std::fs::read_to_string(&skill_md_path)
@@ -419,8 +430,11 @@ pub fn check(config: &Config) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
-    // 5. Check command wrapper at ~/.claude/commands/temper.md
+/// Check the command wrapper at `~/.claude/commands/temper.md`.
+fn check_command_wrapper() {
     let wrapper_path = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("~"))
         .join(".claude/commands/temper.md");
@@ -434,8 +448,6 @@ pub fn check(config: &Config) -> Result<()> {
         );
         output::hint("  Run: temper skill install");
     }
-
-    Ok(())
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

@@ -122,9 +122,32 @@ pub async fn aggregator_subgraph(
         .map(|dt| dt.as_str().to_string())
         .collect();
 
-    // Query 1: nodes via the packaged SQL function. The function does the
-    // seed + BFS + edge/session aggregation in a single planned query,
-    // avoiding the N*4 correlated subqueries of the prior inline form.
+    let (nodes, node_ids) = fetch_subgraph_nodes(pool, &params, &aggregator_names, depth).await?;
+
+    if node_ids.is_empty() {
+        return Ok(SubgraphResponse {
+            nodes,
+            edges: vec![],
+        });
+    }
+
+    let edges = fetch_subgraph_edges(pool, &node_ids).await?;
+
+    Ok(SubgraphResponse { nodes, edges })
+}
+
+/// Query 1: nodes via the packaged `graph_subgraph_nodes` SQL function. The
+/// function does the seed + BFS + edge/session aggregation in a single planned
+/// query, avoiding the N*4 correlated subqueries of the prior inline form.
+///
+/// Returns the projected [`GraphNode`]s alongside their raw ids (the input to
+/// the edge query). An empty result yields `(vec![], vec![])`.
+async fn fetch_subgraph_nodes(
+    pool: &PgPool,
+    params: &AggregatorSubgraphParams<'_>,
+    aggregator_names: &[String],
+    depth: u32,
+) -> ApiResult<(Vec<GraphNode>, Vec<Uuid>)> {
     let node_records = sqlx::query!(
         r#"
         SELECT
@@ -140,18 +163,11 @@ pub async fn aggregator_subgraph(
         "#,
         params.caller_profile_id,
         params.context_id,
-        &aggregator_names,
+        aggregator_names,
         depth as i32,
     )
     .fetch_all(pool)
     .await?;
-
-    if node_records.is_empty() {
-        return Ok(SubgraphResponse {
-            nodes: vec![],
-            edges: vec![],
-        });
-    }
 
     let mut node_ids: Vec<Uuid> = Vec::with_capacity(node_records.len());
     let mut nodes: Vec<GraphNode> = Vec::with_capacity(node_records.len());
@@ -182,9 +198,13 @@ pub async fn aggregator_subgraph(
         });
     }
 
-    // Query 2: edge rows — both endpoints must be in the resolved set.
-    // Because node_ids only contains active resources (query 1), no dangling
-    // edges can appear here.
+    Ok((nodes, node_ids))
+}
+
+/// Query 2: edge rows — both endpoints must be in the resolved set. Because
+/// `node_ids` only contains active resources (query 1), no dangling edges can
+/// appear here.
+async fn fetch_subgraph_edges(pool: &PgPool, node_ids: &[Uuid]) -> ApiResult<Vec<GraphEdge>> {
     let edge_records = sqlx::query!(
         r#"
         SELECT source_id AS "source!: Uuid", target_id AS "target!: Uuid",
@@ -195,7 +215,7 @@ pub async fn aggregator_subgraph(
            AND source_id = ANY($1::uuid[]) AND target_id = ANY($1::uuid[])
            AND NOT is_folded
         "#,
-        &node_ids,
+        node_ids,
     )
     .fetch_all(pool)
     .await?;
@@ -211,7 +231,7 @@ pub async fn aggregator_subgraph(
         })
         .collect();
 
-    Ok(SubgraphResponse { nodes, edges })
+    Ok(edges)
 }
 
 #[cfg(test)]

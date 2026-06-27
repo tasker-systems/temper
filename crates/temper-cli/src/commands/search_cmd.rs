@@ -3,41 +3,25 @@
 use crate::actions::{runtime, search as search_actions};
 use crate::error::Result;
 use crate::format::OutputFormat;
-use uuid::Uuid;
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "all args are CLI-derived primitives; bundling into a struct would mirror clap-generated fields with no semantic benefit"
-)]
-pub fn run(
-    query: &str,
-    context: Option<&str>,
-    doc_type: Option<&str>,
-    limit: Option<i64>,
-    fmt: OutputFormat,
-    text_only: bool,
-    seed_ids: Vec<Uuid>,
-    edge_types: Vec<String>,
-    depth: Option<i32>,
-    no_graph: bool,
-) -> Result<()> {
-    let embedding = if text_only {
-        None
-    } else {
-        Some(search_actions::embed_query(query)?)
-    };
-
+/// Run a search. `args` carries the CLI-derived query/filter/graph fields
+/// (including the already-resolved query `embedding`); the caller builds it
+/// — see `main.rs`'s `Commands::Search` arm.
+pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result<()> {
     let results = runtime::with_client(|client| {
+        // The closure may borrow `args` (with_client is FnOnce, but the
+        // owned Vec fields are cloned per the original construction so the
+        // moved-into-future `params` owns its data).
         let params = search_actions::build_search_params(search_actions::CliSearchArgs {
-            query,
-            embedding: embedding.clone(),
-            context,
-            doc_type,
-            limit,
-            seed_ids: seed_ids.clone(),
-            edge_types: edge_types.clone(),
-            depth,
-            no_graph,
+            query: args.query,
+            embedding: args.embedding.clone(),
+            context: args.context,
+            doc_type: args.doc_type,
+            limit: args.limit,
+            seed_ids: args.seed_ids.clone(),
+            edge_types: args.edge_types.clone(),
+            depth: args.depth,
+            no_graph: args.no_graph,
         });
         Box::pin(async move { search_actions::search_api(client, params).await })
     })?;

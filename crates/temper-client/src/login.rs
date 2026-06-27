@@ -7,9 +7,9 @@
 //! 4. Exchange authorization code for tokens at /oauth/token
 //! 5. Persist tokens to ~/.config/temper/auth.json
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
 
 use crate::auth::{self, StoredAuth};
@@ -94,7 +94,10 @@ pub fn build_authorize_url(
 #[derive(Debug, serde::Deserialize)]
 struct TokenResponse {
     access_token: String,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "deserialized from the token response but unused — the access token is what we persist and decode for claims"
+    )]
     id_token: Option<String>,
     refresh_token: Option<String>,
     expires_in: Option<u64>,
@@ -170,7 +173,7 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
     let tokens = exchange_code(config, &code, &code_verifier, &config.callback_url).await?;
 
     // Decode claims from the access token.
-    let claims = decode_jwt_claims(&tokens.access_token)?;
+    let claims = auth::parse_jwt_claims(&tokens.access_token)?;
 
     let expires_at = if let Some(exp) = tokens.expires_in {
         Utc::now() + chrono::Duration::seconds(exp as i64)
@@ -185,7 +188,7 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
         access_token: tokens.access_token.into(),
         refresh_token: tokens.refresh_token.map(Into::into),
         expires_at,
-        profile_id: claims.subject,
+        profile_id: claims.profile_id,
         device_id: Some(device_id),
     };
 
@@ -195,137 +198,141 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
     Ok(stored)
 }
 
+/// Success page shown in the browser tab once the authorization code arrives.
+const SUCCESS_HTML: &str = "<!DOCTYPE html><html><body>\
+    <h2>Authentication successful!</h2>\
+    <p>You can close this tab and return to the terminal.</p>\
+    </body></html>";
+
+/// Parsed outcome of an OAuth2 callback request's query string.
+enum CallbackOutcome {
+    /// Authorization code present — login can proceed.
+    Code(String),
+    /// Provider returned an error (`error` + optional `error_description`).
+    Error { error: String, description: String },
+    /// Neither code nor error — a stray request (favicon etc.); keep waiting.
+    Pending,
+}
+
 /// Wait for the OAuth2 callback with an authorization code.
+///
+/// Orchestrates the per-connection phases: accept (bounded by the login
+/// deadline), read + parse the request line, then route the callback to a
+/// code, an error, or a keep-waiting outcome — writing a browser-facing
+/// response on each path.
 async fn wait_for_code(listener: &TcpListener) -> Result<String> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
 
     loop {
-        let accept = tokio::time::timeout_at(deadline, listener.accept()).await;
-
-        let (mut stream, _) = match accept {
-            Ok(Ok(conn)) => conn,
-            Ok(Err(e)) => {
-                warn!("accept error: {e}");
-                continue;
-            }
-            Err(_) => {
-                return Err(ClientError::Other("authentication timed out (120s)".into()));
-            }
+        let Some(mut stream) = accept_connection(listener, deadline).await? else {
+            continue;
         };
 
         let mut buf = vec![0u8; 8192];
         let n = stream.read(&mut buf).await?;
-        let request_str = String::from_utf8_lossy(&buf[..n]);
+        let request = String::from_utf8_lossy(&buf[..n]);
 
-        let first_line = request_str.lines().next().unwrap_or("");
-        let parts: Vec<&str> = first_line.split_whitespace().collect();
-        let method = parts.first().copied().unwrap_or("");
-        let path = parts.get(1).copied().unwrap_or("");
-
+        let (method, path) = parse_request_line(&request);
         debug!(method, path, "Received request");
 
-        if method == "GET"
-            && (path.starts_with("/callback") || path.starts_with("/?") || path == "/")
-        {
-            let full_url = url::Url::parse(&format!("http://localhost{path}"))
-                .map_err(|e| ClientError::Other(format!("parse error: {e}")))?;
-
-            let code = full_url
-                .query_pairs()
-                .find(|(k, _)| k == "code")
-                .map(|(_, v)| v.into_owned());
-
-            // Check for error response from provider
-            let error = full_url
-                .query_pairs()
-                .find(|(k, _)| k == "error")
-                .map(|(_, v)| v.into_owned());
-
-            if let Some(err) = error {
-                let desc = full_url
-                    .query_pairs()
-                    .find(|(k, _)| k == "error_description")
-                    .map(|(_, v)| v.into_owned())
-                    .unwrap_or_default();
-
-                let html = format!(
-                    "<!DOCTYPE html><html><body>\
-                    <h2>Authentication Failed</h2>\
-                    <p>{err}: {desc}</p>\
-                    </body></html>"
-                );
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    html.len(),
-                    html
-                );
-                let _ = stream.write_all(response.as_bytes()).await;
-
-                return Err(ClientError::Other(format!("OAuth error: {err} — {desc}")));
-            }
-
-            // Send success response
-            let html = "<!DOCTYPE html><html><body>\
-                <h2>Authentication successful!</h2>\
-                <p>You can close this tab and return to the terminal.</p>\
-                </body></html>";
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                html.len(),
-                html
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
-
-            if let Some(c) = code {
-                return Ok(c);
-            }
-            // No code in callback — keep waiting (might be favicon request etc.)
-        } else {
+        let is_callback = method == "GET"
+            && (path.starts_with("/callback") || path.starts_with("/?") || path == "/");
+        if !is_callback {
             let response =
                 "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(response.as_bytes()).await;
+            continue;
+        }
+
+        match extract_oauth_code(path)? {
+            CallbackOutcome::Error { error, description } => {
+                let html = format!(
+                    "<!DOCTYPE html><html><body>\
+                    <h2>Authentication Failed</h2>\
+                    <p>{error}: {description}</p>\
+                    </body></html>"
+                );
+                write_html_response(&mut stream, &html).await;
+                return Err(ClientError::Other(format!(
+                    "OAuth error: {error} — {description}"
+                )));
+            }
+            CallbackOutcome::Code(code) => {
+                write_html_response(&mut stream, SUCCESS_HTML).await;
+                return Ok(code);
+            }
+            CallbackOutcome::Pending => {
+                // No code in callback — keep waiting (might be favicon request etc.)
+                write_html_response(&mut stream, SUCCESS_HTML).await;
+            }
         }
     }
 }
 
-struct JwtClaims {
-    expires_at: DateTime<Utc>,
-    subject: Option<uuid::Uuid>,
+/// Accept the next inbound connection, honoring the overall login deadline.
+///
+/// Returns `Ok(Some(stream))` on a fresh connection, `Ok(None)` on a
+/// recoverable accept error (caller should retry), or `Err` once the deadline
+/// passes.
+async fn accept_connection(
+    listener: &TcpListener,
+    deadline: tokio::time::Instant,
+) -> Result<Option<TcpStream>> {
+    match tokio::time::timeout_at(deadline, listener.accept()).await {
+        Ok(Ok((stream, _))) => Ok(Some(stream)),
+        Ok(Err(e)) => {
+            warn!("accept error: {e}");
+            Ok(None)
+        }
+        Err(_) => Err(ClientError::Other("authentication timed out (120s)".into())),
+    }
 }
 
-fn decode_jwt_claims(jwt: &str) -> Result<JwtClaims> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+/// Split the HTTP request line (`GET /path HTTP/1.1`) into method and path.
+fn parse_request_line(request: &str) -> (&str, &str) {
+    let first_line = request.lines().next().unwrap_or("");
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+    (method, path)
+}
 
-    let parts: Vec<&str> = jwt.split('.').collect();
-    if parts.len() != 3 {
-        return Err(ClientError::Other("invalid JWT format".into()));
+/// Parse the callback `path`'s query string into a [`CallbackOutcome`].
+///
+/// An `error` parameter takes precedence over a `code`, matching the provider
+/// contract (a callback never carries both meaningfully).
+fn extract_oauth_code(path: &str) -> Result<CallbackOutcome> {
+    let url = url::Url::parse(&format!("http://localhost{path}"))
+        .map_err(|e| ClientError::Other(format!("parse error: {e}")))?;
+
+    let find = |key: &str| {
+        url.query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    };
+
+    if let Some(error) = find("error") {
+        let description = find("error_description").unwrap_or_default();
+        return Ok(CallbackOutcome::Error { error, description });
     }
 
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| ClientError::Other(format!("JWT decode error: {e}")))?;
-
-    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes)?;
-
-    let exp = payload
-        .get("exp")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| ClientError::Other("JWT missing exp claim".into()))?;
-
-    let expires_at = DateTime::from_timestamp(exp, 0)
-        .ok_or_else(|| ClientError::Other("invalid exp timestamp".into()))?;
-
-    // Auth0 sub claims are strings like "google-oauth2|12345", not UUIDs.
-    // Try to parse as UUID but don't fail if it isn't one.
-    let subject = payload
-        .get("sub")
-        .and_then(|v| v.as_str())
-        .and_then(|s| uuid::Uuid::parse_str(s).ok());
-
-    Ok(JwtClaims {
-        expires_at,
-        subject,
+    Ok(match find("code") {
+        Some(code) => CallbackOutcome::Code(code),
+        None => CallbackOutcome::Pending,
     })
+}
+
+/// Write a `200 OK` HTML response to the callback stream.
+///
+/// Write errors are ignored: the browser tab is cosmetic, and the
+/// authorization outcome is already decided by the time we respond.
+async fn write_html_response(stream: &mut TcpStream, html: &str) {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        html.len(),
+        html
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,47 +392,6 @@ mod tests {
         let (_verifier, challenge) = generate_pkce_pair();
         let url = build_authorize_url(&config, 9999, &challenge).unwrap();
         assert!(!url.contains("audience="));
-    }
-
-    #[test]
-    fn decode_jwt_extracts_exp_and_sub() {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-
-        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD
-            .encode(r#"{"sub":"418200cc-e77a-496f-b5cc-eb4228e0e828","exp":1711800000}"#);
-        let sig = URL_SAFE_NO_PAD.encode("fakesig");
-        let jwt = format!("{header}.{payload}.{sig}");
-
-        let claims = decode_jwt_claims(&jwt).unwrap();
-        assert!(claims.subject.is_some());
-        assert_eq!(
-            claims.subject.unwrap().to_string(),
-            "418200cc-e77a-496f-b5cc-eb4228e0e828"
-        );
-        assert_eq!(claims.expires_at.timestamp(), 1711800000);
-    }
-
-    #[test]
-    fn decode_jwt_handles_auth0_sub_format() {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-
-        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-        let payload =
-            URL_SAFE_NO_PAD.encode(r#"{"sub":"google-oauth2|123456789","exp":1711800000}"#);
-        let sig = URL_SAFE_NO_PAD.encode("fakesig");
-        let jwt = format!("{header}.{payload}.{sig}");
-
-        let claims = decode_jwt_claims(&jwt).unwrap();
-        // Auth0 sub is not a UUID — should be None, not an error
-        assert!(claims.subject.is_none());
-        assert_eq!(claims.expires_at.timestamp(), 1711800000);
-    }
-
-    #[test]
-    fn decode_jwt_rejects_malformed() {
-        assert!(decode_jwt_claims("not.a.valid-jwt").is_err());
-        assert!(decode_jwt_claims("only-one-part").is_err());
     }
 
     #[tokio::test]

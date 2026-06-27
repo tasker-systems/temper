@@ -279,15 +279,15 @@ pub fn write_resource_file_from_parts(
         .transpose()
         .map_err(|e| TemperError::Config(format!("projection serialize managed_meta: {e}")))?;
 
-    let fm = ingest::build_frontmatter_from_resource(
-        row,
+    let fm = ingest::build_frontmatter_from_resource(ingest::BuildFrontmatterParams {
+        resource: row,
         context,
         doc_type,
-        owner,
-        ingest::normalize_body_for_vault(&content.markdown),
-        managed_value.as_ref(),
-        content.open_meta.as_ref(),
-    )?;
+        canonical_owner: owner,
+        body: ingest::normalize_body_for_vault(&content.markdown),
+        managed_meta: managed_value.as_ref(),
+        open_meta: content.open_meta.as_ref(),
+    })?;
 
     let path = Vault::new(vault_root).doc_file(owner, context, doc_type, &slug);
     if let Some(parent) = path.parent() {
@@ -389,7 +389,20 @@ pub async fn pull_context(
     config: &Config,
     context: &str,
 ) -> Result<PullSummary> {
-    // 1. List every resource in the context (paginated).
+    let rows = list_context_resources(client, context).await?;
+    let keep = write_projection_files(client, &config.vault_root, &rows).await?;
+    let pruned = prune_absent_files(&config.vault_root, context, &rows, &keep)?;
+    record_context_cursor(client, &config.state_dir, context, &rows).await?;
+
+    Ok(PullSummary {
+        context: context.to_string(),
+        written: keep.len(),
+        pruned,
+    })
+}
+
+/// List every resource in `context`, following the server's pagination.
+async fn list_context_resources(client: &TemperClient, context: &str) -> Result<Vec<ResourceRow>> {
     let mut rows: Vec<ResourceRow> = Vec::new();
     let mut offset: i64 = 0;
     loop {
@@ -411,19 +424,37 @@ pub async fn pull_context(
         }
         offset += PULL_PAGE_SIZE;
     }
+    Ok(rows)
+}
 
-    // 2. Write each resource's file.
+/// Write each listed resource's projection file, returning the set of paths
+/// that must be kept (used to drive pruning).
+async fn write_projection_files(
+    client: &TemperClient,
+    vault_root: &Path,
+    rows: &[ResourceRow],
+) -> Result<HashSet<PathBuf>> {
     let mut keep: HashSet<PathBuf> = HashSet::new();
-    for row in &rows {
-        let path = write_resource_file(client, &config.vault_root, row).await?;
+    for row in rows {
+        let path = write_resource_file(client, vault_root, row).await?;
         keep.insert(path);
     }
+    Ok(keep)
+}
 
-    // 3. Prune files for resources no longer in the context.
-    // The on-disk directory component is the context's `context_name` field (e.g. `"temper"`),
-    // not the raw ref (which may be `"@me/temper"`). Derive it from any listed row; for an empty
-    // context fall back to parsing the slug from the ref so that a context that has been emptied
-    // server-side still prunes its local projection files.
+/// Prune projection files for resources no longer present in the context.
+///
+/// The on-disk directory component is the context's `context_name` field
+/// (e.g. `"temper"`), not the raw ref (which may be `"@me/temper"`). Derive
+/// it from any listed row; for an empty context fall back to parsing the
+/// slug from the ref so that a context that has been emptied server-side
+/// still prunes its local projection files.
+fn prune_absent_files(
+    vault_root: &Path,
+    context: &str,
+    rows: &[ResourceRow],
+    keep: &HashSet<PathBuf>,
+) -> Result<usize> {
     let context_dir_name: Option<String> =
         rows.first().map(|r| r.context_name.clone()).or_else(|| {
             parse_context_ref(context).ok().and_then(|r| match r {
@@ -431,13 +462,20 @@ pub async fn pull_context(
                 ContextRef::Id(_) => None,
             })
         });
-    let pruned = match context_dir_name.as_deref() {
-        Some(name) => prune_context(&config.vault_root, name, &keep)?,
-        None => 0,
-    };
+    match context_dir_name.as_deref() {
+        Some(name) => prune_context(vault_root, name, keep),
+        None => Ok(0),
+    }
+}
 
-    // 4. Record the staleness cursor. The context's UUID comes from any
-    //    listed row; an empty context yields no event id.
+/// Record the per-context staleness cursor. The context's UUID comes from
+/// any listed row; an empty context yields no event id.
+async fn record_context_cursor(
+    client: &TemperClient,
+    state_dir: &Path,
+    context: &str,
+    rows: &[ResourceRow],
+) -> Result<()> {
     let context_id = rows.first().map(|r| Uuid::from(r.kb_context_id));
     let last_event_id = match context_id {
         Some(cid) => client
@@ -448,19 +486,13 @@ pub async fn pull_context(
         None => None,
     };
     write_cursor(
-        &config.state_dir,
+        state_dir,
         context,
         &ProjectionCursor {
             last_event_id,
             pulled_at: Utc::now(),
         },
-    )?;
-
-    Ok(PullSummary {
-        context: context.to_string(),
-        written: keep.len(),
-        pruned,
-    })
+    )
 }
 
 #[cfg(test)]

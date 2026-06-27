@@ -346,18 +346,30 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             edge_types,
             depth,
             no_graph,
-        } => commands::search_cmd::run(
-            &query,
-            context.as_deref(),
-            doc_type.as_deref(),
-            limit,
-            output_format,
-            text_only,
-            seed_ids,
-            edge_types,
-            depth,
-            no_graph,
-        ),
+        } => {
+            use temper_cli::actions::search as search_actions;
+            // Resolve the query embedding at the call site, then bundle every
+            // CLI-derived search field into `CliSearchArgs` for `run`.
+            let embedding = if text_only {
+                None
+            } else {
+                Some(search_actions::embed_query(&query)?)
+            };
+            commands::search_cmd::run(
+                search_actions::CliSearchArgs {
+                    query: &query,
+                    embedding,
+                    context: context.as_deref(),
+                    doc_type: doc_type.as_deref(),
+                    limit,
+                    seed_ids,
+                    edge_types,
+                    depth,
+                    no_graph,
+                },
+                output_format,
+            )
+        }
         Commands::Edge { action } => temper_cli::commands::edge::run(action),
         Commands::Cogmap { cmd } => match cmd {
             CogmapCmd::Reconcile { r#ref, manifest } => {
