@@ -12,10 +12,10 @@
 //! the shared trait.
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::types::resource::ResourceRow;
 use temper_core::error::TemperError;
+use temper_core::types::ids::EdgeId;
 
 use super::commands::{
     AssertRelationship, CreateResource, DeleteResource, FoldRelationship, ListResources,
@@ -75,28 +75,29 @@ pub trait Backend: Send + Sync {
 
     // ── relationship/edge writes (WS6 4c) ──
     // Brought under the trait so surfaces dispatch them through `select_backend` to the selected
-    // substrate. Each returns the edge handle (`Uuid`): correlation_id for `DbBackend`, edge_id for
-    // `NextBackend` — backend-opaque, fed back into retype/reweight/fold within the same backend.
+    // substrate. Each returns the `kb_edges` id (`EdgeId`), fed back into retype/reweight/fold.
+    // Post-WS6-flip there is a single substrate-backed backend, so the returned value is always a
+    // real edge row id (the earlier backend-opaque correlation-id split is gone).
 
     async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
-    ) -> Result<CommandOutput<Uuid>, TemperError>;
+    ) -> Result<CommandOutput<EdgeId>, TemperError>;
 
     async fn retype_relationship(
         &self,
         cmd: RetypeRelationship,
-    ) -> Result<CommandOutput<Uuid>, TemperError>;
+    ) -> Result<CommandOutput<EdgeId>, TemperError>;
 
     async fn reweight_relationship(
         &self,
         cmd: ReweightRelationship,
-    ) -> Result<CommandOutput<Uuid>, TemperError>;
+    ) -> Result<CommandOutput<EdgeId>, TemperError>;
 
     async fn fold_relationship(
         &self,
         cmd: FoldRelationship,
-    ) -> Result<CommandOutput<Uuid>, TemperError>;
+    ) -> Result<CommandOutput<EdgeId>, TemperError>;
 
     // ── L0 cognitive-map content reconcile (L0 delivery & lifecycle, Task 4) ──
     // Idempotent, additive-only, provenance-scoped desired-state reconcile of a cognitive map's

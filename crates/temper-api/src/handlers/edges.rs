@@ -7,7 +7,7 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::edge_service;
 use crate::state::AppState;
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{EdgeId, ProfileId};
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
     ReweightRelationshipRequest,
@@ -76,7 +76,7 @@ pub async fn assert(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     }))
 }
 
@@ -102,7 +102,7 @@ pub async fn retype(
     Json(req): Json<RetypeRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let cmd = RetypeRelationship {
-        edge_handle,
+        edge_handle: EdgeId::from(edge_handle),
         edge_kind: req.edge_kind,
         polarity: req.polarity,
         origin: Surface::ApiHttp,
@@ -113,7 +113,7 @@ pub async fn retype(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     }))
 }
 
@@ -139,7 +139,7 @@ pub async fn reweight(
     Json(req): Json<ReweightRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let cmd = ReweightRelationship {
-        edge_handle,
+        edge_handle: EdgeId::from(edge_handle),
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
@@ -149,7 +149,7 @@ pub async fn reweight(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     }))
 }
 
@@ -175,7 +175,7 @@ pub async fn fold(
     Json(req): Json<FoldRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let cmd = FoldRelationship {
-        edge_handle,
+        edge_handle: EdgeId::from(edge_handle),
         reason: req.reason,
         origin: Surface::ApiHttp,
     };
@@ -185,6 +185,6 @@ pub async fn fold(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     }))
 }

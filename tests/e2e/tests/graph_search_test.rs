@@ -194,7 +194,7 @@ async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
     assert_eq!(edges[0].label, "depends_on");
     assert_eq!(edges[0].direction, "outgoing");
     assert_eq!(edges[0].peer_slug, "base-doc");
-    assert_eq!(edges[0].peer_resource_id, resource_b.id.0);
+    assert_eq!(edges[0].peer_resource_id, resource_b.id);
 
     // Fetch edges for B (should have incoming)
     let edges_b = app

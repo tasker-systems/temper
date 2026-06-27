@@ -88,7 +88,7 @@ async fn backend(pool: &PgPool) -> DbBackend {
 
 fn cmd(cogmap: Uuid, req: ReconcileCogmapRequest) -> ReconcileCognitiveMap {
     ReconcileCognitiveMap {
-        cogmap_id: cogmap,
+        cogmap_id: temper_core::types::ids::CogmapId::from(cogmap),
         request: req,
         origin: Surface::ApiHttp,
     }

@@ -46,7 +46,7 @@ pub async fn reconcile(
     .await?;
 
     let cmd = ReconcileCognitiveMap {
-        cogmap_id,
+        cogmap_id: CogmapId::from(cogmap_id),
         request,
         origin: Surface::ApiHttp,
     };

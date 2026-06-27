@@ -13,7 +13,7 @@ use uuid::Uuid;
 use temper_api::backend::DbBackend;
 use temper_core::error::TemperError;
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{EdgeId, ProfileId};
 use temper_core::types::relationship_requests::RelationshipAck;
 use temper_workflow::operations::{
     AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
@@ -124,7 +124,7 @@ pub async fn assert_relationship(
         .map_err(|e| map_err(e, "assert_relationship"))?;
 
     let ack = RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -140,7 +140,7 @@ pub async fn retype_relationship(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = RetypeRelationship {
-        edge_handle: input.edge_handle,
+        edge_handle: EdgeId::from(input.edge_handle),
         edge_kind: input.edge_kind,
         polarity: input.polarity,
         origin: Surface::Mcp,
@@ -153,7 +153,7 @@ pub async fn retype_relationship(
         .map_err(|e| map_err(e, "retype_relationship"))?;
 
     let ack = RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -169,7 +169,7 @@ pub async fn reweight_relationship(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = ReweightRelationship {
-        edge_handle: input.edge_handle,
+        edge_handle: EdgeId::from(input.edge_handle),
         weight: input.weight,
         origin: Surface::Mcp,
     };
@@ -181,7 +181,7 @@ pub async fn reweight_relationship(
         .map_err(|e| map_err(e, "reweight_relationship"))?;
 
     let ack = RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -197,7 +197,7 @@ pub async fn fold_relationship(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = FoldRelationship {
-        edge_handle: input.edge_handle,
+        edge_handle: EdgeId::from(input.edge_handle),
         reason: input.reason,
         origin: Surface::Mcp,
     };
@@ -209,7 +209,7 @@ pub async fn fold_relationship(
         .map_err(|e| map_err(e, "fold_relationship"))?;
 
     let ack = RelationshipAck {
-        edge_handle: out.value,
+        edge_handle: Uuid::from(out.value),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),

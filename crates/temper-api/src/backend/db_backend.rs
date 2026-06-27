@@ -188,7 +188,7 @@ fn validate_managed_meta_pipeline(
         params.identity_slug,
     );
     let validate_params = temper_workflow::operations::ValidateManagedMetaParams {
-        id: params.id,
+        id: ResourceId::from(params.id),
         created: params.created,
         doc_type: params.doc_type,
         managed_meta: Some(&managed),
@@ -899,7 +899,7 @@ impl Backend for DbBackend {
     async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
-    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+    ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         // Source and target ids ARE the substrate resource ids (synthesis carries resource ids verbatim)
         // — used directly, no origin_uri remap (the prior bimap collapsed empty-origin_uri resources
         // onto one arbitrary id).
@@ -943,16 +943,19 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(api_err)?;
-        Ok(CommandOutput::new(edge.uuid()))
+        Ok(CommandOutput::new(temper_core::types::ids::EdgeId::from(
+            edge.uuid(),
+        )))
     }
 
     async fn retype_relationship(
         &self,
         cmd: RetypeRelationship,
-    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+    ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         // The edge handle on the substrate backend IS the substrate edge id (returned by assert).
+        let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(cmd.edge_handle).await?;
+        let src = self.edge_source_resource(handle).await?;
         self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -962,7 +965,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::retype_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
@@ -975,9 +978,10 @@ impl Backend for DbBackend {
     async fn reweight_relationship(
         &self,
         cmd: ReweightRelationship,
-    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+    ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
+        let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(cmd.edge_handle).await?;
+        let src = self.edge_source_resource(handle).await?;
         self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -987,7 +991,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::reweight_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(handle),
             cmd.weight,
             emitter,
         )
@@ -999,9 +1003,10 @@ impl Backend for DbBackend {
     async fn fold_relationship(
         &self,
         cmd: FoldRelationship,
-    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+    ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
+        let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(cmd.edge_handle).await?;
+        let src = self.edge_source_resource(handle).await?;
         self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -1011,7 +1016,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::fold_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(cmd.edge_handle),
+            temper_substrate::ids::EdgeId::from(handle),
             cmd.reason.as_deref(),
             emitter,
         )
@@ -1032,7 +1037,8 @@ impl Backend for DbBackend {
         &self,
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
-        let cogmap = temper_substrate::ids::CogmapId::from(cmd.cogmap_id);
+        let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
+        let cogmap = temper_substrate::ids::CogmapId::from(cogmap_uuid);
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.
@@ -1041,7 +1047,7 @@ impl Backend for DbBackend {
         // PRE-FLIGHT (FIX #3) — fail fast + loud on an unresolved edge target, BEFORE opening the
         // transaction, so a bad manifest writes NOTHING. A quick read on the pool; the authoritative
         // in-tx read still happens inside `reconcile_apply`.
-        self.preflight_validate_edge_targets(cmd.cogmap_id, &cmd.request)
+        self.preflight_validate_edge_targets(cogmap_uuid, &cmd.request)
             .await?;
 
         // ONE SERIALIZABLE transaction for the whole run. `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`
