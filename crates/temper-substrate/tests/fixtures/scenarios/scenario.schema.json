@@ -172,14 +172,22 @@
           "type": "string"
         },
         "system_access": {
-          "description": "'none' | 'approved' | 'admin'",
-          "type": "string"
+          "$ref": "#/$defs/SystemAccess"
         }
       },
       "required": [
         "handle",
         "display_name",
         "system_access"
+      ]
+    },
+    "SystemAccess": {
+      "description": "The `system_access` PG enum — a profile's platform-wide access tier. Typed\nin the YAML model so an invalid value fails at deserialization rather than at\nthe `$n::system_access` cast after the load transaction opens.",
+      "type": "string",
+      "enum": [
+        "none",
+        "approved",
+        "admin"
       ]
     },
     "EntityDef": {

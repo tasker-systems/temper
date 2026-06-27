@@ -35,7 +35,7 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
              VALUES ($1,$2,$3::system_access) RETURNING id",
             p.handle,
             p.display_name,
-            p.system_access as _,
+            p.system_access.as_sql() as _,
         )
         .fetch_one(&mut *tx)
         .await?;

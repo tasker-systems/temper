@@ -13,6 +13,7 @@
 //! Dumps/restores are dynamic-table operations, so this module uses runtime `sqlx::query` (the
 //! established exception class) rather than compile-checked macros.
 
+use crate::events::EventKind;
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -137,16 +138,32 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
         let event_id: Uuid = r.get(0);
         let name: String = r.get(1);
         let payload: serde_json::Value = r.get(2);
-        let manifests = match name.as_str() {
-            "cogmap_seeded" => payload.pointer("/telos/blocks").cloned(),
-            "resource_created" => payload.get("blocks").cloned(),
+        let kind = EventKind::from_canonical_name(&name)
+            .with_context(|| format!("snapshot: unknown event type {name}"))?;
+        let manifests = match kind {
+            EventKind::CogmapSeeded => payload.pointer("/telos/blocks").cloned(),
+            EventKind::ResourceCreated => payload.get("blocks").cloned(),
             // block_mutated carries a flat `chunks` array (one block); wrap it as a single
             // pseudo-block so the chunk-extraction loop below stays uniform.
-            "block_mutated" => payload
+            EventKind::BlockMutated => payload
                 .get("chunks")
                 .cloned()
                 .map(|chunks| serde_json::json!([{ "chunks": chunks }])),
-            _ => None,
+            // The SQL query above restricts to the three content-bearing types, so the
+            // remaining variants are unreachable here — they carry no chunk manifests.
+            EventKind::ResourceUpdated
+            | EventKind::ResourceDeleted
+            | EventKind::ResourceRehomed
+            | EventKind::RelationshipAsserted
+            | EventKind::RelationshipRetyped
+            | EventKind::RelationshipReweighted
+            | EventKind::PropertyAsserted
+            | EventKind::PropertySet
+            | EventKind::LensCreated
+            | EventKind::RegionMaterialized
+            | EventKind::RelationshipFolded
+            | EventKind::DelegatedLaunch
+            | EventKind::InvocationClosed => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -215,8 +232,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         let id: Uuid = r.get(0);
         let name: String = r.get(1);
         let payload: serde_json::Value = r.get(2);
-        match name.as_str() {
-            "cogmap_seeded" => {
+        let kind = EventKind::from_canonical_name(&name)
+            .with_context(|| format!("replay: no projector for event type {name}"))?;
+        match kind {
+            EventKind::CogmapSeeded => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 sqlx::query("SELECT _project_cogmap_seeded($1,$2,$3)")
                     .bind(id)
@@ -225,7 +244,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
-            "resource_created" => {
+            EventKind::ResourceCreated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 sqlx::query("SELECT _project_resource_created($1,$2,$3)")
                     .bind(id)
@@ -234,7 +253,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
-            "block_mutated" => {
+            EventKind::BlockMutated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 sqlx::query("SELECT _project_block_mutated($1,$2,$3)")
                     .bind(id)
@@ -243,35 +262,35 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
-            "relationship_asserted" => {
+            EventKind::RelationshipAsserted => {
                 sqlx::query("SELECT _project_relationship_asserted($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "property_asserted" => {
+            EventKind::PropertyAsserted => {
                 sqlx::query("SELECT _project_property_asserted($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "property_set" => {
+            EventKind::PropertySet => {
                 sqlx::query("SELECT _project_property_set($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "lens_created" => {
+            EventKind::LensCreated => {
                 sqlx::query("SELECT _project_lens_created($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "region_materialized" => {
+            EventKind::RegionMaterialized => {
                 sqlx::query("SELECT _project_region_materialized($1,$2)")
                     .bind(id)
                     .bind(&payload)
@@ -279,63 +298,62 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .await?;
             }
             // WS6 4c mutations + the relationship_folded sibling (payload-only projectors, no sidecar).
-            "relationship_folded" => {
+            EventKind::RelationshipFolded => {
                 sqlx::query("SELECT _project_relationship_folded($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "relationship_retyped" => {
+            EventKind::RelationshipRetyped => {
                 sqlx::query("SELECT _project_relationship_retyped($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "relationship_reweighted" => {
+            EventKind::RelationshipReweighted => {
                 sqlx::query("SELECT _project_relationship_reweighted($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "resource_deleted" => {
+            EventKind::ResourceDeleted => {
                 sqlx::query("SELECT _project_resource_deleted($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "resource_updated" => {
+            EventKind::ResourceUpdated => {
                 sqlx::query("SELECT _project_resource_updated($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "resource_rehomed" => {
+            EventKind::ResourceRehomed => {
                 sqlx::query("SELECT _project_resource_rehomed($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "delegated_launch" => {
+            EventKind::DelegatedLaunch => {
                 sqlx::query("SELECT _project_delegated_launch($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            "invocation_closed" => {
+            EventKind::InvocationClosed => {
                 sqlx::query("SELECT _project_invocation_closed($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
                     .await?;
             }
-            other => anyhow::bail!("replay: no projector for event type {other}"),
         }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;

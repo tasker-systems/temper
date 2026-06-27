@@ -221,6 +221,8 @@ pub fn updatable_fields(doc_type: &str) -> Result<Vec<(String, serde_json::Value
 /// per-type extras. This is the single point of curation — adding a new
 /// doctype means extending the match here.
 pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
+    use crate::frontmatter::DocType;
+
     const UNIVERSAL: &[&str] = &[
         "temper-context",
         "temper-type",
@@ -228,20 +230,15 @@ pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
         "temper-updated",
     ];
 
-    let extras: &[&str] = match doc_type {
-        "task" => &[
+    let extras: &[&str] = match DocType::from_str(doc_type)? {
+        DocType::Task => &[
             "temper-stage",
             "temper-mode",
             "temper-effort",
             "temper-goal",
         ],
-        "goal" => &["temper-status", "temper-seq"],
-        "session" | "research" | "concept" | "decision" => &[],
-        other => {
-            return Err(TemperError::Config(format!(
-                "unknown doctype '{other}' for display_fields"
-            )));
-        }
+        DocType::Goal => &["temper-status", "temper-seq"],
+        DocType::Session | DocType::Research | DocType::Concept | DocType::Decision => &[],
     };
 
     Ok(UNIVERSAL

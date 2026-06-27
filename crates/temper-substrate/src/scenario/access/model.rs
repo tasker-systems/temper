@@ -50,6 +50,31 @@ pub struct TeamDef {
     pub parents: Vec<String>,
 }
 
+/// The `team_role` PG enum — a member's role within a team. Typed in the YAML
+/// model so an invalid value fails at deserialization rather than at the
+/// `$n::team_role` cast after the load transaction opens.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TeamRole {
+    Owner,
+    Maintainer,
+    Member,
+    Watcher,
+}
+
+impl TeamRole {
+    /// Canonical `team_role` label, for binding behind a `::team_role` cast.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            TeamRole::Owner => "owner",
+            TeamRole::Maintainer => "maintainer",
+            TeamRole::Member => "member",
+            TeamRole::Watcher => "watcher",
+        }
+    }
+}
+
 /// A sub-team membership. Root (`temper-system`) joins are maintained by the `sync_system_membership`
 /// trigger from `system_access`, so they are NOT listed here.
 #[derive(Debug, Deserialize)]
@@ -57,7 +82,7 @@ pub struct TeamDef {
 pub struct MembershipDef {
     pub team: String,    // slug
     pub profile: String, // handle
-    pub role: String,    // team_role: owner | maintainer | member | watcher
+    pub role: TeamRole,
 }
 
 /// A named context — a real owner-scoped `kb_contexts` row (WS6 §2 amendment), the referent for named

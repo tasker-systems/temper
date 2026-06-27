@@ -6,6 +6,7 @@ use crate::templates::{
 use askama::Template;
 use std::path::Path;
 use std::path::PathBuf;
+use temper_workflow::frontmatter::DocType;
 
 // ---------------------------------------------------------------------------
 // Validation constants and helpers
@@ -51,10 +52,14 @@ pub fn validate_effort(e: &str) -> Result<()> {
 
 /// Return a rendered template with placeholder values for a note type.
 /// Used by `--show-template` flags to preview template structure.
-pub fn get_template(note_type: &str) -> Result<String> {
+///
+/// Takes a typed [`DocType`] — the string→enum parse happens once at the CLI
+/// dispatch boundary, so this match is exhaustive over the owned variant set
+/// and a new doctype forces a template to be added here.
+pub fn get_template(doc_type: DocType) -> Result<String> {
     let placeholder = "{{placeholder}}";
-    match note_type {
-        "task" => TaskTemplate {
+    match doc_type {
+        DocType::Task => TaskTemplate {
             id: placeholder,
             title: placeholder,
             slug: placeholder,
@@ -66,13 +71,13 @@ pub fn get_template(note_type: &str) -> Result<String> {
             datetime: placeholder,
         }
         .render(),
-        "session" => SessionTemplate {
+        DocType::Session => SessionTemplate {
             id: placeholder,
             title: placeholder,
             date: placeholder,
         }
         .render(),
-        "goal" => GoalTemplate {
+        DocType::Goal => GoalTemplate {
             id: placeholder,
             title: placeholder,
             slug: placeholder,
@@ -81,7 +86,7 @@ pub fn get_template(note_type: &str) -> Result<String> {
             date: placeholder,
         }
         .render(),
-        "research" => ResearchTemplate {
+        DocType::Research => ResearchTemplate {
             id: placeholder,
             title: placeholder,
             date: placeholder,
@@ -89,7 +94,7 @@ pub fn get_template(note_type: &str) -> Result<String> {
             slug: placeholder,
         }
         .render(),
-        "concept" => ConceptTemplate {
+        DocType::Concept => ConceptTemplate {
             id: placeholder,
             title: placeholder,
             date: placeholder,
@@ -97,7 +102,7 @@ pub fn get_template(note_type: &str) -> Result<String> {
             slug: placeholder,
         }
         .render(),
-        "decision" => DecisionTemplate {
+        DocType::Decision => DecisionTemplate {
             id: placeholder,
             title: placeholder,
             date: placeholder,
@@ -105,11 +110,6 @@ pub fn get_template(note_type: &str) -> Result<String> {
             slug: placeholder,
         }
         .render(),
-        _ => {
-            return Err(TemperError::Vault(format!(
-                "No template found for '{note_type}'"
-            )))
-        }
     }
     .map_err(|e| TemperError::Vault(format!("Failed to render template: {e}")))
 }

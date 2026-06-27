@@ -9,6 +9,7 @@
 /// Apply doc-type-specific defaults to managed_meta.
 /// Only sets fields that are absent — never overwrites caller-provided values.
 pub fn apply_managed_defaults(doc_type: &str, meta: &mut serde_json::Value) {
+    use crate::frontmatter::DocType;
     use serde_json::json;
 
     let obj = match meta.as_object_mut() {
@@ -16,22 +17,30 @@ pub fn apply_managed_defaults(doc_type: &str, meta: &mut serde_json::Value) {
         None => return,
     };
 
+    // Unknown doctypes are a silent no-op (as before); known doctypes dispatch
+    // through the typed enum so the wildcard-free match forces this code to be
+    // revisited whenever a new `DocType` variant is added.
+    let Ok(doc_type) = DocType::from_str(doc_type) else {
+        return;
+    };
+
     match doc_type {
-        "task" => {
+        DocType::Task => {
             obj.entry("temper-stage")
                 .or_insert_with(|| json!("backlog"));
         }
-        "goal" => {
+        DocType::Goal => {
             obj.entry("temper-status")
                 .or_insert_with(|| json!("active"));
         }
-        _ => {}
+        DocType::Session | DocType::Research | DocType::Decision | DocType::Concept => {}
     }
 }
 
 /// Apply doc-type-specific defaults to open_meta.
 /// Only sets fields that are absent — never overwrites caller-provided values.
 pub fn apply_open_defaults(doc_type: &str, meta: &mut serde_json::Value) {
+    use crate::frontmatter::DocType;
     use serde_json::json;
 
     let obj = match meta.as_object_mut() {
@@ -39,9 +48,13 @@ pub fn apply_open_defaults(doc_type: &str, meta: &mut serde_json::Value) {
         None => return,
     };
 
-    let now_date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    // Unknown doctypes are a silent no-op (as before).
+    let Ok(doc_type) = DocType::from_str(doc_type) else {
+        return;
+    };
 
-    if matches!(doc_type, "session" | "research") {
+    if matches!(doc_type, DocType::Session | DocType::Research) {
+        let now_date = chrono::Utc::now().format("%Y-%m-%d").to_string();
         obj.entry("date").or_insert_with(|| json!(now_date));
     }
 }

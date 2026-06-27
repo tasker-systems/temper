@@ -12,8 +12,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
-    Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
-    SystemSettings,
+    AccessMode, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
+    PublicSystemSettings, SystemSettings,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 
@@ -135,10 +135,19 @@ pub async fn create_join_request(
 ) -> ApiResult<JoinRequest> {
     let settings = get_system_settings(pool).await?;
 
-    if settings.access_mode == "open" {
-        return Err(ApiError::BadRequest(
-            "System is in open mode — no access request needed".to_string(),
-        ));
+    let access_mode = AccessMode::from_db_str(&settings.access_mode).ok_or_else(|| {
+        ApiError::Internal(format!(
+            "unrecognized access_mode {:?} in kb_system_settings",
+            settings.access_mode
+        ))
+    })?;
+    match access_mode {
+        AccessMode::Open => {
+            return Err(ApiError::BadRequest(
+                "System is in open mode — no access request needed".to_string(),
+            ));
+        }
+        AccessMode::InviteOnly => {}
     }
 
     let gating_slug = settings.gating_team_slug.ok_or_else(|| {

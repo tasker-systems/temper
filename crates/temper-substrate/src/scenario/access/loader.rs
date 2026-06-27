@@ -68,7 +68,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
              VALUES ($1,$2,$3::system_access) RETURNING id",
             p.handle,
             p.display_name,
-            p.system_access as _,
+            p.system_access.as_sql() as _,
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -101,7 +101,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
             "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1,$2,$3::team_role)",
             tid,
             pid,
-            m.role as _,
+            m.role.as_sql() as _,
         )
         .execute(&mut *tx)
         .await?;

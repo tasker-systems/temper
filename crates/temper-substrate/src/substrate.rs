@@ -1,5 +1,5 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -54,10 +54,13 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
     let edges = edge_rows
         .iter()
         .map(|r| -> Result<Edge> {
+            let kind_str: String = r.get("kind");
+            let kind = EdgeKind::from_sql(&kind_str)
+                .with_context(|| format!("unknown edge_kind from DB: {kind_str:?}"))?;
             Ok(Edge {
                 src: r.get("source_id"),
                 tgt: r.get("target_id"),
-                kind: parse_kind(r.get::<String, _>("kind").as_str())?,
+                kind,
                 weight: r.get("weight"),
                 label: r.get("label"),
             })
@@ -111,16 +114,6 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
         facets,
         lens,
         lens_id: lr.get("id"),
-    })
-}
-
-fn parse_kind(s: &str) -> Result<EdgeKind> {
-    Ok(match s {
-        "express" => EdgeKind::Express,
-        "contains" => EdgeKind::Contains,
-        "leads_to" => EdgeKind::LeadsTo,
-        "near" => EdgeKind::Near,
-        other => anyhow::bail!("unknown edge_kind from DB: {other:?}"),
     })
 }
 
@@ -193,9 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_kind_is_exhaustive_and_errors_on_unknown() {
-        assert_eq!(parse_kind("near").unwrap(), EdgeKind::Near);
-        assert_eq!(parse_kind("leads_to").unwrap(), EdgeKind::LeadsTo);
-        assert!(parse_kind("sideways").is_err());
+    fn edge_kind_from_sql_is_exhaustive_and_rejects_unknown() {
+        assert_eq!(EdgeKind::from_sql("near"), Some(EdgeKind::Near));
+        assert_eq!(EdgeKind::from_sql("leads_to"), Some(EdgeKind::LeadsTo));
+        assert_eq!(EdgeKind::from_sql("sideways"), None);
     }
 }

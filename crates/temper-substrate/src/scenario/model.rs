@@ -151,13 +151,35 @@ pub struct WorldDef {
     pub entities: Vec<EntityDef>,
 }
 
+/// The `system_access` PG enum — a profile's platform-wide access tier. Typed
+/// in the YAML model so an invalid value fails at deserialization rather than at
+/// the `$n::system_access` cast after the load transaction opens.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SystemAccess {
+    None,
+    Approved,
+    Admin,
+}
+
+impl SystemAccess {
+    /// Canonical `system_access` label, for binding behind a `::system_access` cast.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            SystemAccess::None => "none",
+            SystemAccess::Approved => "approved",
+            SystemAccess::Admin => "admin",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ProfileDef {
     pub handle: String,
     pub display_name: String,
-    /// 'none' | 'approved' | 'admin'
-    pub system_access: String,
+    pub system_access: SystemAccess,
 }
 
 #[derive(Debug, Clone, Deserialize)]
