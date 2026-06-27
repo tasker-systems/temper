@@ -298,59 +298,7 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
 
     let auth_choice = match idx {
         0 => AuthChoice::Hosted,
-        1 => {
-            let instance_url: String = Input::with_theme(&theme)
-                .with_prompt("Instance base URL (e.g. https://temper.acme.com)")
-                .interact_text()
-                .map_err(prompt_err)?;
-            let idp_idx = Select::with_theme(&theme)
-                .with_prompt("Identity provider")
-                .default(0)
-                .items(["Auth0", "Okta"])
-                .interact()
-                .map_err(prompt_err)?;
-            let auth_domain: String = Input::with_theme(&theme)
-                .with_prompt(if idp_idx == 1 {
-                    "Okta org domain (e.g. acme.okta.com)"
-                } else {
-                    "Auth0 tenant domain (e.g. acme.us.auth0.com)"
-                })
-                .interact_text()
-                .map_err(prompt_err)?;
-            let idp = if idp_idx == 1 {
-                let auth_server_id: String = Input::with_theme(&theme)
-                    .with_prompt("Okta authorization server ID (e.g. aus1a2b3c)")
-                    .validate_with(|input: &String| -> std::result::Result<(), &str> {
-                        if input.trim().is_empty() {
-                            Err("Okta authorization server ID cannot be empty")
-                        } else {
-                            Ok(())
-                        }
-                    })
-                    .interact_text()
-                    .map_err(prompt_err)?;
-                Idp::Okta {
-                    auth_server_id: auth_server_id.trim().to_string(),
-                }
-            } else {
-                Idp::Auth0
-            };
-            let client_id: String = Input::with_theme(&theme)
-                .with_prompt("CLI application client_id")
-                .interact_text()
-                .map_err(prompt_err)?;
-            let audience: String = Input::with_theme(&theme)
-                .with_prompt("API audience (e.g. https://temper.acme.com/api)")
-                .interact_text()
-                .map_err(prompt_err)?;
-            AuthChoice::SelfHosted(SelfHostConfig {
-                instance_url: instance_url.trim().trim_end_matches('/').to_string(),
-                auth_domain: auth_domain.trim().to_string(),
-                client_id: client_id.trim().to_string(),
-                audience: audience.trim().to_string(),
-                idp,
-            })
-        }
+        1 => AuthChoice::SelfHosted(gather_self_host_config(&theme)?),
         _ => AuthChoice::None,
     };
 
@@ -358,6 +306,66 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
         vault_path,
         extra_contexts,
         auth_choice,
+    })
+}
+
+/// Prompt for the per-instance OAuth inputs of a self-hosted deployment.
+///
+/// Extracted from `gather_answers` — the `self-hosted` branch of the
+/// instance selector. Drives the instance-URL, identity-provider, domain,
+/// optional Okta authorization-server-id, client-id, and audience prompts,
+/// trimming each value the same way the inline branch did.
+fn gather_self_host_config(theme: &ColorfulTheme) -> Result<SelfHostConfig> {
+    let instance_url: String = Input::with_theme(theme)
+        .with_prompt("Instance base URL (e.g. https://temper.acme.com)")
+        .interact_text()
+        .map_err(prompt_err)?;
+    let idp_idx = Select::with_theme(theme)
+        .with_prompt("Identity provider")
+        .default(0)
+        .items(["Auth0", "Okta"])
+        .interact()
+        .map_err(prompt_err)?;
+    let auth_domain: String = Input::with_theme(theme)
+        .with_prompt(if idp_idx == 1 {
+            "Okta org domain (e.g. acme.okta.com)"
+        } else {
+            "Auth0 tenant domain (e.g. acme.us.auth0.com)"
+        })
+        .interact_text()
+        .map_err(prompt_err)?;
+    let idp = if idp_idx == 1 {
+        let auth_server_id: String = Input::with_theme(theme)
+            .with_prompt("Okta authorization server ID (e.g. aus1a2b3c)")
+            .validate_with(|input: &String| -> std::result::Result<(), &str> {
+                if input.trim().is_empty() {
+                    Err("Okta authorization server ID cannot be empty")
+                } else {
+                    Ok(())
+                }
+            })
+            .interact_text()
+            .map_err(prompt_err)?;
+        Idp::Okta {
+            auth_server_id: auth_server_id.trim().to_string(),
+        }
+    } else {
+        Idp::Auth0
+    };
+    let client_id: String = Input::with_theme(theme)
+        .with_prompt("CLI application client_id")
+        .interact_text()
+        .map_err(prompt_err)?;
+    let audience: String = Input::with_theme(theme)
+        .with_prompt("API audience (e.g. https://temper.acme.com/api)")
+        .interact_text()
+        .map_err(prompt_err)?;
+    Ok(SelfHostConfig {
+        instance_url: instance_url.trim().trim_end_matches('/').to_string(),
+        auth_domain: auth_domain.trim().to_string(),
+        client_id: client_id.trim().to_string(),
+        audience: audience.trim().to_string(),
+        idp,
     })
 }
 

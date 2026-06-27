@@ -167,16 +167,35 @@ fn display_name_from_url(url: &str) -> String {
 /// open_meta fields (user-defined keys: tags, relates_to, extends,
 /// depends_on, and any other custom frontmatter) for complete frontmatter
 /// that matches what the CLI would produce locally.
+/// Bundled inputs for [`build_frontmatter_from_resource`]. `resource`,
+/// `context`, `doc_type`, and `canonical_owner` are borrowed; `body` is
+/// owned because it is moved into the new `Frontmatter`. `managed_meta` and
+/// `open_meta` are the optional two metadata tiers.
+#[derive(Debug)]
+pub struct BuildFrontmatterParams<'a> {
+    pub resource: &'a temper_workflow::types::ResourceRow,
+    pub context: &'a str,
+    pub doc_type: &'a str,
+    pub canonical_owner: &'a str,
+    pub body: String,
+    pub managed_meta: Option<&'a serde_json::Value>,
+    pub open_meta: Option<&'a serde_json::Value>,
+}
+
 pub fn build_frontmatter_from_resource(
-    resource: &temper_workflow::types::ResourceRow,
-    context: &str,
-    doc_type: &str,
-    canonical_owner: &str,
-    body: String,
-    managed_meta: Option<&serde_json::Value>,
-    open_meta: Option<&serde_json::Value>,
+    params: BuildFrontmatterParams<'_>,
 ) -> crate::error::Result<temper_workflow::frontmatter::Frontmatter> {
     use temper_workflow::frontmatter::{DocType, Frontmatter};
+
+    let BuildFrontmatterParams {
+        resource,
+        context,
+        doc_type,
+        canonical_owner,
+        body,
+        managed_meta,
+        open_meta,
+    } = params;
 
     let dt = DocType::from_str(doc_type)?;
     let mut fm = Frontmatter::new(dt, body);
@@ -376,15 +395,15 @@ mod tests {
         let resource = test_resource_row();
         // Caller is responsible for resolving @me -> @<slug> before calling.
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "@j-cole-taylor",
-            String::new(),
-            None,
-            None,
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "@j-cole-taylor",
+            body: String::new(),
+            managed_meta: None,
+            open_meta: None,
+        })
         .unwrap();
 
         let owner = fm
@@ -403,15 +422,15 @@ mod tests {
     fn build_frontmatter_from_resource_passes_team_handle_through() {
         let resource = test_resource_row();
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "+platform-eng",
-            String::new(),
-            None,
-            None,
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "+platform-eng",
+            body: String::new(),
+            managed_meta: None,
+            open_meta: None,
+        })
         .unwrap();
 
         let owner = fm
@@ -433,15 +452,15 @@ mod tests {
             "config": {"key": "value", "nested": true}
         });
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "@me",
-            String::new(),
-            Some(&meta),
-            None,
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "@me",
+            body: String::new(),
+            managed_meta: Some(&meta),
+            open_meta: None,
+        })
         .unwrap();
         let v = fm.value();
 
@@ -477,15 +496,15 @@ mod tests {
             "tags": ["alpha", "beta"],
         });
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "@me",
-            String::new(),
-            None,
-            Some(&open_meta),
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "@me",
+            body: String::new(),
+            managed_meta: None,
+            open_meta: Some(&open_meta),
+        })
         .unwrap();
         let v = fm.value();
 
@@ -525,15 +544,15 @@ mod tests {
             "custom_block": {"key": "value", "nested": {"inner": true}},
         });
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "@me",
-            String::new(),
-            None,
-            Some(&open_meta),
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "@me",
+            body: String::new(),
+            managed_meta: None,
+            open_meta: Some(&open_meta),
+        })
         .unwrap();
         let v = fm.value();
 
@@ -566,15 +585,15 @@ mod tests {
             "custom_tag": "hello",
         });
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "@me",
-            String::new(),
-            Some(&managed_meta),
-            Some(&open_meta),
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "@me",
+            body: String::new(),
+            managed_meta: Some(&managed_meta),
+            open_meta: Some(&open_meta),
+        })
         .unwrap();
         let v = fm.value();
 
@@ -633,15 +652,15 @@ mod tests {
             "effort": "M",
         });
 
-        let fm = build_frontmatter_from_resource(
-            &resource,
-            "temper",
-            "research",
-            "@me",
-            String::new(),
-            Some(&managed_meta),
-            None,
-        )
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "research",
+            canonical_owner: "@me",
+            body: String::new(),
+            managed_meta: Some(&managed_meta),
+            open_meta: None,
+        })
         .unwrap();
         let v = fm.value();
 
