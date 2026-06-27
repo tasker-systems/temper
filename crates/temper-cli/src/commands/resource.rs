@@ -51,6 +51,11 @@ pub(crate) struct EdgesReport {
 /// `ref` is render-time only — never persisted, never on the wire type.
 /// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
 /// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
+///
+/// Also injects `context_ref` — the decorated home-context ref
+/// (`{context_owner_ref}/{context_slug}`) — when both fields are present
+/// on the row. This lets agents and UIs address the resource's home
+/// context without a second round-trip.
 pub(crate) fn inject_ref(row: &mut serde_json::Value) {
     let id = row
         .get("id")
@@ -64,6 +69,44 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
             temper_core::types::ids::ResourceId(uuid),
         );
         if let Some(obj) = row.as_object_mut() {
+            obj.insert("ref".to_string(), serde_json::Value::String(decorated));
+
+            // Inject context_ref alongside ref when the row carries the raw ingredients.
+            let ctx_owner_ref = obj
+                .get("context_owner_ref")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            let ctx_slug = obj
+                .get("context_slug")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if let (Some(owner_ref), Some(slug)) = (ctx_owner_ref, ctx_slug) {
+                let context_ref = format!("{owner_ref}/{slug}");
+                obj.insert(
+                    "context_ref".to_string(),
+                    serde_json::Value::String(context_ref),
+                );
+            }
+        }
+    }
+}
+
+/// Insert a derived `ref` key into a serialized context row
+/// (`ContextRow` / `ContextRowWithCounts`), computed from `owner_ref` + `slug`.
+/// The `ref` is render-time only — never persisted, never on the wire type.
+/// No-op if `owner_ref` or `slug` are absent from the row.
+pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
+    if let Some(obj) = row.as_object_mut() {
+        let owner_ref = obj
+            .get("owner_ref")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let slug = obj
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        if let (Some(owner_ref), Some(slug)) = (owner_ref, slug) {
+            let decorated = format!("{owner_ref}/{slug}");
             obj.insert("ref".to_string(), serde_json::Value::String(decorated));
         }
     }
@@ -1140,6 +1183,8 @@ mod action_result_tests {
             context_name: context.to_string(),
             doc_type_name: doc_type.to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: context.to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: None,
             seq: None,
             mode: None,
@@ -1332,6 +1377,8 @@ mod resource_list_render_tests {
             context_name: "temper".to_string(),
             doc_type_name: "research".to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: "temper".to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: None,
             seq: None,
             mode: None,

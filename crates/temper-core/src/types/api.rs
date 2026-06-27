@@ -135,6 +135,14 @@ pub struct UnifiedSearchResultRow {
     pub graph_score: f32,
     pub combined_score: f32,
     pub origin: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_slug: Option<String>,
+    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
+    /// Together with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable
+    /// decorated context ref. `None` when not resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_owner_ref: Option<String>,
 }
 
 /// Request body for updating a profile.

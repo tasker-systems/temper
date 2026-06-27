@@ -226,6 +226,10 @@ pub struct EnrichedListRow {
     pub updated: DateTime<Utc>,
     /// Home context display name.
     pub context_name: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`).
+    pub context_slug: String,
+    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
+    pub context_owner_ref: String,
     /// The authoritative doctype (the `doc_type` property the resource pass stamps).
     pub doc_type: String,
     /// `temper-stage`, if present.
@@ -274,6 +278,11 @@ pub async fn enriched_list(
                 r.created,
                 r.updated,
                 c.name AS context_name,
+                c.slug AS context_slug,
+                CASE c.owner_table
+                  WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+                END AS context_owner_ref,
                 dt.property_value #>> '{}' AS doc_type,
                 st.property_value #>> '{}' AS stage,
                 md.property_value #>> '{}' AS mode,
@@ -355,6 +364,8 @@ pub async fn enriched_list(
                 created: r.get("created"),
                 updated: r.get("updated"),
                 context_name: r.get("context_name"),
+                context_slug: r.get("context_slug"),
+                context_owner_ref: r.get("context_owner_ref"),
                 doc_type: r.get("doc_type"),
                 stage: r.get("stage"),
                 mode: r.get("mode"),
@@ -484,6 +495,10 @@ pub struct ResourceRowParity {
     pub doc_type_name: String,
     /// Owner profile handle (invariant).
     pub owner_handle: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`). Invariant.
+    pub context_slug: String,
+    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`). Invariant.
+    pub context_owner_ref: String,
     /// `temper-stage`, if present (invariant).
     pub stage: Option<String>,
     /// `temper-mode`, if present (invariant).
@@ -520,6 +535,11 @@ pub async fn resource_row(
                 r.body_hash,
                 c.id              AS re_minted_context_id,
                 c.name            AS context_name,
+                c.slug            AS context_slug,
+                CASE c.owner_table
+                  WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+                END               AS context_owner_ref,
                 h.owner_profile_id,
                 h.originator_profile_id,
                 p.handle          AS owner_handle,
@@ -573,6 +593,8 @@ pub async fn resource_row(
         created: row.get("created"),
         updated: row.get("updated"),
         context_name: row.get("context_name"),
+        context_slug: row.get("context_slug"),
+        context_owner_ref: row.get("context_owner_ref"),
         doc_type_name: row.get("doc_type_name"),
         owner_handle: row.get("owner_handle"),
         stage: row.get("stage"),

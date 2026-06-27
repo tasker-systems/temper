@@ -175,6 +175,74 @@ async fn list_by_context_ref_at_me_slug2_returns_only_that_contexts_resources(po
     );
 }
 
+// ─── Test 4: round-trip — list rows carry slug+owner_ref that resolve back ───────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn context_row_ref_round_trips_through_parse_and_resolve(pool: PgPool) {
+    use temper_api::services::context_service;
+    use temper_core::context_ref::{decorated_context_ref, parse_context_ref};
+    use temper_core::types::ids::ProfileId;
+
+    let email = format!("list-ref-rt-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, _context_a_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+
+    // Insert a second context (team-owned requires a team; add another profile-owned context).
+    let context_b_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+         VALUES ($1, 'kb_profiles', $2, 'notes', 'notes')",
+    )
+    .bind(context_b_id)
+    .bind(profile_id)
+    .execute(&pool)
+    .await
+    .expect("insert second context");
+
+    let rows =
+        context_service::list_visible(&pool, ProfileId::from(profile_id))
+            .await
+            .expect("list_visible must succeed");
+
+    assert!(
+        rows.len() >= 2,
+        "expected at least 2 rows, got {}",
+        rows.len()
+    );
+
+    for row in &rows {
+        // Build the decorated ref the same way the CLI would: "{owner_ref}/{slug}".
+        let full_ref = format!("{}/{}", row.owner_ref, row.slug);
+
+        // Parse → resolve → assert same context id.
+        let cref = parse_context_ref(&full_ref)
+            .unwrap_or_else(|e| panic!("parse_context_ref({full_ref:?}) failed: {e}"));
+
+        let resolved = context_service::resolve_context_ref(
+            &pool,
+            ProfileId::from(profile_id),
+            &cref,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("resolve_context_ref({full_ref:?}) failed: {e}"));
+
+        assert_eq!(
+            *resolved,
+            *row.id,
+            "round-trip ref {full_ref:?} resolved to wrong context"
+        );
+
+        // Also verify the decorated_context_ref helper produces the same owner_ref/slug.
+        // Extract the bare owner_addressable (strip sigil '@' or '+').
+        let bare_addressable = row.owner_ref.trim_start_matches(['@', '+']);
+        let built = decorated_context_ref(&row.kb_owner_table, bare_addressable, &row.slug);
+        assert_eq!(
+            built, full_ref,
+            "decorated_context_ref helper must reproduce the same ref"
+        );
+    }
+}
+
 // ─── Test 3: bare name → 400 Bad Request ─────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

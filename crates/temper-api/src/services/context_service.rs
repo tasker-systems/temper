@@ -29,6 +29,11 @@ pub async fn list_visible(
                c.owner_id AS "kb_owner_id!",
                c.created,
                c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!",
                COUNT(rh.resource_id) AS "resource_count!"
           FROM kb_contexts c
           LEFT JOIN kb_resource_homes rh
@@ -38,7 +43,7 @@ pub async fn list_visible(
                  SELECT 1 FROM kb_team_contexts tc
                    JOIN kb_team_members tm ON tm.team_id = tc.team_id
                   WHERE tc.context_id = c.id AND tm.profile_id = $1)
-         GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created
+         GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created, c.slug
          ORDER BY c.name
         "#,
         *profile_id
@@ -62,7 +67,12 @@ pub async fn get_visible(
                c.owner_table AS "kb_owner_table!",
                c.owner_id AS "kb_owner_id!",
                c.created,
-               c.created AS "updated!"
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!"
           FROM kb_contexts c
          WHERE c.id = $2
            AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
@@ -92,7 +102,12 @@ pub async fn resolve_by_name(
                c.owner_table AS "kb_owner_table!",
                c.owner_id AS "kb_owner_id!",
                c.created,
-               c.created AS "updated!"
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!"
           FROM kb_contexts c
          WHERE c.name = $2
            AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
@@ -317,7 +332,12 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
                   owner_table AS "kb_owner_table!",
                   owner_id AS "kb_owner_id!",
                   created,
-                  created AS "updated!"
+                  created AS "updated!",
+                  slug,
+                  CASE owner_table
+                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                    ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+                  END AS "owner_ref!"
         "#,
         *id,
         *profile_id,

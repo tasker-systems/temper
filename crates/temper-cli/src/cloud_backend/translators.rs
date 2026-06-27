@@ -458,6 +458,8 @@ mod tests {
             context_name: "temper".to_string(),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: "temper".to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: Some("active".to_string()),
             seq: None,
             mode: None,

@@ -33,7 +33,12 @@ export type ResourceFacets = { doc_type: { [key in string]?: bigint }, };
 /**
  * Query parameters for listing visible resources.
  */
-export type ResourceListParams = { kb_context_id: string | null, kb_doc_type_id: string | null, context_name: string | null, doc_type_name: string | null, owner: string | null, q: string | null, stage: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
+export type ResourceListParams = { kb_doc_type_id: string | null, 
+/**
+ * Context filter: UUID string or `@owner/slug` decorated ref.
+ * Bare context names are rejected server-side (spec Decision 1).
+ */
+context_ref: string | null, doc_type_name: string | null, owner: string | null, q: string | null, stage: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
 /**
  * When true, the list endpoint returns `ResourceMetaListResponse`
  * (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
@@ -50,7 +55,16 @@ export type ResourceListResponse = { rows: Array<ResourceRow>, total: bigint, fa
  * Row type for resource listings — includes joined display fields
  * and managed_meta projections from `vault_resources_browse` view.
  */
-export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, origin_uri: string, title: string, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string, doc_type_name: string, owner_handle: string, stage: string | null, seq: number | null, mode: string | null, effort: string | null, 
+export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, origin_uri: string, title: string, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string, doc_type_name: string, owner_handle: string, 
+/**
+ * Slug of the home context (the natural-key half of `@owner/slug`).
+ */
+context_slug: string, 
+/**
+ * Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
+ * Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
+ */
+context_owner_ref: string, stage: string | null, seq: number | null, mode: string | null, effort: string | null, 
 /**
  * SHA-256 hash of the resource body content, from `kb_resource_manifests`.
  * `None` when no manifest row exists (resource created via POST without a
@@ -91,7 +105,15 @@ content_hash: string | null,
  * Pre-computed chunks (base64-encoded MessagePack). Required iff
  * `content` is `Some`.
  */
-chunks_packed: string | null, };
+chunks_packed: string | null, 
+/**
+ * Context move ref: a bare UUID or `@owner/slug` decorated form.
+ * Bare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the
+ * server (Decision 1). When present the server resolves the ref to a
+ * `ContextId` (visibility-gated to the principal) and re-homes the
+ * resource. Forwarded verbatim from the CLI `--context-to` flag.
+ */
+context_to: string | null, };
 
 /**
  * Sort direction.

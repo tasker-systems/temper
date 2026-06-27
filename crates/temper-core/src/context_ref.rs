@@ -59,6 +59,23 @@ fn validate_slug(slug: &str) -> Result<(), ContextRefError> {
     }
 }
 
+/// Build the decorated context ref for display/round-trip.
+///
+/// `owner_addressable` is the bare handle (profiles) or team-slug (teams),
+/// WITHOUT a sigil. `owner_table` is the substrate discriminator
+/// (`"kb_profiles"` or `"kb_teams"`).
+///
+/// Returns `@<handle>/<context_slug>` for profile owners, or
+/// `+<team-slug>/<context_slug>` for team owners.
+pub fn decorated_context_ref(
+    owner_table: &str,
+    owner_addressable: &str,
+    context_slug: &str,
+) -> String {
+    let sigil = if owner_table == "kb_teams" { '+' } else { '@' };
+    format!("{sigil}{owner_addressable}/{context_slug}")
+}
+
 /// Parse a context ref. Pure — no DB, no principal. See [`ContextRef`].
 pub fn parse_context_ref(s: &str) -> Result<ContextRef, ContextRefError> {
     let s = s.trim();
@@ -186,6 +203,18 @@ mod tests {
                 owner: ContextOwnerRef::Me,
                 slug: "temper".into()
             }
+        );
+    }
+
+    #[test]
+    fn decorates_profile_and_team() {
+        assert_eq!(
+            decorated_context_ref("kb_profiles", "j-cole-taylor", "temper"),
+            "@j-cole-taylor/temper"
+        );
+        assert_eq!(
+            decorated_context_ref("kb_teams", "tasker-systems", "general"),
+            "+tasker-systems/general"
         );
     }
 }

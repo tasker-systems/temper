@@ -372,6 +372,8 @@ pub async fn search_select(
             graph_score: h.graph_score,
             combined_score: h.combined_score,
             origin: "unified".to_string(),
+            context_slug: Some(row.context_slug),
+            context_owner_ref: Some(row.context_owner_ref),
         });
     }
     Ok(out)
@@ -405,6 +407,8 @@ pub async fn list_enriched_select(
             context_name: r.context_name,
             doc_type_name: r.doc_type,
             owner_handle: "@me".to_string(),
+            context_slug: r.context_slug,
+            context_owner_ref: r.context_owner_ref,
             stage: r.stage,
             seq: None,
             mode: r.mode,

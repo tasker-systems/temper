@@ -4,9 +4,27 @@ import type { ContextId } from "./ContextId";
 /**
  * Response row for context endpoints.
  */
-export type ContextRow = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, };
+export type ContextRow = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, 
+/**
+ * The context's per-owner-unique slug (the natural-key half of `@owner/slug`).
+ */
+slug: string, 
+/**
+ * The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.
+ * Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
+ */
+owner_ref: string, };
 
 /**
  * Context with resource count — used by the list endpoint.
  */
-export type ContextRowWithCounts = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, resource_count: bigint, };
+export type ContextRowWithCounts = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, resource_count: bigint, 
+/**
+ * The context's per-owner-unique slug (the natural-key half of `@owner/slug`).
+ */
+slug: string, 
+/**
+ * The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.
+ * Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
+ */
+owner_ref: string, };

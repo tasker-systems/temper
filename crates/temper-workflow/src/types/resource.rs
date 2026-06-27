@@ -29,6 +29,11 @@ pub struct ResourceRow {
     pub context_name: String,
     pub doc_type_name: String,
     pub owner_handle: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`).
+    pub context_slug: String,
+    /// Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
+    /// Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
+    pub context_owner_ref: String,
     // Managed meta projections
     pub stage: Option<String>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]

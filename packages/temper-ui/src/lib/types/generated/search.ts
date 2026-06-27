@@ -21,4 +21,14 @@ export type UnifiedSearchResultRow = { resource_id: string, title: string, slug:
  * Surface A (Beat 2) structural-proximity score: max-over-paths γ^hop·Π edge_weight, 0 when the
  * candidate was reached only by FTS/vector. Exposed so the graph term is observable for tuning.
  */
-graph_score: number, combined_score: number, origin: string, };
+graph_score: number, combined_score: number, origin: string, 
+/**
+ * Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved.
+ */
+context_slug: string | null, 
+/**
+ * Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
+ * Together with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable
+ * decorated context ref. `None` when not resolved.
+ */
+context_owner_ref: string | null, };

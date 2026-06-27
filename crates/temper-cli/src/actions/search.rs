@@ -167,6 +167,8 @@ mod tests {
             graph_score: 0.0,
             combined_score: 0.5,
             origin: "fts".to_string(),
+            context_slug: None,
+            context_owner_ref: None,
         }];
         let out =
             crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");

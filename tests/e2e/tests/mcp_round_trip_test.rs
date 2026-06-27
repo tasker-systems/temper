@@ -442,6 +442,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         ),
         open_meta: None,
         move_to: None,
+        context_ref: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(pool.clone(), profile_id)
@@ -569,6 +570,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         managed_meta: Some(new_managed),
         open_meta: Some(new_open),
         move_to: None,
+        context_ref: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(pool.clone(), profile_id)
@@ -685,6 +687,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
         }),
         open_meta: None,
         move_to: None,
+        context_ref: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(pool.clone(), profile_id)
@@ -781,6 +784,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
         }),
         open_meta: None,
         move_to: None,
+        context_ref: None,
         origin: Surface::Mcp,
     };
     let result = DbBackend::new(pool.clone(), profile_id)

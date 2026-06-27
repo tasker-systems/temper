@@ -226,6 +226,8 @@ pub(crate) async fn native_resource_row(
         context_name: p.context_name,
         doc_type_name: p.doc_type_name,
         owner_handle: p.owner_handle,
+        context_slug: p.context_slug,
+        context_owner_ref: p.context_owner_ref,
         stage: p.stage,
         seq: p.seq,
         mode: p.mode,

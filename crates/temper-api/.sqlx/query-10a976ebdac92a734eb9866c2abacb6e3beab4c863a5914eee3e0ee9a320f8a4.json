@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.name,\n               c.owner_table AS \"kb_owner_table!\",\n               c.owner_id AS \"kb_owner_id!\",\n               c.created,\n               c.created AS \"updated!\",\n               c.slug,\n               CASE c.owner_table\n                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)\n                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)\n               END AS \"owner_ref!\",\n               COUNT(rh.resource_id) AS \"resource_count!\"\n          FROM kb_contexts c\n          LEFT JOIN kb_resource_homes rh\n                 ON rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id\n         WHERE (c.owner_table = 'kb_profiles' AND c.owner_id = $1)\n            OR EXISTS (\n                 SELECT 1 FROM kb_team_contexts tc\n                   JOIN kb_team_members tm ON tm.team_id = tc.team_id\n                  WHERE tc.context_id = c.id AND tm.profile_id = $1)\n         GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created, c.slug\n         ORDER BY c.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "resource_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "10a976ebdac92a734eb9866c2abacb6e3beab4c863a5914eee3e0ee9a320f8a4"
+}
