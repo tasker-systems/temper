@@ -7,6 +7,7 @@
 use crate::frontmatter::document::DocType;
 use serde::{Deserialize, Serialize};
 use temper_core::types::graph::{EdgeKind, Polarity};
+use temper_core::types::ids::{EdgeId, ResourceId};
 use uuid::Uuid;
 
 // ─── Edge Type ──────────────────────────────────────────────────────────────
@@ -74,7 +75,7 @@ impl EdgeType {
 /// Used during edge extraction before resolution against the database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetRef {
-    Id(Uuid),
+    Id(ResourceId),
     Slug(String),
 }
 
@@ -90,7 +91,7 @@ impl TargetRef {
             return None;
         }
         if let Ok(uuid) = Uuid::parse_str(trimmed) {
-            return Some(Self::Id(uuid));
+            return Some(Self::Id(ResourceId::from(uuid)));
         }
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             return None;
@@ -183,13 +184,14 @@ impl ResourceRelationships {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct GraphTraversalRow {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub depth: i32,
+    // `path` stays `Vec<Uuid>` — bare path arrays are deferred (CQ-3 sub-item).
     pub path: Vec<Uuid>,
     pub edge_kind: Option<EdgeKind>,
     pub polarity: Option<Polarity>,
     pub label: Option<String>,
-    pub from_resource_id: Option<Uuid>,
+    pub from_resource_id: Option<ResourceId>,
     pub path_weight: f64,
 }
 
@@ -199,7 +201,7 @@ pub struct GraphTraversalRow {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct GraphNeighborRow {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
     pub label: String,
@@ -213,8 +215,8 @@ pub struct GraphNeighborRow {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct GraphEdgeRow {
-    pub edge_id: Uuid,
-    pub peer_resource_id: Uuid,
+    pub edge_id: EdgeId,
+    pub peer_resource_id: ResourceId,
     pub peer_title: String,
     pub peer_slug: String,
     pub edge_kind: EdgeKind,
@@ -228,8 +230,8 @@ pub struct GraphEdgeRow {
 /// A resolved edge ready for projection.
 #[derive(Debug, Clone)]
 pub struct ResolvedEdge {
-    pub source_resource_id: Uuid,
-    pub target_resource_id: Uuid,
+    pub source_resource_id: ResourceId,
+    pub target_resource_id: ResourceId,
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
     pub label: String,
@@ -277,7 +279,7 @@ pub fn is_aggregator(doc_type: DocType) -> bool {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphNode {
-    pub id: Uuid,
+    pub id: ResourceId,
     pub slug: String,
     pub title: String,
     /// Typed doctype — serializes as `"concept"`, `"research"`, etc.
@@ -343,9 +345,9 @@ mod tests {
         let result = TargetRef::parse(input);
         assert_eq!(
             result,
-            Some(TargetRef::Id(
+            Some(TargetRef::Id(ResourceId::from(
                 Uuid::parse_str("019d1d24-2000-7379-8f26-ae4ae87bc5c6").unwrap()
-            ))
+            )))
         );
     }
 

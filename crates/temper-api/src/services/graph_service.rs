@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
+use temper_core::types::ids::ResourceId;
 use temper_workflow::frontmatter::document::DocType;
 use temper_workflow::types::graph::{is_aggregator, GraphEdge, GraphNode, SubgraphResponse};
 
@@ -166,7 +167,7 @@ pub async fn aggregator_subgraph(
             None
         };
         nodes.push(GraphNode {
-            id: rec.id,
+            id: ResourceId::from(rec.id),
             slug: rec.slug,
             title: rec.title,
             aggregator: is_aggregator(doc_type),

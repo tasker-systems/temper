@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::types::managed_meta::ManagedMeta;
-use temper_core::types::ids::ResourceId;
+use temper_core::types::ids::{CogmapId, EdgeId, ResourceId};
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -129,10 +129,10 @@ pub struct AssertRelationship {
 }
 
 /// Retype an existing relationship (identified by its `edge_handle` — the
-/// backend-opaque edge handle from `assert`) — changes `edge_kind` / `polarity`.
+/// `kb_edges` id returned by `assert`) — changes `edge_kind` / `polarity`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetypeRelationship {
-    pub edge_handle: uuid::Uuid,
+    pub edge_handle: EdgeId,
     pub edge_kind: temper_core::types::graph::EdgeKind,
     pub polarity: temper_core::types::graph::Polarity,
     pub origin: Surface,
@@ -141,7 +141,7 @@ pub struct RetypeRelationship {
 /// Reweight an existing relationship — changes `weight`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReweightRelationship {
-    pub edge_handle: uuid::Uuid,
+    pub edge_handle: EdgeId,
     pub weight: f64,
     pub origin: Surface,
 }
@@ -150,7 +150,7 @@ pub struct ReweightRelationship {
 /// Optional human-readable reason for audit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoldRelationship {
-    pub edge_handle: uuid::Uuid,
+    pub edge_handle: EdgeId,
     pub reason: Option<String>,
     pub origin: Surface,
 }
@@ -161,8 +161,8 @@ pub struct FoldRelationship {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenInvocation {
     pub trigger_kind: String,
-    pub originating_cogmap: uuid::Uuid,
-    pub parent_cogmap: Option<uuid::Uuid>,
+    pub originating_cogmap: CogmapId,
+    pub parent_cogmap: Option<CogmapId>,
     pub origin: Surface,
 }
 
@@ -181,7 +181,7 @@ pub struct CloseInvocation {
 /// is a temper_next cogmap id (not a resource ref).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReconcileCognitiveMap {
-    pub cogmap_id: uuid::Uuid,
+    pub cogmap_id: CogmapId,
     pub request: temper_core::types::reconcile::ReconcileCogmapRequest,
     pub origin: Surface,
 }
@@ -279,7 +279,7 @@ mod tests {
     fn open_invocation_round_trips() {
         let cmd = OpenInvocation {
             trigger_kind: "manual".to_string(),
-            originating_cogmap: uuid::Uuid::now_v7(),
+            originating_cogmap: CogmapId::new(),
             parent_cogmap: None,
             origin: Surface::Mcp,
         };

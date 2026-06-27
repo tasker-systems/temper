@@ -190,7 +190,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
     let task_row = resolve_by_title(&app.client, "myapp", "task", "Implement Widget").await;
     // The id-based link must target the seeded task's resource id directly.
     assert_eq!(
-        outgoing[0].peer_resource_id,
+        uuid::Uuid::from(outgoing[0].peer_resource_id),
         *task_row.id.as_uuid(),
         "outgoing advances edge must target the seeded task's resource id"
     );
@@ -211,7 +211,8 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
         "task must have exactly one incoming session→task edge; got {task_edges:?}"
     );
     assert_eq!(
-        incoming[0].peer_resource_id, session_id,
+        uuid::Uuid::from(incoming[0].peer_resource_id),
+        session_id,
         "incoming edge source must be the session"
     );
     assert_eq!(incoming[0].label, "advances");
