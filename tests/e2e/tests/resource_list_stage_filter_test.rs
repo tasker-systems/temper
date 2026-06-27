@@ -106,7 +106,7 @@ async fn resource_list_filters_by_stage(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id.into()),
+            context_ref: Some(uuid::Uuid::from(context.id).to_string()),
             doc_type_name: Some("task".to_string()),
             stage: Some("in-progress".to_string()),
             limit: Some(50),
@@ -135,7 +135,7 @@ async fn resource_list_filters_by_stage(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id.into()),
+            context_ref: Some(uuid::Uuid::from(context.id).to_string()),
             doc_type_name: Some("task".to_string()),
             stage: Some("done".to_string()),
             limit: Some(50),
@@ -161,7 +161,7 @@ async fn resource_list_filters_by_stage(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id.into()),
+            context_ref: Some(uuid::Uuid::from(context.id).to_string()),
             doc_type_name: Some("task".to_string()),
             limit: Some(50),
             ..Default::default()

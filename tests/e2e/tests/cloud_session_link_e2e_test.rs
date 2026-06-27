@@ -77,7 +77,7 @@ async fn resolve_by_title(
     title: &str,
 ) -> temper_workflow::types::resource::ResourceRow {
     let params = temper_workflow::types::resource::ResourceListParams {
-        context_name: Some(context.to_string()),
+        context_ref: Some(format!("@me/{context}")),
         doc_type_name: Some(doc_type.to_string()),
         ..Default::default()
     };

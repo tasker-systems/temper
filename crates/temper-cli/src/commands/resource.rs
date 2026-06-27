@@ -416,7 +416,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     let fields_owned: Vec<String> = params.fields.to_vec();
     let api_params = ResourceListParams {
         doc_type_name: Some(doc_type.clone()),
-        context_name: context.clone(),
+        context_ref: context.clone(),
         stage: params.stage.map(str::to_string),
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),
@@ -478,7 +478,7 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     let limit = params.limit.unwrap_or(50);
     let api_params = ResourceListParams {
         doc_type_name: Some(params.doc_type.to_string()),
-        context_name: params.context.map(ToString::to_string),
+        context_ref: params.context.map(ToString::to_string),
         stage: params.stage.map(str::to_string),
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),

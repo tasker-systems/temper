@@ -172,7 +172,7 @@ pub async fn read_resource(
         })?;
 
         let params = temper_workflow::types::resource::ResourceListParams {
-            kb_context_id: Some(uuid::Uuid::from(context.id)),
+            context_ref: Some(uuid::Uuid::from(context.id).to_string()),
             limit: Some(200),
             ..Default::default()
         };

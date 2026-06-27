@@ -350,7 +350,7 @@ pub async fn pull_context(
     let mut offset: i64 = 0;
     loop {
         let params = ResourceListParams {
-            context_name: Some(context.to_string()),
+            context_ref: Some(context.to_string()),
             limit: Some(PULL_PAGE_SIZE),
             offset: Some(offset),
             ..Default::default()

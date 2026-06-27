@@ -73,7 +73,7 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&temper_workflow::types::resource::ResourceListParams {
-            context_name: Some("cursor-ctx".to_string()),
+            context_ref: Some("@me/cursor-ctx".to_string()),
             ..Default::default()
         })
         .await
@@ -117,7 +117,7 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&temper_workflow::types::resource::ResourceListParams {
-            context_name: Some("wctx".to_string()),
+            context_ref: Some("@me/wctx".to_string()),
             ..Default::default()
         })
         .await
@@ -168,7 +168,7 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
         .client
         .resources()
         .list(&temper_workflow::types::resource::ResourceListParams {
-            context_name: Some("fpctx".to_string()),
+            context_ref: Some("@me/fpctx".to_string()),
             ..Default::default()
         })
         .await

@@ -86,7 +86,7 @@ fn collect_sessions_with_content(
 ) -> Result<(Vec<WarmupSession>, Option<String>)> {
     let api_params = ResourceListParams {
         doc_type_name: Some("session".to_string()),
-        context_name: Some(context.to_string()),
+        context_ref: Some(context.to_string()),
         sort: Some(ResourceSortField::Created),
         order: Some(SortOrder::Desc),
         limit: Some(limit as i64),

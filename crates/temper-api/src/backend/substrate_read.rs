@@ -7,8 +7,9 @@
 //! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
 //! is unqualified against the one schema (the connection carries the search_path).
 //!
-//! `list`/`list_meta` filter (context_name/doc_type_name/stage/owner/`q`-title), sort, and paginate the
-//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; the enrichment path
+//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/owner/`q`-title), sort, and paginate the
+//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
+//! to a context UUID before filtering so bare names are rejected (spec Decision 1). The enrichment path
 //! (`list_enriched`/MCP) filters by name in SQL via `readback::enriched_list`. Full-text/vector `q` on
 //! the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
 
@@ -19,7 +20,9 @@ use uuid::Uuid;
 
 use crate::backend::db_backend::{map_readback_err, native_resource_row};
 use crate::error::{ApiError, ApiResult};
+use crate::services::context_service::resolve_context_ref;
 use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
+use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
@@ -60,10 +63,15 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
     }
 }
 
-/// Resolve the visible set, apply the `ResourceListParams` filters (context_name /
+/// Resolve the visible set, apply the `ResourceListParams` filters (context_ref /
 /// doc_type_name / stage / owner / `q` title-match) + sort + pagination IN SQL, and
 /// return only the page's ids (so the caller reconstructs the page, not every visible
 /// row — this also fixes the prior all-rows N+1).
+///
+/// `context_ref` is a UUID string or `@owner/slug` decorated ref. It is resolved to a
+/// context UUID before the SQL runs — bare names are rejected with `BadRequest` (spec
+/// Decision 1). Filter is then `c.id = $2` (UUID), eliminating the prior name-ambiguity
+/// bug where two contexts sharing a name both matched.
 ///
 /// `owner`: `@me` resolves to the caller's profile; any other value matches the owner
 /// profile's `handle` (per `graph.rs`'s handle convention). `q` is a trivial title
@@ -76,6 +84,18 @@ async fn filtered_visible_page(
     profile_id: Uuid,
     params: &ResourceListParams,
 ) -> ApiResult<VisiblePage> {
+    // Resolve context_ref → UUID before building SQL. A bare name is
+    // rejected by `parse_context_ref` (spec Decision 1); an @owner/slug
+    // ref is resolved via `resolve_context_ref` (visibility-gated).
+    let context_id: Option<Uuid> = match params.context_ref.as_deref() {
+        Some(s) => {
+            let cref = parse_context_ref(s)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            Some(*resolve_context_ref(pool, ProfileId::from(profile_id), &cref).await?)
+        }
+        None => None,
+    };
+
     let owner_self: Option<Uuid> = match params.owner.as_deref() {
         Some("@me") => Some(profile_id),
         _ => None,
@@ -110,7 +130,7 @@ async fn filtered_visible_page(
              ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
             AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
           WHERE r.is_active
-            AND ($2::text IS NULL OR c.name = $2)
+            AND ($2::uuid IS NULL OR c.id = $2)
             AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
             AND ($4::text IS NULL OR st.property_value #>> '{{}}' = $4)
             AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
@@ -122,7 +142,7 @@ async fn filtered_visible_page(
 
     let rows = sqlx::query(&sql)
         .bind(profile_id)
-        .bind(params.context_name.as_deref())
+        .bind(context_id)
         .bind(params.doc_type_name.as_deref())
         .bind(params.stage.as_deref())
         .bind(owner_self)

@@ -73,9 +73,9 @@ async fn test_list_resources_returns_wrapped_response(pool: PgPool) {
     );
 }
 
-/// GET /api/resources?context_name=temper filters by context name.
+/// GET /api/resources?context_ref=@me/temper filters by resolved context id.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn test_list_resources_filter_by_context_name(pool: PgPool) {
+async fn test_list_resources_filter_by_context_ref(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
 
     let email = format!("filter-user-{}@example.com", uuid::Uuid::new_v4());
@@ -100,7 +100,7 @@ async fn test_list_resources_filter_by_context_name(pool: PgPool) {
 
     let resp = app
         .client
-        .get(app.url("/api/resources?context_name=temper"))
+        .get(app.url("/api/resources?context_ref=@me/temper"))
         .header("Authorization", format!("Bearer {token}"))
         .send()
         .await

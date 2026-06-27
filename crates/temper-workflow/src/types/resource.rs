@@ -79,9 +79,10 @@ pub enum SortOrder {
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListParams {
-    pub kb_context_id: Option<Uuid>,
     pub kb_doc_type_id: Option<Uuid>,
-    pub context_name: Option<String>,
+    /// Context filter: UUID string or `@owner/slug` decorated ref.
+    /// Bare context names are rejected server-side (spec Decision 1).
+    pub context_ref: Option<String>,
     pub doc_type_name: Option<String>,
     pub owner: Option<String>,
     pub q: Option<String>,

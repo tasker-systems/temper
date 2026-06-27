@@ -941,15 +941,15 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// WS6 Spec B Task 6: list_resources routes through list_enriched_select
+// WS6 Spec B Task 6: list_resources routes through list_select + enrich_resources
 // ---------------------------------------------------------------------------
 
-/// Drive the production MCP `list_resources` tool fn end-to-end (rows + meta via
-/// the single backend-agnostic `substrate_read::list_enriched_select`, each
-/// assembled by the pure `build_enriched`). Proves the contract through the
-/// *production caller* (`TemperMcpService` → `require_profile` → `list_resources`):
-/// the doctype filter narrows the array to matching rows, and every row carries
-/// managed_meta + a non-empty context_name.
+/// Drive the production MCP `list_resources` tool fn end-to-end (rows via
+/// `substrate_read::list_select` filtered by `context_ref`, enriched per-row
+/// via `enrich_resources`). Proves the contract through the *production caller*
+/// (`TemperMcpService` → `require_profile` → `list_resources`): the doctype
+/// filter narrows the array to matching rows, and every row carries managed_meta
+/// + a non-empty context_name.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     use temper_api::config::ApiConfig;
@@ -1044,7 +1044,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let result = temper_mcp::tools::resources::list_resources(
         &svc,
         temper_mcp::tools::resources::ListResourcesInput {
-            context_name: Some("list-selector".to_string()),
+            context_ref: Some("@me/list-selector".to_string()),
             doc_type_name: Some("research".to_string()),
             limit: None,
             offset: None,
@@ -1074,25 +1074,25 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     );
     assert!(
         row.get("managed_meta").is_some(),
-        "managed_meta sourced via list_enriched_select (get_meta_batch)"
+        "managed_meta sourced via enrich_resources (get_meta_batch)"
     );
     assert_eq!(
         row["open_meta"]["tags"][0], "list-selector-research",
-        "open_meta sourced via list_enriched_select"
+        "open_meta sourced via enrich_resources"
     );
 
     // Unknown doc_type filter → empty result (NOT an error). Pre-collapse the
     // filter resolved a doc-type id first, so an unknown name produced a
     // NotFound that the MCP boundary mapped to invalid_params (the "I1
     // regression" guard). The WS6 collapse folds doc_type filtering into the
-    // `list_enriched_select` SQL as a by-NAME predicate, so an unknown name now
-    // simply matches zero rows — the same semantics as any other unmatched
-    // filter. That earlier error-mapping behavior is retired; the surviving
-    // contract is "unmatched filter yields an empty list, no error".
+    // list SQL as a by-NAME predicate, so an unknown name now simply matches
+    // zero rows — the same semantics as any other unmatched filter. That
+    // earlier error-mapping behavior is retired; the surviving contract is
+    // "unmatched filter yields an empty list, no error".
     let empty = temper_mcp::tools::resources::list_resources(
         &svc,
         temper_mcp::tools::resources::ListResourcesInput {
-            context_name: Some("list-selector".to_string()),
+            context_ref: Some("@me/list-selector".to_string()),
             doc_type_name: Some("no-such-doctype".to_string()),
             limit: None,
             offset: None,

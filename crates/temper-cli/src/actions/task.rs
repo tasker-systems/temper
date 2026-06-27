@@ -53,7 +53,7 @@ pub fn load_tasks(
     for ctx in contexts {
         let api_params = ResourceListParams {
             doc_type_name: Some("task".to_string()),
-            context_name: Some(ctx.clone()),
+            context_ref: Some(ctx.clone()),
             sort: Some(ResourceSortField::Seq),
             order: Some(SortOrder::Asc),
             limit: Some(TASK_LIST_LIMIT),
