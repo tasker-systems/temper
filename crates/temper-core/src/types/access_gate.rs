@@ -60,6 +60,39 @@ pub struct JoinRequestWithProfile {
     pub email: Option<String>,
 }
 
+/// The system access gate mode — the `kb_system_settings.access_mode` set.
+///
+/// Stored as a `VARCHAR(16)` CHECK column (not a PG enum), so it is parsed at
+/// the logic boundary via [`Self::from_db_str`] rather than decoded by sqlx.
+/// Typing the gate decision removes the stringly `== "open"` branch and makes a
+/// new mode a compile error at every match site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessMode {
+    Open,
+    InviteOnly,
+}
+
+impl AccessMode {
+    /// Canonical DB string form (the `access_mode` CHECK values).
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            AccessMode::Open => "open",
+            AccessMode::InviteOnly => "invite_only",
+        }
+    }
+
+    /// Parse the `access_mode` column value. Returns `None` for any value
+    /// outside the CHECK set (which the DB constraint should make impossible).
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "open" => Some(AccessMode::Open),
+            "invite_only" => Some(AccessMode::InviteOnly),
+            _ => None,
+        }
+    }
+}
+
 /// Instance-wide system settings (singleton row).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct SystemSettings {

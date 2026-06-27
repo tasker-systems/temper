@@ -75,6 +75,34 @@ impl EventKind {
             EventKind::InvocationClosed => "invocation_closed",
         }
     }
+
+    /// Parse a canonical `kb_event_types.name` back into an `EventKind`.
+    ///
+    /// The exact inverse of [`Self::as_canonical_name`]; returns `None` for
+    /// names outside the owned set. Lets Rust-side dispatch (e.g. ledger
+    /// replay) match the typed enum instead of branching on raw strings, so a
+    /// new variant is a compile error rather than a runtime `bail!`.
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "cogmap_seeded" => EventKind::CogmapSeeded,
+            "resource_created" => EventKind::ResourceCreated,
+            "resource_updated" => EventKind::ResourceUpdated,
+            "resource_deleted" => EventKind::ResourceDeleted,
+            "resource_rehomed" => EventKind::ResourceRehomed,
+            "relationship_asserted" => EventKind::RelationshipAsserted,
+            "relationship_retyped" => EventKind::RelationshipRetyped,
+            "relationship_reweighted" => EventKind::RelationshipReweighted,
+            "property_asserted" => EventKind::PropertyAsserted,
+            "property_set" => EventKind::PropertySet,
+            "lens_created" => EventKind::LensCreated,
+            "region_materialized" => EventKind::RegionMaterialized,
+            "relationship_folded" => EventKind::RelationshipFolded,
+            "block_mutated" => EventKind::BlockMutated,
+            "delegated_launch" => EventKind::DelegatedLaunch,
+            "invocation_closed" => EventKind::InvocationClosed,
+            _ => return None,
+        })
+    }
 }
 
 /// Where an asserted edge homes — polymorphic per the payload's `AnchorRef`
