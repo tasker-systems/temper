@@ -26,11 +26,11 @@ impl<'a> SearchClient<'a> {
     pub async fn query(
         &self,
         embedding: Vec<f32>,
-        context_name: Option<String>,
+        context_ref: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
     ) -> Result<Vec<UnifiedSearchResultRow>> {
-        self.search(None, Some(embedding), context_name, doc_type, limit)
+        self.search(None, Some(embedding), context_ref, doc_type, limit)
             .await
     }
 
@@ -38,11 +38,11 @@ impl<'a> SearchClient<'a> {
     pub async fn text_query(
         &self,
         query: &str,
-        context_name: Option<String>,
+        context_ref: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
     ) -> Result<Vec<UnifiedSearchResultRow>> {
-        self.search(Some(query.to_string()), None, context_name, doc_type, limit)
+        self.search(Some(query.to_string()), None, context_ref, doc_type, limit)
             .await
     }
 
@@ -51,7 +51,7 @@ impl<'a> SearchClient<'a> {
         &self,
         query: Option<String>,
         embedding: Option<Vec<f32>>,
-        context_name: Option<String>,
+        context_ref: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
     ) -> Result<Vec<UnifiedSearchResultRow>> {
@@ -59,7 +59,7 @@ impl<'a> SearchClient<'a> {
         let params = SearchParams {
             query,
             embedding,
-            context_name,
+            context_ref,
             doc_type,
             limit,
             ..SearchParams::default()

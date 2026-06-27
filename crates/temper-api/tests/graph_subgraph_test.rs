@@ -3,7 +3,7 @@
 //!
 //! All tests load `scripts/seed-graph-fixtures.sql` after `clean_and_seed`,
 //! then call the service against Alice's profile asking for concepts in
-//! `graph-test-primary`.
+//! the primary context (addressed by resolved UUID, not by name).
 
 mod common;
 
@@ -16,8 +16,12 @@ use temper_workflow::frontmatter::document::DocType;
 
 // Well-known UUIDs from scripts/seed-graph-fixtures.sql.
 const ALICE: &str = "00000000-0000-0000-0088-000000000001";
-#[allow(dead_code)]
+#[expect(dead_code, reason = "kept for cross-owner fixture documentation")]
 const BOB: &str = "00000000-0000-0000-0088-000000000002";
+
+// Context UUIDs from scripts/seed-graph-fixtures.sql.
+const CTX_PRIMARY: &str = "00000000-0000-0000-00bc-000000000001";
+const CTX_SECONDARY: &str = "00000000-0000-0000-00bc-000000000002";
 
 const C1_IDEMPOTENCY: &str = "00000000-0000-0000-00c1-000000000001";
 const C2_CIRCUIT: &str = "00000000-0000-0000-00c1-000000000002";
@@ -68,7 +72,7 @@ async fn happy_path_returns_all_concepts_and_direct_members(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -116,7 +120,7 @@ async fn sessions_excluded_from_nodes_and_edges(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -160,7 +164,7 @@ async fn aggregator_flag_set_correctly(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -196,7 +200,7 @@ async fn session_count_is_zero_pending_remodel(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -222,7 +226,7 @@ async fn tier_three_reachable_included(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -246,7 +250,7 @@ async fn tier_four_unreachable_excluded(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -270,7 +274,7 @@ async fn singleton_concept_returned_as_isolated_node(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -305,7 +309,7 @@ async fn diamond_shared_member_appears_once(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -343,7 +347,7 @@ async fn cross_owner_concept_excluded(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -370,7 +374,7 @@ async fn cross_owner_edge_attempt_filtered(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -405,7 +409,7 @@ async fn deleted_concept_excluded(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -429,7 +433,7 @@ async fn empty_context_returns_empty_subgraph(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "nonexistent-context",
+            context_id: Uuid::nil(), // nil UUID → no resources homed there → empty subgraph
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -457,7 +461,7 @@ async fn multi_context_isolation(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -476,7 +480,7 @@ async fn multi_context_isolation(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-secondary",
+            context_id: uuid(CTX_SECONDARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -504,7 +508,7 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -544,7 +548,7 @@ async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -590,7 +594,7 @@ async fn excerpt_is_none_when_no_body_chunk(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -624,7 +628,7 @@ async fn stage_populated_only_for_task_doctype(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: uuid(ALICE),
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },
@@ -675,7 +679,7 @@ async fn service_succeeds_for_caller_own_data(pool: PgPool) {
         &pool,
         AggregatorSubgraphParams {
             caller_profile_id: alice,
-            context_name: "graph-test-primary",
+            context_id: uuid(CTX_PRIMARY),
             aggregator_types: &[DocType::Concept],
             depth: 2,
         },

@@ -164,7 +164,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id.into()),
+            context_ref: Some(context.id.to_string()),
             limit: Some(50),
             ..Default::default()
         })
@@ -350,7 +350,7 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id.into()),
+            context_ref: Some(context.id.to_string()),
             limit: Some(2),
             ..Default::default()
         })

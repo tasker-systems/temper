@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 pub struct IngestPayload {
     pub title: String,
     pub origin_uri: String,
-    pub context_name: String,
+    /// Context **ref** (UUID or `@owner/slug`), resolved server-side.
+    /// Bare names (no `@` prefix, not a UUID) are rejected with 400.
+    pub context_ref: String,
     pub doc_type_name: String,
     /// `"sha256:<hex>"` — server computes if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,7 +186,7 @@ mod tests {
         let payload = IngestPayload {
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
-            context_name: "ctx".to_owned(),
+            context_ref: "ctx".to_owned(),
             doc_type_name: "task".to_owned(),
             content_hash: Some("sha256:abc".to_owned()),
             slug: "test".to_owned(),
@@ -198,7 +200,7 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         let deserialized: IngestPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.title, "Test");
-        assert_eq!(deserialized.context_name, "ctx");
+        assert_eq!(deserialized.context_ref, "ctx");
         assert_eq!(
             deserialized.managed_meta,
             Some(serde_json::json!({"temper-stage": "backlog"}))
@@ -217,7 +219,7 @@ mod tests {
         let payload = IngestPayload {
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
-            context_name: "ctx".to_owned(),
+            context_ref: "ctx".to_owned(),
             doc_type_name: "task".to_owned(),
             slug: "test".to_owned(),
             content: "# Test".to_owned(),
@@ -240,7 +242,7 @@ mod tests {
 
     #[test]
     fn payload_deserializes_with_optional_chunks_absent() {
-        let json = r#"{"title":"Test","origin_uri":"kb://ctx/task/test","context_name":"ctx","doc_type_name":"task","slug":"test","content":"Heading"}"#;
+        let json = r#"{"title":"Test","origin_uri":"kb://ctx/task/test","context_ref":"ctx","doc_type_name":"task","slug":"test","content":"Heading"}"#;
         let payload: IngestPayload = serde_json::from_str(json).unwrap();
         assert!(payload.chunks_packed.is_none());
         assert!(payload.content_hash.is_none());
@@ -251,7 +253,7 @@ mod tests {
         let payload = IngestPayload {
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
-            context_name: "ctx".to_owned(),
+            context_ref: "ctx".to_owned(),
             doc_type_name: "task".to_owned(),
             slug: "test".to_owned(),
             content: "# Test".to_owned(),

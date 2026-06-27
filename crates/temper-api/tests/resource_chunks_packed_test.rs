@@ -60,15 +60,6 @@ async fn auth(pool: &PgPool) -> (String, Uuid) {
     (token, context_id)
 }
 
-/// Resolve the context NAME for an ingest payload (POST /api/ingest keys by name).
-async fn context_name(pool: &PgPool, context_id: Uuid) -> String {
-    sqlx::query_scalar("SELECT name FROM kb_contexts WHERE id = $1")
-        .bind(context_id)
-        .fetch_one(pool)
-        .await
-        .expect("fetch context name")
-}
-
 // ---------------------------------------------------------------------------
 // Test #1 — the headline: client chunks honored, NO server embed (test-db tier).
 // ---------------------------------------------------------------------------
@@ -79,14 +70,13 @@ async fn context_name(pool: &PgPool, context_id: Uuid) -> String {
 async fn create_honors_client_chunks_no_server_embed(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let (token, context_id) = auth(&pool).await;
-    let ctx_name = context_name(&pool, context_id).await;
 
     // One chunk with a synthetic, recognizable embedding (all 0.5).
     let chunks = vec![synthetic_chunk(0, "Client-chunked body prose.", "aa", 0.5)];
     let payload = IngestPayload {
         title: "Client Chunked".to_string(),
         origin_uri: format!("test://client-chunked-{}", Uuid::new_v4()),
-        context_name: ctx_name,
+        context_ref: context_id.to_string(),
         doc_type_name: "research".to_string(),
         content_hash: None,
         slug: "client-chunked".to_string(),
@@ -135,14 +125,13 @@ async fn create_honors_client_chunks_no_server_embed(pool: PgPool) {
 async fn update_honors_client_chunks_no_server_embed(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let (token, context_id) = auth(&pool).await;
-    let ctx_name = context_name(&pool, context_id).await;
 
     // Create with client chunks (embedding 0.5) — no ONNX.
     let create_chunks = vec![synthetic_chunk(0, "Original client body.", "bb", 0.5)];
     let create_payload = IngestPayload {
         title: "Update Target".to_string(),
         origin_uri: format!("test://update-target-{}", Uuid::new_v4()),
-        context_name: ctx_name,
+        context_ref: context_id.to_string(),
         doc_type_name: "research".to_string(),
         content_hash: None,
         slug: "update-target".to_string(),
@@ -208,12 +197,11 @@ async fn update_honors_client_chunks_no_server_embed(pool: PgPool) {
 async fn create_without_chunks_falls_back_to_server_embed(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let (token, context_id) = auth(&pool).await;
-    let ctx_name = context_name(&pool, context_id).await;
 
     let payload = IngestPayload {
         title: "Server Embedded".to_string(),
         origin_uri: format!("test://server-embedded-{}", Uuid::new_v4()),
-        context_name: ctx_name,
+        context_ref: context_id.to_string(),
         doc_type_name: "research".to_string(),
         content_hash: None,
         slug: "server-embedded".to_string(),

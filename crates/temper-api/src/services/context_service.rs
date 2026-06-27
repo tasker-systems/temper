@@ -1,7 +1,10 @@
 //! Context CRUD service over the substrate.
 //!
-//! Visibility is derived inline (owner OR `kb_team_contexts` share) — there is
-//! no `contexts_visible_to()` SQL function. `kb_owner_table`/`kb_owner_id`/
+//! Visibility is centralized in the `context_visible_to(principal, context)`
+//! SQL function (migration `20260627000001`): own personal context, OR a context
+//! owned by a team the principal is a member of, OR a context explicitly shared
+//! (`kb_team_contexts`) to one of the principal's teams. Every read/resolve site
+//! below calls that one predicate so they cannot drift. `kb_owner_table`/`kb_owner_id`/
 //! `updated` are synthesized to the `ContextRow` shape from the substrate's
 //! `owner_table`/`owner_id`/`created` columns. Resource counts come from
 //! `kb_resource_homes`. Context creation is a plain INSERT (no event emission —
@@ -10,6 +13,7 @@
 use sqlx::PgPool;
 
 use crate::error::{ApiError, ApiResult};
+use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_workflow::operations::sluggify;
 
@@ -28,16 +32,17 @@ pub async fn list_visible(
                c.owner_id AS "kb_owner_id!",
                c.created,
                c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!",
                COUNT(rh.resource_id) AS "resource_count!"
           FROM kb_contexts c
           LEFT JOIN kb_resource_homes rh
                  ON rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id
-         WHERE (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-            OR EXISTS (
-                 SELECT 1 FROM kb_team_contexts tc
-                   JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                  WHERE tc.context_id = c.id AND tm.profile_id = $1)
-         GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created
+         WHERE context_visible_to($1, c.id)
+         GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created, c.slug
          ORDER BY c.name
         "#,
         *profile_id
@@ -61,14 +66,15 @@ pub async fn get_visible(
                c.owner_table AS "kb_owner_table!",
                c.owner_id AS "kb_owner_id!",
                c.created,
-               c.created AS "updated!"
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!"
           FROM kb_contexts c
          WHERE c.id = $2
-           AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-                OR EXISTS (
-                     SELECT 1 FROM kb_team_contexts tc
-                       JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                      WHERE tc.context_id = c.id AND tm.profile_id = $1))
+           AND context_visible_to($1, c.id)
         "#,
         *profile_id,
         *context_id
@@ -78,50 +84,119 @@ pub async fn get_visible(
     .ok_or(ApiError::NotFound)
 }
 
-/// Resolve a context by name within the profile's visible contexts.
-pub async fn resolve_by_name(
+/// Resolve a context ref to a `ContextId`, gated to what `principal` may see.
+///
+/// The single source of truth for context resolution. `@me` uses the caller's
+/// profile; `@handle`/`+team` resolve the owner then the `(owner, slug)` row;
+/// a bare UUID must be visible to the principal.
+///
+/// Error taxonomy:
+/// - `Id`/`Handle`/profile-context miss → `NotFound`
+/// - Team non-membership → `Forbidden` (existence of team/context not leaked)
+pub async fn resolve_context_ref(
     pool: &PgPool,
-    profile_id: ProfileId,
-    name: &str,
-) -> ApiResult<ContextRow> {
-    sqlx::query_as!(
-        ContextRow,
-        r#"
-        SELECT c.id, c.name,
-               c.owner_table AS "kb_owner_table!",
-               c.owner_id AS "kb_owner_id!",
-               c.created,
-               c.created AS "updated!"
-          FROM kb_contexts c
-         WHERE c.name = $2
-           AND ((c.owner_table = 'kb_profiles' AND c.owner_id = $1)
-                OR EXISTS (
-                     SELECT 1 FROM kb_team_contexts tc
-                       JOIN kb_team_members tm ON tm.team_id = tc.team_id
-                      WHERE tc.context_id = c.id AND tm.profile_id = $1))
-        "#,
-        *profile_id,
-        name
+    principal: ProfileId,
+    r: &ContextRef,
+) -> ApiResult<ContextId> {
+    match r {
+        ContextRef::Id(id) => {
+            // Visible-to-principal gate: profile-owned or team-shared.
+            let found = sqlx::query_scalar!(
+                r#"
+                SELECT c.id FROM kb_contexts c
+                 WHERE c.id = $2
+                   AND context_visible_to($1, c.id)
+                "#,
+                *principal,
+                id
+            )
+            .fetch_optional(pool)
+            .await?;
+            found.map(ContextId::from).ok_or(ApiError::NotFound)
+        }
+        ContextRef::OwnerSlug { owner, slug } => match owner {
+            ContextOwnerRef::Me => lookup_profile_context(pool, *principal, slug).await,
+            ContextOwnerRef::Handle(handle) => {
+                let owner_id =
+                    sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE handle = $1", handle)
+                        .fetch_optional(pool)
+                        .await?
+                        .ok_or(ApiError::NotFound)?;
+                // Resolve the context, then gate visibility to the principal.
+                let cid = lookup_profile_context(pool, owner_id, slug).await?;
+                ensure_context_visible(pool, *principal, *cid).await?;
+                Ok(cid)
+            }
+            ContextOwnerRef::Team(team_slug) => {
+                let team_id =
+                    sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", team_slug)
+                        .fetch_optional(pool)
+                        .await?
+                        .ok_or(ApiError::NotFound)?;
+                // Membership gate — non-member gets Forbidden, not NotFound.
+                let is_member = sqlx::query_scalar!(
+                    r#"SELECT EXISTS(
+                         SELECT 1 FROM kb_team_members
+                          WHERE team_id = $1 AND profile_id = $2) AS "ok!""#,
+                    team_id,
+                    *principal
+                )
+                .fetch_one(pool)
+                .await?;
+                if !is_member {
+                    return Err(ApiError::Forbidden);
+                }
+                let id = sqlx::query_scalar!(
+                    "SELECT id FROM kb_contexts \
+                     WHERE owner_table = 'kb_teams' AND owner_id = $1 AND slug = $2",
+                    team_id,
+                    slug
+                )
+                .fetch_optional(pool)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+                Ok(ContextId::from(id))
+            }
+        },
+    }
+}
+
+/// Look up a profile-owned context by `(owner_id, slug)`.
+async fn lookup_profile_context(
+    pool: &PgPool,
+    owner_id: uuid::Uuid,
+    slug: &str,
+) -> ApiResult<ContextId> {
+    let id = sqlx::query_scalar!(
+        "SELECT id FROM kb_contexts \
+         WHERE owner_table = 'kb_profiles' AND owner_id = $1 AND slug = $2",
+        owner_id,
+        slug
     )
     .fetch_optional(pool)
     .await?
-    .ok_or(ApiError::NotFound)
+    .ok_or(ApiError::NotFound)?;
+    Ok(ContextId::from(id))
 }
 
-/// Resolve a context name by ID without a visibility gate.
-///
-/// Used by handlers that receive a `kb_context_id` UUID on the wire and need
-/// the corresponding name to construct a typed operations command. The
-/// visibility check is enforced downstream by the create path (via
-/// `resolve_by_name`, which is visibility-gated).
-///
-/// Returns `ApiError::BadRequest` when no context with the given ID exists.
-pub async fn resolve_name_by_id(pool: &PgPool, context_id: ContextId) -> ApiResult<String> {
-    let name = sqlx::query_scalar!("SELECT name FROM kb_contexts WHERE id = $1", *context_id)
-        .fetch_optional(pool)
-        .await?;
-
-    name.ok_or_else(|| ApiError::BadRequest(format!("unknown context id: '{context_id}'")))
+/// Assert that `principal` may see `context_id` (owned or team-shared).
+async fn ensure_context_visible(
+    pool: &PgPool,
+    principal: uuid::Uuid,
+    context_id: uuid::Uuid,
+) -> ApiResult<()> {
+    let visible = sqlx::query_scalar!(
+        r#"SELECT context_visible_to($1, $2) AS "ok!""#,
+        principal,
+        context_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
 }
 
 /// Pick a slug for a new context, unique within `(owner_table, owner_id, slug)`.
@@ -187,7 +262,12 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
                   owner_table AS "kb_owner_table!",
                   owner_id AS "kb_owner_id!",
                   created,
-                  created AS "updated!"
+                  created AS "updated!",
+                  slug,
+                  CASE owner_table
+                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                    ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+                  END AS "owner_ref!"
         "#,
         *id,
         *profile_id,

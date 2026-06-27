@@ -29,6 +29,11 @@ pub struct ResourceRow {
     pub context_name: String,
     pub doc_type_name: String,
     pub owner_handle: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`).
+    pub context_slug: String,
+    /// Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
+    /// Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
+    pub context_owner_ref: String,
     // Managed meta projections
     pub stage: Option<String>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
@@ -79,9 +84,10 @@ pub enum SortOrder {
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListParams {
-    pub kb_context_id: Option<Uuid>,
     pub kb_doc_type_id: Option<Uuid>,
-    pub context_name: Option<String>,
+    /// Context filter: UUID string or `@owner/slug` decorated ref.
+    /// Bare context names are rejected server-side (spec Decision 1).
+    pub context_ref: Option<String>,
     pub doc_type_name: Option<String>,
     pub owner: Option<String>,
     pub q: Option<String>,
@@ -126,6 +132,10 @@ pub struct ResourceListResponse {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceCreateRequest {
+    /// Context addressed by UUID. The API wraps this as `ContextRef::Id` and resolves it through
+    /// `resolve_context_ref` (visibility-gated). Stays UUID-keyed intentionally (spec §7 decision):
+    /// the create path is server-to-server / MCP and always has the UUID at hand; a `context_ref`
+    /// string here would add blast-radius with no practical benefit (deferred).
     pub kb_context_id: Uuid,
     /// Doc-type name (the substrate stores doc-type as a property name; the
     /// backend create path passes it straight through to `CreateResource`).
@@ -166,6 +176,13 @@ pub struct ResourceUpdateRequest {
     /// `content` is `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
+    /// Context move ref: a bare UUID or `@owner/slug` decorated form.
+    /// Bare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the
+    /// server (Decision 1). When present the server resolves the ref to a
+    /// `ContextId` (visibility-gated to the principal) and re-homes the
+    /// resource. Forwarded verbatim from the CLI `--context-to` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_to: Option<String>,
 }
 
 /// Chunk used to reconstitute markdown content.
@@ -298,6 +315,7 @@ mod tests {
             content: Some("# Body\n".to_string()),
             content_hash: Some("sha256:abc".to_string()),
             chunks_packed: Some("base64-blob".to_string()),
+            context_to: Some("@me/knowledge".to_string()),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
@@ -314,6 +332,7 @@ mod tests {
         assert_eq!(parsed.content.as_deref(), Some("# Body\n"));
         assert_eq!(parsed.content_hash.as_deref(), Some("sha256:abc"));
         assert_eq!(parsed.chunks_packed.as_deref(), Some("base64-blob"));
+        assert_eq!(parsed.context_to.as_deref(), Some("@me/knowledge"));
     }
 
     #[test]
@@ -329,10 +348,12 @@ mod tests {
             content: None,
             content_hash: None,
             chunks_packed: None,
+            context_to: None,
         };
         let serialized = serde_json::to_string(&req).unwrap();
         assert!(!serialized.contains("\"title\""));
         assert!(!serialized.contains("\"content\""));
+        assert!(!serialized.contains("\"context_to\""));
         assert!(serialized.contains("\"managed_meta\""));
     }
 }

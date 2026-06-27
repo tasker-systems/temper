@@ -25,7 +25,7 @@ a CLI flag, fixing a known bug, writing a utility function, updating a configura
 Pipe the session summary via stdin to save it, then mark the task done:
 
 ```bash
-cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
+cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
 ## Goal
 What we set out to do
 

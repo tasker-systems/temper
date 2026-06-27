@@ -12,7 +12,8 @@ use crate::services::resource_service::{
 };
 use crate::state::AppState;
 
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::context_ref::ContextRef;
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
@@ -146,13 +147,14 @@ pub async fn create(
     auth: AuthUser,
     Json(req): Json<ResourceCreateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    // Resolve the context ID → name for the operations command. The visibility
-    // gate is enforced downstream by the backend create path (via
-    // `context_service::resolve_by_name`, which is visibility-gated). The
-    // doc-type arrives as a name on the wire and passes straight through.
-    let context_name =
-        context_service::resolve_name_by_id(&state.pool, ContextId::from(req.kb_context_id))
-            .await?;
+    // Resolve the context UUID from the request — visibility-gated to the principal.
+    // `ContextRef::Id` does the profile-visibility check without needing a name lookup.
+    let context = context_service::resolve_context_ref(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        &ContextRef::Id(req.kb_context_id),
+    )
+    .await?;
 
     // When slug is absent, derive one from the title so the create path's
     // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.
@@ -161,7 +163,7 @@ pub async fn create(
         .unwrap_or_else(|| temper_substrate::text::slugify(&req.title));
 
     let cmd = CreateResource {
-        context: context_name,
+        context,
         doctype: req.doc_type,
         slug,
         title: req.title,
@@ -202,8 +204,9 @@ pub async fn update(
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
+    use temper_core::context_ref::parse_context_ref;
     use temper_core::types::ids::ResourceId;
-    use temper_workflow::operations::{BodyUpdate, UpdateResource};
+    use temper_workflow::operations::{BodyUpdate, MoveSpec, UpdateResource};
 
     // Client-supplied chunks_packed (+ content_hash) are HONORED: the client did the
     // extract→chunk→embed locally, so the server carries them verbatim and only embeds
@@ -231,12 +234,31 @@ pub async fn update(
         }
     };
 
+    // Resolve context_to ref (if present) to a ContextId, gated by principal visibility.
+    // parse_context_ref rejects bare names → ApiError::BadRequest (Decision 1).
+    let move_to = if let Some(ref ctx_ref) = req.context_to {
+        let r = parse_context_ref(ctx_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let context_id = context_service::resolve_context_ref(
+            &state.pool,
+            ProfileId::from(auth.0.profile.id),
+            &r,
+        )
+        .await?;
+        Some(MoveSpec {
+            context_to: Some(context_id),
+            type_to: None,
+        })
+    } else {
+        None
+    };
+
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         body,
         managed_meta,
         open_meta: req.open_meta,
-        move_to: None,
+        move_to,
+        context_ref: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

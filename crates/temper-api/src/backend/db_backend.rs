@@ -226,6 +226,8 @@ pub(crate) async fn native_resource_row(
         context_name: p.context_name,
         doc_type_name: p.doc_type_name,
         owner_handle: p.owner_handle,
+        context_slug: p.context_slug,
+        context_owner_ref: p.context_owner_ref,
         stage: p.stage,
         seq: p.seq,
         mode: p.mode,
@@ -569,7 +571,9 @@ impl Backend for DbBackend {
         &self,
         cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        // Resolve the caller's synthesized identity (natural-key) and the home context.
+        // Resolve the caller's synthesized identity (natural-key).
+        // `cmd.context` is a pre-resolved ContextId — surfaces parse+resolve the ref
+        // before building the command, so no `writes::resolve_context` call is needed here.
         let prod_profile: uuid::Uuid = *self.profile_id;
         let owner = writes::resolve_profile(&self.pool, prod_profile)
             .await
@@ -577,9 +581,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        let home = writes::resolve_context(&self.pool, owner, &cmd.context)
-            .await
-            .map_err(api_err)?;
+        // cmd.context is temper_core::types::ids::ContextId (pre-resolved at the surface);
+        // writes::CreateParams.home expects temper_substrate::ids::ContextId. Convert via Uuid.
+        let home = temper_substrate::ids::ContextId::from(uuid::Uuid::from(cmd.context));
 
         let body = cmd
             .body
@@ -612,7 +616,7 @@ impl Backend for DbBackend {
             title: &cmd.title,
             identity_slug: injected_slug,
             validator_slug: &cmd.slug,
-            context_name: &cmd.context,
+            context_name: &cmd.context.to_string(),
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
         })?;
@@ -739,9 +743,8 @@ impl Backend for DbBackend {
             let effective_context = cmd
                 .move_to
                 .as_ref()
-                .and_then(|m| m.context_to.as_deref())
-                .unwrap_or(current.context_name.as_str())
-                .to_owned();
+                .and_then(|m| m.context_to.map(|id| id.to_string()))
+                .unwrap_or_else(|| current.context_name.clone());
             // temper-title updates the kb_resources.title column when supplied; otherwise the
             // current title carries (and seeds validation). temper-slug is §7-Die (not stored,
             // so `current.slug` is None) — derive the canonical slug from the title so the
@@ -789,12 +792,13 @@ impl Backend for DbBackend {
             if let Some(type_to) = &mv.type_to {
                 properties.push(("doc_type".to_owned(), serde_json::json!(type_to)));
             }
-            if let Some(ctx_to) = &mv.context_to {
-                rehome_to = Some(
-                    writes::resolve_context(&self.pool, owner, ctx_to)
-                        .await
-                        .map_err(api_err)?,
-                );
+            if let Some(ctx_to) = mv.context_to {
+                // The ContextId was already resolved and visibility-gated at the
+                // handler boundary (parse_context_ref + resolve_context_ref). Use it
+                // directly; no second DB lookup needed.
+                rehome_to = Some(temper_substrate::ids::ContextId::from(uuid::Uuid::from(
+                    ctx_to,
+                )));
             }
         }
 

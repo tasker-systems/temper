@@ -264,7 +264,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             ContextAction::Remove { name } => temper_cli::commands::context_cmd::remove(&name),
             ContextAction::Create { name } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
-                    temper_cli::commands::context_cmd::create_remote(client, &name).await
+                    temper_cli::commands::context_cmd::create_remote(client, &name, output_format)
+                        .await
                 })
             }),
             ContextAction::List => {

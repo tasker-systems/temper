@@ -20,6 +20,13 @@ use crate::error::{Result, TemperError};
 pub struct CloudBackendCtx {
     pub client: Arc<TemperClient>,
     pub owner: String,
+    /// Context ref string for the create path. Passed verbatim as
+    /// `IngestPayload.context_ref` — no synthesis, no sigil-prefixing.
+    /// Bare names (no `@`/`+` sigil, no UUID) are intentionally NOT
+    /// prefixed with `@me/`; they reach the server's `parse_context_ref`,
+    /// which rejects them with `BadRequest`. That server-side rejection IS
+    /// the hard-reject for bare names (spec Decision 1).
+    pub context_ref: String,
     pub config: Arc<Config>,
     pub surface: Surface,
 }
@@ -49,9 +56,18 @@ pub fn assemble_cloud_backend(
 
     let owner = config.owner_for_context(context);
 
+    // Pass the context value verbatim as the context ref — no synthesis, no
+    // `@me/<name>` prefixing. Bare names intentionally reach the server where
+    // `parse_context_ref` rejects them with BadRequest (spec Decision 1:
+    // bare names are hard-rejected because they are ambiguous in multi-person
+    // orgs). Users must supply a decorated ref: `@me/slug`, `@handle/slug`,
+    // `+team/slug`, or a UUID.
+    let context_ref = context.to_owned();
+
     let ctx = CloudBackendCtx {
         client: Arc::new(client),
         owner,
+        context_ref,
         config: Arc::new(config.clone()),
         surface: Surface::CliCloud,
     };

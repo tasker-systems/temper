@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM kb_edges WHERE label=$1 AND NOT is_folded",
+  "query": "SELECT id FROM kb_contexts WHERE owner_table = 'kb_profiles' AND owner_id = $1 AND slug = $2",
   "describe": {
     "columns": [
       {
@@ -11,6 +11,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Text"
       ]
     },
@@ -18,5 +19,5 @@
       false
     ]
   },
-  "hash": "629082ccb38ea22a2927beab95142455e28277bc95e467d0ffa9861f2b928e57"
+  "hash": "1a6fad41e47b6135ffc5925f5163288cb7a18b1a25dc14e8ea2a2d3e56d5e359"
 }

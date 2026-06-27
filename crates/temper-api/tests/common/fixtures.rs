@@ -34,11 +34,11 @@ pub async fn create_test_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
 /// context. Returns `(profile_id, context_id)`.
 ///
 /// The profile is reachable by a test JWT whose `sub` is `test|<profile_id>`
-/// (auth provider `test-provider`). The `temper` context resolves by name for
-/// HTTP create payloads (`context_service::resolve_name_by_id` → name →
-/// `writes::resolve_context` by owner+slug). The owner sees and can modify its
-/// own resources via the ownership branch of `resources_visible_to` /
-/// `can_modify_resource`, so no team-share is needed.
+/// (auth provider `test-provider`). HTTP create payloads address the context by
+/// UUID (`kb_context_id`), resolved through `context_service::resolve_context_ref`
+/// (visibility-gated). The owner sees and can modify its own resources via the
+/// ownership branch of `resources_visible_to` / `can_modify_resource`, so no
+/// team-share is needed.
 pub async fn create_test_profile_with_context(
     pool: &PgPool,
     email: &str,

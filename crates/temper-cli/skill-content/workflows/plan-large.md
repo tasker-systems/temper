@@ -17,7 +17,7 @@ learn, evolve the roadmap, create the next task.
    - `temper search "<relevant terms>"` across multiple angles
    - `temper context` to review the current context landscape
    - Codebase exploration: read key files, trace data flows, map dependencies
-   - Check recent sessions: `temper resource list --type session --context <ctx>`
+   - Check recent sessions: `temper resource list --type session --context @me/<ctx>`
 3. **Map the problem space** — if the user has opted into a brainstorming skill, invoke
    it to MAP the problem space, NOT to design an implementation. Otherwise, explore
    these questions inline:
@@ -29,7 +29,7 @@ learn, evolve the roadmap, create the next task.
    - Present the map to the user before proceeding.
 4. **Produce a goal roadmap** — create a structured goal:
    ```bash
-   temper resource create --type goal --title "<goal title>" --context <ctx>
+   temper resource create --type goal --title "<goal title>" --context @me/<ctx>
    ```
    The roadmap should include:
    - Throughline summary: what this goal achieves and why it matters
@@ -39,7 +39,7 @@ learn, evolve the roadmap, create the next task.
    - Dependencies between chunks
 5. **Create the FIRST actionable task** — pick the first chunk from the roadmap:
    ```bash
-   temper resource create --type task --title "<first task title>" --context <ctx> --mode build --effort <effort>
+   temper resource create --type task --title "<first task title>" --context @me/<ctx> --mode build --effort <effort>
    ```
 6. **Code only if pushed** — the primary output of plan/large is the roadmap and first
    task, not code. Only write code if the user actively requests it in this session.
@@ -50,7 +50,7 @@ Pipe the session summary via stdin. Plan/large tasks may not reach done in a sin
 session — that is expected. Use the appropriate stage:
 
 ```bash
-cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
+cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
 ## Goal
 What we set out to do
 

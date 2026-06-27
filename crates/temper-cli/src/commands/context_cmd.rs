@@ -1,3 +1,4 @@
+use crate::commands::resource::inject_context_ref;
 use crate::config::{self, Config};
 use crate::error::Result;
 use crate::output;
@@ -79,17 +80,25 @@ pub fn remove(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Create a context on the remote server.
-pub async fn create_remote(client: &temper_client::TemperClient, name: &str) -> Result<()> {
+/// Create a context on the remote server and render the resulting context row
+/// with an injected `ref` field (`{owner_ref}/{slug}`) for copy-paste addressing.
+pub async fn create_remote(
+    client: &temper_client::TemperClient,
+    name: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
     let context = client
         .contexts()
         .create(name)
         .await
         .map_err(crate::commands::client_err)?;
-    output::success(format!(
-        "Created context '{}' ({})",
-        context.name, context.id
-    ));
+
+    let mut row = serde_json::to_value(&context)
+        .map_err(|e| crate::error::TemperError::Api(format!("context serialize: {e}")))?;
+    inject_context_ref(&mut row);
+
+    let rendered = crate::format::render(&row, fmt)?;
+    println!("{rendered}");
     Ok(())
 }
 

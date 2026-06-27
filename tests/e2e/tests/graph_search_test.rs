@@ -26,7 +26,7 @@ fn test_payload(
     IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://e2e/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "research".to_string(),
         content_hash: Some(
             format!("{slug}-body-hash-{pad}", pad = "0".repeat(64))[..64].to_string(),
@@ -95,7 +95,7 @@ async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
 
     // Search with graph_expand: true using Doc A as explicit seed
     let params_with_graph = SearchParams {
-        context_name: Some("graph-e2e".into()),
+        context_ref: Some("@me/graph-e2e".into()),
         limit: Some(10),
         seed_ids: Some(vec![resource_a.id.into()]),
         graph_depth: Some(3),
@@ -248,7 +248,7 @@ async fn search_no_graph_flag_disables_expansion(pool: sqlx::PgPool) {
 
     // Search with explicit seed and graph enabled
     let params_graph = SearchParams {
-        context_name: Some("nograph-e2e".into()),
+        context_ref: Some("@me/nograph-e2e".into()),
         limit: Some(10),
         seed_ids: Some(vec![resource_a.id.into()]),
         graph_depth: Some(2),

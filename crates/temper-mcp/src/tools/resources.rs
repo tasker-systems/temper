@@ -6,6 +6,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::{substrate_read, DbBackend};
+use temper_api::services::context_service::resolve_context_ref;
+use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
@@ -18,8 +20,9 @@ use crate::service::TemperMcpService;
 /// MCP input for create_resource.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateResourceInput {
-    /// Human-readable context name (must already exist).
-    pub context_name: String,
+    /// Context ref (UUID or `@owner/slug`), resolved server-side.
+    /// Bare names (no `@` prefix, not a UUID) are rejected.
+    pub context_ref: String,
     /// Human-readable doc type name (e.g. "task", "session", "research").
     pub doc_type_name: String,
     /// Resource title.
@@ -62,8 +65,8 @@ pub struct GetResourceInput {
 /// MCP input for list_resources.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListResourcesInput {
-    /// Filter by context name.
-    pub context_name: Option<String>,
+    /// Filter by context ref (UUID or @owner/slug). Bare context names are rejected.
+    pub context_ref: Option<String>,
     /// Filter by doc type name (e.g. "task", "research").
     pub doc_type_name: Option<String>,
     /// Max results (default 50, max 200).
@@ -290,6 +293,13 @@ pub async fn create_resource(
         }
     }
 
+    // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
+    let cref = parse_context_ref(&input.context_ref)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None))?;
+    let context = resolve_context_ref(pool, profile_id, &cref)
+        .await
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+
     // Build slug from title if not provided
     let slug = input.slug.unwrap_or_else(|| {
         input
@@ -336,7 +346,7 @@ pub async fn create_resource(
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
-        context: input.context_name,
+        context,
         title: input.title,
         body,
         managed_meta,
@@ -455,34 +465,37 @@ pub async fn list_resources(
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
-    // One selector returns the rows + their managed/open meta
-    // (readback::enriched_list filtered in SQL), assembled by `build_enriched`.
-    let rows = substrate_read::list_enriched_select(
-        pool,
-        ProfileId::from(profile.id),
-        input.context_name.as_deref(),
-        input.doc_type_name.as_deref(),
-    )
-    .await
-    .map_err(|e| match e {
-        // A bad filter is a caller error (invalid_params, 400-class), not a server fault —
-        // preserving the pre-unification contract. An unknown `context_name` resolves to
-        // `NotFound` (a unit variant), an unknown `doc_type_name` to `BadRequest(msg)` (carrying
-        // the specific "unknown doc_type: '…'" message).
-        temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
-            format!("unknown filter: no context named {:?}", input.context_name),
-            None,
-        ),
-        temper_api::error::ApiError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => {
-            rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
-        }
-    })?;
+    // Build list params — context_ref is resolved server-side by filtered_visible_page;
+    // bare context names are rejected there (spec Decision 1).
+    let params = temper_workflow::types::resource::ResourceListParams {
+        context_ref: input.context_ref.clone(),
+        doc_type_name: input.doc_type_name.clone(),
+        limit: input.limit.or(Some(50)).map(|l| l.min(200)),
+        offset: input.offset,
+        ..Default::default()
+    };
+    let list_result = substrate_read::list_select(pool, ProfileId::from(profile.id), params)
+        .await
+        .map_err(|e| match e {
+            // A bare context name or invalid ref is rejected with BadRequest (spec Decision 1).
+            // An unresolvable ref (not visible / not found) yields NotFound.
+            // Both are caller errors → invalid_params (400-class).
+            temper_api::error::ApiError::BadRequest(msg) => {
+                rmcp::ErrorData::invalid_params(msg, None)
+            }
+            temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
+                format!(
+                    "unknown filter: context_ref {:?} not found or not visible",
+                    input.context_ref
+                ),
+                None,
+            ),
+            other => {
+                rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
+            }
+        })?;
 
-    let enriched: Vec<EnrichedResource> = rows
-        .iter()
-        .map(|(row, managed, open)| build_enriched(row, managed.clone(), open.clone()))
-        .collect();
+    let enriched = enrich_resources(pool, profile.id, &list_result.rows).await?;
 
     let array_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -560,6 +573,7 @@ pub async fn update_resource(
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
         move_to: None,
+        context_ref: None,
         origin: Surface::Mcp,
     };
 
@@ -614,6 +628,7 @@ pub async fn update_resource_meta(
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
         move_to: None,
+        context_ref: None,
         origin: Surface::Mcp,
     };
 
@@ -691,7 +706,7 @@ mod tests {
     #[test]
     fn create_resource_input_accepts_object_valued_managed_meta() {
         let raw = serde_json::json!({
-            "context_name": "demo",
+            "context_ref": "@me/demo",
             "doc_type_name": "task",
             "title": "Demo Task",
             "managed_meta": { "temper-stage": "backlog", "temper-mode": "build" },
@@ -756,6 +771,8 @@ mod build_enriched_tests {
             context_name: "temper".to_string(),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: "temper".to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: Some("in-progress".to_string()),
             seq: None,
             mode: None,
@@ -837,7 +854,7 @@ mod fields_projection_tests {
     fn list_resources_input_accepts_fields() {
         // Compile-time check that ListResourcesInput grows the fields field.
         let _input = ListResourcesInput {
-            context_name: None,
+            context_ref: None,
             doc_type_name: None,
             limit: None,
             offset: None,

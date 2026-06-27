@@ -24,7 +24,7 @@ async fn search_returns_results(pool: sqlx::PgPool) {
     let results = app
         .client
         .search()
-        .query(embedding, Some("temper".to_string()), None, Some(10))
+        .query(embedding, None, None, Some(10))
         .await
         .expect("search query failed");
 

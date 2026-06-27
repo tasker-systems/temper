@@ -51,6 +51,11 @@ pub(crate) struct EdgesReport {
 /// `ref` is render-time only — never persisted, never on the wire type.
 /// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
 /// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
+///
+/// Also injects `context_ref` — the decorated home-context ref
+/// (`{context_owner_ref}/{context_slug}`) — when both fields are present
+/// on the row. This lets agents and UIs address the resource's home
+/// context without a second round-trip.
 pub(crate) fn inject_ref(row: &mut serde_json::Value) {
     let id = row
         .get("id")
@@ -65,6 +70,41 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
         );
         if let Some(obj) = row.as_object_mut() {
             obj.insert("ref".to_string(), serde_json::Value::String(decorated));
+
+            // Inject context_ref alongside ref when the row carries the raw ingredients.
+            let ctx_owner_ref = obj
+                .get("context_owner_ref")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            let ctx_slug = obj
+                .get("context_slug")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if let (Some(owner_ref), Some(slug)) = (ctx_owner_ref, ctx_slug) {
+                let context_ref = format!("{owner_ref}/{slug}");
+                obj.insert(
+                    "context_ref".to_string(),
+                    serde_json::Value::String(context_ref),
+                );
+            }
+        }
+    }
+}
+
+/// Insert a derived `ref` key into a serialized context row
+/// (`ContextRow` / `ContextRowWithCounts`), computed from `owner_ref` + `slug`.
+/// The `ref` is render-time only — never persisted, never on the wire type.
+/// No-op if `owner_ref` or `slug` are absent from the row.
+pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
+    if let Some(obj) = row.as_object_mut() {
+        let owner_ref = obj
+            .get("owner_ref")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let slug = obj.get("slug").and_then(|v| v.as_str()).map(str::to_owned);
+        if let (Some(owner_ref), Some(slug)) = (owner_ref, slug) {
+            let decorated = format!("{owner_ref}/{slug}");
+            obj.insert("ref".to_string(), serde_json::Value::String(decorated));
         }
     }
 }
@@ -77,7 +117,7 @@ fn require_context(context: Option<&str>) -> Result<String> {
     match context {
         Some(ctx) => Ok(ctx.to_string()),
         None => Err(TemperError::Project(
-            "no context specified — use --context <name>".into(),
+            "no context specified — use --context <ref> (e.g. @me/temper, +team/general, or a UUID)".into(),
         )),
     }
 }
@@ -222,10 +262,13 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
+    // `context` is a placeholder ContextId — the actual context ref (`ctx`) is
+    // threaded through `CloudBackend.context_ref` to `cmd_to_ingest_payload`
+    // and sent as `IngestPayload.context_ref` for server-side resolution.
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
-        context: ctx.to_string(),
+        context: temper_core::types::ids::ContextId::new(),
         title: title.to_string(),
         body: body_opt.filter(|b| !b.is_empty()).map(|content| {
             temper_workflow::operations::BodyUpdate {
@@ -413,7 +456,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     let fields_owned: Vec<String> = params.fields.to_vec();
     let api_params = ResourceListParams {
         doc_type_name: Some(doc_type.clone()),
-        context_name: context.clone(),
+        context_ref: context.clone(),
         stage: params.stage.map(str::to_string),
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),
@@ -475,7 +518,7 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     let limit = params.limit.unwrap_or(50);
     let api_params = ResourceListParams {
         doc_type_name: Some(params.doc_type.to_string()),
-        context_name: params.context.map(ToString::to_string),
+        context_ref: params.context.map(ToString::to_string),
         stage: params.stage.map(str::to_string),
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),
@@ -847,20 +890,23 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
     }
 }
 
-/// Build a `MoveSpec` from `--type-to` / `--context-to` CLI flags. Returns
-/// `None` when neither is set; otherwise returns `Some` with whichever fields
-/// were provided. Translates CLI move flags into the `UpdateResource.move_to`
-/// operations field.
+/// Build a `MoveSpec` from the `--type-to` CLI flag. Returns `None` when
+/// `type_to` is not set.
+///
+/// Context moves (`--context-to`) do NOT produce a `MoveSpec` here: the CLI
+/// can't resolve a context ref to a `ContextId` without DB access. Instead,
+/// the raw ref string travels via `UpdateResource.context_ref` and is
+/// forwarded verbatim by the cloud-backend translator as `context_to` in the
+/// HTTP wire payload, where the API handler resolves it server-side.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_workflow::operations::MoveSpec> {
-    if params.context_to.is_none() && params.type_to.is_none() {
-        return None;
-    }
-    Some(temper_workflow::operations::MoveSpec {
-        context_to: params.context_to.map(String::from),
-        type_to: params.type_to.map(String::from),
-    })
+    params
+        .type_to
+        .map(|tt| temper_workflow::operations::MoveSpec {
+            context_to: None,
+            type_to: Some(String::from(tt)),
+        })
 }
 
 /// Update a resource's frontmatter fields.
@@ -912,12 +958,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     )?;
 
     // 4. Build the UpdateResource cmd.
+    // context_to travels as a raw ref via context_ref (the API handler resolves
+    // it server-side); type_to goes through MoveSpec so the translator can set
+    // managed_meta.doc_type on the wire.
     let cmd = UpdateResource {
         resource: id,
         body: resolved_body.map(BodyUpdate::new),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
+        context_ref: params.context_to.map(String::from),
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
@@ -1042,22 +1092,44 @@ mod build_helpers_tests {
         assert!(build_move_spec_from_args(&params).is_none());
     }
 
+    /// context_to goes via `context_ref` in `UpdateResource`, not through
+    /// `MoveSpec.context_to`: the CLI can't resolve a ref to a ContextId
+    /// without DB access, so MoveSpec.context_to is always None from the CLI.
     #[test]
-    fn build_move_spec_returns_some_with_only_context_to_when_only_context_to_set() {
+    fn build_move_spec_returns_none_when_only_context_to_set() {
         let mut params = empty_update_params("foo");
-        params.context_to = Some("temper");
-        let spec = build_move_spec_from_args(&params).expect("expected Some");
-        assert_eq!(spec.context_to, Some("temper".to_string()));
-        assert_eq!(spec.type_to, None);
+        params.context_to = Some("@me/temper");
+        // MoveSpec is None when only context_to is provided; the ref is
+        // forwarded via UpdateResource.context_ref by the caller instead.
+        assert!(
+            build_move_spec_from_args(&params).is_none(),
+            "context_to alone must not produce a MoveSpec; raw ref goes via context_ref"
+        );
     }
 
     #[test]
-    fn build_move_spec_returns_some_with_both_when_both_set() {
+    fn build_move_spec_returns_some_with_type_to_when_set() {
         let mut params = empty_update_params("foo");
-        params.context_to = Some("temper");
         params.type_to = Some("concept");
-        let spec = build_move_spec_from_args(&params).expect("expected Some");
-        assert_eq!(spec.context_to, Some("temper".to_string()));
+        let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
+        assert_eq!(
+            spec.context_to, None,
+            "MoveSpec.context_to is always None from CLI"
+        );
+        assert_eq!(spec.type_to, Some("concept".to_string()));
+    }
+
+    #[test]
+    fn build_move_spec_returns_some_with_type_to_when_both_set() {
+        // context_to goes via context_ref; type_to is still in MoveSpec.
+        let mut params = empty_update_params("foo");
+        params.context_to = Some("@me/temper");
+        params.type_to = Some("concept");
+        let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
+        assert_eq!(
+            spec.context_to, None,
+            "context_to never in MoveSpec from CLI"
+        );
         assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 
@@ -1116,6 +1188,8 @@ mod action_result_tests {
             context_name: context.to_string(),
             doc_type_name: doc_type.to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: context.to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: None,
             seq: None,
             mode: None,
@@ -1308,6 +1382,8 @@ mod resource_list_render_tests {
             context_name: "temper".to_string(),
             doc_type_name: "research".to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: "temper".to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: None,
             seq: None,
             mode: None,

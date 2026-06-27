@@ -60,7 +60,7 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: 
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://hash-invariant-{}", Uuid::new_v4()),
-        context_name: "default".to_string(),
+        context_ref: "@me/default".to_string(),
         doc_type_name: "research".to_string(),
         slug: slug.to_string(),
         content: "body content".to_string(),

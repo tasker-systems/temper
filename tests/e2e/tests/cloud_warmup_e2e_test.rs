@@ -75,7 +75,7 @@ async fn seed_session(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("kb://{context}/session/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "session".to_string(),
         content_hash: Some(content_hash),
         slug: slug.to_string(),
@@ -111,7 +111,7 @@ async fn seed_task(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "task".to_string(),
         content_hash: None,
         slug: slug.to_string(),
@@ -298,7 +298,7 @@ async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("myapp"))
+            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("@me/myapp"))
                 .expect("build_warmup_result must succeed")
         })
     })
@@ -357,7 +357,7 @@ async fn warmup_truncates_long_session_body(pool: sqlx::PgPool) {
 
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("myapp"))
+            temper_cli::commands::warmup::build_warmup_result(&cli_config, Some("@me/myapp"))
                 .expect("build_warmup_result must succeed")
         })
     })

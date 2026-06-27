@@ -130,9 +130,12 @@ async fn assert_edge(
 // ── graph_subgraph_nodes returns the substrate-homed aggregator resources ────────
 
 /// Seed a context with two `concept` resources joined by one edge, then assert
-/// `graph_subgraph_nodes($profile, $context, ['concept'], depth)` returns the seeded aggregators with
-/// the legacy output shape (resource_id / slug / doc_type / edge_count …). Proves the ported functions
-/// resolve against the substrate shape.
+/// `graph_subgraph_nodes($profile, $context_id, ['concept'], depth)` returns the seeded aggregators
+/// with the expected output shape (resource_id / slug / doc_type / edge_count …). Proves the
+/// ported functions resolve against the substrate shape.
+///
+/// The function now takes a context UUID (not a context name) — resolution from ref → id happens
+/// server-side in the handler before the service is called.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn subgraph_nodes_returns_seeded_resources(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
@@ -160,12 +163,13 @@ async fn subgraph_nodes_returns_seeded_resources(pool: sqlx::PgPool) {
     .await;
     let _edge = assert_edge(&pool, a, b, ctx, emitter).await;
 
+    // Pass the resolved context UUID (not the name) — matches the new function signature.
     let rows = sqlx::query(
         "SELECT resource_id, slug, title, doc_type, edge_count, session_count, first_chunk, stage_raw \
-         FROM graph_subgraph_nodes($1, $2, $3::text[], $4::int)",
+         FROM graph_subgraph_nodes($1, $2::uuid, $3::text[], $4::int)",
     )
     .bind(owner.uuid())
-    .bind("temper")
+    .bind(ctx.uuid())
     .bind(vec!["concept".to_string()])
     .bind(2_i32)
     .fetch_all(&pool)

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::types::managed_meta::ManagedMeta;
-use temper_core::types::ids::{CogmapId, EdgeId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, EdgeId, ResourceId};
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -25,7 +25,9 @@ use super::{
 pub struct CreateResource {
     pub slug: String,
     pub doctype: String,
-    pub context: String,
+    /// Resolved context ID. Surfaces must parse+resolve the context ref before
+    /// building this command — bare names are not accepted here.
+    pub context: ContextId,
     pub title: String,
     pub body: Option<BodyUpdate>,
     /// Caller-supplied managed_meta. Backends will apply doctype defaults
@@ -59,16 +61,16 @@ pub struct ShowResource {
 }
 
 /// File-move spec for `UpdateResource`. Both fields are optional and
-/// independent; supplying either (or both) triggers a filesystem move.
+/// independent; supplying either (or both) triggers a move.
 ///
-/// - `context_to`: move the file to a new context directory and update
-///   `temper-context` in frontmatter. The DB backend ignores this field —
-///   the new context is communicated via `managed_meta.context`.
-/// - `type_to`: move the file to a new doc-type directory and update
-///   `temper-type` in frontmatter. Likewise ignored by DbBackend.
+/// - `context_to`: resolved `ContextId` for the destination context. Set by
+///   surfaces after resolving a context ref (UUID or `@owner/slug`) via
+///   `resolve_context_ref`. `DbBackend` re-homes the resource to this context.
+/// - `type_to`: move the resource to a new doc-type. Stored as the `doc_type`
+///   property by `DbBackend`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MoveSpec {
-    pub context_to: Option<String>,
+    pub context_to: Option<ContextId>,
     pub type_to: Option<String>,
 }
 
@@ -80,11 +82,19 @@ pub struct UpdateResource {
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
-    /// File-move spec (local-mode only). `DbBackend` ignores `move_to` —
-    /// the new context/type is conveyed via `managed_meta` which DbBackend
-    /// already handles. This field carries no SQL and does not affect the
-    /// `.sqlx/` query cache.
+    /// Move spec: `DbBackend` re-homes the resource when `move_to.context_to`
+    /// is `Some`. The `context_to` field carries a **resolved** `ContextId`;
+    /// surfaces must parse+resolve a context ref before setting it. For the
+    /// cloud CLI path the raw context ref string travels via `context_ref`
+    /// below and is resolved by the API handler, so `move_to.context_to` is
+    /// `None` on the CLI side.
     pub move_to: Option<MoveSpec>,
+    /// Raw, unresolved context ref (UUID string or `@owner/slug`) supplied by
+    /// the CLI surface. The cloud-backend translator forwards this verbatim
+    /// as the `context_to` field of the HTTP wire payload; the API handler
+    /// parses and resolves it server-side. `None` when not a CLI-originated
+    /// context move (API handler builds `move_to` directly after resolution).
+    pub context_ref: Option<String>,
     pub origin: Surface,
 }
 
@@ -209,12 +219,14 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             move_to: None,
+            context_ref: None,
             origin: Surface::ApiHttp,
         };
         assert!(cmd.body.is_none());
         assert!(cmd.managed_meta.is_none());
         assert!(cmd.open_meta.is_none());
         assert!(cmd.move_to.is_none());
+        assert!(cmd.context_ref.is_none());
     }
 
     #[test]
@@ -222,7 +234,7 @@ mod tests {
         let cmd = CreateResource {
             slug: "new-task".to_string(),
             doctype: "task".to_string(),
-            context: "temper".to_string(),
+            context: temper_core::types::ids::ContextId::new(),
             title: "New task".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),

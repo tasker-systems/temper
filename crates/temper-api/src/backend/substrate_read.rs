@@ -7,10 +7,10 @@
 //! is scoped to the caller's profile (WS2) — the readbacks gate through `resources_visible_to`. SQL
 //! is unqualified against the one schema (the connection carries the search_path).
 //!
-//! `list`/`list_meta` filter (context_name/doc_type_name/stage/owner/`q`-title), sort, and paginate the
-//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; the enrichment path
-//! (`list_enriched`/MCP) filters by name in SQL via `readback::enriched_list`. Full-text/vector `q` on
-//! the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
+//! `list`/`list_meta` filter (context_ref/doc_type_name/stage/owner/`q`-title), sort, and paginate the
+//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
+//! to a context UUID before filtering so bare names are rejected (spec Decision 1). Full-text/vector `q`
+//! on the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
 
 use std::collections::HashMap;
 
@@ -19,10 +19,12 @@ use uuid::Uuid;
 
 use crate::backend::db_backend::{map_readback_err, native_resource_row};
 use crate::error::{ApiError, ApiResult};
+use crate::services::context_service::resolve_context_ref;
 use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
+use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -60,10 +62,15 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
     }
 }
 
-/// Resolve the visible set, apply the `ResourceListParams` filters (context_name /
+/// Resolve the visible set, apply the `ResourceListParams` filters (context_ref /
 /// doc_type_name / stage / owner / `q` title-match) + sort + pagination IN SQL, and
 /// return only the page's ids (so the caller reconstructs the page, not every visible
 /// row — this also fixes the prior all-rows N+1).
+///
+/// `context_ref` is a UUID string or `@owner/slug` decorated ref. It is resolved to a
+/// context UUID before the SQL runs — bare names are rejected with `BadRequest` (spec
+/// Decision 1). Filter is then `c.id = $2` (UUID), eliminating the prior name-ambiguity
+/// bug where two contexts sharing a name both matched.
 ///
 /// `owner`: `@me` resolves to the caller's profile; any other value matches the owner
 /// profile's `handle` (per `graph.rs`'s handle convention). `q` is a trivial title
@@ -76,6 +83,17 @@ async fn filtered_visible_page(
     profile_id: ProfileId,
     params: &ResourceListParams,
 ) -> ApiResult<VisiblePage> {
+    // Resolve context_ref → UUID before building SQL. A bare name is
+    // rejected by `parse_context_ref` (spec Decision 1); an @owner/slug
+    // ref is resolved via `resolve_context_ref` (visibility-gated).
+    let context_id: Option<Uuid> = match params.context_ref.as_deref() {
+        Some(s) => {
+            let cref = parse_context_ref(s).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            Some(*resolve_context_ref(pool, profile_id, &cref).await?)
+        }
+        None => None,
+    };
+
     let owner_self: Option<Uuid> = match params.owner.as_deref() {
         Some("@me") => Some(*profile_id),
         _ => None,
@@ -110,7 +128,7 @@ async fn filtered_visible_page(
              ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
             AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
           WHERE r.is_active
-            AND ($2::text IS NULL OR c.name = $2)
+            AND ($2::uuid IS NULL OR c.id = $2)
             AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
             AND ($4::text IS NULL OR st.property_value #>> '{{}}' = $4)
             AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
@@ -122,7 +140,7 @@ async fn filtered_visible_page(
 
     let rows = sqlx::query(&sql)
         .bind(profile_id)
-        .bind(params.context_name.as_deref())
+        .bind(context_id)
         .bind(params.doc_type_name.as_deref())
         .bind(params.stage.as_deref())
         .bind(owner_self)
@@ -305,13 +323,21 @@ pub async fn search_select(
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     let clamped = clamp_search_params(&params);
-    // Context filtering is intentionally NOT wired in Beat 2. Resolving a context by `name` is
-    // ambiguous — a principal can see several same-named contexts across teams + self — so it
-    // belongs to the dedicated context-ref addressing arc (UUID-primary + decorated @owner/slug),
-    // which converts every surface (UI/CLI/MCP/API/skill) together to keep their assumptions
-    // compatible. Until then `search` does not filter by context: `unified_search` keeps its
-    // `p_context_id` parameter, exercised here as `None` (no filter). The `doc_type` filter, which
-    // is unambiguous, stays wired. See `SearchParams.context_name`'s note.
+    // Resolve context_ref → context UUID before the SQL call. A bare name is
+    // rejected by `parse_context_ref` (spec Decision 1); an @owner/slug or UUID
+    // ref is resolved via `resolve_context_ref` (visibility-gated). Parse error
+    // → BadRequest; not-found/forbidden propagates from the resolver.
+    let context_id: Option<uuid::Uuid> = match params.context_ref.as_deref() {
+        Some(s) => {
+            let cref = temper_core::context_ref::parse_context_ref(s)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            Some(
+                *crate::services::context_service::resolve_context_ref(pool, profile_id, &cref)
+                    .await?,
+            )
+        }
+        None => None,
+    };
 
     let hits = readback::unified_search(
         pool,
@@ -322,7 +348,7 @@ pub async fn search_select(
             seed_ids: params.seed_ids.as_deref().unwrap_or(&[]),
             depth: clamped.depth,
             edge_types: params.edge_types.as_deref().unwrap_or(&[]),
-            context_id: None, // deferred to the context-ref addressing arc (see note above)
+            context_id,
             doc_type: params.doc_type.as_deref(),
             graph_expand: params.graph_expand,
             limit: clamped.limit,
@@ -349,50 +375,9 @@ pub async fn search_select(
             graph_score: h.graph_score,
             combined_score: h.combined_score,
             origin: "unified".to_string(),
+            context_slug: Some(row.context_slug),
+            context_owner_ref: Some(row.context_owner_ref),
         });
-    }
-    Ok(out)
-}
-
-/// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
-/// `doc_type` in SQL via `readback::enriched_list` (WS2-scoped). Returns always-compiled temper-core
-/// types so the MCP consumer needs no feature gate. Native rows: real timestamps (event-sourced
-/// from `kb_events.occurred_at`), name-only doc type, no fabricated fields.
-pub async fn list_enriched_select(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    context_name: Option<&str>,
-    doc_type: Option<&str>,
-) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
-    let rows = readback::enriched_list(pool, *profile_id, context_name, doc_type)
-        .await
-        .map_err(api_err)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        let row = ResourceRow {
-            id: ResourceId::from(r.new_id),
-            kb_context_id: ContextId::from(Uuid::nil()), // re-minted; unused by build_enriched
-            origin_uri: r.origin_uri,
-            title: r.title,
-            originator_profile_id: ProfileId::from(Uuid::nil()),
-            owner_profile_id: ProfileId::from(Uuid::nil()),
-            is_active: r.is_active,
-            created: r.created,
-            updated: r.updated,
-            context_name: r.context_name,
-            doc_type_name: r.doc_type,
-            owner_handle: "@me".to_string(),
-            stage: r.stage,
-            seq: None,
-            mode: r.mode,
-            effort: r.effort,
-            body_hash: None,
-        };
-        // Propagate a genuine deser failure (don't swallow to None — a malformed managed shape is a fault).
-        let managed: Option<ManagedMeta> =
-            Some(serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?);
-        let open = Some(serde_json::Value::Object(r.open));
-        out.push((row, managed, open));
     }
     Ok(out)
 }

@@ -141,7 +141,7 @@ pub enum Commands {
     Search {
         /// Search query text
         query: String,
-        /// Filter by context name
+        /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
         /// Filter by document type
@@ -194,7 +194,7 @@ pub enum ResourceAction {
         /// Resource title
         #[arg(long)]
         title: Option<String>,
-        /// Context name
+        /// Context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
         /// Parent goal slug (task only)
@@ -232,7 +232,7 @@ pub enum ResourceAction {
         /// Resource type (task, goal, session, research, concept, decision)
         #[arg(long)]
         r#type: String,
-        /// Filter by context
+        /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
         /// Maximum results

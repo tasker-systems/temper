@@ -7,6 +7,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
+use temper_core::context_ref::parse_context_ref;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
@@ -30,6 +31,18 @@ pub async fn create(
     auth: AuthUser,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
+    // Parse the context ref string (UUID or @owner/slug). Bare names are rejected with 400.
+    let cref =
+        parse_context_ref(&payload.context_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // Resolve to a ContextId, visibility-gated to the calling principal.
+    let context = crate::services::context_service::resolve_context_ref(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        &cref,
+    )
+    .await?;
+
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     // Parse failures (malformed JSON for ManagedMeta shape) surface as BadRequest.
     let managed_meta: ManagedMeta = match payload.managed_meta {
@@ -45,7 +58,7 @@ pub async fn create(
     };
 
     let cmd = CreateResource {
-        context: payload.context_name,
+        context,
         doctype: payload.doc_type_name,
         slug: payload.slug,
         title: payload.title,
@@ -110,6 +123,7 @@ pub async fn update(
         managed_meta,
         open_meta: payload.open_meta,
         move_to: None,
+        context_ref: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

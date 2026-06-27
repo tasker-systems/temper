@@ -50,11 +50,8 @@ pub struct SearchParams {
     /// (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     #[serde(default = "default_search_config")]
     pub search_config: String,
-    /// Filter by context name. NOTE: not currently honored by `/api/search` — resolving a context by
-    /// bare name is ambiguous (names collide across owners; uniqueness is on `slug` per owner). Context
-    /// filtering is deferred to the context-ref addressing arc (UUID-primary + decorated `@owner/slug`),
-    /// which converts every surface together. `unified_search` retains a dormant `p_context_id` for it.
-    pub context_name: Option<String>,
+    /// Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.
+    pub context_ref: Option<String>,
     /// Filter by document type.
     pub doc_type: Option<String>,
     /// Maximum results (default 10, max 50).
@@ -82,7 +79,7 @@ impl Default for SearchParams {
             embedding: None,
             query: None,
             search_config: default_search_config(),
-            context_name: None,
+            context_ref: None,
             doc_type: None,
             limit: None,
             offset: None,
@@ -138,6 +135,14 @@ pub struct UnifiedSearchResultRow {
     pub graph_score: f32,
     pub combined_score: f32,
     pub origin: String,
+    /// Slug of the home context (the natural-key half of `@owner/slug`). `None` when not resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_slug: Option<String>,
+    /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`).
+    /// Together with `context_slug`, forms `{context_owner_ref}/{context_slug}` — the copy-pasteable
+    /// decorated context ref. `None` when not resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_owner_ref: Option<String>,
 }
 
 /// Request body for updating a profile.
@@ -160,7 +165,7 @@ mod tests {
         assert_eq!(params.query.as_deref(), Some("hello world"));
         assert!(params.embedding.is_none());
         assert_eq!(params.search_config, "english");
-        assert!(params.context_name.is_none());
+        assert!(params.context_ref.is_none());
         assert!(params.doc_type.is_none());
         assert!(params.limit.is_none());
         assert!(params.offset.is_none());

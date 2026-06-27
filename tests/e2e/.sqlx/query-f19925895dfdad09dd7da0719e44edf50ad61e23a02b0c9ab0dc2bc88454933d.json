@@ -47,7 +47,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Varchar",
+        "Uuid",
         "TextArray",
         "Int4"
       ]

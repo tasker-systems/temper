@@ -58,7 +58,10 @@ fn resolve_create_body(
 /// **`origin_uri`:** empty string today — server constructs the canonical
 /// URI from `(owner, context, doctype, slug)`.
 #[cfg(feature = "embed")]
-pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayload> {
+pub(crate) fn cmd_to_ingest_payload(
+    cmd: &CreateResource,
+    context_ref: &str,
+) -> Result<IngestPayload> {
     use temper_workflow::operations::ensure_managed_identity_keys;
 
     // Resolve body content (verbatim when provided; placeholder otherwise).
@@ -93,7 +96,7 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
     Ok(IngestPayload {
         title: cmd.title.clone(),
         origin_uri: String::new(),
-        context_name: cmd.context.clone(),
+        context_ref: context_ref.to_owned(),
         doc_type_name: cmd.doctype.clone(),
         content_hash,
         slug: cmd.slug.clone(),
@@ -111,11 +114,16 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
 /// **Partial-merge semantics:** only fields present in the cmd are
 /// serialized on the wire.
 ///
-/// **Move-to → managed_meta synthesis:** when the cmd carries
-/// `move_to: Some(MoveSpec { context_to, type_to })` but no
-/// `managed_meta.context` / `managed_meta.doc_type`, synthesizes
-/// minimal managed_meta entries so the server-side row reflects the
-/// move. Explicit caller-supplied values always win.
+/// **Context move:** `cmd.context_ref` (the raw `@owner/slug` or UUID ref
+/// set by the CLI) is forwarded verbatim as `req.context_to` for the API
+/// handler to parse and resolve server-side. `move_to.context_to` carries a
+/// *resolved* `ContextId` (only set by the API handler, never the CLI); if
+/// somehow present it is also forwarded as a UUID string. Bare names are
+/// rejected 400 by the server (Decision 1).
+///
+/// **Type move:** when `move_to.type_to` is set and `managed_meta.doc_type`
+/// is not, synthesizes `managed_meta.doc_type` so the server row reflects
+/// the new doc-type. Explicit caller-supplied values always win.
 ///
 /// **Body-trio:** computed only when `cmd.body` is `Some`. Short-circuits
 /// when `BodyUpdate` already carries pre-computed `content_hash` and
@@ -140,14 +148,17 @@ pub(crate) fn cmd_to_resource_update_request(
         None => (None, None, None),
     };
 
-    // Move_to → managed_meta synthesis: explicit caller fields always win.
+    // Context move: prefer the raw ref from context_ref (CLI path), fall back
+    // to converting a pre-resolved ContextId (if somehow present) to UUID string.
+    let context_to = cmd.context_ref.clone().or_else(|| {
+        cmd.move_to
+            .as_ref()
+            .and_then(|mv| mv.context_to.map(|id| id.to_string()))
+    });
+
+    // Type move → managed_meta synthesis: explicit caller fields always win.
     let mut managed_meta = cmd.managed_meta.clone().unwrap_or_default();
     if let Some(move_to) = &cmd.move_to {
-        if managed_meta.context.is_none() {
-            if let Some(ctx_to) = &move_to.context_to {
-                managed_meta.context = Some(ctx_to.clone());
-            }
-        }
         if managed_meta.doc_type.is_none() {
             if let Some(type_to) = &move_to.type_to {
                 managed_meta.doc_type = Some(type_to.clone());
@@ -183,6 +194,7 @@ pub(crate) fn cmd_to_resource_update_request(
         content,
         content_hash,
         chunks_packed,
+        context_to,
     })
 }
 
@@ -216,7 +228,7 @@ mod tests {
         CreateResource {
             slug: "2026-05-18-test".to_string(),
             doctype: "task".to_string(),
-            context: "temper".to_string(),
+            context: temper_core::types::ids::ContextId::new(),
             title: "Test task".to_string(),
             body: Some(BodyUpdate {
                 content: "# Test\n\nBody.\n".to_string(),
@@ -244,10 +256,10 @@ mod tests {
     #[test]
     fn cmd_to_ingest_payload_round_trips_basic_fields() {
         let cmd = sample_cmd();
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         assert_eq!(payload.slug, "2026-05-18-test");
         assert_eq!(payload.title, "Test task");
-        assert_eq!(payload.context_name, "temper");
+        assert_eq!(payload.context_ref, "@me/temper");
         assert_eq!(payload.doc_type_name, "task");
         assert_eq!(payload.content, "# Test\n\nBody.\n");
         assert!(payload.chunks_packed.is_some());
@@ -258,7 +270,7 @@ mod tests {
     #[test]
     fn cmd_to_ingest_payload_serializes_managed_meta_to_json() {
         let cmd = sample_cmd();
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         let mm = payload
             .managed_meta
             .expect("managed_meta should be present");
@@ -273,7 +285,7 @@ mod tests {
     fn cmd_to_ingest_payload_synthesizes_body_when_absent() {
         let mut cmd = sample_cmd();
         cmd.body = None;
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         assert_eq!(
             payload.content, "# Test task\n",
             "placeholder body uses title"
@@ -288,7 +300,7 @@ mod tests {
         // injected from the typed cmd.
         let mut cmd = sample_cmd();
         cmd.managed_meta = ManagedMeta::default();
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         let mm = payload
             .managed_meta
             .expect("identity keys make managed_meta non-default by construction");
@@ -304,7 +316,7 @@ mod tests {
         let mut cmd = sample_cmd();
         cmd.managed_meta.title = Some("Drift!".to_string());
         cmd.managed_meta.slug = Some("drift-slug".to_string());
-        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         let mm = payload.managed_meta.expect("present");
         assert_eq!(
             mm["temper-title"], "Test task",
@@ -323,6 +335,7 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             move_to: None,
+            context_ref: None,
             origin: Surface::CliCloud,
         }
     }
@@ -337,19 +350,46 @@ mod tests {
         assert!(req.content.is_none());
         assert!(req.content_hash.is_none());
         assert!(req.chunks_packed.is_none());
+        assert!(req.context_to.is_none());
     }
 
     #[test]
-    fn cmd_to_resource_update_request_synthesizes_managed_meta_from_move_to() {
+    fn cmd_to_resource_update_request_forwards_context_ref_to_context_to() {
+        // CLI path: raw ref goes via context_ref; translator forwards it to
+        // req.context_to verbatim (API handler resolves server-side).
+        let mut cmd = sample_update();
+        cmd.context_ref = Some("@me/knowledge".to_string());
+        let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
+        assert_eq!(
+            req.context_to.as_deref(),
+            Some("@me/knowledge"),
+            "raw context ref must be forwarded verbatim to req.context_to"
+        );
+        // managed_meta must NOT carry a context field (no synthesis from context_ref).
+        assert!(
+            req.managed_meta
+                .as_ref()
+                .and_then(|m| m.context.as_ref())
+                .is_none(),
+            "managed_meta.context must not be set from context_ref"
+        );
+    }
+
+    #[test]
+    fn cmd_to_resource_update_request_synthesizes_doc_type_from_move_to_type_to() {
+        // Type moves go through MoveSpec.type_to → managed_meta.doc_type.
         let mut cmd = sample_update();
         cmd.move_to = Some(MoveSpec {
-            context_to: Some("knowledge".to_string()),
+            context_to: None,
             type_to: Some("concept".to_string()),
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
-        let mm = req.managed_meta.expect("synthesized from move_to");
-        assert_eq!(mm.context.as_deref(), Some("knowledge"));
+        let mm = req.managed_meta.expect("synthesized from move_to.type_to");
         assert_eq!(mm.doc_type.as_deref(), Some("concept"));
+        assert!(
+            req.context_to.is_none(),
+            "no context_to without context_ref"
+        );
     }
 
     #[test]
@@ -370,22 +410,21 @@ mod tests {
     }
 
     #[test]
-    fn cmd_to_resource_update_request_does_not_overwrite_explicit_managed_meta() {
+    fn cmd_to_resource_update_request_context_ref_wins_over_move_to_context_to() {
+        // When both context_ref and move_to.context_to are set (unusual; move_to.context_to
+        // is a resolved ContextId, normally only set server-side), context_ref wins since
+        // or_else picks the first Some.
         let mut cmd = sample_update();
-        cmd.managed_meta = Some(ManagedMeta {
-            context: Some("explicit-context".to_string()),
-            ..ManagedMeta::default()
-        });
+        cmd.context_ref = Some("@me/from-cli".to_string());
         cmd.move_to = Some(MoveSpec {
-            context_to: Some("from-move-to".to_string()),
+            context_to: Some(temper_core::types::ids::ContextId::new()),
             type_to: None,
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
-        let mm = req.managed_meta.expect("present");
         assert_eq!(
-            mm.context.as_deref(),
-            Some("explicit-context"),
-            "explicit value wins over move_to synthesis"
+            req.context_to.as_deref(),
+            Some("@me/from-cli"),
+            "context_ref (CLI raw ref) wins over move_to.context_to UUID"
         );
     }
 
@@ -425,6 +464,8 @@ mod tests {
             context_name: "temper".to_string(),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
+            context_slug: "temper".to_string(),
+            context_owner_ref: "@me".to_string(),
             stage: Some("active".to_string()),
             seq: None,
             mode: None,

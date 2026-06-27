@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use temper_client::TemperClient;
+use temper_core::context_ref::{parse_context_ref, ContextOwnerRef, ContextRef};
 use temper_workflow::types::resource::ResourceListParams;
 use temper_workflow::types::ContentResponse;
 use temper_workflow::types::ResourceRow;
@@ -52,13 +53,24 @@ pub fn read_cursor(state_dir: &Path, context: &str) -> Result<Option<ProjectionC
 
 /// Atomically write a context's cursor sidecar using the standard
 /// temp-file-plus-rename pattern.
+///
+/// The `context` key may be a decorated ref (`@owner/slug`) whose `/`
+/// causes `cursor_path` to introduce a subdirectory under the projection
+/// directory. The temp path is derived from the cursor `path` directly
+/// (via `set_extension`) rather than re-joining `context` as a string, so
+/// a ref containing `/` never creates an unexpected second level of nesting.
 pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) -> Result<()> {
     let path = cursor_path(state_dir, context);
     let dir = path.parent().ok_or_else(|| {
         TemperError::Config(format!("cursor path has no parent: {}", path.display()))
     })?;
     std::fs::create_dir_all(dir)?;
-    let tmp_path = dir.join(format!("{context}.json.tmp"));
+    // Derive the temp path from `path` itself — do NOT re-join `context`
+    // because a decorated ref like `@me/slug` contains `/` and
+    // `dir.join("@me/slug.json.tmp")` would silently create a nested
+    // subdirectory that `create_dir_all(dir)` did not prepare.
+    let mut tmp_path = path.clone();
+    tmp_path.set_extension("json.tmp");
     let content = serde_json::to_string_pretty(cursor)?;
     std::fs::write(&tmp_path, content)?;
     std::fs::rename(&tmp_path, &path)?;
@@ -92,14 +104,41 @@ fn evaluate_staleness(cursor: &ProjectionCursor, server_latest: Option<Uuid>) ->
     }
 }
 
-/// Resolve a context name to its UUID via the contexts list. Returns `None`
-/// when the context is not found or the API call fails — the caller treats
-/// either as "cannot check", not as an error.
+/// Resolve a context ref to its UUID via the contexts list. Returns `None`
+/// when the ref cannot be parsed, the context is not found, or the API call
+/// fails — the caller treats any of these as "cannot check", not as an error.
+///
+/// Accepts a UUID or decorated `@owner/slug` / `+team/slug` form. Bare names
+/// are rejected by the parser and return `None` (consistent with the arc's
+/// hard-rejection of ambiguous bare-name addressing).
+///
+/// For `@me/slug` the row is matched by slug alone among profile-owned entries
+/// (`owner_ref` starts with `@`). This is unambiguous because slug is unique
+/// per `(owner_table, owner_id)` on the server, and profile-to-profile context
+/// sharing is not supported — visible profile-owned contexts are always the
+/// principal's own.
 async fn resolve_context_id(client: &TemperClient, context: &str) -> Option<Uuid> {
+    let r = parse_context_ref(context).ok()?;
     let rows = client.contexts().list().await.ok()?;
-    rows.into_iter()
-        .find(|c| c.name == context)
-        .map(|c| Uuid::from(c.id))
+    match r {
+        ContextRef::Id(id) => rows
+            .into_iter()
+            .find(|c| Uuid::from(c.id) == id)
+            .map(|c| Uuid::from(c.id)),
+        ContextRef::OwnerSlug { owner, slug } => rows
+            .into_iter()
+            .find(|c| {
+                c.slug == slug
+                    && match &owner {
+                        // `@me` — all profile-owned contexts have an `@`-sigiled `owner_ref`.
+                        // Slug uniqueness per owner means this is unambiguous.
+                        ContextOwnerRef::Me => c.owner_ref.starts_with('@'),
+                        ContextOwnerRef::Handle(h) => c.owner_ref == format!("@{h}"),
+                        ContextOwnerRef::Team(t) => c.owner_ref == format!("+{t}"),
+                    }
+            })
+            .map(|c| Uuid::from(c.id)),
+    }
 }
 
 /// Non-blocking staleness pre-flight for one context. Reads the context's
@@ -150,9 +189,14 @@ pub async fn warn_if_context_stale(client: &TemperClient, state_dir: &Path, cont
 
 /// Remove projection `.md` files for resources no longer present in the
 /// context. `keep` is the set of absolute file paths the current pull
-/// wrote. Walks `<vault_root>/<owner>/<context>/<doc_type>/*.md` across
+/// wrote. Walks `<vault_root>/<owner>/<context_name>/<doc_type>/*.md` across
 /// every owner directory. Only `.md` files are considered; other files
 /// and other contexts are never touched. Returns the number of files removed.
+///
+/// `context` must be the **on-disk directory name** (the context's slug/name,
+/// e.g. `"temper"`), not a decorated ref like `@me/temper`. Callers should
+/// derive it from the listed rows' `context_name` field rather than forwarding
+/// the raw command-line ref.
 pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) -> Result<usize> {
     let mut removed = 0usize;
     let owner_iter = match std::fs::read_dir(vault_root) {
@@ -350,7 +394,7 @@ pub async fn pull_context(
     let mut offset: i64 = 0;
     loop {
         let params = ResourceListParams {
-            context_name: Some(context.to_string()),
+            context_ref: Some(context.to_string()),
             limit: Some(PULL_PAGE_SIZE),
             offset: Some(offset),
             ..Default::default()
@@ -376,7 +420,21 @@ pub async fn pull_context(
     }
 
     // 3. Prune files for resources no longer in the context.
-    let pruned = prune_context(&config.vault_root, context, &keep)?;
+    // The on-disk directory component is the context's `context_name` field (e.g. `"temper"`),
+    // not the raw ref (which may be `"@me/temper"`). Derive it from any listed row; for an empty
+    // context fall back to parsing the slug from the ref so that a context that has been emptied
+    // server-side still prunes its local projection files.
+    let context_dir_name: Option<String> =
+        rows.first().map(|r| r.context_name.clone()).or_else(|| {
+            parse_context_ref(context).ok().and_then(|r| match r {
+                ContextRef::OwnerSlug { slug, .. } => Some(slug),
+                ContextRef::Id(_) => None,
+            })
+        });
+    let pruned = match context_dir_name.as_deref() {
+        Some(name) => prune_context(&config.vault_root, name, &keep)?,
+        None => 0,
+    };
 
     // 4. Record the staleness cursor. The context's UUID comes from any
     //    listed row; an empty context yields no event id.

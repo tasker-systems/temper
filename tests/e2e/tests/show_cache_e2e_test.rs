@@ -65,7 +65,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
     let payload = IngestPayload {
         title: "Heal Me".to_string(),
         origin_uri: "test://show-heal".to_string(),
-        context_name: "show-heal".to_string(),
+        context_ref: "@me/show-heal".to_string(),
         doc_type_name: "research".to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
         slug: "heal-me".to_string(),
@@ -167,7 +167,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
     let payload = IngestPayload {
         title: "Mismatch".to_string(),
         origin_uri: "test://show-mismatch".to_string(),
-        context_name: "show-mismatch".to_string(),
+        context_ref: "@me/show-mismatch".to_string(),
         doc_type_name: "research".to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
         slug: "mismatch".to_string(),

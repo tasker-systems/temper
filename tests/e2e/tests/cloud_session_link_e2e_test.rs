@@ -40,7 +40,7 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: "task".to_string(),
         content_hash: None,
         slug: slug.to_string(),
@@ -77,7 +77,7 @@ async fn resolve_by_title(
     title: &str,
 ) -> temper_workflow::types::resource::ResourceRow {
     let params = temper_workflow::types::resource::ResourceListParams {
-        context_name: Some(context.to_string()),
+        context_ref: Some(format!("@me/{context}")),
         doc_type_name: Some(doc_type.to_string()),
         ..Default::default()
     };
@@ -132,7 +132,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title,
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -253,7 +253,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title,
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -320,7 +320,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title,
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -391,7 +391,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "research",
                     title: "Research With Task Flag",
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,
@@ -461,7 +461,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
                 temper_cli::commands::resource::CreateResourceArgs {
                     doc_type: "session",
                     title,
-                    context: Some("myapp"),
+                    context: Some("@me/myapp"),
                     goal: None,
                     mode: None,
                     effort: None,

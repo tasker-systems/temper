@@ -40,7 +40,7 @@ trail for the next session.
 9. **Commit** — make a clean commit with a message that references the task context.
 10. **Create sub-tasks for remaining work** — for each remaining piece:
     ```bash
-    temper resource create --type task --title "<next piece title>" --context <ctx> --mode build --effort <effort>
+    temper resource create --type task --title "<next piece title>" --context @me/<ctx> --mode build --effort <effort>
     ```
 
 ## Session Rhythm
@@ -57,7 +57,7 @@ Pipe the session summary via stdin. Use `--stage done` only if THIS sub-task is 
 The parent task may remain in-progress across sessions.
 
 ```bash
-cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
+cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
 ## Goal
 What we set out to do
 

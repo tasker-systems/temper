@@ -2,7 +2,6 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { Grid, WillowDark } from 'wx-svelte-grid';
-	import { decoratedRef } from '$lib/ref';
 	import type { ResourceRow, ResourceSortField } from '$lib/types';
 
 	interface Props {
@@ -78,8 +77,7 @@
 		if (ev.eventSource !== 'click' || !ev.row) return;
 		const row = rowLookup.get(String(ev.row));
 		if (!row) return;
-		const ident = decoratedRef(row.slug, row.id);
-		goto(`/vault/${row.owner_handle}/${row.context_name}/${row.doc_type_name}/${ident}`);
+		goto(`/vault/${row.context_owner_ref}/${row.context_slug}/${row.doc_type_name}/${row.id}`);
 	}
 
 	function handleSort(ev: { key: string | number; order?: 'asc' | 'desc' }) {

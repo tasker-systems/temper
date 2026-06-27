@@ -34,7 +34,7 @@ async fn seed_resource(
     let payload = IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://{slug}"),
-        context_name: context.to_string(),
+        context_ref: format!("@me/{context}"),
         doc_type_name: doc_type.to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
         slug,
@@ -73,7 +73,7 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&temper_workflow::types::resource::ResourceListParams {
-            context_name: Some("cursor-ctx".to_string()),
+            context_ref: Some("@me/cursor-ctx".to_string()),
             ..Default::default()
         })
         .await
@@ -117,7 +117,7 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&temper_workflow::types::resource::ResourceListParams {
-            context_name: Some("wctx".to_string()),
+            context_ref: Some("@me/wctx".to_string()),
             ..Default::default()
         })
         .await
@@ -168,7 +168,7 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
         .client
         .resources()
         .list(&temper_workflow::types::resource::ResourceListParams {
-            context_name: Some("fpctx".to_string()),
+            context_ref: Some("@me/fpctx".to_string()),
             ..Default::default()
         })
         .await
@@ -334,13 +334,16 @@ async fn staleness_fresh_immediately_after_pull(pool: sqlx::PgPool) {
     app.client.contexts().create("sfr").await.expect("ctx");
     seed_resource(&app, "sfr", "research", "Doc").await;
 
+    // Pull and check using the same decorated ref — resolve_context_id now
+    // matches by slug on profile-owned contexts for `@me/…` refs, so no
+    // cursor rekey is needed.
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, "sfr")
+    temper_cli::projection::pull_context(&app.client, &config, "@me/sfr")
         .await
         .expect("pull");
 
     let outcome =
-        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sfr")
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "@me/sfr")
             .await;
     assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Fresh);
 }
@@ -356,8 +359,9 @@ async fn staleness_stale_after_post_pull_write(pool: sqlx::PgPool) {
     app.client.contexts().create("sst").await.expect("ctx");
     seed_resource(&app, "sst", "research", "First Doc").await;
 
+    // Pull and check using the same decorated ref — no cursor rekey needed.
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, "sst")
+    temper_cli::projection::pull_context(&app.client, &config, "@me/sst")
         .await
         .expect("first pull");
 
@@ -365,7 +369,7 @@ async fn staleness_stale_after_post_pull_write(pool: sqlx::PgPool) {
     seed_resource(&app, "sst", "research", "Second Doc").await;
 
     let outcome =
-        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sst")
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "@me/sst")
             .await;
     assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Stale);
 }
@@ -407,11 +411,14 @@ async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("ectx").await.expect("ctx");
+    let ctx = app.client.contexts().create("ectx").await.expect("ctx");
+    // Use the context UUID as the ref — it is a valid addressable form (no bare
+    // name) and avoids ambiguity in cursor keying.
+    let context_ref = ctx.id.to_string();
 
     // Pull a context that has no resources at all.
     let config = projection_test_config(&app);
-    let summary = temper_cli::projection::pull_context(&app.client, &config, "ectx")
+    let summary = temper_cli::projection::pull_context(&app.client, &config, &context_ref)
         .await
         .expect("pull_context on empty context");
 
@@ -419,7 +426,7 @@ async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
     assert_eq!(summary.pruned, 0, "nothing to prune");
 
     // The cursor sidecar is still written; with no events it records None.
-    let cursor = temper_cli::projection::read_cursor(&config.state_dir, "ectx")
+    let cursor = temper_cli::projection::read_cursor(&config.state_dir, &context_ref)
         .expect("read_cursor")
         .expect("cursor written even for an empty context");
     assert!(
