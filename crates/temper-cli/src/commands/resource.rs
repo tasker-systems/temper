@@ -1350,12 +1350,13 @@ mod resource_list_render_tests {
 mod edges_report_tests {
     use super::EdgesReport;
     use temper_core::types::graph::{EdgeKind, Polarity};
+    use temper_core::types::ids::{EdgeId, ResourceId};
     use temper_workflow::types::graph::GraphEdgeRow;
 
     fn make_edge(direction: &str, label: &str) -> GraphEdgeRow {
         GraphEdgeRow {
-            edge_id: uuid::Uuid::nil(),
-            peer_resource_id: uuid::Uuid::nil(),
+            edge_id: EdgeId::from(uuid::Uuid::nil()),
+            peer_resource_id: ResourceId::from(uuid::Uuid::nil()),
             peer_title: "Peer Title".to_string(),
             peer_slug: "peer-slug".to_string(),
             edge_kind: EdgeKind::Express,

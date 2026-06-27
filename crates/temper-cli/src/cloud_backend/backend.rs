@@ -168,7 +168,7 @@ mod embed_impl {
         async fn assert_relationship(
             &self,
             _cmd: AssertRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::assert_relationship not wired until cutover".to_string(),
             ))
@@ -177,7 +177,7 @@ mod embed_impl {
         async fn retype_relationship(
             &self,
             _cmd: RetypeRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::retype_relationship not wired until cutover".to_string(),
             ))
@@ -186,7 +186,7 @@ mod embed_impl {
         async fn reweight_relationship(
             &self,
             _cmd: ReweightRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::reweight_relationship not wired until cutover".to_string(),
             ))
@@ -195,7 +195,7 @@ mod embed_impl {
         async fn fold_relationship(
             &self,
             _cmd: FoldRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::fold_relationship not wired until cutover".to_string(),
             ))
@@ -358,7 +358,7 @@ mod non_embed_impl {
         async fn assert_relationship(
             &self,
             _cmd: AssertRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
@@ -367,7 +367,7 @@ mod non_embed_impl {
         async fn retype_relationship(
             &self,
             _cmd: RetypeRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
@@ -376,7 +376,7 @@ mod non_embed_impl {
         async fn reweight_relationship(
             &self,
             _cmd: ReweightRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
@@ -385,7 +385,7 @@ mod non_embed_impl {
         async fn fold_relationship(
             &self,
             _cmd: FoldRelationship,
-        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

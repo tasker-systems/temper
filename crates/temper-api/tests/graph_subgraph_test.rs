@@ -76,7 +76,7 @@ async fn happy_path_returns_all_concepts_and_direct_members(pool: PgPool) {
     .await
     .expect("aggregator_subgraph should succeed");
 
-    let node_ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let node_ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
 
     // All active concepts present
     assert!(node_ids.contains(&uuid(C1_IDEMPOTENCY)), "c1 present");
@@ -230,7 +230,7 @@ async fn tier_three_reachable_included(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         ids.contains(&uuid(T1_TOKEN_REFRESH)),
         "t1 should be reachable via c4 → m6 → t1 at depth 2"
@@ -254,7 +254,7 @@ async fn tier_four_unreachable_excluded(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         !ids.contains(&uuid(T2_SESSION_MGMT)),
         "t2 is depth-3 from c4 and must NOT appear at depth=2"
@@ -278,7 +278,7 @@ async fn singleton_concept_returned_as_isolated_node(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         ids.contains(&uuid(C3_SINGLETON)),
         "singleton concept still present"
@@ -316,7 +316,7 @@ async fn diamond_shared_member_appears_once(pool: PgPool) {
     let m1_count = result
         .nodes
         .iter()
-        .filter(|n| n.id == uuid(M1_OAUTH))
+        .filter(|n| Uuid::from(n.id) == uuid(M1_OAUTH))
         .count();
     assert_eq!(m1_count, 1, "shared member m1 should appear exactly once");
 
@@ -351,7 +351,7 @@ async fn cross_owner_concept_excluded(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         !ids.contains(&uuid(B1_BOB_CONCEPT)),
         "bob's concept must not leak to alice's query"
@@ -378,7 +378,7 @@ async fn cross_owner_edge_attempt_filtered(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         !ids.contains(&uuid(B2_BOB_RESEARCH)),
         "b2 (bob-owned) must not appear"
@@ -413,7 +413,7 @@ async fn deleted_concept_excluded(pool: PgPool) {
     .await
     .expect("aggregator_subgraph");
 
-    let ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         !ids.contains(&uuid(C5_DELETED)),
         "soft-deleted concept (is_active=false) must NOT appear"
@@ -465,7 +465,7 @@ async fn multi_context_isolation(pool: PgPool) {
     .await
     .expect("aggregator_subgraph primary");
 
-    let primary_ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let primary_ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         !primary_ids.contains(&uuid(S1_SECONDARY)),
         "secondary context's concept must not appear in primary query"
@@ -484,7 +484,7 @@ async fn multi_context_isolation(pool: PgPool) {
     .await
     .expect("aggregator_subgraph secondary");
 
-    let secondary_ids: Vec<Uuid> = result.nodes.iter().map(|n| n.id).collect();
+    let secondary_ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
     assert!(
         secondary_ids.contains(&uuid(S1_SECONDARY)),
         "s1 present in secondary"
@@ -516,7 +516,7 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
     let m1 = result
         .nodes
         .iter()
-        .find(|n| n.id == uuid(M1_OAUTH))
+        .find(|n| Uuid::from(n.id) == uuid(M1_OAUTH))
         .expect("m1 should be in the result");
     assert_eq!(
         m1.edge_count, 2,
@@ -527,7 +527,7 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
     let c1 = result
         .nodes
         .iter()
-        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .find(|n| Uuid::from(n.id) == uuid(C1_IDEMPOTENCY))
         .expect("c1 should be in the result");
     assert_eq!(c1.edge_count, 3, "c1 has 3 outgoing edges");
 }
@@ -555,7 +555,7 @@ async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
     let c1 = result
         .nodes
         .iter()
-        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .find(|n| Uuid::from(n.id) == uuid(C1_IDEMPOTENCY))
         .expect("c1 should be in the result");
     assert_eq!(
         c1.excerpt.as_deref(),
@@ -566,7 +566,7 @@ async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
     let m1 = result
         .nodes
         .iter()
-        .find(|n| n.id == uuid(M1_OAUTH))
+        .find(|n| Uuid::from(n.id) == uuid(M1_OAUTH))
         .expect("m1 should be in the result");
     let m1_excerpt = m1.excerpt.as_deref().expect("m1 excerpt present");
     assert!(
@@ -602,7 +602,7 @@ async fn excerpt_is_none_when_no_body_chunk(pool: PgPool) {
     let c3 = result
         .nodes
         .iter()
-        .find(|n| n.id == uuid(C3_SINGLETON))
+        .find(|n| Uuid::from(n.id) == uuid(C3_SINGLETON))
         .expect("c3 should be in the result");
     assert!(
         c3.excerpt.is_none(),
@@ -635,7 +635,7 @@ async fn stage_populated_only_for_task_doctype(pool: PgPool) {
     let m2 = result
         .nodes
         .iter()
-        .find(|n| n.id == uuid(M2_MIDDLEWARE))
+        .find(|n| Uuid::from(n.id) == uuid(M2_MIDDLEWARE))
         .expect("m2 (task) should be in the result");
     assert_eq!(m2.doc_type, DocType::Task, "fixture sanity");
     assert_eq!(
