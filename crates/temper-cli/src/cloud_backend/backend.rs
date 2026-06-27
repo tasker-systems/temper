@@ -261,7 +261,6 @@ mod embed_impl {
 
         // Compile-level guard: confirm CloudBackend implements Backend.
         // Actual dispatch is exercised via tests/e2e/ at end of branch (Task 19).
-        #[allow(dead_code)]
         fn assert_implements_backend<T: Backend>(_: &T) {}
 
         #[test]

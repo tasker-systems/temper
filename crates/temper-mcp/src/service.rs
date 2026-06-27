@@ -23,6 +23,7 @@ use tokio::sync::Mutex;
 
 use temper_api::services::profile_service;
 use temper_api::state::AppState;
+use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, Profile};
 
 use crate::middleware::McpClaims;
@@ -35,6 +36,16 @@ pub struct TemperMcpService {
     tool_router: ToolRouter<Self>,
     /// Cached profile resolved from the Auth0 `sub` claim.
     profile: Arc<Mutex<Option<Profile>>>,
+}
+
+// Manual impl: `ToolRouter` does not implement Debug, so `tool_router` is omitted.
+impl std::fmt::Debug for TemperMcpService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemperMcpService")
+            .field("api_state", &self.api_state)
+            .field("profile", &self.profile)
+            .finish_non_exhaustive()
+    }
 }
 
 #[tool_router]
@@ -91,7 +102,7 @@ impl TemperMcpService {
         // Check system access before allowing any tool use.
         let has_access = temper_api::services::access_service::has_system_access(
             &self.api_state.pool,
-            profile.id,
+            ProfileId::from(profile.id),
         )
         .await
         .map_err(|e| {

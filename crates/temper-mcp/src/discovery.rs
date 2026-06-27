@@ -108,6 +108,13 @@ pub struct ClientRegistrationRequest {
     // Accept and ignore any other fields the client sends.
 }
 
+/// RFC 7591 §3.2.2 — Client registration error response.
+#[derive(Serialize)]
+struct OAuthErrorResponse {
+    error: &'static str,
+    error_description: &'static str,
+}
+
 /// RFC 7591 — Client registration response.
 #[derive(Serialize)]
 struct ClientRegistrationResponse {
@@ -136,10 +143,10 @@ pub async fn register_client(
         tracing::warn!("DCR request received but MCP_CLIENT_ID is not configured");
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "temporarily_unavailable",
-                "error_description": "Dynamic client registration is not configured"
-            })),
+            Json(OAuthErrorResponse {
+                error: "temporarily_unavailable",
+                error_description: "Dynamic client registration is not configured",
+            }),
         ));
     };
 
@@ -167,14 +174,14 @@ pub async fn register_client(
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!(ClientRegistrationResponse {
+        Json(ClientRegistrationResponse {
             client_id: client_id.clone(),
             client_name,
             redirect_uris,
             grant_types: vec!["authorization_code", "refresh_token"],
             response_types: vec!["code"],
             token_endpoint_auth_method: "none",
-        })),
+        }),
     ))
 }
 

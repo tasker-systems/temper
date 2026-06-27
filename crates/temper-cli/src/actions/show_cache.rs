@@ -28,7 +28,10 @@ use crate::actions::runtime::client_err_to_temper;
 use crate::error::{Result, TemperError};
 use crate::output;
 
-/// Default debounce window.
+/// Default debounce window: how long a freshly-projected local file is trusted
+/// before a remote re-fetch is attempted. Long enough that back-to-back reads
+/// in one working session skip the network, short enough that edits made
+/// elsewhere surface quickly.
 pub const DEFAULT_DEBOUNCE_SECONDS: u64 = 30;
 
 pub struct ShowCacheParams<'a> {
@@ -38,6 +41,7 @@ pub struct ShowCacheParams<'a> {
     pub debounce: Duration,
 }
 
+#[derive(Debug)]
 pub struct ShowCacheResult {
     pub content: String,
     pub source: FreshnessTier,

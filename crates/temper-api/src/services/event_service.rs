@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
+use temper_core::types::ids::{ContextId, ProfileId};
 
 /// The most recent event id produced against a context the profile owns (directly, or via a team it
 /// belongs to). Returns `None` when the context has no events the profile may see. Post-collapse events
@@ -9,8 +10,8 @@ use crate::error::ApiResult;
 /// the context's own event stream, gated by context ownership.
 pub async fn latest_event_id_for_context(
     pool: &PgPool,
-    profile_id: Uuid,
-    kb_context_id: Uuid,
+    profile_id: ProfileId,
+    kb_context_id: ContextId,
 ) -> ApiResult<Option<Uuid>> {
     let id = sqlx::query_scalar!(
         r#"
@@ -27,8 +28,8 @@ pub async fn latest_event_id_for_context(
          ORDER BY e.occurred_at DESC
          LIMIT 1
         "#,
-        profile_id,
-        kb_context_id,
+        *profile_id,
+        *kb_context_id,
     )
     .fetch_optional(pool)
     .await?;

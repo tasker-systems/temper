@@ -265,7 +265,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     );
 
     // Verify content is retrievable via the substrate read selector
-    let retrieved = substrate_read::get_content_select(&pool, *profile_id, *resource.id)
+    let retrieved = substrate_read::get_content_select(&pool, profile_id, resource.id)
         .await
         .expect("get_content_select");
 
@@ -451,7 +451,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         .expect("update via DbBackend");
 
     // Read back the row via the substrate selector (NOT the retired get_visible).
-    let updated_resource = substrate_read::show_select(&pool, *profile_id, *resource.id)
+    let updated_resource = substrate_read::show_select(&pool, profile_id, resource.id)
         .await
         .expect("show_select after update");
     assert_eq!(updated_resource.id, resource.id);
@@ -467,7 +467,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     );
 
     // 4. Verify the reconstructed body reflects the new content, not the old.
-    let reconstructed = substrate_read::get_content_select(&pool, *profile_id, *resource.id)
+    let reconstructed = substrate_read::get_content_select(&pool, profile_id, resource.id)
         .await
         .expect("get_content_select after update")
         .markdown;

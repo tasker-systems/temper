@@ -38,23 +38,6 @@ impl axum::response::IntoResponse for ListResourcesResponse {
     }
 }
 
-/// Derive a URL-safe slug from a title.
-///
-/// Lowercases, replaces non-alphanumeric chars with hyphens, collapses runs
-/// of hyphens, and strips leading/trailing hyphens. Matches the pattern
-/// enforced by doc-type schema validation (`^[a-z0-9][a-z0-9-]*$`).
-fn slugify_title(title: &str) -> String {
-    let raw: String = title
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-    raw.split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 #[utoipa::path(
     get,
     path = "/api/resources",
@@ -74,15 +57,18 @@ pub async fn list(
     if params.meta_only.unwrap_or(false) {
         let response = crate::backend::substrate_read::list_meta_select(
             &state.pool,
-            auth.0.profile.id,
+            ProfileId::from(auth.0.profile.id),
             params,
         )
         .await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
-        let response =
-            crate::backend::substrate_read::list_select(&state.pool, auth.0.profile.id, params)
-                .await?;
+        let response = crate::backend::substrate_read::list_select(
+            &state.pool,
+            ProfileId::from(auth.0.profile.id),
+            params,
+        )
+        .await?;
         Ok(ListResourcesResponse::Default(response))
     }
 }
@@ -133,9 +119,13 @@ pub async fn get_content(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
-    crate::backend::substrate_read::get_content_select(&state.pool, auth.0.profile.id, resource_id)
-        .await
-        .map(Json)
+    crate::backend::substrate_read::get_content_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        ResourceId::from(resource_id),
+    )
+    .await
+    .map(Json)
 }
 
 #[utoipa::path(
@@ -168,7 +158,9 @@ pub async fn create(
 
     // When slug is absent, derive one from the title so the create path's
     // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.
-    let slug = req.slug.unwrap_or_else(|| slugify_title(&req.title));
+    let slug = req
+        .slug
+        .unwrap_or_else(|| temper_substrate::text::slugify(&req.title));
 
     let cmd = CreateResource {
         context,

@@ -30,6 +30,20 @@ pub(crate) struct ErrorBody {
     error: ErrorDetail,
 }
 
+impl ErrorBody {
+    /// Build a typed error body with no `details` payload — the shape used by
+    /// both `ApiError::into_response` and the router fallback handler.
+    pub(crate) fn new(code: &'static str, message: String) -> Self {
+        Self {
+            error: ErrorDetail {
+                code,
+                message,
+                details: None,
+            },
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 pub(crate) struct ErrorDetail {
     code: &'static str,
@@ -163,7 +177,6 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
             TemperError::Conflict(s) => ApiError::Conflict(s),
             TemperError::Api(s) => ApiError::Internal(s),
-            TemperError::NotImplemented(s) => ApiError::Internal(format!("not implemented: {s}")),
             TemperError::SystemAccessRequired(details) => {
                 // Round-trip the join_request_status string back to the enum.
                 // The inbound conversion stringified it as `format!("{s:?}").to_lowercase()`,

@@ -22,6 +22,7 @@ pub fn slug_from_title(title: &str) -> String {
 
 /// Body trio extracted from raw markdown — the chunk + hash output that
 /// goes onto IngestPayload (cloud create) or ResourceUpdateRequest (cloud update).
+#[derive(Debug)]
 pub struct BodyChunks {
     pub content_hash: String,
     pub chunks_packed: String,

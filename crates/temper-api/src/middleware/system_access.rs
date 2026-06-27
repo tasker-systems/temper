@@ -11,6 +11,7 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
+use temper_core::types::ids::ProfileId;
 use temper_core::types::AuthenticatedProfile;
 
 use crate::error::ApiError;
@@ -34,11 +35,14 @@ pub async fn require_system_access(
             ApiError::Internal("AuthenticatedProfile not found in request extensions".to_string())
         })?;
 
-    let has_access = access_service::has_system_access(&state.pool, profile.profile.id).await?;
+    let has_access =
+        access_service::has_system_access(&state.pool, ProfileId::from(profile.profile.id)).await?;
 
     if !has_access {
         let settings = access_service::get_public_settings(&state.pool).await?;
-        let own_request = access_service::get_own_request(&state.pool, profile.profile.id).await?;
+        let own_request =
+            access_service::get_own_request(&state.pool, ProfileId::from(profile.profile.id))
+                .await?;
 
         // SECURITY NOTE: email and display_name are safe to return here because
         // the caller already proved ownership of this identity through OAuth.

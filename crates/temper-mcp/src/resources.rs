@@ -12,7 +12,13 @@ use rmcp::model::{
 use uuid::Uuid;
 
 use temper_api::state::AppState;
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::Profile;
+
+/// Page size for the resource-browsing list calls. MCP resource listing is a
+/// flat browse surface (no client-driven pagination), so we cap each fetch at a
+/// reasonable ceiling rather than streaming the whole vault.
+const MCP_RESOURCE_BROWSE_LIMIT: i64 = 200;
 
 /// List all resources visible to the authenticated user as MCP resources.
 ///
@@ -25,16 +31,17 @@ pub async fn list_resources(
 ) -> Result<ListResourcesResult, rmcp::ErrorData> {
     // Fetch all visible resources (no filters, reasonable limit for browsing).
     let params = temper_workflow::types::resource::ResourceListParams {
-        limit: Some(200),
+        limit: Some(MCP_RESOURCE_BROWSE_LIMIT),
         ..Default::default()
     };
 
-    let response =
-        temper_api::backend::substrate_read::list_select(&state.pool, profile.id, params)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
-            })?;
+    let response = temper_api::backend::substrate_read::list_select(
+        &state.pool,
+        ProfileId::from(profile.id),
+        params,
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
 
     let resources = response
         .rows
@@ -105,15 +112,15 @@ pub async fn read_resource(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let content =
-            temper_api::backend::substrate_read::get_content_select(&state.pool, profile.id, id)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to read resource content: {e}"),
-                        None,
-                    )
-                })?;
+        let content = temper_api::backend::substrate_read::get_content_select(
+            &state.pool,
+            ProfileId::from(profile.id),
+            ResourceId::from(id),
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
+        })?;
 
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
             content.markdown,
@@ -127,21 +134,25 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let row = temper_api::backend::substrate_read::show_select(&state.pool, profile.id, id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
-            })?;
+        let row = temper_api::backend::substrate_read::show_select(
+            &state.pool,
+            ProfileId::from(profile.id),
+            ResourceId::from(id),
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
+        })?;
 
-        let content =
-            temper_api::backend::substrate_read::get_content_select(&state.pool, profile.id, id)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to read resource content: {e}"),
-                        None,
-                    )
-                })?;
+        let content = temper_api::backend::substrate_read::get_content_select(
+            &state.pool,
+            ProfileId::from(profile.id),
+            ResourceId::from(id),
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
+        })?;
 
         // Return metadata as JSON + content as markdown.
         let meta_json = serde_json::to_string_pretty(&row).map_err(|e| {
@@ -182,19 +193,22 @@ pub async fn read_resource(
 
         let params = temper_workflow::types::resource::ResourceListParams {
             context_ref: Some(uuid::Uuid::from(context_id).to_string()),
-            limit: Some(200),
+            limit: Some(MCP_RESOURCE_BROWSE_LIMIT),
             ..Default::default()
         };
 
-        let response =
-            temper_api::backend::substrate_read::list_select(&state.pool, profile.id, params)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to list resources in context: {e}"),
-                        None,
-                    )
-                })?;
+        let response = temper_api::backend::substrate_read::list_select(
+            &state.pool,
+            ProfileId::from(profile.id),
+            params,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to list resources in context: {e}"),
+                None,
+            )
+        })?;
 
         let json = serde_json::to_string_pretty(&response.rows).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to serialize resource list: {e}"), None)

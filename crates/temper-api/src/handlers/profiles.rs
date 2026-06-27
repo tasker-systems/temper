@@ -2,14 +2,15 @@ use axum::extract::State;
 use axum::Json;
 
 use temper_core::types::access_gate::Entitlements;
+use temper_core::types::ids::ProfileId;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::{access_service, profile_service};
 use crate::state::AppState;
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct ProfileWithEntitlements {
     #[serde(flatten)]
     pub profile: Profile,
@@ -30,8 +31,10 @@ pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<ProfileWithEntitlements>> {
-    let profile = profile_service::get_by_id(&state.pool, auth.0.profile.id).await?;
-    let entitlements = access_service::get_entitlements(&state.pool, auth.0.profile.id).await?;
+    let profile =
+        profile_service::get_by_id(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    let entitlements =
+        access_service::get_entitlements(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
 
     Ok(Json(ProfileWithEntitlements {
         profile,
@@ -57,19 +60,13 @@ pub async fn update(
 ) -> ApiResult<Json<Profile>> {
     profile_service::validate_preferences_size(req.preferences.as_ref())?;
 
-    let vault_config_value = req
-        .vault_config
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|e| ApiError::BadRequest(format!("Invalid vault_config: {e}")))?;
-
+    // `req.vault_config` is intentionally ignored: it is substrate-dropped
+    // (synthesized on read), so there is nothing to persist.
     profile_service::update(
         &state.pool,
-        auth.0.profile.id,
+        ProfileId::from(auth.0.profile.id),
         req.display_name.as_deref(),
         req.preferences.as_ref(),
-        vault_config_value.as_ref(),
     )
     .await
     .map(Json)
@@ -89,7 +86,7 @@ pub async fn list_auth_links(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<ProfileAuthLink>>> {
-    profile_service::list_auth_links(&state.pool, auth.0.profile.id)
+    profile_service::list_auth_links(&state.pool, ProfileId::from(auth.0.profile.id))
         .await
         .map(Json)
 }

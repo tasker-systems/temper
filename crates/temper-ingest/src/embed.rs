@@ -239,6 +239,7 @@ pub fn tokenize(tokenizer: &Tokenizer, texts: &[&str]) -> Result<Vec<Encoding>> 
 // ---- Tensor construction ----
 
 /// Input tensors for the ONNX model.
+#[derive(Debug)]
 pub struct InputTensors {
     pub input_ids: Array2<i64>,
     pub attention_mask: Array2<i64>,
@@ -420,7 +421,7 @@ mod tests {
     // ---- Unit tests (no model download needed) ----
 
     #[test]
-    fn test_l2_normalize() {
+    fn test_l2_normalize_scales_to_unit_length() {
         let mut vec = vec![3.0, 4.0];
         l2_normalize(&mut vec);
         assert!((vec[0] - 0.6).abs() < 1e-6);
@@ -442,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mean_pool_basic() {
+    fn test_mean_pool_averages_unmasked_positions() {
         let hidden = ndarray::array![[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0]]];
         let mask = ndarray::array![[1i64, 1]];
         let result = mean_pool(hidden.view(), &mask);

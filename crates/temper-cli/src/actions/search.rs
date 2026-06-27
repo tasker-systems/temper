@@ -22,6 +22,7 @@ pub fn embed_query(_text: &str) -> Result<Vec<f32>> {
 }
 
 /// CLI search arguments — bundles domain params for `build_search_params`.
+#[derive(Debug)]
 pub struct CliSearchArgs<'a> {
     pub query: &'a str,
     pub embedding: Option<Vec<f32>>,

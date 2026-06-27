@@ -14,7 +14,7 @@ use crate::middleware::auth::AuthUser;
 use crate::services::access_service;
 use crate::state::AppState;
 
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
 
@@ -38,7 +38,12 @@ pub async fn reconcile(
     Json(request): Json<ReconcileCogmapRequest>,
 ) -> ApiResult<Json<ReconcileOutcome>> {
     // Auth before writes (Global Constraints): the root-team-cogmap write gate.
-    access_service::require_cogmap_write_admin(&state.pool, auth.0.profile.id, cogmap_id).await?;
+    access_service::require_cogmap_write_admin(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        CogmapId::from(cogmap_id),
+    )
+    .await?;
 
     let cmd = ReconcileCognitiveMap {
         cogmap_id,

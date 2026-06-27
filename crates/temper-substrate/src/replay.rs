@@ -88,6 +88,7 @@ const INPUT_TABLES: &[&str] = &[
     "kb_events",
 ];
 
+#[derive(Debug)]
 pub struct LedgerSnapshot {
     inputs: Vec<(String, serde_json::Value)>,
     team_cogmaps: serde_json::Value,

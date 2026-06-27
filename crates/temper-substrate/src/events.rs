@@ -98,6 +98,7 @@ impl EdgeHome {
 /// One seeding mutation, carrying its params (typed ids — bare `Uuid` only at the SQL-bind boundary).
 /// One variant per reusable SQL mutation function, plus `Materialize` (whose event has no SQL function —
 /// it is the raw `region_materialized` INSERT, reconciled here so it shares the one firing surface).
+#[derive(Debug)]
 pub enum SeedAction<'a> {
     CogmapGenesis {
         name: &'a str,
