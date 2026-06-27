@@ -39,7 +39,7 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> SearchParams {
     SearchParams {
         query: Some(args.query.to_string()),
         embedding: args.embedding,
-        context_name: args.context.map(String::from),
+        context_ref: args.context.map(String::from),
         doc_type: args.doc_type.map(String::from),
         limit: args.limit,
         seed_ids: if args.seed_ids.is_empty() {
@@ -124,7 +124,7 @@ mod tests {
         };
         let params = build_search_params(args);
         assert_eq!(params.query.as_deref(), Some("hello"));
-        assert_eq!(params.context_name.as_deref(), Some("temper"));
+        assert_eq!(params.context_ref.as_deref(), Some("temper"));
         assert_eq!(params.limit, Some(5));
         assert_eq!(
             params.edge_types.as_deref(),

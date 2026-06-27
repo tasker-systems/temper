@@ -323,13 +323,18 @@ pub async fn search_select(
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     let clamped = clamp_search_params(&params);
-    // Context filtering is intentionally NOT wired in Beat 2. Resolving a context by `name` is
-    // ambiguous — a principal can see several same-named contexts across teams + self — so it
-    // belongs to the dedicated context-ref addressing arc (UUID-primary + decorated @owner/slug),
-    // which converts every surface (UI/CLI/MCP/API/skill) together to keep their assumptions
-    // compatible. Until then `search` does not filter by context: `unified_search` keeps its
-    // `p_context_id` parameter, exercised here as `None` (no filter). The `doc_type` filter, which
-    // is unambiguous, stays wired. See `SearchParams.context_name`'s note.
+    // Resolve context_ref → context UUID before the SQL call. A bare name is
+    // rejected by `parse_context_ref` (spec Decision 1); an @owner/slug or UUID
+    // ref is resolved via `resolve_context_ref` (visibility-gated). Parse error
+    // → BadRequest; not-found/forbidden propagates from the resolver.
+    let context_id: Option<uuid::Uuid> = match params.context_ref.as_deref() {
+        Some(s) => {
+            let cref = temper_core::context_ref::parse_context_ref(s)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            Some(*crate::services::context_service::resolve_context_ref(pool, ProfileId::from(profile_id), &cref).await?)
+        }
+        None => None,
+    };
 
     let hits = readback::unified_search(
         pool,
@@ -340,7 +345,7 @@ pub async fn search_select(
             seed_ids: params.seed_ids.as_deref().unwrap_or(&[]),
             depth: clamped.depth,
             edge_types: params.edge_types.as_deref().unwrap_or(&[]),
-            context_id: None, // deferred to the context-ref addressing arc (see note above)
+            context_id,
             doc_type: params.doc_type.as_deref(),
             graph_expand: params.graph_expand,
             limit: clamped.limit,
