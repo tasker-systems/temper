@@ -130,7 +130,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
     let rows = sqlx::query(
         "SELECT e.id, et.name, e.payload \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE et.name IN ('cogmap_seeded','resource_created','block_mutated') ORDER BY e.id",
+          WHERE et.name IN ('cogmap_seeded','resource_created','block_mutated','charter_set') ORDER BY e.id",
     )
     .fetch_all(pool)
     .await?;
@@ -142,7 +142,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             .with_context(|| format!("snapshot: unknown event type {name}"))?;
         let manifests = match kind {
             EventKind::CogmapSeeded => payload.pointer("/telos/blocks").cloned(),
-            EventKind::ResourceCreated => payload.get("blocks").cloned(),
+            // charter_set carries the role-tagged block set at the top level (CharterSet::blocks),
+            // same shape as resource_created — the chunk content/embeddings must be retained for replay.
+            EventKind::ResourceCreated | EventKind::CharterSet => payload.get("blocks").cloned(),
             // block_mutated carries a flat `chunks` array (one block); wrap it as a single
             // pseudo-block so the chunk-extraction loop below stays uniform.
             EventKind::BlockMutated => payload
@@ -256,6 +258,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             EventKind::BlockMutated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 sqlx::query("SELECT _project_block_mutated($1,$2,$3)")
+                    .bind(id)
+                    .bind(&payload)
+                    .bind(side)
+                    .execute(pool)
+                    .await?;
+            }
+            EventKind::CharterSet => {
+                let side = snap.sidecars.get(&id).context("missing sidecar")?;
+                sqlx::query("SELECT _project_charter_set($1,$2,$3)")
                     .bind(id)
                     .bind(&payload)
                     .bind(side)

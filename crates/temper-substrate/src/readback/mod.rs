@@ -499,6 +499,37 @@ pub async fn find_by_body_hash(
     Ok(dup.map(ResourceId::from))
 }
 
+/// The telos resource id + its current body merkle for a cogmap — the charter reconcile diff source.
+/// `body_hash` is `sha256_hex("")` for a fresh genesis telos (empty block set, the SQL's empty-aggregate
+/// coalesce) — never SQL-NULL once the resource exists — or the structural merkle of the current charter.
+#[derive(Debug, Clone)]
+pub struct TelosCharterState {
+    pub telos_resource_id: ResourceId,
+    pub body_hash: Option<String>,
+}
+
+/// Resolve `cogmap` → telos resource, returning its current `body_hash` for the charter diff. Compile-time
+/// macro (like [`find_by_body_hash`]/[`kernel_slice`]; resolves against `public`, workspace `.sqlx` cache).
+pub async fn telos_charter_state(
+    conn: &mut sqlx::PgConnection,
+    cogmap: CogmapId,
+) -> Result<TelosCharterState> {
+    let row = sqlx::query!(
+        r#"SELECT t.id        AS "telos_resource_id!",
+                  t.body_hash AS "body_hash?"
+             FROM kb_cogmaps c
+             JOIN kb_resources t ON t.id = c.telos_resource_id
+            WHERE c.id = $1"#,
+        cogmap.uuid(),
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(TelosCharterState {
+        telos_resource_id: row.telos_resource_id.into(),
+        body_hash: row.body_hash,
+    })
+}
+
 /// One row of L0's reconcile diff source: a `provenance: kernel` resource homed to a cogmap, keyed
 /// (by the caller) on `resource_id`, carrying its body merkle and merged facet object.
 #[derive(Debug, Clone, PartialEq, Eq)]
