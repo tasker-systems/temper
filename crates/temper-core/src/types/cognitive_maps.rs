@@ -7,13 +7,15 @@
 //! the `temper-api` read wrapper can `query_as` straight into it.
 
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use uuid::Uuid;
 
 /// One non-folded region of a cognitive map under a lens, as returned by `cogmap_shape`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct CogmapRegionRow {
     /// `kb_cogmap_regions.id` — the region's stable identity.
     pub region_id: Uuid,
