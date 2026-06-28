@@ -460,6 +460,19 @@ pub enum CogmapCmd {
         #[arg(long)]
         lens: Option<String>,
     },
+    /// Read a cognitive map's per-region analytics metrics.
+    RegionMetrics {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Optional lens ref to filter regions.
+        #[arg(long)]
+        lens: Option<String>,
+    },
+    /// Read a cognitive map's map-level analytics (telos, staleness, regulation).
+    Analytics {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+    },
 }
 
 /// CLI-local enum mirroring `Disposition` for clap `value_enum` parsing.

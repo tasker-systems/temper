@@ -29,6 +29,37 @@ pub fn shape(cogmap_ref: &str, lens_ref: Option<&str>, fmt: OutputFormat) -> Res
     Ok(())
 }
 
+/// `temper cogmap region-metrics <cogmap_ref> [--lens <ref>]` — read the per-region analytics metrics.
+pub fn region_metrics(cogmap_ref: &str, lens_ref: Option<&str>, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+    let lens_id = lens_ref
+        .map(|l| temper_workflow::operations::parse_ref(l).map(|p| p.0))
+        .transpose()?;
+
+    let rows = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            crate::actions::cogmap::region_metrics_api(client, cogmap_id, lens_id).await
+        })
+    })?;
+
+    let rendered = crate::format::render(&rows, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// `temper cogmap analytics <cogmap_ref>` — read the map-level analytics (telos, staleness, regulation).
+pub fn analytics(cogmap_ref: &str, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move { crate::actions::cogmap::analytics_api(client, cogmap_id).await })
+    })?;
+
+    let rendered = crate::format::render(&row, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// Reconcile the cognitive map addressed by `cogmap_ref` to the manifest at `manifest_path`.
 #[cfg(feature = "embed")]
 pub fn reconcile(cogmap_ref: &str, manifest_path: &str, fmt: OutputFormat) -> Result<()> {
