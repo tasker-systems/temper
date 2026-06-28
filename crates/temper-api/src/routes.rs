@@ -88,6 +88,10 @@ pub fn create_app(state: AppState) -> Router {
             put(handlers::cognitive_maps::reconcile),
         )
         .route(
+            "/api/cognitive-maps/{id}/shape",
+            get(handlers::cognitive_maps::shape),
+        )
+        .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),
         )

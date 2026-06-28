@@ -38,6 +38,7 @@ use temper_workflow::types::resource::{
         crate::handlers::edges::fold,
         crate::handlers::graph::get_subgraph,
         crate::handlers::cognitive_maps::reconcile,
+        crate::handlers::cognitive_maps::shape,
     ),
     components(schemas(
         HealthResponse,
@@ -78,6 +79,7 @@ use temper_workflow::types::resource::{
         temper_core::types::reconcile::ReconcileTombstone,
         temper_core::types::reconcile::ReconcileEdgeTombstone,
         temper_core::types::reconcile::ReconcileOutcome,
+        temper_core::types::cognitive_maps::CogmapRegionRow,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -143,6 +145,7 @@ mod tests {
         assert!(json.contains("/api/resources/{id}/edges"));
         assert!(json.contains("/api/relationships"));
         assert!(json.contains("/api/graph/subgraph"));
+        assert!(json.contains("/api/cognitive-maps/{id}/shape"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));
