@@ -98,6 +98,57 @@ pub struct InvocationSummary {
     pub closed_at: Option<DateTime<Utc>>,
 }
 
+// ── MCP surface inputs ──────────────────────────────────────────────────────
+//
+// Cogmap/invocation ids arrive as **string refs** (parse_ref'd in the tool — a bare
+// UUID passes parse_ref's trailing-UUID-only resolver). Mirrors `CogmapShapeInput`
+// for derives/attributes; doc comments become the MCP tool's field descriptions.
+
+/// MCP input for `invocation_open`. Opens an agent-run accountability envelope; the
+/// server mints the id and returns it (feed it into `invocation_close`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct InvocationOpenInput {
+    /// Free-form trigger label (e.g. `manual`, `delegated`, `scheduled`).
+    pub trigger_kind: String,
+    /// The cognitive map this invocation runs against, by ref (UUID or `slug-<uuid>`).
+    pub originating_cogmap: String,
+    /// Optional delegating-parent cogmap ref; omit when not spawned beneath another.
+    pub parent_cogmap: Option<String>,
+}
+
+/// MCP input for `invocation_close`. Terminates an open envelope with a disposition
+/// and opaque outcome.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct InvocationCloseInput {
+    /// The invocation to close, by ref (the UUID returned by `invocation_open`).
+    pub invocation: String,
+    /// Terminal disposition: one of `completed`, `failed`, `abandoned`.
+    pub disposition: Disposition,
+    /// Opaque, agent-defined terminal outcome payload; omit for none.
+    pub outcome: Option<serde_json::Value>,
+}
+
+/// MCP input for `invocation_show`. Reads one envelope plus its acts by raw UUID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct InvocationShowInput {
+    /// The invocation to read, by ref (UUID or `slug-<uuid>`).
+    pub invocation: String,
+}
+
+/// MCP input for `invocation_list`. Lists envelopes, optionally narrowed by
+/// originating cogmap and/or lifecycle status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct InvocationListInput {
+    /// Optional originating cogmap ref to filter by; omit for all maps.
+    pub cogmap: Option<String>,
+    /// Optional lifecycle status filter: one of `open`, `completed`, `failed`, `abandoned`.
+    pub status: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +188,92 @@ mod tests {
         assert!(json.contains("\"closed_at\":null"), "json: {json}");
         let back: InvocationView = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, view);
+    }
+
+    #[test]
+    fn invocation_open_input_deserializes() {
+        let json = serde_json::json!({
+            "trigger_kind": "agent_run",
+            "originating_cogmap": "my-map-00000000-0000-0000-0005-000000000001",
+            "parent_cogmap": "00000000-0000-0000-0005-000000000002"
+        });
+        let input: InvocationOpenInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.trigger_kind, "agent_run");
+        assert_eq!(
+            input.originating_cogmap,
+            "my-map-00000000-0000-0000-0005-000000000001"
+        );
+        assert_eq!(
+            input.parent_cogmap.as_deref(),
+            Some("00000000-0000-0000-0005-000000000002")
+        );
+    }
+
+    #[test]
+    fn invocation_open_input_omits_parent() {
+        let json = serde_json::json!({
+            "trigger_kind": "manual",
+            "originating_cogmap": "00000000-0000-0000-0005-000000000001"
+        });
+        let input: InvocationOpenInput = serde_json::from_value(json).unwrap();
+        assert!(input.parent_cogmap.is_none());
+    }
+
+    #[test]
+    fn invocation_close_input_deserializes() {
+        let json = serde_json::json!({
+            "invocation": "00000000-0000-0000-0005-000000000009",
+            "disposition": "completed",
+            "outcome": { "summary": "done" }
+        });
+        let input: InvocationCloseInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.invocation, "00000000-0000-0000-0005-000000000009");
+        assert_eq!(input.disposition, Disposition::Completed);
+        assert_eq!(
+            input.outcome,
+            Some(serde_json::json!({ "summary": "done" }))
+        );
+    }
+
+    #[test]
+    fn invocation_close_input_omits_outcome() {
+        let json = serde_json::json!({
+            "invocation": "00000000-0000-0000-0005-000000000009",
+            "disposition": "abandoned"
+        });
+        let input: InvocationCloseInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.disposition, Disposition::Abandoned);
+        assert!(input.outcome.is_none());
+    }
+
+    #[test]
+    fn invocation_show_input_deserializes() {
+        let json = serde_json::json!({
+            "invocation": "00000000-0000-0000-0005-000000000009"
+        });
+        let input: InvocationShowInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.invocation, "00000000-0000-0000-0005-000000000009");
+    }
+
+    #[test]
+    fn invocation_list_input_deserializes_filters() {
+        let json = serde_json::json!({
+            "cogmap": "00000000-0000-0000-0005-000000000001",
+            "status": "open"
+        });
+        let input: InvocationListInput = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            input.cogmap.as_deref(),
+            Some("00000000-0000-0000-0005-000000000001")
+        );
+        assert_eq!(input.status.as_deref(), Some("open"));
+    }
+
+    #[test]
+    fn invocation_list_input_all_optional() {
+        let json = serde_json::json!({});
+        let input: InvocationListInput = serde_json::from_value(json).unwrap();
+        assert!(input.cogmap.is_none());
+        assert!(input.status.is_none());
     }
 }
