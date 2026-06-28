@@ -114,6 +114,7 @@ pub async fn assert_relationship(
         polarity: input.polarity,
         label: input.label,
         weight: input.weight,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 
@@ -199,6 +200,7 @@ pub async fn fold_relationship(
     let cmd = FoldRelationship {
         edge_handle: EdgeId::from(input.edge_handle),
         reason: input.reason,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 

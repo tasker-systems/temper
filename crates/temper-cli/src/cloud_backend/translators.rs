@@ -245,6 +245,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: Surface::CliCloud,
         }
     }

@@ -17,7 +17,7 @@ use crate::affinity::EdgeKind;
 use crate::content::{
     prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock, PreparedChunk,
 };
-use crate::events::{fire, EdgeHome, SeedAction};
+use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
 };
@@ -110,13 +110,25 @@ pub struct CreateParams<'a> {
 }
 
 pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<ResourceId> {
+    create_resource_with(pool, p, EventContext::default()).await
+}
+
+/// [`create_resource`] under an explicit [`EventContext`] — the authored `resource_created` act is
+/// stamped with the caller's authorship (→ `kb_events.metadata`) and invocation correlator
+/// (→ `kb_events.invocation_id`). The property acts fired at creation stay un-stamped (out of the
+/// authored-act scope). Mirrors the [`crate::events::fire`]/`fire_with` split.
+pub async fn create_resource_with(
+    pool: &PgPool,
+    p: CreateParams<'_>,
+    ctx: EventContext,
+) -> Result<ResourceId> {
     let block = match p.chunks {
         Some(chunks) => prepare_block_from_chunks(0, None, chunks),
         None => prepare_block(0, None, p.body)?,
     };
     let blocks = [block];
     let mut tx = begin_scoped(pool).await?;
-    let new_id = fire(
+    let new_id = fire_with(
         &mut tx,
         SeedAction::ResourceCreate {
             title: p.title,
@@ -130,6 +142,7 @@ pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<Resou
             doc_type: Some(p.doc_type),
             emitter: p.emitter,
         },
+        ctx,
     )
     .await?
     .resource()?;
@@ -533,8 +546,18 @@ pub struct AssertParams<'a> {
 }
 
 pub async fn assert_relationship(pool: &PgPool, p: AssertParams<'_>) -> Result<EdgeId> {
+    assert_relationship_with(pool, p, EventContext::default()).await
+}
+
+/// [`assert_relationship`] under an explicit [`EventContext`] — the authored `relationship_asserted`
+/// act carries the caller's authorship + invocation correlator. Mirrors `fire`/`fire_with`.
+pub async fn assert_relationship_with(
+    pool: &PgPool,
+    p: AssertParams<'_>,
+    ctx: EventContext,
+) -> Result<EdgeId> {
     let mut tx = begin_scoped(pool).await?;
-    let edge = fire(
+    let edge = fire_with(
         &mut tx,
         SeedAction::RelationshipAssert {
             src: p.src,
@@ -546,6 +569,7 @@ pub async fn assert_relationship(pool: &PgPool, p: AssertParams<'_>) -> Result<E
             home: EdgeHome::Context(p.home),
             emitter: p.emitter,
         },
+        ctx,
     )
     .await?
     .relationship()?;
@@ -601,27 +625,42 @@ pub async fn fold_relationship(
     reason: Option<&str>,
     emitter: EntityId,
 ) -> Result<()> {
+    fold_relationship_with(pool, edge, reason, emitter, EventContext::default()).await
+}
+
+/// [`fold_relationship`] under an explicit [`EventContext`] — the authored `relationship_folded` act
+/// carries the caller's authorship + invocation correlator. Mirrors `fire`/`fire_with`.
+pub async fn fold_relationship_with(
+    pool: &PgPool,
+    edge: EdgeId,
+    reason: Option<&str>,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fold_relationship_in_tx(&mut tx, edge, reason, emitter).await?;
+    fold_relationship_in_tx(&mut tx, edge, reason, emitter, ctx).await?;
     tx.commit().await?;
     Ok(())
 }
 
 /// In-transaction variant of [`fold_relationship`] — fires on a caller-supplied connection (no
-/// begin/commit).
+/// begin/commit). `ctx` stamps the authored `relationship_folded` act (`EventContext::default()`
+/// for an un-attributed fold).
 pub async fn fold_relationship_in_tx(
     conn: &mut sqlx::PgConnection,
     edge: EdgeId,
     reason: Option<&str>,
     emitter: EntityId,
+    ctx: EventContext,
 ) -> Result<()> {
-    fire(
+    fire_with(
         conn,
         SeedAction::RelationshipFold {
             edge,
             reason,
             emitter,
         },
+        ctx,
     )
     .await?;
     Ok(())

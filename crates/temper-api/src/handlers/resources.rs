@@ -176,6 +176,7 @@ pub async fn create(
         // create path is POST /api/ingest, which threads payload.chunks_packed through.
         chunks_packed: None,
         content_hash: None,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

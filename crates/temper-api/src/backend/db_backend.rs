@@ -26,6 +26,7 @@ use temper_workflow::operations::{
 };
 use temper_workflow::types::resource::ResourceRow;
 
+use temper_substrate::events::EventContext;
 use temper_substrate::keys::{key_fate, KeyFate};
 use temper_substrate::readback;
 use temper_substrate::writes;
@@ -610,6 +611,9 @@ impl DbBackend {
                     edge_id,
                     Some("reconcile fold"),
                     ctx.emitter,
+                    // Reconcile-loop folds are system-internal; per-act authorship for the reconcile
+                    // path is the follow-on (see the act-authorship plan). Un-attributed for now.
+                    EventContext::default(),
                 )
                 .await
                 .map_err(api_err)?;
@@ -676,6 +680,46 @@ impl DbBackend {
     }
 }
 
+impl DbBackend {
+    /// Per-act correlation-integrity gate. When an authored act carries an `invocation_id`, the caller
+    /// must be able to read the invocation's originating cogmap (absent OR unreadable → uniform 404, no
+    /// existence oracle — matching the `invocation_show`/`close_invocation` deny→NotFound contract), and
+    /// the run must still be `open` (a closed run is a 409 — you cannot stamp new acts onto a terminal
+    /// envelope).
+    ///
+    /// This is ADDITIVE to the act's own write authz (`can_modify`, context-owner resolution) — it never
+    /// authorizes the write, it only guards the *correlation claim*. An act with no invocation skips it
+    /// entirely (a one-off attributed act, or a human at the same tools, is fully valid).
+    async fn check_act_invocation(
+        &self,
+        invocation: Option<InvocationId>,
+    ) -> Result<(), TemperError> {
+        let Some(inv) = invocation else {
+            return Ok(());
+        };
+        let row = sqlx::query!(
+            "SELECT status \
+               FROM kb_invocations \
+              WHERE id = $1 \
+                AND anchor_readable_by_profile($2, 'kb_cogmaps', originating_cogmap_id)",
+            inv.uuid(),
+            *self.profile_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| TemperError::NotFound(format!("invocation {} not found", inv.uuid())))?;
+        if row.status != "open" {
+            return Err(TemperError::Conflict(format!(
+                "invocation {} is '{}' — cannot stamp an act onto a non-open run",
+                inv.uuid(),
+                row.status
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Backend for DbBackend {
     async fn create_resource(
@@ -692,6 +736,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
+        // Correlation-integrity gate for any claimed invocation — additive to the create authz above,
+        // before any mutation (auth-before-write). No-op when the act carries no invocation.
+        self.check_act_invocation(cmd.act.invocation).await?;
         // cmd.context is the pre-resolved (surface-side) ContextId — the same unified type
         // writes::CreateParams.home expects, so pass it through directly.
         let home = cmd.context;
@@ -760,7 +807,14 @@ impl Backend for DbBackend {
 
         let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
 
-        let new_id = writes::create_resource(
+        // Map the surface-supplied ActContext → substrate EventContext (identical re-exported types).
+        // The authored `resource_created` act carries this authorship + invocation; the property acts
+        // fired at creation stay un-stamped (out of the authored-act scope).
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        let new_id = writes::create_resource_with(
             &self.pool,
             writes::CreateParams {
                 title: &cmd.title,
@@ -776,6 +830,7 @@ impl Backend for DbBackend {
                 properties: &properties,
                 chunks: incoming_chunks,
             },
+            act_ctx,
         )
         .await
         .map_err(api_err)?;
@@ -1009,6 +1064,8 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): edge mutations gate on the SOURCE resource (production's
         // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
         self.check_can_modify_next(src_next).await?;
+        // Correlation-integrity gate — additive to the modify-source authz above, never a substitute.
+        self.check_act_invocation(cmd.act.invocation).await?;
 
         let tgt_next = uuid::Uuid::from(cmd.target);
 
@@ -1030,7 +1087,11 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
 
         let label = (!cmd.label.is_empty()).then_some(cmd.label.as_str());
-        let edge = writes::assert_relationship(
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        let edge = writes::assert_relationship_with(
             &self.pool,
             writes::AssertParams {
                 src: ResourceId::from(src_next),
@@ -1042,6 +1103,7 @@ impl Backend for DbBackend {
                 home: ContextId::from(home_next),
                 emitter,
             },
+            act_ctx,
         )
         .await
         .map_err(api_err)?;
@@ -1105,17 +1167,24 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): gate on the edge's source resource.
         let src = self.edge_source_resource(handle).await?;
         self.check_can_modify_next(src).await?;
+        // Correlation-integrity gate — additive to the modify-source authz above.
+        self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::fold_relationship(
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        writes::fold_relationship_with(
             &self.pool,
             EdgeId::from(handle),
             cmd.reason.as_deref(),
             emitter,
+            act_ctx,
         )
         .await
         .map_err(api_err)?;

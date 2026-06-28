@@ -1,10 +1,11 @@
 //! Typed event payloads — the ledger's wire contract (2026-06-09 event-payload-formalization spec §3).
 //!
 //! One struct per event type; `fire()` serializes these into `kb_events.payload` and the SQL
-//! `_project_<type>` halves read ONLY the payload. Authored HERE (not temper-core) for now —
-//! temper-substrate deliberately carries no temper-core dependency pre-slim; these are parity-shaped for
-//! the temper-core lift at convergence (same pattern as the local `EventKind`). The committed
-//! JSON-Schema snapshots (tests/fixtures/payloads/) are the cross-system contract meanwhile.
+//! `_project_<type>` halves read ONLY the payload. The boundary-shared types have been lifted to
+//! temper-core (ids; and now `AgentAuthorship`/`ConfidenceBand`, re-exported below); the remaining
+//! payload structs stay HERE as the substrate's wire contract, parity-shaped for a later temper-core
+//! lift at convergence (same pattern as the local `EventKind`). The committed JSON-Schema snapshots
+//! (tests/fixtures/payloads/) are the cross-system contract meanwhile.
 //!
 //! The exclusion rule: DERIVED STATE IS NEVER PAYLOAD. Embeddings (recomputed/copied; model identity
 //! rides event metadata), block_body_hash / resource body_hash (merkles over carried chunk hashes),
@@ -482,33 +483,12 @@ pub struct BlockProvenanceCorrected {
 
 // ── invocation envelope + agent-authorship payloads ─────────────────────────
 
-/// The agent's SUBJECTIVE self-assessment of an authored act — a graded band, not a false-precision
-/// scalar. Ordinal: Tentative < Probable < Confident.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ConfidenceBand {
-    Tentative,
-    Probable,
-    Confident,
-}
-
-/// Per-event agent-authorship metadata — rides in `kb_events.metadata`, NOT the payload, so it is
-/// invisible to projections (and thus to affinity math) by construction. `reasoning` is required on
-/// structural acts at the AGENT layer (the substrate stores whatever is supplied).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct AgentAuthorship {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<String>,
-    pub confidence: ConfidenceBand,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rationale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persona: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-}
+// Per-act agent-authorship metadata — the canonical home is now `temper_core::types::authorship`
+// (CLAUDE.md: "the wire type lives in temper-core"). Re-exported here so substrate's
+// `payloads::{AgentAuthorship, ConfidenceBand}` call sites (events.rs `EventContext`, the metadata
+// serialization, temper-agents) stay stable. Authorship rides `kb_events.metadata`, invisible to
+// projections/affinity by construction.
+pub use temper_core::types::authorship::{AgentAuthorship, ConfidenceBand};
 
 /// Terminal disposition of an invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -690,21 +670,6 @@ mod tests {
         let v = serde_json::to_value(r).unwrap();
         assert_eq!(v["rel"], "derived_from");
         assert_eq!(v["target"]["kind"], "block");
-    }
-
-    #[test]
-    fn authorship_serializes_confidence_band() {
-        let a = AgentAuthorship {
-            reasoning: Some("because X".into()),
-            confidence: ConfidenceBand::Probable,
-            rationale: None,
-            persona: None,
-            model: None,
-        };
-        let v = serde_json::to_value(&a).unwrap();
-        assert_eq!(v["confidence"], "probable");
-        let back: AgentAuthorship = serde_json::from_value(v).unwrap();
-        assert_eq!(back.confidence, ConfidenceBand::Probable);
     }
 
     #[test]

@@ -495,6 +495,7 @@ mod non_embed_impl {
                 origin_uri: None,
                 chunks_packed: None,
                 content_hash: None,
+                act: Default::default(),
                 origin: Surface::CliCloud,
             };
             let err = backend.create_resource(cmd).await.unwrap_err();
