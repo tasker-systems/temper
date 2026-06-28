@@ -49,7 +49,10 @@ mod tests {
         let json = serde_json::to_string(&row).expect("serialize");
         // null nullable + present nullable both survive the round-trip
         assert!(json.contains("\"content_cohesion\":null"), "json: {json}");
-        assert!(json.contains("\"label\":\"Migration tooling\""), "json: {json}");
+        assert!(
+            json.contains("\"label\":\"Migration tooling\""),
+            "json: {json}"
+        );
         let back: CogmapRegionRow = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, row);
     }

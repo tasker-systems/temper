@@ -173,6 +173,110 @@ pub async fn insert_context(
     Ok(id)
 }
 
+/// Seed the canonical system actor (profile + entity + event types + global lenses).
+/// Thin wrapper around `bootseed::seed_system` for artifact tests that call through `common::`.
+pub async fn seed_system(pool: &sqlx::PgPool) {
+    temper_substrate::scenario::bootseed::seed_system(pool)
+        .await
+        .expect("seed_system");
+}
+
+/// Genesis a cogmap (name + telos_title) via `fire(CogmapGenesis)`, using the boot-seeded `system`
+/// actor as owner + emitter. Returns `(cogmap_id, telos_resource_id)` as raw UUIDs. Call after
+/// `seed_system`.
+pub async fn genesis_cogmap(
+    pool: &sqlx::PgPool,
+    name: &str,
+    telos_title: &str,
+) -> (uuid::Uuid, uuid::Uuid) {
+    use temper_substrate::content::{PreparedBlock, PreparedChunk};
+    use temper_substrate::events::{fire, SeedAction};
+    use temper_substrate::ids::{BlockId, ChunkId, EntityId, ProfileId};
+    use uuid::Uuid;
+
+    let profile: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let entity: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let owner = ProfileId::from(profile);
+    let emitter = EntityId::from(entity);
+
+    let mut charter_embedding = vec![0.0_f32; 768];
+    charter_embedding[0] = 1.0;
+    let charter = vec![PreparedBlock {
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq: 0,
+        role: None,
+        chunks: vec![PreparedChunk {
+            chunk_id: ChunkId::from(Uuid::now_v7()),
+            chunk_index: 0,
+            content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+            content: "charter statement".to_string(),
+            embedding: charter_embedding,
+            header_path: None,
+            heading_depth: None,
+        }],
+    }];
+
+    let mut tx = pool.begin().await.unwrap();
+    let fired = fire(
+        &mut tx,
+        SeedAction::CogmapGenesis {
+            name,
+            telos_title,
+            charter: &charter,
+            owner,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let (cogmap, telos) = fired.cogmap_genesis().unwrap();
+    (cogmap.uuid(), telos.uuid())
+}
+
+/// Insert one `kb_teams` row by slug (name = slug), returning its new id. Runtime `sqlx::query`
+/// (a test-fixture insert).
+pub async fn create_team(pool: &sqlx::PgPool, slug: &str) -> uuid::Uuid {
+    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .expect("create_team")
+}
+
+/// Insert one `kb_profiles` row by email used as handle and display_name (email also stored in the
+/// `email` column), returning its new id. `system_access` defaults to `'none'`. Runtime
+/// `sqlx::query` (a test-fixture insert).
+pub async fn create_profile(pool: &sqlx::PgPool, email: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name, email) VALUES ($1, $1, $1) RETURNING id",
+    )
+    .bind(email)
+    .fetch_one(pool)
+    .await
+    .expect("create_profile")
+}
+
+/// Add a profile to a team as a `'member'`. Runtime `sqlx::query` (a test-fixture insert).
+pub async fn add_team_member(pool: &sqlx::PgPool, team: uuid::Uuid, profile: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(team)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("add_team_member");
+}
+
 /// Canonical, UUID-INDEPENDENT region partition signature for a cogmap at lens `telos-default`:
 /// each region's member origin_uris sorted within the region, regions sorted among themselves, then
 /// hashed. Independent of region/member UUIDs and group order, so it is comparable across seeding
