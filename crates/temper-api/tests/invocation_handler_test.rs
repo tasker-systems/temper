@@ -79,6 +79,31 @@ async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
         closed.closed_at.is_some(),
         "closed_at set after close: {closed:?}"
     );
+
+    // append-only: close is a one-shot terminal transition. Re-closing a completed envelope is a
+    // Conflict, not a second silent overwrite of the terminal record.
+    let reclose = backend
+        .close_invocation(CloseInvocation {
+            invocation: invocation_id,
+            disposition: Disposition::Failed,
+            outcome: serde_json::json!({ "result": "should-not-apply" }),
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(reclose, Err(temper_core::error::TemperError::Conflict(_))),
+        "re-closing a completed invocation must be a Conflict: {reclose:?}"
+    );
+
+    // the rejected re-close left the terminal record untouched.
+    let still = substrate_read::invocation_show_select(&pool, profile_id, invocation_id)
+        .await
+        .expect("show must be Ok")
+        .expect("invocation still present");
+    assert_eq!(
+        still.status, "completed",
+        "terminal record preserved after rejected re-close: {still:?}"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

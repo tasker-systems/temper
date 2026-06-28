@@ -87,6 +87,7 @@ use temper_workflow::types::resource::{
         temper_core::types::invocation_requests::OpenInvocationRequest,
         temper_core::types::invocation_requests::CloseInvocationRequest,
         temper_core::types::invocation_requests::InvocationAck,
+        temper_core::types::invocation_requests::InvocationCloseAck,
         temper_core::types::invocation::InvocationView,
         temper_core::types::invocation::InvocationSummary,
         temper_core::types::invocation::InvocationActRow,

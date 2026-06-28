@@ -5,7 +5,9 @@
 use crate::cli::DispositionArg;
 use crate::error::{Result, TemperError};
 use crate::format::OutputFormat;
-use temper_core::types::invocation_requests::{CloseInvocationRequest, OpenInvocationRequest};
+use temper_core::types::invocation_requests::{
+    CloseInvocationRequest, InvocationCloseAck, OpenInvocationRequest,
+};
 
 /// `temper invocation open --cogmap <ref> [--parent <ref>] --trigger-kind <kind>`.
 pub fn open(
@@ -49,8 +51,9 @@ pub fn close(
         None => serde_json::Value::Null,
     };
 
+    let disposition = disposition.to_core();
     let req = CloseInvocationRequest {
-        disposition: disposition.to_core(),
+        disposition,
         outcome,
     };
 
@@ -60,10 +63,11 @@ pub fn close(
         )
     })?;
 
-    // The close endpoint returns 204 No Content; surface a typed acknowledgement.
-    let ack = CloseAck {
+    // The close endpoint returns 204 No Content; surface a typed acknowledgement (shared with the
+    // MCP surface so both emit the same shape).
+    let ack = InvocationCloseAck {
         invocation_id,
-        status: "closed",
+        disposition,
     };
     let rendered = crate::format::render(&ack, fmt)?;
     crate::output::plain(rendered);
@@ -97,12 +101,4 @@ pub fn list(cogmap_ref: Option<&str>, status: Option<&str>, fmt: OutputFormat) -
     let rendered = crate::format::render(&rows, fmt)?;
     crate::output::plain(rendered);
     Ok(())
-}
-
-/// Typed acknowledgement printed after a successful 204 close — mirrors the
-/// open ack's shape so the surface always emits a structured row.
-#[derive(serde::Serialize)]
-struct CloseAck {
-    invocation_id: uuid::Uuid,
-    status: &'static str,
 }

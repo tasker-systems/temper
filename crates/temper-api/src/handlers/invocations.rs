@@ -73,8 +73,8 @@ pub async fn open(
     request_body = CloseInvocationRequest,
     responses(
         (status = 204, description = "Invocation closed"),
-        (status = 403, description = "Caller cannot read the originating cogmap"),
-        (status = 404, description = "Invocation not found"),
+        (status = 404, description = "Invocation not found, or not readable by the caller (uniform — no existence oracle)"),
+        (status = 409, description = "Invocation is already closed (close is a one-shot terminal transition)"),
     )
 )]
 pub async fn close(
@@ -83,7 +83,8 @@ pub async fn close(
     Path(id): Path<Uuid>,
     Json(req): Json<CloseInvocationRequest>,
 ) -> ApiResult<StatusCode> {
-    // Auth-before-write + not-found (404) both live inside DbBackend::close_invocation — just dispatch.
+    // Auth + existence (uniform 404, no oracle) + terminal-state guard (409 on re-close) all live
+    // inside DbBackend::close_invocation — just dispatch.
     let cmd = CloseInvocation {
         invocation: id,
         disposition: req.disposition,

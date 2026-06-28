@@ -1175,27 +1175,42 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(invocation.uuid()))
     }
 
-    /// Close an agent-invocation envelope with a terminal disposition + opaque outcome. AUTH BEFORE
-    /// WRITE: the originating cogmap is read from `kb_invocations` (no row → 404), then the acting
-    /// profile must be able to read it (`check_can_read_cogmap`) — deny → 403, before any `writes::`
-    /// call.
+    /// Close an agent-invocation envelope with a terminal disposition + opaque outcome. ONE gated
+    /// lookup does auth + existence + terminal-state in a single round-trip: the row is returned only
+    /// when the acting profile can read the originating cogmap, so absent and unreadable collapse to a
+    /// uniform 404 (no existence oracle — matching the `invocation_show` deny→None contract). Close is
+    /// a one-shot terminal transition; a non-open envelope is a 409 (append-only — a re-close would
+    /// append a second `invocation_closed` event and overwrite the terminal record). All before any
+    /// `writes::` call.
     async fn close_invocation(
         &self,
         cmd: CloseInvocation,
     ) -> Result<CommandOutput<()>, TemperError> {
-        // The originating cogmap is needed both for the auth check and to construct the close action
-        // truthfully. A missing invocation is a 404, not a silent no-op.
-        let originating: uuid::Uuid = sqlx::query_scalar!(
-            "SELECT originating_cogmap_id FROM kb_invocations WHERE id = $1",
+        // Auth + existence in one query: the gate is in the WHERE, so a row comes back only for a
+        // readable invocation. Absent OR unreadable → no row → uniform NotFound (404), never 403
+        // (which would confirm the id exists). The `status` rides along for the terminal guard.
+        let row = sqlx::query!(
+            "SELECT originating_cogmap_id, status \
+               FROM kb_invocations \
+              WHERE id = $1 \
+                AND anchor_readable_by_profile($2, 'kb_cogmaps', originating_cogmap_id)",
             cmd.invocation,
+            *self.profile_id,
         )
         .fetch_optional(&self.pool)
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("invocation {} not found", cmd.invocation)))?;
 
-        // Auth before any write: the acting profile must be able to read the originating cogmap.
-        self.check_can_read_cogmap(originating).await?;
+        // Append-only: close is a one-shot terminal transition. Re-closing a completed/failed/abandoned
+        // envelope would append a second close event and overwrite its terminal record — reject it.
+        if row.status != "open" {
+            return Err(TemperError::Conflict(format!(
+                "invocation {} is already '{}' — close is a one-shot terminal transition",
+                cmd.invocation, row.status
+            )));
+        }
+        let originating = row.originating_cogmap_id;
 
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await

@@ -14,7 +14,7 @@ use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::invocation::{
     InvocationCloseInput, InvocationListInput, InvocationOpenInput, InvocationShowInput,
 };
-use temper_core::types::invocation_requests::InvocationAck;
+use temper_core::types::invocation_requests::{InvocationAck, InvocationCloseAck};
 use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation, Surface};
 
 use crate::service::TemperMcpService;
@@ -98,9 +98,10 @@ pub async fn invocation_close(
 
     let invocation = parse_invocation(&input.invocation)?;
 
+    let disposition = input.disposition;
     let cmd = CloseInvocation {
         invocation,
-        disposition: input.disposition,
+        disposition,
         outcome: input.outcome.unwrap_or(serde_json::Value::Null),
         origin: Surface::Mcp,
     };
@@ -111,8 +112,12 @@ pub async fn invocation_close(
         .await
         .map_err(|e| map_err(e, "invocation_close"))?;
 
+    let ack = InvocationCloseAck {
+        invocation_id: invocation,
+        disposition,
+    };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&serde_json::json!({ "invocation_id": invocation, "closed": true })),
+        to_text(&ack),
     )]))
 }
 
