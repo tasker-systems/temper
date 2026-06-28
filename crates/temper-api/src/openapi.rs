@@ -39,6 +39,10 @@ use temper_workflow::types::resource::{
         crate::handlers::graph::get_subgraph,
         crate::handlers::cognitive_maps::reconcile,
         crate::handlers::cognitive_maps::shape,
+        crate::handlers::invocations::open,
+        crate::handlers::invocations::close,
+        crate::handlers::invocations::show,
+        crate::handlers::invocations::list,
     ),
     components(schemas(
         HealthResponse,
@@ -80,6 +84,13 @@ use temper_workflow::types::resource::{
         temper_core::types::reconcile::ReconcileEdgeTombstone,
         temper_core::types::reconcile::ReconcileOutcome,
         temper_core::types::cognitive_maps::CogmapRegionRow,
+        temper_core::types::invocation_requests::OpenInvocationRequest,
+        temper_core::types::invocation_requests::CloseInvocationRequest,
+        temper_core::types::invocation_requests::InvocationAck,
+        temper_core::types::invocation::InvocationView,
+        temper_core::types::invocation::InvocationSummary,
+        temper_core::types::invocation::InvocationActRow,
+        temper_core::types::invocation::Disposition,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -92,6 +103,7 @@ use temper_workflow::types::resource::{
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
         (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
+        (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
     ),
     info(
         title = "Temper Cloud API",
@@ -146,6 +158,9 @@ mod tests {
         assert!(json.contains("/api/relationships"));
         assert!(json.contains("/api/graph/subgraph"));
         assert!(json.contains("/api/cognitive-maps/{id}/shape"));
+        assert!(json.contains("/api/invocations"));
+        assert!(json.contains("/api/invocations/{id}"));
+        assert!(json.contains("/api/invocations/{id}/close"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));

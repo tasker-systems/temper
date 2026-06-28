@@ -92,6 +92,15 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::cognitive_maps::shape),
         )
         .route(
+            "/api/invocations",
+            post(handlers::invocations::open).get(handlers::invocations::list),
+        )
+        .route("/api/invocations/{id}", get(handlers::invocations::show))
+        .route(
+            "/api/invocations/{id}/close",
+            post(handlers::invocations::close),
+        )
+        .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),
         )
