@@ -15,7 +15,7 @@ use sqlx::PgPool;
 use temper_core::error::TemperError;
 use temper_core::types::graph;
 use temper_core::types::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
-use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
+use temper_core::types::reconcile::{CharterDisposition, ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
     ListResources, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
@@ -342,6 +342,7 @@ impl DbBackend {
         Self::apply_resource_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
         Self::apply_edge_phase(&mut *conn, request, ctx).await?;
         Self::apply_tombstone_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
+        Self::apply_telos_phase(&mut *conn, request, ctx, &mut outcome).await?;
 
         Ok(outcome)
     }
@@ -574,6 +575,59 @@ impl DbBackend {
                 outcome.folded += 1;
             }
         }
+        Ok(())
+    }
+
+    /// PHASE 4 — the telos charter (distinct grain from the kernel slice). Diff on the telos's two-level
+    /// body merkle; fire `cogmap_charter_set` only on change; record `outcome.charter`. A request with no
+    /// `telos:` leaves `charter = Absent`.
+    async fn apply_telos_phase(
+        conn: &mut sqlx::PgConnection,
+        request: &ReconcileCogmapRequest,
+        ctx: ReconcileCtx,
+        outcome: &mut ReconcileOutcome,
+    ) -> Result<(), TemperError> {
+        let Some(telos) = &request.telos else {
+            return Ok(());
+        }; // charter stays Absent
+
+        // Unpack + prepare each role-tagged block (client-embedded chunks, verbatim).
+        let mut blocks = Vec::with_capacity(telos.blocks.len());
+        for (seq, b) in telos.blocks.iter().enumerate() {
+            let chunks = unpack_incoming_chunks(&b.chunks_packed)?;
+            blocks.push(temper_substrate::content::prepare_block_from_chunks(
+                seq as i32,
+                Some(&b.role),
+                chunks,
+            ));
+        }
+
+        // Incoming resource merkle (two-level), compared to the live telos body_hash — the diff key.
+        let per_block: Vec<Vec<String>> = blocks
+            .iter()
+            .map(|blk| blk.chunks.iter().map(|c| c.content_hash.clone()).collect())
+            .collect();
+        let incoming = temper_substrate::content::body_hash_from_block_chunk_hashes(&per_block);
+
+        let live = readback::telos_charter_state(&mut *conn, ctx.cogmap)
+            .await
+            .map_err(api_err)?;
+
+        if live.body_hash.as_deref() == Some(incoming.as_str()) {
+            outcome.charter = CharterDisposition::Unchanged;
+            return Ok(());
+        }
+
+        writes::set_charter_in_tx(&mut *conn, ctx.cogmap, &blocks, ctx.emitter)
+            .await
+            .map_err(api_err)?;
+
+        let empty = temper_substrate::content::body_hash_for_body("");
+        outcome.charter = if live.body_hash.as_deref() == Some(empty.as_str()) {
+            CharterDisposition::Created
+        } else {
+            CharterDisposition::Updated
+        };
         Ok(())
     }
 }
