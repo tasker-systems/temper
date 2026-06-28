@@ -72,6 +72,12 @@ DATABASE_URL=<DATABASE_URL_UNPOOLED> sqlx migrate run
 
 Migration files live in `migrations/`. sqlx is the single migration authority — never apply schema changes by other means.
 
+Migrations provision the **schema**. Some content is delivered separately as an
+operator step — notably the L0 kernel cogmap's landmarks + telos charter, which
+is admin-gated and fail-closed. See
+[l0-content-delivery.md](./l0-content-delivery.md) if you need a populated L0 map
+on your instance.
+
 ### Neon × Vercel integration
 
 If you connect your Neon project to Vercel via the Neon integration, Neon automatically provisions `DATABASE_URL` and `DATABASE_URL_UNPOOLED` per preview branch. Pull-request preview deployments therefore get isolated databases with no manual wiring. The migration step still runs separately — Vercel does not run it automatically.
