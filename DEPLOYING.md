@@ -65,6 +65,12 @@ Production migrations are **operator-run** against each target's Neon database
   cutover, verify, then the coincident redeploy. (The executed WS6 schema collapse
   that established this pattern is in git history.)
 
+Some migrations also have an **operator-run content step** after the schema lands.
+Delivering or updating the L0 kernel cogmap's content (landmarks + telos charter)
+is one such step — it is admin-gated and fail-closed, with its own
+grant → reconcile → re-lock procedure. See
+[docs/guides/l0-content-delivery.md](docs/guides/l0-content-delivery.md).
+
 ## Per-target Vercel setup (reference)
 
 To stand up a new target (or document an existing one):
