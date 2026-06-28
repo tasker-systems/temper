@@ -58,9 +58,10 @@ impl CloudBackend {
 mod embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
-        FoldRelationship, ListResources, ReconcileCognitiveMap, RetypeRelationship,
-        ReweightRelationship, SearchResources, ShowResource, UpdateResource,
+        AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateResource,
+        DeleteResource, DomainEvent, FoldRelationship, ListResources, OpenInvocation,
+        ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources,
+        ShowResource, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::ResourceRow;
@@ -217,6 +218,26 @@ mod embed_impl {
                     .to_string(),
             ))
         }
+
+        // Invocation-envelope writes are on the trait but the CLI does not yet dispatch them through
+        // CloudBackend; these stubs satisfy the trait until the cutover wires them.
+        async fn open_invocation(
+            &self,
+            _cmd: OpenInvocation,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::open_invocation not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn close_invocation(
+            &self,
+            _cmd: CloseInvocation,
+        ) -> Result<CommandOutput<()>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::close_invocation not wired until cutover".to_string(),
+            ))
+        }
     }
 
     #[cfg(test)]
@@ -291,10 +312,10 @@ mod embed_impl {
 mod non_embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource,
-        FoldRelationship, ListResources, ReconcileCognitiveMap, ResourceSummary,
-        RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
-        UpdateResource,
+        AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateResource,
+        DeleteResource, FoldRelationship, ListResources, OpenInvocation, ReconcileCognitiveMap,
+        ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
+        ShowResource, UpdateResource,
     };
     use temper_workflow::types::resource::ResourceRow;
 
@@ -402,6 +423,24 @@ mod non_embed_impl {
             _cmd: ReconcileCognitiveMap,
         ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError>
         {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn open_invocation(
+            &self,
+            _cmd: OpenInvocation,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn close_invocation(
+            &self,
+            _cmd: CloseInvocation,
+        ) -> Result<CommandOutput<()>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
