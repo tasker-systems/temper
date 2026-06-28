@@ -9,7 +9,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
+use crate::types::ids::{LensId, RegionId, ResourceId};
 
 /// MCP/surface input for the cogmap shape read. `cogmap` is a ref (UUID or decorated
 /// `sluggify(title)-<uuid>`); `lens` is an optional lens ref to narrow the read.
@@ -30,9 +31,9 @@ pub struct CogmapShapeInput {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct CogmapRegionRow {
     /// `kb_cogmap_regions.id` — the region's stable identity.
-    pub region_id: Uuid,
+    pub region_id: RegionId,
     /// The lens (perspective) that produced this region.
-    pub lens_id: Uuid,
+    pub lens_id: LensId,
     /// Computed, memoized blend (telos-alignment + reference-standing + centrality); higher = more salient.
     pub salience: f64,
     /// Mean member-to-centroid cosine; `None` until the downstream readout has been computed.
@@ -73,9 +74,9 @@ pub struct CogmapAnalyticsInput {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct CogmapRegionMetricsRow {
     /// `kb_cogmap_regions.id` — the region's stable identity.
-    pub region_id: Uuid,
+    pub region_id: RegionId,
     /// The lens (perspective) that produced this region.
-    pub lens_id: Uuid,
+    pub lens_id: LensId,
     /// Internal declared-affinity mass × size.
     pub centrality: Option<f64>,
     /// Mean member-to-centroid cosine.
@@ -110,7 +111,7 @@ pub struct CogmapStaleness {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct CogmapRegulationRow {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub title: String,
     pub body_text: Option<String>,
     pub edge_label: String,
@@ -127,7 +128,7 @@ pub struct CogmapRegulationRow {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct CogmapAnalyticsRow {
     /// `kb_cogmaps.telos_resource_id` — the charter resource (NOT NULL).
-    pub telos_resource_id: Uuid,
+    pub telos_resource_id: ResourceId,
     pub staleness: CogmapStaleness,
     pub regulation: Vec<CogmapRegulationRow>,
 }
@@ -163,8 +164,8 @@ mod tests {
     #[test]
     fn cogmap_region_row_serde_roundtrip_preserves_nullables() {
         let row = CogmapRegionRow {
-            region_id: Uuid::from_u128(1),
-            lens_id: Uuid::from_u128(2),
+            region_id: Uuid::from_u128(1).into(),
+            lens_id: Uuid::from_u128(2).into(),
             salience: 0.75,
             content_cohesion: None,
             label: Some("Migration tooling".to_string()),
@@ -184,8 +185,8 @@ mod tests {
     #[test]
     fn cogmap_region_metrics_row_serde_roundtrip_preserves_nullables() {
         let row = CogmapRegionMetricsRow {
-            region_id: Uuid::from_u128(1),
-            lens_id: Uuid::from_u128(2),
+            region_id: Uuid::from_u128(1).into(),
+            lens_id: Uuid::from_u128(2).into(),
             centrality: Some(4.0),
             content_cohesion: None,
             internal_tension: Some(1.5),
@@ -202,14 +203,14 @@ mod tests {
     #[test]
     fn cogmap_analytics_row_nests_staleness_and_regulation() {
         let row = CogmapAnalyticsRow {
-            telos_resource_id: Uuid::from_u128(9),
+            telos_resource_id: Uuid::from_u128(9).into(),
             staleness: CogmapStaleness {
                 materialized_at: None,
                 latest_touch: None,
                 is_stale: true,
             },
             regulation: vec![CogmapRegulationRow {
-                resource_id: Uuid::from_u128(3),
+                resource_id: Uuid::from_u128(3).into(),
                 title: "Deploy safely".to_string(),
                 body_text: Some("body".to_string()),
                 edge_label: "operationalized_by".to_string(),

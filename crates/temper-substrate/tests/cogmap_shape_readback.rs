@@ -4,7 +4,7 @@
 //! (zero rows, not an error); folded regions are excluded; the lens filter narrows by lens.
 
 use sqlx::PgPool;
-use temper_substrate::ids::{CogmapId, ProfileId};
+use temper_substrate::ids::{CogmapId, LensId, ProfileId, RegionId};
 use uuid::Uuid;
 
 mod common;
@@ -117,7 +117,7 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
         1,
         "only the non-folded region surfaces: {rows:?}"
     );
-    assert_eq!(rows[0].region_id, kept);
+    assert_eq!(rows[0].region_id, RegionId::from(kept));
     assert_eq!(rows[0].label.as_deref(), Some("kept"));
     assert_eq!(rows[0].member_count, 3);
     assert_eq!(rows[0].content_cohesion, None);
@@ -142,7 +142,7 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
         &pool,
         CogmapId::from(cogmap),
         ProfileId::from(p1),
-        Some(other_lens),
+        Some(LensId::from(other_lens)),
     )
     .await
     .expect("lens-filtered read");

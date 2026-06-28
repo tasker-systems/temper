@@ -28,7 +28,7 @@ use temper_core::types::cognitive_maps::{
     CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow, CogmapRegulationRow,
     CogmapStaleness,
 };
-use temper_core::types::ids::{CogmapId, ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -404,9 +404,14 @@ pub async fn cogmap_shape_select(
     cogmap_id: uuid::Uuid,
     lens_id: Option<uuid::Uuid>,
 ) -> ApiResult<Vec<CogmapRegionRow>> {
-    let rows = readback::cogmap_shape(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
-        .await
-        .map_err(api_err)?;
+    let rows = readback::cogmap_shape(
+        pool,
+        CogmapId::from(cogmap_id),
+        profile_id,
+        lens_id.map(LensId::from),
+    )
+    .await
+    .map_err(api_err)?;
     Ok(rows
         .into_iter()
         .map(|r| CogmapRegionRow {
@@ -428,10 +433,14 @@ pub async fn cogmap_region_metrics_select(
     cogmap_id: uuid::Uuid,
     lens_id: Option<uuid::Uuid>,
 ) -> ApiResult<Vec<CogmapRegionMetricsRow>> {
-    let rows =
-        readback::cogmap_region_metrics(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
-            .await
-            .map_err(api_err)?;
+    let rows = readback::cogmap_region_metrics(
+        pool,
+        CogmapId::from(cogmap_id),
+        profile_id,
+        lens_id.map(LensId::from),
+    )
+    .await
+    .map_err(api_err)?;
     Ok(rows
         .into_iter()
         .map(|r| CogmapRegionMetricsRow {

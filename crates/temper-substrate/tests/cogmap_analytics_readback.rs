@@ -6,7 +6,7 @@
 //! denies a non-member (None, not an error).
 
 use sqlx::PgPool;
-use temper_substrate::ids::{CogmapId, ProfileId};
+use temper_substrate::ids::{CogmapId, LensId, ProfileId, RegionId, ResourceId};
 use uuid::Uuid;
 
 mod common;
@@ -114,7 +114,7 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
         1,
         "only the non-folded region surfaces: {rows:?}"
     );
-    assert_eq!(rows[0].region_id, kept);
+    assert_eq!(rows[0].region_id, RegionId::from(kept));
     assert_eq!(rows[0].centrality, Some(4.0));
     assert_eq!(
         rows[0].internal_tension,
@@ -139,7 +139,7 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
         &pool,
         CogmapId::from(cogmap),
         ProfileId::from(p1),
-        Some(Uuid::now_v7()),
+        Some(LensId::from(Uuid::now_v7())),
     )
     .await
     .expect("lens-filtered read");
@@ -196,7 +196,7 @@ async fn analytics_telos_staleness_regulation_and_deny(pool: PgPool) {
     .await
     .expect("readable analytics read")
     .expect("readable principal gets Some");
-    assert_eq!(got.telos_resource_id, telos);
+    assert_eq!(got.telos_resource_id, ResourceId::from(telos));
     assert!(
         got.staleness.is_stale,
         "never-materialized map reads as stale"
@@ -207,7 +207,7 @@ async fn analytics_telos_staleness_regulation_and_deny(pool: PgPool) {
         "one readable regulation concept: {:?}",
         got.regulation
     );
-    assert_eq!(got.regulation[0].resource_id, target);
+    assert_eq!(got.regulation[0].resource_id, ResourceId::from(target));
     assert_eq!(got.regulation[0].edge_label, "operationalized_by");
     assert_eq!(got.regulation[0].title, "Deploy safely");
 

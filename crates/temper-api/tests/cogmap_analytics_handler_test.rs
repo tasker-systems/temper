@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_api::backend::substrate_read::{cogmap_analytics_select, cogmap_region_metrics_select};
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{ProfileId, ResourceId};
 
 mod common;
 
@@ -41,7 +41,11 @@ async fn l0_analytics_readable_some_with_telos(pool: PgPool) {
         .await
         .expect("readable L0 analytics must be Ok")
         .expect("L0 is root-joined → Some for an approved profile");
-    assert_eq!(got.telos_resource_id, L0_TELOS, "L0 telos charter resource");
+    assert_eq!(
+        got.telos_resource_id,
+        ResourceId::from(L0_TELOS),
+        "L0 telos charter resource"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

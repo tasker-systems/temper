@@ -25,9 +25,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
-use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
+use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId};
 use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
@@ -745,8 +744,8 @@ pub async fn vector_search(
 /// depend on `temper-core`; the `temper-api` wrapper maps this to the `CogmapRegionRow` wire type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogmapShapeRow {
-    pub region_id: Uuid,
-    pub lens_id: Uuid,
+    pub region_id: RegionId,
+    pub lens_id: LensId,
     pub salience: f64,
     pub content_cohesion: Option<f64>,
     pub label: Option<String>,
@@ -764,7 +763,7 @@ pub async fn cogmap_shape(
     pool: &PgPool,
     cogmap_id: CogmapId,
     principal: ProfileId,
-    lens_id: Option<Uuid>,
+    lens_id: Option<LensId>,
 ) -> Result<Vec<CogmapShapeRow>> {
     let rows = sqlx::query(
         "SELECT region_id, lens_id, salience, content_cohesion, label, member_count
@@ -938,8 +937,8 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
 /// `temper-api` wrapper maps this to the `CogmapRegionMetricsRow` wire type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogmapRegionMetricsRow {
-    pub region_id: Uuid,
-    pub lens_id: Uuid,
+    pub region_id: RegionId,
+    pub lens_id: LensId,
     pub centrality: Option<f64>,
     pub content_cohesion: Option<f64>,
     pub internal_tension: Option<f64>,
@@ -953,7 +952,7 @@ pub async fn cogmap_region_metrics(
     pool: &PgPool,
     cogmap_id: CogmapId,
     principal: ProfileId,
-    lens_id: Option<Uuid>,
+    lens_id: Option<LensId>,
 ) -> Result<Vec<CogmapRegionMetricsRow>> {
     let rows = sqlx::query(
         "SELECT region_id, lens_id, centrality, content_cohesion, internal_tension,
@@ -984,7 +983,7 @@ pub async fn cogmap_region_metrics(
 /// the aggregated `jsonb`; field names match the `cogmap_regulation` return columns.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct CogmapRegulationRow {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub title: String,
     pub body_text: Option<String>,
     pub edge_label: String,
@@ -1002,7 +1001,7 @@ pub struct CogmapStaleness {
 /// Substrate-local; the `temper-api` wrapper maps this to the `CogmapAnalyticsRow` wire type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogmapAnalyticsRow {
-    pub telos_resource_id: Uuid,
+    pub telos_resource_id: ResourceId,
     pub staleness: CogmapStaleness,
     pub regulation: Vec<CogmapRegulationRow>,
 }

@@ -53,8 +53,8 @@ mod tests {
     fn render_region_metrics_rows_json_is_passthrough_array() {
         use temper_core::types::cognitive_maps::CogmapRegionMetricsRow;
         let rows: Vec<CogmapRegionMetricsRow> = vec![CogmapRegionMetricsRow {
-            region_id: Uuid::from_u128(1),
-            lens_id: Uuid::from_u128(2),
+            region_id: Uuid::from_u128(1).into(),
+            lens_id: Uuid::from_u128(2).into(),
             centrality: Some(4.0),
             content_cohesion: None,
             internal_tension: Some(1.5),
@@ -70,8 +70,8 @@ mod tests {
     #[test]
     fn render_shape_rows_json_is_passthrough_array() {
         let rows: Vec<CogmapRegionRow> = vec![CogmapRegionRow {
-            region_id: Uuid::from_u128(1),
-            lens_id: Uuid::from_u128(2),
+            region_id: Uuid::from_u128(1).into(),
+            lens_id: Uuid::from_u128(2).into(),
             salience: 0.5,
             content_cohesion: None,
             label: Some("region".to_string()),
