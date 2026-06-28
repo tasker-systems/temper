@@ -788,6 +788,149 @@ pub async fn cogmap_shape(
         .collect())
 }
 
+/// One act folded under an invocation envelope's show projection: a `kb_events` row stamped with this
+/// invocation's id (`kb_events.invocation_id`). Substrate-local because `temper-substrate` cannot depend
+/// on `temper-core`; the `temper-api` wrapper maps this to the `InvocationActRow` wire type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvocationActRecord {
+    pub event_id: Uuid,
+    pub event_kind: String,
+    pub emitter_entity_id: Uuid,
+    pub occurred_at: DateTime<Utc>,
+}
+
+/// The full show projection of an invocation envelope: the `kb_invocations` row (minus the internal
+/// ledger pointers `opened_by_event_id`/`closed_by_event_id`) plus its acts. Substrate-local; the
+/// `temper-api` wrapper maps this to the `InvocationView` wire type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvocationShowRow {
+    pub id: Uuid,
+    pub status: String,
+    pub trigger_kind: String,
+    pub originating_cogmap_id: Uuid,
+    pub parent_cogmap_id: Option<Uuid>,
+    pub scoped_entity_id: Uuid,
+    pub telos_resource_id: Uuid,
+    pub outcome: Option<Value>,
+    pub opened_at: DateTime<Utc>,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub acts: Vec<InvocationActRecord>,
+}
+
+/// The lighter list-row projection of an invocation envelope (no acts). Substrate-local; the
+/// `temper-api` wrapper maps this to the `InvocationSummary` wire type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvocationListRow {
+    pub id: Uuid,
+    pub status: String,
+    pub trigger_kind: String,
+    pub originating_cogmap_id: Uuid,
+    pub opened_at: DateTime<Utc>,
+    pub closed_at: Option<DateTime<Utc>>,
+}
+
+/// The show read of one invocation envelope plus its acts. The access gate is INSIDE the SQL: the
+/// envelope row is returned ONLY when the principal can read the originating cogmap
+/// (`anchor_readable_by_profile($principal, 'kb_cogmaps', i.originating_cogmap_id)`). A denied or absent
+/// invocation yields `Ok(None)` — never an error (leak-safe, like [`cogmap_shape`]). Acts are fetched
+/// ONLY after the envelope passes the gate, so an unreadable invocation never leaks its acts.
+///
+/// Runtime `sqlx::query` (NOT the `query!` macros) — unqualified, self-gating SQL; see the module-level
+/// note. Read-only.
+pub async fn invocation_show(
+    pool: &PgPool,
+    invocation_id: Uuid,
+    principal: ProfileId,
+) -> Result<Option<InvocationShowRow>> {
+    let Some(row) = sqlx::query(
+        "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.parent_cogmap_id,
+                i.scoped_entity_id, i.telos_resource_id, i.outcome, i.opened_at, i.closed_at
+           FROM kb_invocations i
+          WHERE i.id = $1
+            AND anchor_readable_by_profile($2, 'kb_cogmaps', i.originating_cogmap_id)",
+    )
+    .bind(invocation_id)
+    .bind(principal)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let acts = sqlx::query(
+        "SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at
+           FROM kb_events e
+           JOIN kb_event_types et ON et.id = e.event_type_id
+          WHERE e.invocation_id = $1
+          ORDER BY e.occurred_at, e.id",
+    )
+    .bind(invocation_id)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| InvocationActRecord {
+        event_id: r.get("id"),
+        event_kind: r.get("name"),
+        emitter_entity_id: r.get("emitter_entity_id"),
+        occurred_at: r.get("occurred_at"),
+    })
+    .collect();
+
+    Ok(Some(InvocationShowRow {
+        id: row.get("id"),
+        status: row.get("status"),
+        trigger_kind: row.get("trigger_kind"),
+        originating_cogmap_id: row.get("originating_cogmap_id"),
+        parent_cogmap_id: row.get("parent_cogmap_id"),
+        scoped_entity_id: row.get("scoped_entity_id"),
+        telos_resource_id: row.get("telos_resource_id"),
+        outcome: row.get("outcome"),
+        opened_at: row.get("opened_at"),
+        closed_at: row.get("closed_at"),
+        acts,
+    }))
+}
+
+/// The list read of invocation envelopes, every row gated by the same `anchor_readable_by_profile`
+/// predicate as [`invocation_show`] (a principal who cannot read an invocation's originating cogmap
+/// never sees its row — empty, never an error). Optionally narrowed by originating `cogmap` and/or
+/// `status`; ordered newest-open-first.
+///
+/// Runtime `sqlx::query` (NOT the `query!` macros) — unqualified, self-gating SQL; see the module-level
+/// note. Read-only.
+pub async fn invocation_list(
+    pool: &PgPool,
+    principal: ProfileId,
+    cogmap: Option<Uuid>,
+    status: Option<String>,
+) -> Result<Vec<InvocationListRow>> {
+    let rows = sqlx::query(
+        "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.opened_at, i.closed_at
+           FROM kb_invocations i
+          WHERE anchor_readable_by_profile($1, 'kb_cogmaps', i.originating_cogmap_id)
+            AND ($2::uuid IS NULL OR i.originating_cogmap_id = $2)
+            AND ($3::text IS NULL OR i.status = $3)
+          ORDER BY i.opened_at DESC",
+    )
+    .bind(principal)
+    .bind(cogmap)
+    .bind(status)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| InvocationListRow {
+            id: r.get("id"),
+            status: r.get("status"),
+            trigger_kind: r.get("trigger_kind"),
+            originating_cogmap_id: r.get("originating_cogmap_id"),
+            opened_at: r.get("opened_at"),
+            closed_at: r.get("closed_at"),
+        })
+        .collect())
+}
+
 /// One 1-hop graph neighbor of a resource: the OTHER endpoint's origin_uri plus the connecting edge's
 /// kind/polarity/label. The §9 graph-neighbors read floor over `kb_edges` (folded edges
 /// excluded, matching production's `NOT is_folded` gate).
