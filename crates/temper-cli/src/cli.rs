@@ -178,6 +178,12 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: CogmapCmd,
     },
+
+    /// Operate on agent-invocation envelopes (open / close / show / list)
+    Invocation {
+        #[command(subcommand)]
+        cmd: InvocationCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -469,6 +475,71 @@ pub enum CogmapCmd {
     },
 }
 
+/// CLI-local enum mirroring `Disposition` for clap `value_enum` parsing.
+///
+/// Kept in `cli.rs` (not `temper-core`) to avoid adding a `clap` dependency to
+/// `temper-core`. Maps to `temper_core::types::invocation::Disposition` via the
+/// exhaustive `to_core` method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DispositionArg {
+    Completed,
+    Failed,
+    Abandoned,
+}
+
+impl DispositionArg {
+    /// Exhaustive map to the temper-core terminal disposition.
+    pub fn to_core(self) -> temper_core::types::invocation::Disposition {
+        use temper_core::types::invocation::Disposition;
+        match self {
+            DispositionArg::Completed => Disposition::Completed,
+            DispositionArg::Failed => Disposition::Failed,
+            DispositionArg::Abandoned => Disposition::Abandoned,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub enum InvocationCmd {
+    /// Open an agent-invocation envelope. The server mints the id and returns it.
+    Open {
+        /// The originating cognitive map, by ref (UUID or `slug-<uuid>`).
+        #[arg(long)]
+        cogmap: String,
+        /// Optional delegating-parent cogmap ref; omit when not spawned beneath another.
+        #[arg(long)]
+        parent: Option<String>,
+        /// Free-form trigger label (e.g. `manual`, `delegated`, `scheduled`).
+        #[arg(long = "trigger-kind")]
+        trigger_kind: String,
+    },
+    /// Close an open envelope with a terminal disposition and optional outcome.
+    Close {
+        /// The invocation to close, by ref (the UUID returned by `open`).
+        invocation: String,
+        /// Terminal disposition: completed | failed | abandoned.
+        #[arg(long, value_enum)]
+        disposition: DispositionArg,
+        /// Opaque, agent-defined terminal outcome as a JSON value; omit for none.
+        #[arg(long)]
+        outcome: Option<String>,
+    },
+    /// Read one envelope plus its acts by ref.
+    Show {
+        /// The invocation to read, by ref (UUID or `slug-<uuid>`).
+        invocation: String,
+    },
+    /// List envelopes, optionally narrowed by originating cogmap and/or status.
+    List {
+        /// Optional originating cogmap ref to filter by; omit for all maps.
+        #[arg(long)]
+        cogmap: Option<String>,
+        /// Optional lifecycle status filter: open | completed | failed | abandoned.
+        #[arg(long)]
+        status: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum SkillAction {
     /// Generate skill content (preview to stdout)
@@ -622,5 +693,72 @@ mod meta_only_flag_tests {
             "list with --meta-only and --fields failed: {:?}",
             m.err()
         );
+    }
+}
+
+#[cfg(test)]
+mod invocation_parse_tests {
+    use super::*;
+    use clap::Parser;
+    use temper_core::types::invocation::Disposition;
+
+    const UUID: &str = "019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+
+    #[test]
+    fn open_parses_into_variant() {
+        let cli = Cli::try_parse_from([
+            "temper",
+            "invocation",
+            "open",
+            "--cogmap",
+            UUID,
+            "--trigger-kind",
+            "manual",
+        ])
+        .expect("open should parse");
+        match cli.command {
+            Commands::Invocation {
+                cmd:
+                    InvocationCmd::Open {
+                        cogmap,
+                        parent,
+                        trigger_kind,
+                    },
+            } => {
+                assert_eq!(cogmap, UUID);
+                assert!(parent.is_none());
+                assert_eq!(trigger_kind, "manual");
+            }
+            _ => panic!("expected invocation open variant"),
+        }
+    }
+
+    #[test]
+    fn close_parses_into_variant() {
+        let cli = Cli::try_parse_from([
+            "temper",
+            "invocation",
+            "close",
+            UUID,
+            "--disposition",
+            "completed",
+        ])
+        .expect("close should parse");
+        match cli.command {
+            Commands::Invocation {
+                cmd:
+                    InvocationCmd::Close {
+                        invocation,
+                        disposition,
+                        outcome,
+                    },
+            } => {
+                assert_eq!(invocation, UUID);
+                assert_eq!(disposition, DispositionArg::Completed);
+                assert_eq!(disposition.to_core(), Disposition::Completed);
+                assert!(outcome.is_none());
+            }
+            _ => panic!("expected invocation close variant"),
+        }
     }
 }

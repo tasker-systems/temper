@@ -14,12 +14,15 @@ use sqlx::PgPool;
 
 use temper_core::error::TemperError;
 use temper_core::types::graph;
-use temper_core::types::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
+use temper_core::types::ids::{
+    CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
+};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
-    ListResources, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
-    ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+    AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateResource, DeleteResource,
+    FoldRelationship, ListResources, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
+    RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface,
+    UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
@@ -65,6 +68,21 @@ fn map_polarity(p: graph::Polarity) -> temper_substrate::payloads::EdgePolarity 
     match p {
         graph::Polarity::Forward => N::Forward,
         graph::Polarity::Inverse => N::Inverse,
+    }
+}
+
+/// temper-core's wire `Disposition` → temper-substrate's `payloads::Disposition` (identical 3-variant
+/// terminal taxonomy). Exhaustive match (the `map_edge_kind` pattern), NOT a stringly conversion:
+/// temper-core does not depend on temper-substrate, so the two mirror enums are bridged here.
+fn map_disposition(
+    d: temper_core::types::invocation::Disposition,
+) -> temper_substrate::payloads::Disposition {
+    use temper_core::types::invocation::Disposition as Core;
+    use temper_substrate::payloads::Disposition as Sub;
+    match d {
+        Core::Completed => Sub::Completed,
+        Core::Failed => Sub::Failed,
+        Core::Abandoned => Sub::Abandoned,
     }
 }
 
@@ -273,6 +291,29 @@ impl DbBackend {
             .fetch_one(&self.pool)
             .await
             .map_err(api_err)?;
+        if can.unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(TemperError::Forbidden)
+        }
+    }
+
+    /// Auth-before-writes gate for the invocation envelope: the acting profile (`self.profile_id`)
+    /// must be able to READ the originating cognitive map. Calls the canonical visibility predicate
+    /// `anchor_readable_by_profile(profile, 'kb_cogmaps', cogmap_id)` directly (the retired
+    /// `cogmap_readable_by_profile` is reached only via this anchor arm; `require_cogmap_write_admin`
+    /// is the wrong gate — it is a structural L0/root-team gate that admits ordinary cogmaps). Deny →
+    /// `Forbidden` (403). The substrate's `invocation_open` enforces the parent→originating delegation
+    /// gate itself, so this is ONLY the acting-profile-can-access-originating check.
+    async fn check_can_read_cogmap(&self, cogmap_id: uuid::Uuid) -> Result<(), TemperError> {
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT anchor_readable_by_profile($1, 'kb_cogmaps', $2)",
+            *self.profile_id,
+            cogmap_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
         if can.unwrap_or(false) {
             Ok(())
         } else {
@@ -1097,6 +1138,98 @@ impl Backend for DbBackend {
             Ok(()) => Ok(CommandOutput::new(outcome)),
             Err(e) => Err(map_commit_err(e)),
         }
+    }
+
+    /// Open an agent-invocation envelope, returning the server-minted invocation id. AUTH BEFORE
+    /// WRITE: the acting profile must be able to read the originating cogmap (`check_can_read_cogmap`)
+    /// — deny → 403, before any `writes::` call. The substrate's `invocation_open` enforces the
+    /// parent→originating delegation gate internally when `parent` is set, so it is not re-checked
+    /// here. The id is minted by `writes::open_invocation` (server-mint v1, never caller-supplied).
+    async fn open_invocation(
+        &self,
+        cmd: OpenInvocation,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // Auth before any write: the acting profile must be able to read the originating cogmap.
+        self.check_can_read_cogmap(uuid::Uuid::from(cmd.originating_cogmap))
+            .await?;
+
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+
+        let invocation = writes::open_invocation(
+            &self.pool,
+            writes::OpenParams {
+                trigger_kind: cmd.trigger_kind,
+                originating: cmd.originating_cogmap,
+                parent: cmd.parent_cogmap,
+                scoped_entity: emitter,
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(invocation.uuid()))
+    }
+
+    /// Close an agent-invocation envelope with a terminal disposition + opaque outcome. ONE gated
+    /// lookup does auth + existence + terminal-state in a single round-trip: the row is returned only
+    /// when the acting profile can read the originating cogmap, so absent and unreadable collapse to a
+    /// uniform 404 (no existence oracle — matching the `invocation_show` deny→None contract). Close is
+    /// a one-shot terminal transition; a non-open envelope is a 409 (append-only — a re-close would
+    /// append a second `invocation_closed` event and overwrite the terminal record). All before any
+    /// `writes::` call.
+    async fn close_invocation(
+        &self,
+        cmd: CloseInvocation,
+    ) -> Result<CommandOutput<()>, TemperError> {
+        // Auth + existence in one query: the gate is in the WHERE, so a row comes back only for a
+        // readable invocation. Absent OR unreadable → no row → uniform NotFound (404), never 403
+        // (which would confirm the id exists). The `status` rides along for the terminal guard.
+        let row = sqlx::query!(
+            "SELECT originating_cogmap_id, status \
+               FROM kb_invocations \
+              WHERE id = $1 \
+                AND anchor_readable_by_profile($2, 'kb_cogmaps', originating_cogmap_id)",
+            cmd.invocation,
+            *self.profile_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| TemperError::NotFound(format!("invocation {} not found", cmd.invocation)))?;
+
+        // Append-only: close is a one-shot terminal transition. Re-closing a completed/failed/abandoned
+        // envelope would append a second close event and overwrite its terminal record — reject it.
+        if row.status != "open" {
+            return Err(TemperError::Conflict(format!(
+                "invocation {} is already '{}' — close is a one-shot terminal transition",
+                cmd.invocation, row.status
+            )));
+        }
+        let originating = row.originating_cogmap_id;
+
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+
+        writes::close_invocation(
+            &self.pool,
+            InvocationId::from(cmd.invocation),
+            CogmapId::from(originating),
+            map_disposition(cmd.disposition),
+            cmd.outcome,
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(()))
     }
 }
 

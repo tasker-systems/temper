@@ -29,6 +29,7 @@ use temper_core::types::cognitive_maps::{
     CogmapStaleness,
 };
 use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
+use temper_core::types::invocation::{InvocationActRow, InvocationSummary, InvocationView};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -483,6 +484,70 @@ pub async fn cogmap_analytics_select(
             })
             .collect(),
     }))
+}
+
+/// `invocation_show` — the show projection of one invocation envelope plus its acts. Service-direct
+/// (reads bypass the Backend trait). The access gate lives in the readback SQL: a principal who cannot
+/// read the originating cogmap gets `None`, never an error. Maps the substrate-local row to the wire
+/// type.
+pub async fn invocation_show_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    invocation_id: uuid::Uuid,
+) -> ApiResult<Option<InvocationView>> {
+    let Some(row) = readback::invocation_show(pool, invocation_id, profile_id)
+        .await
+        .map_err(api_err)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(InvocationView {
+        id: row.id,
+        status: row.status,
+        trigger_kind: row.trigger_kind,
+        originating_cogmap_id: row.originating_cogmap_id,
+        parent_cogmap_id: row.parent_cogmap_id,
+        scoped_entity_id: row.scoped_entity_id,
+        telos_resource_id: row.telos_resource_id,
+        outcome: row.outcome,
+        opened_at: row.opened_at,
+        closed_at: row.closed_at,
+        acts: row
+            .acts
+            .into_iter()
+            .map(|a| InvocationActRow {
+                event_id: a.event_id,
+                event_kind: a.event_kind,
+                emitter_entity_id: a.emitter_entity_id,
+                occurred_at: a.occurred_at,
+            })
+            .collect(),
+    }))
+}
+
+/// `invocation_list` — the list projection of invocation envelopes, each gated by the principal's read
+/// access to its originating cogmap. Service-direct. Optionally narrowed by originating `cogmap` and/or
+/// `status`. Maps the substrate-local rows to the wire type.
+pub async fn invocation_list_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap: Option<uuid::Uuid>,
+    status: Option<String>,
+) -> ApiResult<Vec<InvocationSummary>> {
+    let rows = readback::invocation_list(pool, profile_id, cogmap, status)
+        .await
+        .map_err(api_err)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| InvocationSummary {
+            id: r.id,
+            status: r.status,
+            trigger_kind: r.trigger_kind,
+            originating_cogmap_id: r.originating_cogmap_id,
+            opened_at: r.opened_at,
+            closed_at: r.closed_at,
+        })
+        .collect())
 }
 
 #[cfg(test)]

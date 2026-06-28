@@ -304,6 +304,54 @@ impl TemperMcpService {
         tools::cognitive_maps::cogmap_analytics(self, input).await
     }
 
+    #[tool(
+        description = "Open an agent-invocation envelope — an append-only accountability record for one agent run against a cognitive map. Returns the server-minted invocation_id; feed it into invocation_close when the run terminates. Pass the originating map by ref."
+    )]
+    async fn invocation_open(
+        &self,
+        Parameters(input): Parameters<temper_core::types::invocation::InvocationOpenInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_open(self, input).await
+    }
+
+    #[tool(
+        description = "Close an open agent-invocation envelope with a terminal disposition (completed/failed/abandoned) and an optional opaque outcome. Identify the envelope by the invocation_id returned by invocation_open."
+    )]
+    async fn invocation_close(
+        &self,
+        Parameters(input): Parameters<temper_core::types::invocation::InvocationCloseInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_close(self, input).await
+    }
+
+    #[tool(
+        description = "Show one agent-invocation envelope plus its acts (the stamped events that occurred under it), by raw UUID. Returns null if the invocation is absent or not readable."
+    )]
+    async fn invocation_show(
+        &self,
+        Parameters(input): Parameters<temper_core::types::invocation::InvocationShowInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_show(self, input).await
+    }
+
+    #[tool(
+        description = "List agent-invocation envelopes, optionally narrowed by originating cognitive map (by ref) and/or lifecycle status (open/completed/failed/abandoned)."
+    )]
+    async fn invocation_list(
+        &self,
+        Parameters(input): Parameters<temper_core::types::invocation::InvocationListInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_list(self, input).await
+    }
+
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
     async fn list_contexts(
         &self,
