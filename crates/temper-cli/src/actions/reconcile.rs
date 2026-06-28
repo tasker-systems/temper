@@ -20,6 +20,18 @@ pub struct ManifestDoc {
     pub fold_resources: Vec<ManifestTombstone>,
     #[serde(default)]
     pub fold_edges: Vec<ManifestEdgeTombstone>,
+    #[serde(default)]
+    pub telos: Option<ManifestTelos>,
+}
+
+/// The authored telos charter (pre-embed: prose). Mirrors the workbench seed's `cogmap.telos`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
+pub struct ManifestTelos {
+    pub statement: String,
+    #[serde(default)]
+    pub questions: Vec<temper_core::charter::CharterQuestion>,
+    #[serde(default)]
+    pub framing: Vec<String>,
 }
 
 /// One authored kernel landmark (pre-embed: body is raw prose).
@@ -97,7 +109,7 @@ pub fn manifest_to_request(
     use crate::actions::ingest::{compute_body_chunks, BodyChunks};
     use temper_core::types::reconcile::{
         ReconcileCogmapRequest, ReconcileEdge, ReconcileEdgeTombstone, ReconcileEntry,
-        ReconcileTombstone,
+        ReconcileTelos, ReconcileTelosBlock, ReconcileTombstone,
     };
 
     let mut entries = Vec::with_capacity(doc.entries.len());
@@ -143,11 +155,28 @@ pub fn manifest_to_request(
         })
         .collect();
 
+    let telos = match &doc.telos {
+        None => None,
+        Some(t) => {
+            let specs =
+                temper_core::charter::charter_block_specs(&t.statement, &t.questions, &t.framing);
+            let mut blocks = Vec::with_capacity(specs.len());
+            for (role, prose) in specs {
+                let BodyChunks { chunks_packed, .. } = compute_body_chunks(&prose)?;
+                blocks.push(ReconcileTelosBlock {
+                    role: role.to_string(),
+                    chunks_packed,
+                });
+            }
+            Some(ReconcileTelos { blocks })
+        }
+    };
+
     Ok(ReconcileCogmapRequest {
         entries,
         fold_resources,
         fold_edges,
-        telos: None,
+        telos,
     })
 }
 
@@ -197,6 +226,42 @@ entries:
         // No tombstones in this manifest.
         assert!(doc.fold_resources.is_empty());
         assert!(doc.fold_edges.is_empty());
+    }
+
+    const TELOS_YAML: &str = r#"
+entries: []
+telos:
+  statement: "Orient an arriving agent."
+  questions:
+    - question: "Where am I?"
+      context: "the first thing any agent asks"
+    - question: "Bare question?"
+  framing:
+    - "Self-referential."
+"#;
+
+    #[test]
+    fn parse_manifest_reads_telos() {
+        let doc = parse_manifest(TELOS_YAML).unwrap();
+        let telos = doc.telos.as_ref().unwrap();
+        assert_eq!(telos.statement, "Orient an arriving agent.");
+        assert_eq!(telos.questions.len(), 2);
+        assert_eq!(telos.questions[1].context, ""); // defaulted
+        assert_eq!(telos.framing, vec!["Self-referential.".to_string()]);
+    }
+
+    #[cfg(feature = "test-embed")]
+    #[test]
+    fn manifest_to_request_embeds_telos_blocks_in_role_order() {
+        let doc = parse_manifest(TELOS_YAML).unwrap();
+        let req = manifest_to_request(&doc).unwrap();
+        let blocks = &req.telos.unwrap().blocks;
+        // statement + 2 questions + 1 framing = 4 role-tagged blocks, each embedded.
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].role, "statement");
+        assert_eq!(blocks[1].role, "question");
+        assert_eq!(blocks[3].role, "framing");
+        assert!(blocks.iter().all(|b| !b.chunks_packed.is_empty()));
     }
 
     #[cfg(feature = "test-embed")]
