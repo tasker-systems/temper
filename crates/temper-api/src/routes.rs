@@ -92,6 +92,14 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::cognitive_maps::shape),
         )
         .route(
+            "/api/cognitive-maps/{id}/region-metrics",
+            get(handlers::cognitive_maps::region_metrics),
+        )
+        .route(
+            "/api/cognitive-maps/{id}/analytics",
+            get(handlers::cognitive_maps::analytics),
+        )
+        .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),
         )

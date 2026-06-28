@@ -24,7 +24,10 @@ use crate::services::resource_service::{ResourceListParams, ResourceListResponse
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::cognitive_maps::CogmapRegionRow;
+use temper_core::types::cognitive_maps::{
+    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow, CogmapRegulationRow,
+    CogmapStaleness,
+};
 use temper_core::types::ids::{CogmapId, ContextId, ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
@@ -415,6 +418,61 @@ pub async fn cogmap_shape_select(
             member_count: r.member_count,
         })
         .collect())
+}
+
+/// `cogmap_region_metrics` — the per-region analytics tier. Service-direct; gate is in the SQL
+/// (deny → empty). Maps the substrate-local row to the wire type.
+pub async fn cogmap_region_metrics_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap_id: uuid::Uuid,
+    lens_id: Option<uuid::Uuid>,
+) -> ApiResult<Vec<CogmapRegionMetricsRow>> {
+    let rows = readback::cogmap_region_metrics(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
+        .await
+        .map_err(api_err)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CogmapRegionMetricsRow {
+            region_id: r.region_id,
+            lens_id: r.lens_id,
+            centrality: r.centrality,
+            content_cohesion: r.content_cohesion,
+            internal_tension: r.internal_tension,
+            reference_standing: r.reference_standing,
+            telos_alignment: r.telos_alignment,
+        })
+        .collect())
+}
+
+/// `cogmap_analytics` — the map-level analytics picture. Service-direct; gate is in the SQL
+/// (deny → `None`, surfaced as 404 by the handler). Maps the substrate-local row to the wire type.
+pub async fn cogmap_analytics_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap_id: uuid::Uuid,
+) -> ApiResult<Option<CogmapAnalyticsRow>> {
+    let got = readback::cogmap_analytics(pool, CogmapId::from(cogmap_id), profile_id)
+        .await
+        .map_err(api_err)?;
+    Ok(got.map(|a| CogmapAnalyticsRow {
+        telos_resource_id: a.telos_resource_id,
+        staleness: CogmapStaleness {
+            materialized_at: a.staleness.materialized_at,
+            latest_touch: a.staleness.latest_touch,
+            is_stale: a.staleness.is_stale,
+        },
+        regulation: a
+            .regulation
+            .into_iter()
+            .map(|r| CogmapRegulationRow {
+                resource_id: r.resource_id,
+                title: r.title,
+                body_text: r.body_text,
+                edge_label: r.edge_label,
+            })
+            .collect(),
+    }))
 }
 
 #[cfg(test)]
