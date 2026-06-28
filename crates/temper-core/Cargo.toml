@@ -44,6 +44,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 mcp = ["schemars"]
+scenario-schema = ["schemars"]
 test-db = []
 typescript = ["ts-rs"]
 web-api = ["utoipa", "utoipa/chrono"]

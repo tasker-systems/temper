@@ -14,7 +14,7 @@ use sqlx::PgPool;
 
 use temper_core::error::TemperError;
 use temper_core::types::graph;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
@@ -251,9 +251,9 @@ pub struct DbBackend {
 /// argument instead of threading three identical ids — and to stay under the params-struct threshold.
 #[derive(Clone, Copy, Debug)]
 struct ReconcileCtx {
-    cogmap: temper_substrate::ids::CogmapId,
-    owner: temper_substrate::ids::ProfileId,
-    emitter: temper_substrate::ids::EntityId,
+    cogmap: CogmapId,
+    owner: ProfileId,
+    emitter: EntityId,
 }
 
 impl DbBackend {
@@ -317,10 +317,10 @@ impl DbBackend {
     async fn reconcile_apply(
         &self,
         conn: &mut sqlx::PgConnection,
-        cogmap: temper_substrate::ids::CogmapId,
+        cogmap: CogmapId,
         request: &ReconcileCogmapRequest,
-        owner: temper_substrate::ids::ProfileId,
-        emitter: temper_substrate::ids::EntityId,
+        owner: ProfileId,
+        emitter: EntityId,
     ) -> Result<ReconcileOutcome, TemperError> {
         let ctx = ReconcileCtx {
             cogmap,
@@ -442,7 +442,7 @@ impl DbBackend {
                     writes::update_resource_in_tx(
                         &mut *conn,
                         writes::UpdateParams {
-                            resource: temper_substrate::ids::ResourceId::from(row.resource_id),
+                            resource: ResourceId::from(row.resource_id),
                             // `Some("")` requests a body re-block (the re-block fires iff body is
                             // `Some`); the content comes from `chunks` (always `Some` here), so the
                             // empty string is never embedded — see the CREATE arm's note.
@@ -504,8 +504,8 @@ impl DbBackend {
                     &mut *conn,
                     writes::KernelEdgeParams {
                         cogmap: ctx.cogmap,
-                        src: temper_substrate::ids::ResourceId::from(src),
-                        tgt: temper_substrate::ids::ResourceId::from(tgt),
+                        src: ResourceId::from(src),
+                        tgt: ResourceId::from(tgt),
                         kind,
                         polarity,
                         label: e.label.as_deref(),
@@ -532,7 +532,7 @@ impl DbBackend {
             if let Some(row) = live_by_id.get(&t.id) {
                 writes::delete_resource_in_tx(
                     &mut *conn,
-                    temper_substrate::ids::ResourceId::from(row.resource_id),
+                    ResourceId::from(row.resource_id),
                     ctx.emitter,
                 )
                 .await
@@ -552,7 +552,7 @@ impl DbBackend {
             if let Some(edge_id) = edge_id {
                 writes::fold_relationship_in_tx(
                     &mut *conn,
-                    temper_substrate::ids::EdgeId::from(edge_id),
+                    EdgeId::from(edge_id),
                     Some("reconcile fold"),
                     ctx.emitter,
                 )
@@ -581,9 +581,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        // cmd.context is temper_core::types::ids::ContextId (pre-resolved at the surface);
-        // writes::CreateParams.home expects temper_substrate::ids::ContextId. Convert via Uuid.
-        let home = temper_substrate::ids::ContextId::from(uuid::Uuid::from(cmd.context));
+        // cmd.context is the pre-resolved (surface-side) ContextId — the same unified type
+        // writes::CreateParams.home expects, so pass it through directly.
+        let home = cmd.context;
 
         let body = cmd
             .body
@@ -796,16 +796,14 @@ impl Backend for DbBackend {
                 // The ContextId was already resolved and visibility-gated at the
                 // handler boundary (parse_context_ref + resolve_context_ref). Use it
                 // directly; no second DB lookup needed.
-                rehome_to = Some(temper_substrate::ids::ContextId::from(uuid::Uuid::from(
-                    ctx_to,
-                )));
+                rehome_to = Some(ctx_to);
             }
         }
 
         writes::update_resource(
             &self.pool,
             writes::UpdateParams {
-                resource: temper_substrate::ids::ResourceId::from(new_id),
+                resource: ResourceId::from(new_id),
                 body: body.as_deref(),
                 title: title.as_deref(),
                 origin_uri: None,
@@ -834,13 +832,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::delete_resource(
-            &self.pool,
-            temper_substrate::ids::ResourceId::from(new_id),
-            emitter,
-        )
-        .await
-        .map_err(api_err)?;
+        writes::delete_resource(&self.pool, ResourceId::from(new_id), emitter)
+            .await
+            .map_err(api_err)?;
         Ok(CommandOutput::new(()))
     }
 
@@ -931,13 +925,13 @@ impl Backend for DbBackend {
         let edge = writes::assert_relationship(
             &self.pool,
             writes::AssertParams {
-                src: temper_substrate::ids::ResourceId::from(src_next),
-                tgt: temper_substrate::ids::ResourceId::from(tgt_next),
+                src: ResourceId::from(src_next),
+                tgt: ResourceId::from(tgt_next),
                 kind: map_edge_kind(cmd.edge_kind),
                 polarity: map_polarity(cmd.polarity),
                 label,
                 weight: cmd.weight,
-                home: temper_substrate::ids::ContextId::from(home_next),
+                home: ContextId::from(home_next),
                 emitter,
             },
         )
@@ -965,7 +959,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::retype_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(handle),
+            EdgeId::from(handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
@@ -989,14 +983,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::reweight_relationship(
-            &self.pool,
-            temper_substrate::ids::EdgeId::from(handle),
-            cmd.weight,
-            emitter,
-        )
-        .await
-        .map_err(api_err)?;
+        writes::reweight_relationship(&self.pool, EdgeId::from(handle), cmd.weight, emitter)
+            .await
+            .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -1016,7 +1005,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::fold_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(handle),
+            EdgeId::from(handle),
             cmd.reason.as_deref(),
             emitter,
         )
@@ -1038,7 +1027,7 @@ impl Backend for DbBackend {
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
         let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
-        let cogmap = temper_substrate::ids::CogmapId::from(cogmap_uuid);
+        let cogmap = CogmapId::from(cogmap_uuid);
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.
