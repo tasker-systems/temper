@@ -117,20 +117,15 @@ impl TelosDef {
     /// then the framing blocks (role `"framing"`). Positional by index — `seq` is assigned downstream;
     /// `role` is the `block_role` property the persist path stamps so reads distinguish the kinds.
     pub fn block_specs(&self) -> Vec<(&'static str, String)> {
-        let mut specs = Vec::with_capacity(1 + self.questions.len() + self.framing.len());
-        specs.push(("statement", self.statement.clone()));
-        for q in &self.questions {
-            let prose = if q.context.is_empty() {
-                q.question.clone()
-            } else {
-                format!("{}\n\n{}", q.question, q.context)
-            };
-            specs.push(("question", prose));
-        }
-        for f in &self.framing {
-            specs.push(("framing", f.clone()));
-        }
-        specs
+        let questions: Vec<temper_core::charter::CharterQuestion> = self
+            .questions
+            .iter()
+            .map(|q| temper_core::charter::CharterQuestion {
+                question: q.question.clone(),
+                context: q.context.clone(),
+            })
+            .collect();
+        temper_core::charter::charter_block_specs(&self.statement, &questions, &self.framing)
     }
 }
 
