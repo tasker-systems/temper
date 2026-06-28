@@ -2,7 +2,9 @@
 
 use rmcp::model::CallToolResult;
 
-use temper_core::types::cognitive_maps::{CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput};
+use temper_core::types::cognitive_maps::{
+    CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
+};
 use temper_core::types::ids::ProfileId;
 
 use crate::service::TemperMcpService;
@@ -66,10 +68,14 @@ pub async fn cogmap_region_metrics(
         lens_id,
     )
     .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_region_metrics failed: {e}"), None))?;
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("cogmap_region_metrics failed: {e}"), None)
+    })?;
 
     let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(text)]))
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
 }
 
 pub async fn cogmap_analytics(
@@ -92,9 +98,11 @@ pub async fn cogmap_analytics(
 
     match got {
         Some(analytics) => {
-            let text = serde_json::to_string_pretty(&analytics)
-                .unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(text)]))
+            let text =
+                serde_json::to_string_pretty(&analytics).unwrap_or_else(|_| "{}".to_string());
+            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                text,
+            )]))
         }
         None => Err(rmcp::ErrorData::invalid_params(
             "cognitive map not found or not readable".to_string(),

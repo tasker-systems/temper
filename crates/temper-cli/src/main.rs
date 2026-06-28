@@ -381,9 +381,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             CogmapCmd::RegionMetrics { cogmap, lens } => {
                 commands::cogmap::region_metrics(&cogmap, lens.as_deref(), output_format)
             }
-            CogmapCmd::Analytics { cogmap } => {
-                commands::cogmap::analytics(&cogmap, output_format)
-            }
+            CogmapCmd::Analytics { cogmap } => commands::cogmap::analytics(&cogmap, output_format),
         },
     }
 }

@@ -428,9 +428,10 @@ pub async fn cogmap_region_metrics_select(
     cogmap_id: uuid::Uuid,
     lens_id: Option<uuid::Uuid>,
 ) -> ApiResult<Vec<CogmapRegionMetricsRow>> {
-    let rows = readback::cogmap_region_metrics(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
-        .await
-        .map_err(api_err)?;
+    let rows =
+        readback::cogmap_region_metrics(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
+            .await
+            .map_err(api_err)?;
     Ok(rows
         .into_iter()
         .map(|r| CogmapRegionMetricsRow {

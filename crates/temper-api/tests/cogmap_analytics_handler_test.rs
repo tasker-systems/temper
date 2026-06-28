@@ -21,7 +21,10 @@ async fn l0_region_metrics_readable_empty(pool: PgPool) {
     let rows = cogmap_region_metrics_select(&pool, ProfileId::from(profile), L0_COGMAP, None)
         .await
         .expect("readable L0 region-metrics must be Ok");
-    assert!(rows.is_empty(), "L0 has no materialized regions yet: {rows:?}");
+    assert!(
+        rows.is_empty(),
+        "L0 has no materialized regions yet: {rows:?}"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

@@ -17,7 +17,9 @@ use crate::middleware::auth::AuthUser;
 use crate::services::access_service;
 use crate::state::AppState;
 
-use temper_core::types::cognitive_maps::{CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow};
+use temper_core::types::cognitive_maps::{
+    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+};
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};

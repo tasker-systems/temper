@@ -217,7 +217,10 @@ mod tests {
         };
         let json = serde_json::to_string(&row).expect("serialize");
         assert!(json.contains("\"is_stale\":true"), "json: {json}");
-        assert!(json.contains("\"edge_label\":\"operationalized_by\""), "json: {json}");
+        assert!(
+            json.contains("\"edge_label\":\"operationalized_by\""),
+            "json: {json}"
+        );
         let back: CogmapAnalyticsRow = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, row);
     }

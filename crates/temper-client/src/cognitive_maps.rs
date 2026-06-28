@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::cognitive_maps::{CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow};
+use temper_core::types::cognitive_maps::{
+    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 
 /// Sub-client for cognitive-map operations.

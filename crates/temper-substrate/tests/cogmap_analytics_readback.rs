@@ -77,30 +77,58 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
 
     let kept = insert_region_with_metrics(
         &pool,
-        MetricSeed { cogmap, lens, event, centrality: 4.0, internal_tension: 1.5, is_folded: false },
+        MetricSeed {
+            cogmap,
+            lens,
+            event,
+            centrality: 4.0,
+            internal_tension: 1.5,
+            is_folded: false,
+        },
     )
     .await;
     let _folded = insert_region_with_metrics(
         &pool,
-        MetricSeed { cogmap, lens, event, centrality: 9.0, internal_tension: 0.0, is_folded: true },
+        MetricSeed {
+            cogmap,
+            lens,
+            event,
+            centrality: 9.0,
+            internal_tension: 0.0,
+            is_folded: true,
+        },
     )
     .await;
 
     // Readable principal sees exactly the non-folded region, with the stored scalars.
     let rows = temper_substrate::readback::cogmap_region_metrics(
-        &pool, CogmapId::from(cogmap), ProfileId::from(p1), None,
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p1),
+        None,
     )
     .await
     .expect("readable read");
-    assert_eq!(rows.len(), 1, "only the non-folded region surfaces: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the non-folded region surfaces: {rows:?}"
+    );
     assert_eq!(rows[0].region_id, kept);
     assert_eq!(rows[0].centrality, Some(4.0));
-    assert_eq!(rows[0].internal_tension, Some(1.5), "tension surfaces from the stored column");
+    assert_eq!(
+        rows[0].internal_tension,
+        Some(1.5),
+        "tension surfaces from the stored column"
+    );
     assert_eq!(rows[0].reference_standing, Some(7.0));
 
     // Non-member is denied by the in-SQL gate: zero rows, not an error.
     let denied = temper_substrate::readback::cogmap_region_metrics(
-        &pool, CogmapId::from(cogmap), ProfileId::from(p2), None,
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p2),
+        None,
     )
     .await
     .expect("gate denial is empty, not an error");
@@ -108,11 +136,17 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
 
     // Wrong lens narrows to empty.
     let filtered = temper_substrate::readback::cogmap_region_metrics(
-        &pool, CogmapId::from(cogmap), ProfileId::from(p1), Some(Uuid::now_v7()),
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p1),
+        Some(Uuid::now_v7()),
     )
     .await
     .expect("lens-filtered read");
-    assert!(filtered.is_empty(), "wrong lens yields no metrics: {filtered:?}");
+    assert!(
+        filtered.is_empty(),
+        "wrong lens yields no metrics: {filtered:?}"
+    );
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -155,21 +189,33 @@ async fn analytics_telos_staleness_regulation_and_deny(pool: PgPool) {
 
     // Readable principal: telos id, staleness present, regulation carries the one readable concept.
     let got = temper_substrate::readback::cogmap_analytics(
-        &pool, CogmapId::from(cogmap), ProfileId::from(p1),
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p1),
     )
     .await
     .expect("readable analytics read")
     .expect("readable principal gets Some");
     assert_eq!(got.telos_resource_id, telos);
-    assert!(got.staleness.is_stale, "never-materialized map reads as stale");
-    assert_eq!(got.regulation.len(), 1, "one readable regulation concept: {:?}", got.regulation);
+    assert!(
+        got.staleness.is_stale,
+        "never-materialized map reads as stale"
+    );
+    assert_eq!(
+        got.regulation.len(),
+        1,
+        "one readable regulation concept: {:?}",
+        got.regulation
+    );
     assert_eq!(got.regulation[0].resource_id, target);
     assert_eq!(got.regulation[0].edge_label, "operationalized_by");
     assert_eq!(got.regulation[0].title, "Deploy safely");
 
     // Non-member: the in-SQL gate yields zero rows → None.
     let denied = temper_substrate::readback::cogmap_analytics(
-        &pool, CogmapId::from(cogmap), ProfileId::from(p2),
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p2),
     )
     .await
     .expect("gate denial is None, not an error");
