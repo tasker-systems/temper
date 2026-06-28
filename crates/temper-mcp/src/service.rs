@@ -280,6 +280,30 @@ impl TemperMcpService {
         tools::cognitive_maps::cogmap_shape(self, input).await
     }
 
+    #[tool(
+        description = "Read a cognitive map's per-region analytics metrics (centrality, content cohesion, internal tension, reference standing, telos alignment) under an optional lens. Pass the map by ref."
+    )]
+    async fn cogmap_region_metrics(
+        &self,
+        Parameters(input): Parameters<temper_core::types::cognitive_maps::CogmapRegionMetricsInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_region_metrics(self, input).await
+    }
+
+    #[tool(
+        description = "Read a cognitive map's map-level analytics: its telos charter resource id, staleness, and the regulation concept set. Pass the map by ref."
+    )]
+    async fn cogmap_analytics(
+        &self,
+        Parameters(input): Parameters<temper_core::types::cognitive_maps::CogmapAnalyticsInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_analytics(self, input).await
+    }
+
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
     async fn list_contexts(
         &self,
