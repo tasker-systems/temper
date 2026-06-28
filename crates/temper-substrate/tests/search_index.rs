@@ -270,11 +270,11 @@ async fn soft_deleted_resource_excluded_from_fts_search(pool: sqlx::PgPool) {
     .unwrap();
 
     // Pre-delete: resource is found by FTS.
-    let before = readback::fts_search(&pool, owner.uuid(), "phlogiston")
+    let before = readback::fts_search(&pool, owner, "phlogiston")
         .await
         .unwrap();
     assert!(
-        before.contains(&r.uuid()),
+        before.contains(&r),
         "resource must appear in FTS results before soft-delete"
     );
 
@@ -282,11 +282,11 @@ async fn soft_deleted_resource_excluded_from_fts_search(pool: sqlx::PgPool) {
     writes::delete_resource(&pool, r, emitter).await.unwrap();
 
     // Post-delete: WHERE r.is_active filters the resource out of FTS results.
-    let after = readback::fts_search(&pool, owner.uuid(), "phlogiston")
+    let after = readback::fts_search(&pool, owner, "phlogiston")
         .await
         .unwrap();
     assert!(
-        !after.contains(&r.uuid()),
+        !after.contains(&r),
         "soft-deleted resource must be absent from FTS results (WHERE r.is_active)"
     );
 
@@ -373,7 +373,12 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
         "furnace",
     ] {
         let mut want = inline_fts(&pool, owner.uuid(), q).await;
-        let mut got = readback::fts_search(&pool, owner.uuid(), q).await.unwrap();
+        let mut got: Vec<Uuid> = readback::fts_search(&pool, owner, q)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|id| id.uuid())
+            .collect();
         want.sort();
         got.sort();
         assert_eq!(

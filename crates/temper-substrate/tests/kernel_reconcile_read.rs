@@ -79,7 +79,7 @@ async fn kernel_slice_returns_only_kernel_provenance(pool: sqlx::PgPool) {
     assert_property(&pool, a, emitter, "layer", "concept").await;
     assert_property(&pool, b, emitter, "provenance", "promoted").await;
 
-    let rows = temper_substrate::readback::kernel_slice(&pool, loaded.cogmap)
+    let rows = temper_substrate::readback::kernel_slice(&pool, loaded.cogmap.into())
         .await
         .unwrap();
 

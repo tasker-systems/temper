@@ -87,6 +87,19 @@ macro_rules! define_id {
                 Ok(Self(<Uuid as sqlx::Decode<'_, sqlx::Postgres>>::decode(value)?))
             }
         }
+
+        // Array support so `Vec<$name>`/`&[$name]` bind to `= ANY($1)` / `uuid[]` columns, exactly as a
+        // bare `Uuid` does. (Substrate's prior `#[sqlx(transparent)]` derive supplied this; the
+        // hand-written impls above must too, or typed id arrays would not bind.)
+        impl sqlx::postgres::PgHasArrayType for $name {
+            fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+                <Uuid as sqlx::postgres::PgHasArrayType>::array_type_info()
+            }
+
+            fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+                <Uuid as sqlx::postgres::PgHasArrayType>::array_compatible(ty)
+            }
+        }
     };
 }
 

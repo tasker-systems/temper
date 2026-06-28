@@ -24,9 +24,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
-use crate::ids::{EntityId, ProfileId};
+use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
@@ -48,9 +47,9 @@ pub enum ReadbackError {
     /// The resource is not visible to the principal under `resources_visible_to` → surface 404.
     NotVisible {
         /// The (synthesized) resource id that was requested.
-        resource_id: Uuid,
+        resource_id: ResourceId,
         /// The principal the visibility check ran against.
-        principal: Uuid,
+        principal: ProfileId,
     },
     /// A genuine read-path fault (DB error, missing-by-construction state) → surface 500.
     Fault(anyhow::Error),
@@ -137,8 +136,8 @@ pub struct ListRow {
 /// real faults as 404.
 async fn ensure_visible(
     pool: &PgPool,
-    principal: Uuid,
-    new_id: Uuid,
+    principal: ProfileId,
+    new_id: ResourceId,
 ) -> std::result::Result<(), ReadbackError> {
     // `resources_visible_to` and its nested `profile_effective_teams`/`team_ancestors` resolve their
     // unqualified references against the connection search_path (`public` — the one schema), so no
@@ -160,7 +159,7 @@ async fn ensure_visible(
     }
 }
 
-pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
+pub async fn list(pool: &PgPool, principal: ProfileId) -> Result<Vec<ListRow>> {
     let rows = sqlx::query(
         "SELECT r.origin_uri,
                 r.title,
@@ -237,8 +236,8 @@ pub struct ReconstructedMeta {
 /// module-level note.
 pub async fn meta(
     pool: &PgPool,
-    principal: Uuid,
-    new_id: Uuid,
+    principal: ProfileId,
+    new_id: ResourceId,
 ) -> std::result::Result<ReconstructedMeta, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
     let rows = sqlx::query(
@@ -296,13 +295,13 @@ pub async fn meta(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceRowParity {
     /// The synthesized resource id (re-minted; not a parity invariant).
-    pub re_minted_id: Uuid,
+    pub re_minted_id: ResourceId,
     /// The synthesized home-anchor context id (re-minted; not a parity invariant).
-    pub re_minted_context_id: Uuid,
+    pub re_minted_context_id: ContextId,
     /// The synthesized owner profile id (re-minted; not a parity invariant).
-    pub owner_profile_id: Uuid,
+    pub owner_profile_id: ProfileId,
     /// The synthesized originator profile id (re-minted; not a parity invariant).
-    pub originator_profile_id: Uuid,
+    pub originator_profile_id: ProfileId,
     /// Verbatim-carried origin_uri (invariant; a provenance marker, NOT unique).
     pub origin_uri: String,
     /// Resource title (invariant).
@@ -345,8 +344,8 @@ pub struct ResourceRowParity {
 /// module-level note.
 pub async fn resource_row(
     pool: &PgPool,
-    principal: Uuid,
-    new_id: Uuid,
+    principal: ProfileId,
+    new_id: ResourceId,
 ) -> std::result::Result<ResourceRowParity, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
     let row = sqlx::query(
@@ -441,8 +440,8 @@ pub async fn resource_row(
 /// Read-only; no writes. Runtime `sqlx::query` (NEVER the `query!` macros) — see the module-level note.
 pub async fn body(
     pool: &PgPool,
-    principal: Uuid,
-    new_id: Uuid,
+    principal: ProfileId,
+    new_id: ResourceId,
 ) -> std::result::Result<String, ReadbackError> {
     use sqlx::Row;
     ensure_visible(pool, principal, new_id).await?;
@@ -482,21 +481,21 @@ pub async fn body(
 /// the unqualified table and `resources_visible_to`'s own unqualified internals correctly.
 pub async fn find_by_body_hash(
     pool: &PgPool,
-    principal: Uuid,
+    principal: ProfileId,
     body_hash: &str,
-) -> Result<Option<Uuid>> {
+) -> Result<Option<ResourceId>> {
     let dup = sqlx::query_scalar!(
         r#"SELECT r.id
              FROM kb_resources r
              JOIN resources_visible_to($1) v ON v.resource_id = r.id
             WHERE r.body_hash = $2 AND r.is_active
             LIMIT 1"#,
-        principal,
+        principal.uuid(),
         body_hash,
     )
     .fetch_optional(pool)
     .await?;
-    Ok(dup)
+    Ok(dup.map(ResourceId::from))
 }
 
 /// One row of L0's reconcile diff source: a `provenance: kernel` resource homed to a cogmap, keyed
@@ -505,7 +504,7 @@ pub async fn find_by_body_hash(
 pub struct KernelSliceRow {
     /// The diff key — the resource's STABLE id (UUIDv7). The reconcile applier keys its diff index on
     /// this and addresses blocks/edges by it. `origin_uri` is loose provenance, NEVER the key.
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     /// Verbatim `kb_resources.origin_uri` — a provenance/display marker, NOT unique and NOT the diff
     /// key (that is `resource_id`). Empty for CLI/agent-created resources.
     pub origin_uri: String,
@@ -533,7 +532,7 @@ pub struct KernelSliceRow {
 /// the single `public` schema, cached in the workspace `.sqlx` (post-`temper_next`-elimination, #178).
 pub async fn kernel_slice(
     executor: impl sqlx::PgExecutor<'_>,
-    cogmap_id: Uuid,
+    cogmap_id: CogmapId,
 ) -> Result<Vec<KernelSliceRow>> {
     let rows = sqlx::query!(
         r#"SELECT r.id              AS "resource_id!",
@@ -553,7 +552,7 @@ pub async fn kernel_slice(
               AND prov.property_value #>> '{}' = 'kernel'
             WHERE r.is_active = true
             ORDER BY r.origin_uri"#,
-        cogmap_id,
+        cogmap_id.uuid(),
     )
     .fetch_all(executor)
     .await?;
@@ -561,7 +560,7 @@ pub async fn kernel_slice(
     Ok(rows
         .into_iter()
         .map(|row| KernelSliceRow {
-            resource_id: row.resource_id,
+            resource_id: ResourceId::from(row.resource_id),
             origin_uri: row.origin_uri,
             body_hash: row.body_hash,
             // The inner join guarantees at least the `provenance` property, so the aggregate is never
@@ -604,25 +603,25 @@ pub async fn system_actor(pool: &PgPool) -> Result<(ProfileId, EntityId)> {
 /// Compile-time macro (resolves against `public`; workspace `.sqlx` cache).
 pub async fn find_edge(
     executor: impl sqlx::PgExecutor<'_>,
-    src: Uuid,
-    tgt: Uuid,
+    src: ResourceId,
+    tgt: ResourceId,
     kind: &crate::affinity::EdgeKind,
     polarity: Option<&str>,
-) -> Result<Option<Uuid>> {
+) -> Result<Option<EdgeId>> {
     let id = sqlx::query_scalar!(
         r#"SELECT id FROM kb_edges
             WHERE source_id = $1 AND target_id = $2
               AND source_table = 'kb_resources' AND target_table = 'kb_resources'
               AND edge_kind::text = $3 AND NOT is_folded
               AND ($4::text IS NULL OR polarity::text = $4)"#,
-        src,
-        tgt,
+        src.uuid(),
+        tgt.uuid(),
         kind.as_sql(),
         polarity,
     )
     .fetch_optional(executor)
     .await?;
-    Ok(id)
+    Ok(id.map(EdgeId::from))
 }
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto the substrate tables — the §9
@@ -654,7 +653,11 @@ pub async fn find_edge(
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<Uuid>> {
+pub async fn fts_search(
+    pool: &PgPool,
+    principal: ProfileId,
+    query: &str,
+) -> Result<Vec<ResourceId>> {
     // Beat-1 hardcode: all rows use 'english' tsquery/tsvector today (every resource is indexed with
     // the 'english' config in `rebuild_resource_search_vector`). A future multilingual rollout will
     // store a per-row `search_config` in `kb_resource_search_index` — when that lands, this query
@@ -674,14 +677,14 @@ pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<V
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
+    Ok(rows.iter().map(|r| r.get::<ResourceId, _>("id")).collect())
 }
 
 /// Format a `Vec<f32>` as a pgvector text literal (`[a,b,c]`) for binding into a `::vector` cast.
 /// Inlined here (a tiny helper) rather than
-/// reusing production's `temper_core::types::ingest::format_embedding`: temper-core is only a DEV-dep of
-/// temper-substrate, not a lib dep, and pulling it into the lib just to format five floats would be
-/// over-coupling. Uses `{}` (not `{:?}`) so each float renders without a debug wrapper.
+/// reusing production's `temper_core::types::ingest::format_embedding`: temper-substrate depends on
+/// temper-core only for the shared id newtypes, and reaching into its ingest module just to format five
+/// floats would be over-coupling. Uses `{}` (not `{:?}`) so each float renders without a debug wrapper.
 fn format_pgvector(v: &[f32]) -> String {
     let mut out = String::with_capacity(v.len() * 8 + 2);
     out.push('[');
@@ -713,9 +716,9 @@ fn format_pgvector(v: &[f32]) -> String {
 /// Read-only; no writes. Schema-qualified throughout — see the module-level note.
 pub async fn vector_search(
     pool: &PgPool,
-    principal: Uuid,
+    principal: ProfileId,
     query_embedding: &[f32],
-) -> Result<Vec<Uuid>> {
+) -> Result<Vec<ResourceId>> {
     let embedding_text = format_pgvector(query_embedding);
     let rows = sqlx::query(
         "SELECT r.id
@@ -731,7 +734,7 @@ pub async fn vector_search(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
+    Ok(rows.iter().map(|r| r.get::<ResourceId, _>("id")).collect())
 }
 
 /// One 1-hop graph neighbor of a resource: the OTHER endpoint's origin_uri plus the connecting edge's
@@ -781,7 +784,7 @@ pub struct Neighbor {
 )]
 pub(crate) async fn neighbors(
     executor: impl sqlx::PgExecutor<'_>,
-    new_id: Uuid,
+    new_id: ResourceId,
 ) -> Result<Vec<Neighbor>> {
     // WS2 NOTE — deliberately UNSCOPED (no principal). `neighbors` has no surface caller yet (only
     // the §9 data-parity test reads it), so visibility-scoping it now protects nothing (SG-5: no
@@ -827,7 +830,7 @@ pub(crate) async fn neighbors(
 /// the either/or path's 0.0 placeholders are gone.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ScoredHit {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub fts_score: f32,
     pub vector_score: f32,
     pub graph_score: f32,
@@ -839,13 +842,13 @@ pub struct ScoredHit {
 /// edge kinds. `None` `query`/`embedding` ⇒ that signal's term is zeroed in the blend.
 #[derive(Debug, Clone)]
 pub struct UnifiedSearchQuery<'a> {
-    pub principal: Uuid,
+    pub principal: ProfileId,
     pub query: Option<&'a str>,
     pub embedding: Option<&'a [f32]>,
-    pub seed_ids: &'a [Uuid],
+    pub seed_ids: &'a [ResourceId],
     pub depth: i32,
     pub edge_types: &'a [String],
-    pub context_id: Option<Uuid>,
+    pub context_id: Option<ContextId>,
     pub doc_type: Option<&'a str>,
     pub graph_expand: bool,
     pub limit: i64,
