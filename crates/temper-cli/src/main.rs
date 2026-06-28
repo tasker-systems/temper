@@ -375,6 +375,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             CogmapCmd::Reconcile { r#ref, manifest } => {
                 commands::cogmap::reconcile(&r#ref, &manifest, output_format)
             }
+            CogmapCmd::Shape { cogmap, lens } => {
+                commands::cogmap::shape(&cogmap, lens.as_deref(), output_format)
+            }
         },
     }
 }

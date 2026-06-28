@@ -446,6 +446,14 @@ pub enum CogmapCmd {
         #[arg(long)]
         manifest: String,
     },
+    /// Read a cognitive map's materialized regions (surface tier).
+    Shape {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Optional lens ref to filter regions.
+        #[arg(long)]
+        lens: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
