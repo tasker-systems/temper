@@ -268,6 +268,18 @@ impl TemperMcpService {
         tools::search::search(self, input).await
     }
 
+    #[tool(
+        description = "Read a cognitive map's surface tier: its materialized regions (salience, cohesion, label, member count) under an optional lens. Pass the map by ref."
+    )]
+    async fn cogmap_shape(
+        &self,
+        Parameters(input): Parameters<temper_core::types::cognitive_maps::CogmapShapeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_shape(self, input).await
+    }
+
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
     async fn list_contexts(
         &self,

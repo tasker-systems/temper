@@ -10,6 +10,17 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+/// MCP/surface input for the cogmap shape read. `cogmap` is a ref (UUID or decorated
+/// `sluggify(title)-<uuid>`); `lens` is an optional lens ref to narrow the read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct CogmapShapeInput {
+    /// The cognitive map to read, by ref (UUID or `slug-<uuid>`).
+    pub cogmap: String,
+    /// Optional lens ref to filter regions; omit for all lenses.
+    pub lens: Option<String>,
+}
+
 /// One non-folded region of a cognitive map under a lens, as returned by `cogmap_shape`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
@@ -35,6 +46,29 @@ pub struct CogmapRegionRow {
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn cogmap_shape_input_serde_roundtrip() {
+        // cogmap + lens present
+        let with_lens = CogmapShapeInput {
+            cogmap: "my-map-00000000-0000-0000-0000-000000000042".to_string(),
+            lens: Some("00000000-0000-0000-0000-000000000007".to_string()),
+        };
+        let json = serde_json::to_string(&with_lens).expect("serialize with lens");
+        let back: CogmapShapeInput = serde_json::from_str(&json).expect("deserialize with lens");
+        assert_eq!(back.cogmap, with_lens.cogmap);
+        assert_eq!(back.lens, with_lens.lens);
+
+        // lens: None round-trips without lens field being present as null
+        let no_lens = CogmapShapeInput {
+            cogmap: "bare-uuid-00000000-0000-0000-0000-000000000001".to_string(),
+            lens: None,
+        };
+        let json2 = serde_json::to_string(&no_lens).expect("serialize no lens");
+        let back2: CogmapShapeInput = serde_json::from_str(&json2).expect("deserialize no lens");
+        assert_eq!(back2.cogmap, no_lens.cogmap);
+        assert!(back2.lens.is_none());
+    }
 
     #[test]
     fn cogmap_region_row_serde_roundtrip_preserves_nullables() {
