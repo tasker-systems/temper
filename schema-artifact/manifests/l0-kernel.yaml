@@ -11,7 +11,9 @@
 # SCOPE: this manifest delivers the 22 LANDMARK RESOURCES and the authored telos charter. The 22
 # landmark resources are the reconciler-managed, provenance-stamped slice. The telos CHARTER
 # (statement + six questions-with-context + five framing lines) is delivered by the `telos:` section
-# below — `temper cogmap reconcile` applies it via the BlockMutated mechanism.
+# below — `temper cogmap reconcile` applies it via `cogmap_charter_set` (fold-then-reproject,
+# `CharterSet` event). `block_mutate` / `BlockMutated` is revise-only and cannot populate an empty
+# telos; `cogmap_charter_set` is the correct primitive for initial and subsequent charter delivery.
 #
 # IDENTITY: each entry carries a pre-generated, stable `id` (uuidv7) — the landmark's substrate
 # identity. The reconcile diff matches manifest entry <-> live resource by this `id`, and edges

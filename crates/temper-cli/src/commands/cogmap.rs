@@ -3,7 +3,7 @@
 //!
 //! Reads the authored manifest, embeds each entry CLIENT-SIDE (`compute_body_chunks`), builds a
 //! pre-embedded `ReconcileCogmapRequest`, and PUTs it to `/api/cognitive-maps/{id}` (admin-gated,
-//! idempotent). Prints the run outcome (`created`/`updated`/`folded`/`unchanged`).
+//! idempotent). Prints the run outcome (`created`/`updated`/`folded`/`unchanged`/`charter`).
 //!
 //! The whole path needs the `embed` feature (it runs ONNX). A non-embed build still compiles and
 //! returns a clear "requires --features embed" error, mirroring `actions::search::embed_query`.

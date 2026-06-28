@@ -623,11 +623,14 @@ impl DbBackend {
             .map_err(api_err)?;
 
         let empty = temper_substrate::content::body_hash_for_body("");
-        outcome.charter = if live.body_hash.as_deref() == Some(empty.as_str()) {
-            CharterDisposition::Created
-        } else {
-            CharterDisposition::Updated
-        };
+        // `None` means the telos row exists but has no body yet (genesis / pre-charter state):
+        // also counts as first delivery, not a revision.
+        outcome.charter =
+            if live.body_hash.is_none() || live.body_hash.as_deref() == Some(empty.as_str()) {
+                CharterDisposition::Created
+            } else {
+                CharterDisposition::Updated
+            };
         Ok(())
     }
 }

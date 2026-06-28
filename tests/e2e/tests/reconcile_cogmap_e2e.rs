@@ -46,34 +46,6 @@ fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
     sha256_hex(&sha256_hex(&concat))
 }
 
-/// The resource `body_hash` for a multi-block telos delivery — per-block `sha256_hex(concat of
-/// that block's chunk content_hashes)`, then resource `sha256_hex(concat of per-block hashes)`;
-/// empty blocks ⇒ `sha256_hex("")`. Documents the telos body-merkle so callers can sanity-check
-/// the diff; the reconcile path recomputes it server-side from `chunks_packed`.
-#[allow(dead_code)]
-fn body_hash_from_block_chunk_hashes(blocks: &[Vec<String>]) -> String {
-    use sha2::{Digest, Sha256};
-    fn sha256_hex(s: &str) -> String {
-        let mut h = Sha256::new();
-        h.update(s.as_bytes());
-        format!("{:x}", h.finalize())
-    }
-    if blocks.is_empty() {
-        return sha256_hex("");
-    }
-    let per_block: Vec<String> = blocks
-        .iter()
-        .map(|hashes| {
-            if hashes.is_empty() {
-                sha256_hex("")
-            } else {
-                sha256_hex(&hashes.concat())
-            }
-        })
-        .collect();
-    sha256_hex(&per_block.concat())
-}
-
 /// Build a synthetic pre-embedded telos block for e2e tests. `role` is the `block_role` tag.
 /// `hash_seed` is a short string zero-padded to 64 chars so each block has a stable, distinct
 /// `content_hash` — a re-PUT with the same seed is hash-equal (idempotency precondition).
