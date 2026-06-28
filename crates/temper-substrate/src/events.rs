@@ -49,6 +49,7 @@ pub enum EventKind {
     RegionMaterialized,
     RelationshipFolded,
     BlockMutated,
+    CharterSet,
     DelegatedLaunch,
     InvocationClosed,
 }
@@ -71,6 +72,7 @@ impl EventKind {
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
             EventKind::BlockMutated => "block_mutated",
+            EventKind::CharterSet => "charter_set",
             EventKind::DelegatedLaunch => "delegated_launch",
             EventKind::InvocationClosed => "invocation_closed",
         }
@@ -98,6 +100,7 @@ impl EventKind {
             "region_materialized" => EventKind::RegionMaterialized,
             "relationship_folded" => EventKind::RelationshipFolded,
             "block_mutated" => EventKind::BlockMutated,
+            "charter_set" => EventKind::CharterSet,
             "delegated_launch" => EventKind::DelegatedLaunch,
             "invocation_closed" => EventKind::InvocationClosed,
             _ => return None,
@@ -220,6 +223,15 @@ pub enum SeedAction<'a> {
         chunks: &'a [PreparedChunk],
         emitter: EntityId,
     },
+    /// Replace a cogmap's telos charter with a full role-tagged block set (post-birth populate). The
+    /// genesis leaves the telos empty and `BlockMutate` is revise-only, so this is the only primitive that
+    /// can deliver (0→N) or re-deliver (N→M) a charter: it folds the prior blocks then projects `blocks`.
+    CharterSet {
+        cogmap: CogmapId,
+        /// The Rust-prepared charter blocks (statement, questions-with-context, framing), pre-embedded.
+        blocks: &'a [PreparedBlock],
+        emitter: EntityId,
+    },
     // ── WS6 4c resource + relationship mutations (live write path) ──
     ResourceDelete {
         resource: ResourceId,
@@ -280,6 +292,7 @@ impl SeedAction<'_> {
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
+            SeedAction::CharterSet { .. } => EventKind::CharterSet,
             SeedAction::ResourceDelete { .. } => EventKind::ResourceDeleted,
             SeedAction::ResourceUpdate { .. } => EventKind::ResourceUpdated,
             SeedAction::ResourceRehome { .. } => EventKind::ResourceRehomed,
@@ -305,6 +318,8 @@ pub enum Fired {
     Lens(LensId),
     Materialize(EventId),
     Block(BlockId),
+    /// The telos resource id a `CharterSet` fire replaced the charter on.
+    Charter(ResourceId),
     Invocation(InvocationId),
 }
 
@@ -350,6 +365,14 @@ impl Fired {
         match self {
             Fired::Block(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Block, got {other:?}"),
+        }
+    }
+
+    /// Extract the telos resource id a `CharterSet` fire produced.
+    pub fn charter(self) -> Result<ResourceId> {
+        match self {
+            Fired::Charter(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Charter, got {other:?}"),
         }
     }
 
@@ -694,6 +717,28 @@ pub async fn fire_with(
             .await?
             .context("block_mutate returned null")?;
             Ok(Fired::Block(BlockId::from(id)))
+        }
+
+        SeedAction::CharterSet {
+            cogmap,
+            blocks,
+            emitter,
+        } => {
+            let payload = payloads::CharterSet {
+                cogmap_id: cogmap,
+                blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
+            };
+            let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
+            let telos = sqlx::query_scalar!(
+                "SELECT cogmap_charter_set($1,$2,$3)",
+                serde_json::to_value(&payload)?,
+                sidecar,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("cogmap_charter_set returned null")?;
+            Ok(Fired::Charter(telos.into()))
         }
 
         SeedAction::ResourceDelete { resource, emitter } => {

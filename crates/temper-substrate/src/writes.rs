@@ -14,7 +14,9 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
-use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedChunk};
+use crate::content::{
+    prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock, PreparedChunk,
+};
 use crate::events::{fire, EdgeHome, SeedAction};
 use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
@@ -347,6 +349,28 @@ pub async fn create_kernel_resource_in_tx(
     .await?
     .resource()?;
     Ok(new_id)
+}
+
+/// Replace a cogmap's telos charter with `blocks` (role-tagged, pre-embedded), in a caller-supplied
+/// transaction. Fires `SeedAction::CharterSet` → `cogmap_charter_set` (fold-then-reproject). Returns the
+/// telos resource id. The L0 charter reconciler calls this when the desired charter's body merkle differs
+/// from the telos's current `body_hash` (see [`crate::readback::telos_charter_state`]).
+pub async fn set_charter_in_tx(
+    conn: &mut sqlx::PgConnection,
+    cogmap: CogmapId,
+    blocks: &[PreparedBlock],
+    emitter: EntityId,
+) -> Result<ResourceId> {
+    fire(
+        conn,
+        SeedAction::CharterSet {
+            cogmap,
+            blocks,
+            emitter,
+        },
+    )
+    .await?
+    .charter()
 }
 
 /// Set the **clustering** facet on a resource — one `kb_properties` row with `property_key='facet'`

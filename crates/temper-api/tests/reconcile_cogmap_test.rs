@@ -69,6 +69,7 @@ fn request(entries: Vec<ReconcileEntry>) -> ReconcileCogmapRequest {
         entries,
         fold_resources: vec![],
         fold_edges: vec![],
+        telos: None,
     }
 }
 
@@ -424,6 +425,7 @@ async fn explicit_tombstone_folds_kernel_resource(pool: PgPool) {
         entries: vec![],
         fold_resources: vec![ReconcileTombstone { id: cogmap_id }],
         fold_edges: vec![],
+        telos: None,
     };
     let out = be
         .reconcile_cognitive_map(cmd(L0_COGMAP, fold_req))

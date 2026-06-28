@@ -71,6 +71,41 @@ pub struct ReconcileEdgeTombstone {
     pub kind: String,
 }
 
+/// One charter block in a telos delivery — **pre-embedded** by the CLI. `role` is the `block_role` the
+/// substrate stamps so reads (`resource_blocks(telos, …, role)`) distinguish statement / question /
+/// framing. `chunks_packed` is `compute_body_chunks(prose)` output for THIS block's prose — the same
+/// packed-blob format `ReconcileEntry::chunks_packed` uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ReconcileTelosBlock {
+    pub role: String,
+    pub chunks_packed: String,
+}
+
+/// The telos charter as an ordered run of pre-embedded blocks (block-0 statement, then questions, then
+/// framing). Optional on a reconcile request: absent ⇒ landmark-only reconcile (`charter: Absent`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ReconcileTelos {
+    pub blocks: Vec<ReconcileTelosBlock>,
+}
+
+/// What the reconcile run did to the telos charter — a DISTINCT grain from the landmark counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CharterDisposition {
+    /// The request carried no `telos:` (landmark-only reconcile).
+    #[default]
+    Absent,
+    /// The telos body-merkle matched the live charter — no event fired.
+    Unchanged,
+    /// The telos was empty (first delivery) and the charter was created.
+    Created,
+    /// The live charter differed and was replaced.
+    Updated,
+}
+
 /// The `PUT /api/cognitive-maps/{id}` request body — a desired-state manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -80,6 +115,8 @@ pub struct ReconcileCogmapRequest {
     pub fold_resources: Vec<ReconcileTombstone>,
     #[serde(default)]
     pub fold_edges: Vec<ReconcileEdgeTombstone>,
+    #[serde(default)]
+    pub telos: Option<ReconcileTelos>,
 }
 
 /// The result of one reconcile run — also serialized into `kb_invocations.outcome`.
@@ -90,6 +127,7 @@ pub struct ReconcileOutcome {
     pub updated: u32,
     pub folded: u32,
     pub unchanged: u32,
+    pub charter: CharterDisposition,
 }
 
 #[cfg(test)]
@@ -118,6 +156,7 @@ mod tests {
             }],
             fold_resources: vec![],
             fold_edges: vec![],
+            telos: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: ReconcileCogmapRequest = serde_json::from_str(&json).unwrap();
@@ -128,5 +167,47 @@ mod tests {
     fn outcome_default_is_all_zero() {
         let o = ReconcileOutcome::default();
         assert_eq!((o.created, o.updated, o.folded, o.unchanged), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn request_carries_optional_telos() {
+        let req = ReconcileCogmapRequest {
+            entries: vec![],
+            fold_resources: vec![],
+            fold_edges: vec![],
+            telos: Some(ReconcileTelos {
+                blocks: vec![
+                    ReconcileTelosBlock {
+                        role: "statement".into(),
+                        chunks_packed: "[]".into(),
+                    },
+                    ReconcileTelosBlock {
+                        role: "question".into(),
+                        chunks_packed: "[]".into(),
+                    },
+                ],
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ReconcileCogmapRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+        // A request with no `telos:` round-trips with `None` (landmark-only, backward compatible).
+        let landmark_only: ReconcileCogmapRequest =
+            serde_json::from_str(r#"{"entries":[]}"#).unwrap();
+        assert!(landmark_only.telos.is_none());
+    }
+
+    #[test]
+    fn charter_disposition_defaults_absent_and_serializes_snake_case() {
+        assert_eq!(CharterDisposition::default(), CharterDisposition::Absent);
+        assert_eq!(
+            serde_json::to_string(&CharterDisposition::Updated).unwrap(),
+            "\"updated\""
+        );
+        // Outcome default carries charter: Absent.
+        assert_eq!(
+            ReconcileOutcome::default().charter,
+            CharterDisposition::Absent
+        );
     }
 }

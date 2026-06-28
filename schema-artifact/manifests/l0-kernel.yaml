@@ -8,11 +8,12 @@
 # concept/invariant/reference/boundary). `provenance: kernel` is SERVER-STAMPED on create, NOT
 # carried per entry. The applier strips any stray provenance key before FacetSet.
 #
-# SCOPE: this manifest delivers the 22 LANDMARK RESOURCES only — the reconciler-managed,
-# provenance-stamped slice. The telos CHARTER (the cogmap's statement + the six questions-with-context
-# + framing in the workbench seed's `cogmap.telos`) is a DIFFERENT mechanism: it is born via
-# `cogmap_genesis` and is not a `provenance: kernel` homed resource the reconciler manages. The telos
-# charter is delivered separately (deferred follow-up), NOT through this manifest.
+# SCOPE: this manifest delivers the 22 LANDMARK RESOURCES and the authored telos charter. The 22
+# landmark resources are the reconciler-managed, provenance-stamped slice. The telos CHARTER
+# (statement + six questions-with-context + five framing lines) is delivered by the `telos:` section
+# below — `temper cogmap reconcile` applies it via `cogmap_charter_set` (fold-then-reproject,
+# `CharterSet` event). `block_mutate` / `BlockMutated` is revise-only and cannot populate an empty
+# telos; `cogmap_charter_set` is the correct primitive for initial and subsequent charter delivery.
 #
 # IDENTITY: each entry carries a pre-generated, stable `id` (uuidv7) — the landmark's substrate
 # identity. The reconcile diff matches manifest entry <-> live resource by this `id`, and edges
@@ -21,6 +22,27 @@
 # gets a freshly-generated uuidv7. (Pre-gen by hand for now; a scenario read/re-export tool comes later.)
 #
 # First delivery is all-additive: no `fold_resources` / `fold_edges`.
+telos:
+  statement: "Orient an arriving agent so it can act correctly under temper's substrate at minimal attention cost — by holding the landmarks that say what temper is and how it works, the settled invariants it must not break, and the wayfinding that routes it to the right tool, skill, or more-specific map. This is the bottom referent every agent and every other cognitive map is situated by: it says 'this is the system you are in,' and it actively lowers the activation energy to reach for — and compose — the capabilities temper offers, so a less-powerful model acts where it would otherwise stall. In service of any agent, on any model, becoming competent-to-act in temper without rediscovering the system."
+  questions:
+    - question: "Is this a landmark an agent needs the moment it arrives to know what temper is and where it stands — the substrate, this map's bottom-referent role, the telos it's currently thinking under?"
+      context: "The first thing any agent asks is where am I. Hold the few situating landmarks, not their depth."
+    - question: "Is this a core term an agent must share to read temper at all — cogmap, telos, resource, edge, facet, region, lens, event, invocation — versus jargon a specific map can own?"
+      context: "An agent that can't read the system's words can't act in it. L0 is the kernel-vocabulary bedrock; deeper or domain terms live where they're used."
+    - question: "Is this a settled invariant an agent must not break — event-as-primary, the access floor (it operates as a scoped principal), agents tend declared structure and never cluster, acts carry attribution, cross-map promotion is human-gated?"
+      context: "A weaker model won't infer these and will violate them by default. State the always/nevers plainly as landmarks — this is where L0 earns its keep."
+    - question: "When an agent needs to do something, does L0 name the tool, skill, or map to reach for — and make reaching the obvious next move?"
+      context: "Weaker models stall not for lack of reasoning but for lack of willingness to reach for and compose tools. L0 routes — need X, the tool is Y, use it; compose Y with Z — it gives permission to act."
+    - question: "Is this depth that belongs in a more-specific map, with L0 holding only the landmark and the path to it?"
+      context: "L0 holds landmarks-and-the-way-to-reach, never contents. What falls through to be elaborated here is the saturation pole — it bloats the kernel an arriving model must read."
+    - question: "Does the agent need this to know the edge of what it may do here — what's out of bounds, what needs a human, what it must not assume?"
+      context: "An oriented agent also needs to know where its competence and authority stop — the HITL gates, the leak-safety floor it can't cross, the acts that aren't its to make. This is also where a steward learns to read a telos-charter as an instrument: acting-under-a-telos is the steward's job."
+  framing:
+    - "This map is self-referential: temper mapped in temper's own substrate; the canonical worked-example of a bootstrapped map."
+    - "It is a reference layer — skill files and references — born populated and curated, not accreted from work. That is what distinguishes it from every other map."
+    - "Every other map (organizational-foundational, domain) is situated by L0 and routes through it; L0 holds kernel landmarks and the paths, the specific maps hold depth."
+    - "Authored for the arriving agent, possibly a weaker model — invariant-forward, scannable, landmark-shaped. Every byte costs context; the attention-manifesto extends to agents."
+    - "L0 models how a telos-charter is read to make judgment calls, so a steward learns to find the edge of its mandate from the charter itself."
 entries:
   # --- concept-landmarks (Q2 vocabulary) ---
   - origin_uri: "temper://kernel/concept/cogmap"
