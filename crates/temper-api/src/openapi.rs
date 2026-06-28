@@ -41,6 +41,10 @@ use temper_workflow::types::resource::{
         crate::handlers::cognitive_maps::shape,
         crate::handlers::cognitive_maps::region_metrics,
         crate::handlers::cognitive_maps::analytics,
+        crate::handlers::invocations::open,
+        crate::handlers::invocations::close,
+        crate::handlers::invocations::show,
+        crate::handlers::invocations::list,
     ),
     components(schemas(
         HealthResponse,
@@ -86,6 +90,14 @@ use temper_workflow::types::resource::{
         temper_core::types::cognitive_maps::CogmapAnalyticsRow,
         temper_core::types::cognitive_maps::CogmapStaleness,
         temper_core::types::cognitive_maps::CogmapRegulationRow,
+        temper_core::types::invocation_requests::OpenInvocationRequest,
+        temper_core::types::invocation_requests::CloseInvocationRequest,
+        temper_core::types::invocation_requests::InvocationAck,
+        temper_core::types::invocation_requests::InvocationCloseAck,
+        temper_core::types::invocation::InvocationView,
+        temper_core::types::invocation::InvocationSummary,
+        temper_core::types::invocation::InvocationActRow,
+        temper_core::types::invocation::Disposition,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -98,6 +110,7 @@ use temper_workflow::types::resource::{
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
         (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
+        (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
     ),
     info(
         title = "Temper Cloud API",
@@ -154,6 +167,9 @@ mod tests {
         assert!(json.contains("/api/cognitive-maps/{id}/shape"));
         assert!(json.contains("/api/cognitive-maps/{id}/region-metrics"));
         assert!(json.contains("/api/cognitive-maps/{id}/analytics"));
+        assert!(json.contains("/api/invocations"));
+        assert!(json.contains("/api/invocations/{id}"));
+        assert!(json.contains("/api/invocations/{id}/close"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));

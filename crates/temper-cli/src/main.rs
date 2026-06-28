@@ -1,7 +1,7 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction,
-    TeamAction,
+    AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction, InvocationCmd,
+    ResourceAction, SkillAction, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -382,6 +382,31 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 commands::cogmap::region_metrics(&cogmap, lens.as_deref(), output_format)
             }
             CogmapCmd::Analytics { cogmap } => commands::cogmap::analytics(&cogmap, output_format),
+        },
+        Commands::Invocation { cmd } => match cmd {
+            InvocationCmd::Open {
+                cogmap,
+                parent,
+                trigger_kind,
+            } => {
+                commands::invocation::open(&cogmap, parent.as_deref(), &trigger_kind, output_format)
+            }
+            InvocationCmd::Close {
+                invocation,
+                disposition,
+                outcome,
+            } => commands::invocation::close(
+                &invocation,
+                disposition,
+                outcome.as_deref(),
+                output_format,
+            ),
+            InvocationCmd::Show { invocation } => {
+                commands::invocation::show(&invocation, output_format)
+            }
+            InvocationCmd::List { cogmap, status } => {
+                commands::invocation::list(cogmap.as_deref(), status.as_deref(), output_format)
+            }
         },
     }
 }

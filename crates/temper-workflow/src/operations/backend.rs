@@ -18,9 +18,9 @@ use temper_core::error::TemperError;
 use temper_core::types::ids::EdgeId;
 
 use super::commands::{
-    AssertRelationship, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources, ShowResource,
-    UpdateResource,
+    AssertRelationship, CloseInvocation, CreateResource, DeleteResource, FoldRelationship,
+    ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
+    SearchResources, ShowResource, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -107,6 +107,22 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError>;
+
+    // ── agent-invocation envelope (trace primitive) ──
+    // Open mints a server-side invocation id and returns it; close terminates the envelope with a
+    // disposition + opaque outcome. Both gate on the acting profile's read access to the originating
+    // cogmap (auth before write). Surfaces (API/MCP/CLI) dispatch through these so the envelope write
+    // path is shared.
+
+    async fn open_invocation(
+        &self,
+        cmd: OpenInvocation,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
+
+    async fn close_invocation(
+        &self,
+        cmd: CloseInvocation,
+    ) -> Result<CommandOutput<()>, TemperError>;
 }
 
 #[cfg(test)]

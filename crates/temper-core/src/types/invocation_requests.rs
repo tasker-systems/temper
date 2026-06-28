@@ -41,3 +41,14 @@ pub struct CloseInvocationRequest {
 pub struct InvocationAck {
     pub invocation_id: Uuid,
 }
+
+/// Typed acknowledgement the MCP/CLI surfaces render after a close (the HTTP
+/// endpoint itself returns 204 No Content). Echoes the closed invocation + its
+/// terminal disposition — a structured row rather than inline JSON, shared so
+/// both surfaces emit the same shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct InvocationCloseAck {
+    pub invocation_id: Uuid,
+    pub disposition: Disposition,
+}

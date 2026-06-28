@@ -2,6 +2,7 @@ pub mod body_source;
 pub mod cogmap;
 pub mod config;
 pub mod ingest;
+pub mod invocation;
 pub mod progress;
 pub mod reconcile;
 pub mod runtime;
