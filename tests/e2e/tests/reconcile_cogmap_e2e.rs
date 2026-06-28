@@ -112,6 +112,7 @@ fn two_entry_request() -> ReconcileCogmapRequest {
         ],
         fold_resources: vec![],
         fold_edges: vec![],
+        telos: None,
     }
 }
 

@@ -147,6 +147,7 @@ pub fn manifest_to_request(
         entries,
         fold_resources,
         fold_edges,
+        telos: None,
     })
 }
 
