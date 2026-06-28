@@ -15,8 +15,8 @@ fn fixture() -> (Vec<Uuid>, Vec<Edge>, Vec<Facet>, Lens) {
         ..Lens::telos_default()
     };
     let edges = vec![Edge {
-        src: a,
-        tgt: b,
+        src: a.into(),
+        tgt: b.into(),
         kind: EdgeKind::LeadsTo,
         weight: 0.9,
         label: None,
@@ -27,7 +27,7 @@ fn fixture() -> (Vec<Uuid>, Vec<Edge>, Vec<Facet>, Lens) {
 #[test]
 fn isolated_node_forms_its_own_cluster() {
     let (nodes, edges, facets, lens) = fixture();
-    let aff = |x: Uuid, y: Uuid| affinity(x, y, &edges, &facets, &lens);
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &edges, &facets, &lens);
     let clusters = cluster(&nodes, &aff, lens.resolution);
     assert_eq!(clusters.len(), 2);
     assert!(clusters.iter().any(|c| c == &vec![id(1), id(2)]));
@@ -37,7 +37,7 @@ fn isolated_node_forms_its_own_cluster() {
 #[test]
 fn reproducible_byte_identical_on_rerun() {
     let (nodes, edges, facets, lens) = fixture();
-    let aff = |x: Uuid, y: Uuid| affinity(x, y, &edges, &facets, &lens);
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &edges, &facets, &lens);
     let one = cluster(&nodes, &aff, lens.resolution);
     let two = cluster(&nodes, &aff, lens.resolution);
     assert_eq!(one, two);

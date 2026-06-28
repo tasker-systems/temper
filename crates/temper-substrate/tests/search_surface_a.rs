@@ -562,7 +562,7 @@ async fn graph_expand_filters_and_scope(pool: sqlx::PgPool) {
 
 use temper_substrate::readback::{self, UnifiedSearchQuery};
 
-fn q<'a>(principal: Uuid) -> UnifiedSearchQuery<'a> {
+fn q<'a>(principal: ProfileId) -> UnifiedSearchQuery<'a> {
     UnifiedSearchQuery {
         principal,
         query: None,
@@ -599,14 +599,14 @@ async fn blend_term_zeroing_and_either_or_dissolved(pool: sqlx::PgPool) {
         &pool,
         UnifiedSearchQuery {
             query: Some("tempering"),
-            ..q(owner.uuid())
+            ..q(owner)
         },
     )
     .await
     .unwrap();
     let hit = text_only
         .iter()
-        .find(|h| h.resource_id == r.uuid())
+        .find(|h| h.resource_id == r)
         .expect("found by text");
     assert!(
         hit.fts_score > 0.0 && hit.vector_score == 0.0,
@@ -618,14 +618,14 @@ async fn blend_term_zeroing_and_either_or_dissolved(pool: sqlx::PgPool) {
         &pool,
         UnifiedSearchQuery {
             embedding: Some(&unit(0)),
-            ..q(owner.uuid())
+            ..q(owner)
         },
     )
     .await
     .unwrap();
     let hit = vec_only
         .iter()
-        .find(|h| h.resource_id == r.uuid())
+        .find(|h| h.resource_id == r)
         .expect("found by vector");
     assert!(
         hit.vector_score > 0.0 && hit.fts_score == 0.0,
@@ -680,17 +680,17 @@ async fn blend_self_seeding_boosts_structural_neighbor(pool: sqlx::PgPool) {
         UnifiedSearchQuery {
             query: Some("tempering"),
             graph_expand: true,
-            ..q(owner.uuid())
+            ..q(owner)
         },
     )
     .await
     .unwrap();
     assert!(
-        on.iter().any(|h| h.resource_id == neighbor.uuid()),
+        on.iter().any(|h| h.resource_id == neighbor),
         "graph recall-expansion pulls in the structurally-near non-text-matching neighbor"
     );
     assert!(
-        on.iter().all(|h| h.resource_id != control.uuid()),
+        on.iter().all(|h| h.resource_id != control),
         "the no-connection / no-text control never surfaces — neighbor ranks above it (present vs absent)"
     );
 
@@ -699,13 +699,13 @@ async fn blend_self_seeding_boosts_structural_neighbor(pool: sqlx::PgPool) {
         UnifiedSearchQuery {
             query: Some("tempering"),
             graph_expand: false,
-            ..q(owner.uuid())
+            ..q(owner)
         },
     )
     .await
     .unwrap();
     assert!(
-        off.iter().all(|h| h.resource_id != neighbor.uuid()),
+        off.iter().all(|h| h.resource_id != neighbor),
         "graph_expand=false ⇒ pure FTS∪vector, neighbor absent"
     );
 }
@@ -732,13 +732,13 @@ async fn blend_context_and_doctype_filters(pool: sqlx::PgPool) {
         UnifiedSearchQuery {
             query: Some("tempering"),
             doc_type: Some("session"),
-            ..q(owner.uuid())
+            ..q(owner)
         },
     )
     .await
     .unwrap();
     assert!(
-        none.iter().all(|h| h.resource_id != r),
+        none.iter().all(|h| h.resource_id.uuid() != r),
         "doc_type filter restricts the corpus"
     );
 
@@ -748,13 +748,13 @@ async fn blend_context_and_doctype_filters(pool: sqlx::PgPool) {
         UnifiedSearchQuery {
             query: Some("tempering"),
             doc_type: Some("concept"),
-            ..q(owner.uuid())
+            ..q(owner)
         },
     )
     .await
     .unwrap();
     assert!(
-        some.iter().any(|h| h.resource_id == r),
+        some.iter().any(|h| h.resource_id.uuid() == r),
         "matching doc_type passes the filter"
     );
 }

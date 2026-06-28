@@ -30,8 +30,12 @@ struct ComponentWork {
 /// formation is component-local, so this is byte-identical to clustering the whole node set — but it
 /// also yields the per-component fingerprints incremental materialization compares against.
 fn cluster_components(s: &Substrate) -> Vec<ComponentWork> {
-    let aff = |x: Uuid, y: Uuid| affinity(x, y, &s.edges, &s.facets, &s.lens);
-    connected_components(&s.nodes, &aff)
+    // `affinity` is typed on `ResourceId`; the pure clustering algorithm (`cluster`) works over opaque
+    // `Uuid` nodes. Bridge at this one boundary: feed cluster the bare node uuids, lift each pair back
+    // to `ResourceId` for the affinity lookup.
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.lens);
+    let node_uuids: Vec<Uuid> = s.nodes.iter().map(|n| n.uuid()).collect();
+    connected_components(&node_uuids, &aff)
         .into_iter()
         .map(|members| {
             let clusters = agglomerate(&members, &aff, s.lens.resolution);
@@ -80,9 +84,9 @@ fn zero_centroid() -> String {
 /// reuses on the next pass.
 pub async fn materialize_cogmap(
     pool: &PgPool,
-    cogmap: Uuid,
+    cogmap: CogmapId,
     lens_name: &str,
-    emitter: Uuid,
+    emitter: EntityId,
 ) -> Result<MaterializeOutcome> {
     let s = substrate::load(pool, cogmap, lens_name).await?;
     let comps = cluster_components(&s);
@@ -101,17 +105,16 @@ pub async fn materialize_cogmap(
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
-            cogmap: CogmapId::from(cogmap),
-            lens: LensId::from(s.lens_id),
+            cogmap,
+            lens: s.lens_id,
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
             region_ids: &flat_region_ids,
-            emitter: EntityId::from(emitter),
+            emitter,
         },
     )
     .await?
-    .materialize_event()?
-    .uuid();
+    .materialize_event()?;
 
     // a full pass folds every prior live region AND component for this lens, then recreates them.
     fold_live_regions(&mut tx, cogmap, s.lens_id, ev).await?;
@@ -140,14 +143,15 @@ pub async fn materialize_cogmap(
 /// exactly as under a full pass. Self-bootstraps to a full pass when no prior components exist.
 pub async fn incremental_materialize_cogmap(
     pool: &PgPool,
-    cogmap: Uuid,
+    cogmap: CogmapId,
     lens_name: &str,
-    emitter: Uuid,
+    emitter: EntityId,
 ) -> Result<MaterializeOutcome> {
     let s = substrate::load(pool, cogmap, lens_name).await?;
     let comps = cluster_components(&s);
 
-    let priors = drift::live_components(pool, cogmap, s.lens_id).await?;
+    // `drift` keys on opaque component uuids (out of scope here) — bridge at the boundary.
+    let priors = drift::live_components(pool, cogmap.uuid(), s.lens_id.uuid()).await?;
     if priors.is_empty() {
         // nothing to diff against — the first materialize for this lens is a full pass.
         return materialize_cogmap(pool, cogmap, lens_name, emitter).await;
@@ -178,17 +182,16 @@ pub async fn incremental_materialize_cogmap(
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
-            cogmap: CogmapId::from(cogmap),
-            lens: LensId::from(s.lens_id),
+            cogmap,
+            lens: s.lens_id,
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
             region_ids: &flat_new_region_ids,
-            emitter: EntityId::from(emitter),
+            emitter,
         },
     )
     .await?
-    .materialize_event()?
-    .uuid();
+    .materialize_event()?;
 
     // fold the stale components and their regions; leave matched components + their regions live.
     fold_components(&mut tx, &diff.stale, ev).await?;
@@ -239,11 +242,11 @@ fn mint_region_ids(comps: &[&ComponentWork]) -> Vec<Vec<RegionId>> {
 /// transaction. `work` pairs each component with its pre-minted per-cluster region ids.
 async fn assert_component_regions(
     tx: &mut PgConnection,
-    cogmap: Uuid,
-    lens_id: Uuid,
+    cogmap: CogmapId,
+    lens_id: LensId,
     lens: &Lens,
     zero_centroid: &str,
-    ev: Uuid,
+    ev: EventId,
     work: &[(&ComponentWork, &Vec<RegionId>)],
 ) -> Result<()> {
     for &(comp, comp_region_ids) in work {
@@ -279,15 +282,15 @@ async fn assert_component_regions(
 async fn refresh_moved_region_readouts(
     pool: &PgPool,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    cogmap: Uuid,
+    cogmap: CogmapId,
     s: &Substrate,
     zero_centroid: &str,
     unchanged: &[Uuid],
-    ev: Uuid,
+    ev: EventId,
 ) -> Result<()> {
     let prior_watermark = last_materialize_watermark(tx, cogmap, s.lens_id, ev).await?;
     let touched_resources = match prior_watermark {
-        Some(w) => crate::replay::content_touched_resources_since(pool, cogmap, w).await?,
+        Some(w) => crate::replay::content_touched_resources_since(pool, cogmap.uuid(), w).await?,
         None => Vec::new(),
     };
     if !touched_resources.is_empty() {
@@ -336,9 +339,9 @@ async fn current_watermark(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
 /// the very first materialize, where incremental never reaches the readout-refresh path.
 async fn last_materialize_watermark(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    cogmap: Uuid,
-    lens_id: Uuid,
-    current_ev: Uuid,
+    cogmap: CogmapId,
+    lens_id: LensId,
+    current_ev: EventId,
 ) -> Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
@@ -356,9 +359,9 @@ async fn last_materialize_watermark(
 
 async fn fold_live_regions(
     tx: &mut PgConnection,
-    cogmap: Uuid,
-    lens_id: Uuid,
-    ev: Uuid,
+    cogmap: CogmapId,
+    lens_id: LensId,
+    ev: EventId,
 ) -> Result<()> {
     sqlx::query(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \
@@ -374,9 +377,9 @@ async fn fold_live_regions(
 
 async fn fold_live_components(
     tx: &mut PgConnection,
-    cogmap: Uuid,
-    lens_id: Uuid,
-    ev: Uuid,
+    cogmap: CogmapId,
+    lens_id: LensId,
+    ev: EventId,
 ) -> Result<()> {
     sqlx::query(
         "UPDATE kb_cogmap_components SET is_folded=true, last_event_id=$1 \
@@ -391,7 +394,7 @@ async fn fold_live_components(
 }
 
 /// Fold specific components by id AND their live regions (incremental's stale path).
-async fn fold_components(tx: &mut PgConnection, component_ids: &[Uuid], ev: Uuid) -> Result<()> {
+async fn fold_components(tx: &mut PgConnection, component_ids: &[Uuid], ev: EventId) -> Result<()> {
     if component_ids.is_empty() {
         return Ok(());
     }
@@ -416,10 +419,10 @@ async fn fold_components(tx: &mut PgConnection, component_ids: &[Uuid], ev: Uuid
 /// Persist one component row (its fingerprint + member set), returning its id for the regions to link.
 async fn create_component(
     tx: &mut PgConnection,
-    cogmap: Uuid,
-    lens_id: Uuid,
+    cogmap: CogmapId,
+    lens_id: LensId,
     comp: &ComponentWork,
-    ev: Uuid,
+    ev: EventId,
 ) -> Result<Uuid> {
     use sqlx::Row;
     let row = sqlx::query(
@@ -440,12 +443,12 @@ async fn create_component(
 /// Parameters for [`assert_region`]. The region id is pre-generated (identity-as-input) and already
 /// recorded in the materialization payload before this is called.
 struct AssertRegionCtx<'a> {
-    cogmap: Uuid,
-    lens_id: Uuid,
+    cogmap: CogmapId,
+    lens_id: LensId,
     component_id: Uuid,
     members: &'a [Uuid],
     region_id: Uuid,
-    ev: Uuid,
+    ev: EventId,
     lens: &'a Lens,
     zero_centroid: &'a str,
 }

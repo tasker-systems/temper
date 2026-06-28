@@ -34,9 +34,14 @@ async fn seed_standalone_and_via_scenario_memberships_match(pool: sqlx::PgPool) 
     let seed: Seed = serde_yaml::from_str(&std::fs::read_to_string(SEED_PATH).unwrap()).unwrap();
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
-        .await
-        .unwrap();
+    write::materialize_cogmap(
+        &pool,
+        loaded.cogmap.into(),
+        "telos-default",
+        loaded.emitter.into(),
+    )
+    .await
+    .unwrap();
     let sig_standalone = common::telos_default_partition(&pool, loaded.cogmap).await;
 
     // The replay proof runs unchanged over the standalone-seed path: snapshot the ledger, reset to a
@@ -73,7 +78,7 @@ async fn seed_standalone_and_via_scenario_memberships_match(pool: sqlx::PgPool) 
     let cogmap = substrate::cogmap_by_name(&pool, "onboarding-cogmap")
         .await
         .unwrap();
-    let sig_via_scenario = common::telos_default_partition(&pool, cogmap).await;
+    let sig_via_scenario = common::telos_default_partition(&pool, cogmap.uuid()).await;
 
     assert_eq!(
         sig_standalone, sig_via_scenario,

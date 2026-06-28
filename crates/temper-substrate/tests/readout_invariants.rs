@@ -21,12 +21,22 @@ async fn materialize_populates_finite_readouts_and_multiple_regions(pool: sqlx::
     bootseed::seed_system(&pool).await.unwrap();
     let loaded = loader::load_seed(&pool, &seed()).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
-    let first = write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
-        .await
-        .unwrap();
-    let second = write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
-        .await
-        .unwrap();
+    let first = write::materialize_cogmap(
+        &pool,
+        loaded.cogmap.into(),
+        "telos-default",
+        loaded.emitter.into(),
+    )
+    .await
+    .unwrap();
+    let second = write::materialize_cogmap(
+        &pool,
+        loaded.cogmap.into(),
+        "telos-default",
+        loaded.emitter.into(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         first.membership_fingerprint, second.membership_fingerprint,
         "reproducible"

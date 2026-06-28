@@ -158,7 +158,7 @@ async fn first_delivery_creates_all_entries(pool: PgPool) {
         (2, 0, 0, 0)
     );
 
-    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP.into())
         .await
         .unwrap();
     assert_eq!(slice.len(), 2, "both kernel landmarks now homed to L0");
@@ -312,7 +312,7 @@ async fn body_change_updates_only_that_entry(pool: PgPool) {
     // The live body_hash now equals the revised entry's content_hash.
     let expected =
         temper_substrate::content::body_hash_from_chunk_hashes(&[format!("{:0>64}", "cc")]);
-    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP.into())
         .await
         .unwrap();
     let row = slice
@@ -379,7 +379,7 @@ async fn promoted_content_is_isolated(pool: PgPool) {
 
     // The promoted resource is still active and still NOT in the kernel slice.
     assert!(is_active(&pool, promoted.uuid()).await);
-    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP.into())
         .await
         .unwrap();
     assert!(
@@ -435,7 +435,7 @@ async fn explicit_tombstone_folds_kernel_resource(pool: PgPool) {
         (0, 0, 1, 0)
     );
 
-    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP.into())
         .await
         .unwrap();
     assert!(
@@ -488,7 +488,7 @@ async fn unresolved_edge_target_is_rejected_with_no_writes(pool: PgPool) {
     );
 
     // Pre-flight runs before the transaction opens → nothing was written (no resource, no envelope).
-    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP.into())
         .await
         .unwrap();
     assert!(
@@ -537,7 +537,7 @@ async fn failed_reconcile_leaves_no_partial_state(pool: PgPool) {
     );
 
     // Atomic rollback: the Phase-1 create is gone AND no admin_reconcile envelope remains open.
-    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP)
+    let slice = temper_substrate::readback::kernel_slice(&pool, L0_COGMAP.into())
         .await
         .unwrap();
     assert!(

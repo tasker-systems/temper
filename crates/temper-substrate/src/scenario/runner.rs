@@ -53,16 +53,23 @@ pub async fn run_scenario_with(
         match step {
             Step::Materialize { lens } => {
                 embed::embed_chunks(pool).await?;
+                // `loaded` is the scenario-loader DTO (bare uuids); lift to the typed materialize API.
                 let out = match mode {
                     MaterializeMode::Full => {
-                        write::materialize_cogmap(pool, loaded.cogmap, lens, loaded.emitter).await
+                        write::materialize_cogmap(
+                            pool,
+                            loaded.cogmap.into(),
+                            lens,
+                            loaded.emitter.into(),
+                        )
+                        .await
                     }
                     MaterializeMode::Incremental => {
                         write::incremental_materialize_cogmap(
                             pool,
-                            loaded.cogmap,
+                            loaded.cogmap.into(),
                             lens,
-                            loaded.emitter,
+                            loaded.emitter.into(),
                         )
                         .await
                     }

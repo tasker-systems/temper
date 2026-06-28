@@ -1,4 +1,4 @@
-use uuid::Uuid;
+use crate::ids::ResourceId;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,8 +39,8 @@ impl EdgeKind {
 
 #[derive(Clone, Debug)]
 pub struct Edge {
-    pub src: Uuid,
-    pub tgt: Uuid,
+    pub src: ResourceId,
+    pub tgt: ResourceId,
     pub kind: EdgeKind,
     pub weight: f64,
     pub label: Option<String>,
@@ -48,7 +48,7 @@ pub struct Edge {
 
 #[derive(Clone, Debug)]
 pub struct Facet {
-    pub owner: Uuid,
+    pub owner: ResourceId,
     pub path: String,
     pub value: String,
     pub weight: f64,
@@ -94,7 +94,7 @@ impl Lens {
 }
 
 /// min-weighted overlap over shared (path,value) facet pairs (spec §4b). Declared only — never cosine.
-fn facet_overlap(a: Uuid, b: Uuid, facets: &[Facet]) -> f64 {
+fn facet_overlap(a: ResourceId, b: ResourceId, facets: &[Facet]) -> f64 {
     let fa: Vec<&Facet> = facets.iter().filter(|f| f.owner == a).collect();
     let fb: Vec<&Facet> = facets.iter().filter(|f| f.owner == b).collect();
     let mut sum = 0.0;
@@ -110,7 +110,13 @@ fn facet_overlap(a: Uuid, b: Uuid, facets: &[Facet]) -> f64 {
 
 /// Declared-only symmetric affinity (spec §2a). Cosine is ABSENT — it enters only as a downstream
 /// readout (Plan 1 SQL), never here.
-pub fn affinity(a: Uuid, b: Uuid, edges: &[Edge], facets: &[Facet], lens: &Lens) -> f64 {
+pub fn affinity(
+    a: ResourceId,
+    b: ResourceId,
+    edges: &[Edge],
+    facets: &[Facet],
+    lens: &Lens,
+) -> f64 {
     // Labels are not reserved (spec §2a): every label is ordinary positive relatedness, so
     // contradiction BINDS (shared frame), never separates. No label factor until a lens overrides.
     let edge_sum: f64 = edges
@@ -127,8 +133,11 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    fn ids() -> (Uuid, Uuid) {
-        (Uuid::from_u128(1), Uuid::from_u128(2))
+    fn ids() -> (ResourceId, ResourceId) {
+        (
+            ResourceId::from(Uuid::from_u128(1)),
+            ResourceId::from(Uuid::from_u128(2)),
+        )
     }
 
     #[test]

@@ -1,15 +1,15 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
+use crate::ids::{CogmapId, LensId, ResourceId};
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct Substrate {
-    pub nodes: Vec<Uuid>,
+    pub nodes: Vec<ResourceId>,
     pub edges: Vec<Edge>,
     pub facets: Vec<Facet>,
     pub lens: Lens,
-    pub lens_id: Uuid,
+    pub lens_id: LensId,
 }
 
 pub async fn connect() -> Result<PgPool> {
@@ -21,15 +21,15 @@ pub async fn connect() -> Result<PgPool> {
     Ok(PgPool::connect(&url).await?)
 }
 
-pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<Uuid> {
+pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<CogmapId> {
     let row = sqlx::query("SELECT id FROM kb_cogmaps WHERE name = $1")
         .bind(name)
         .fetch_one(pool)
         .await?;
-    Ok(row.get::<Uuid, _>("id"))
+    Ok(row.get::<CogmapId, _>("id"))
 }
 
-pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substrate> {
+pub async fn load(pool: &PgPool, cogmap: CogmapId, lens_name: &str) -> Result<Substrate> {
     // concept-resources homed in the cogmap
     let node_rows = sqlx::query(
         "SELECT resource_id FROM kb_resource_homes WHERE anchor_table='kb_cogmaps' AND anchor_id=$1",
@@ -37,9 +37,9 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
     .bind(cogmap)
     .fetch_all(pool)
     .await?;
-    let nodes: Vec<Uuid> = node_rows
+    let nodes: Vec<ResourceId> = node_rows
         .iter()
-        .map(|r| r.get::<Uuid, _>("resource_id"))
+        .map(|r| r.get::<ResourceId, _>("resource_id"))
         .collect();
 
     // declared edges homed in the cogmap, both endpoints resources
@@ -120,7 +120,7 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
 /// Expand one `property_key='facet'` row's JSONB object into the `(path, value)` facet entries the
 /// clustering needs. Multi-key objects yield one entry per key; an array value yields one entry per
 /// element, all sharing the row weight. Non-string scalars are skipped (not part of M1's affinity model).
-fn expand_facets(owner: Uuid, value: &serde_json::Value, weight: f64) -> Vec<Facet> {
+fn expand_facets(owner: ResourceId, value: &serde_json::Value, weight: f64) -> Vec<Facet> {
     let Some(obj) = value.as_object() else {
         return Vec::new();
     };
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn expand_facets_handles_scalar_multikey_and_array() {
-        let o = Uuid::nil();
+        let o = ResourceId::from(uuid::Uuid::nil());
         // single-key scalar (the onboarding seed shape) — unchanged behavior
         let f = expand_facets(o, &serde_json::json!({ "phase": "first-week" }), 1.0);
         assert_eq!(f.len(), 1);
