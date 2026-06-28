@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(back.cogmap, with_lens.cogmap);
         assert_eq!(back.lens, with_lens.lens);
 
-        // lens: None round-trips without lens field being present as null
+        // lens: None serializes to null and round-trips correctly
         let no_lens = CogmapShapeInput {
             cogmap: "bare-uuid-00000000-0000-0000-0000-000000000001".to_string(),
             lens: None,

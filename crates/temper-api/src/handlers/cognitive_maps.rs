@@ -3,6 +3,8 @@
 //! The request body is a PRE-EMBEDDED desired-state manifest (the operator CLI embeds client-side). The
 //! handler enforces the root-team-cogmap write gate (Auth before writes), then dispatches ONE operations
 //! command through the `Backend` trait — it never calls services or `sqlx::query!` directly for the write.
+//!
+//! Also exposes `GET /api/cognitive-maps/{id}/shape` — the service-direct surface-tier region read.
 
 use axum::extract::{Path, Query, State};
 use axum::Json;

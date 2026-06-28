@@ -24,6 +24,7 @@ use crate::services::resource_service::{ResourceListParams, ResourceListResponse
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
+use temper_core::types::cognitive_maps::CogmapRegionRow;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
@@ -390,13 +391,13 @@ pub async fn cogmap_shape_select(
     profile_id: ProfileId,
     cogmap_id: uuid::Uuid,
     lens_id: Option<uuid::Uuid>,
-) -> ApiResult<Vec<temper_core::types::cognitive_maps::CogmapRegionRow>> {
+) -> ApiResult<Vec<CogmapRegionRow>> {
     let rows = readback::cogmap_shape(pool, cogmap_id, *profile_id, lens_id)
         .await
         .map_err(api_err)?;
     Ok(rows
         .into_iter()
-        .map(|r| temper_core::types::cognitive_maps::CogmapRegionRow {
+        .map(|r| CogmapRegionRow {
             region_id: r.region_id,
             lens_id: r.lens_id,
             salience: r.salience,

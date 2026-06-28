@@ -7,6 +7,8 @@
 //!
 //! The whole path needs the `embed` feature (it runs ONNX). A non-embed build still compiles and
 //! returns a clear "requires --features embed" error, mirroring `actions::search::embed_query`.
+//!
+//! Also provides `temper cogmap shape <ref>` — read a map's materialized regions (surface tier).
 
 use crate::error::Result;
 use crate::format::OutputFormat;
