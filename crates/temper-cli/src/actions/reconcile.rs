@@ -264,6 +264,17 @@ telos:
         assert!(blocks.iter().all(|b| !b.chunks_packed.is_empty()));
     }
 
+    #[test]
+    fn committed_l0_manifest_carries_full_telos() {
+        let yaml = include_str!("../../../../schema-artifact/manifests/l0-kernel.yaml");
+        let doc = parse_manifest(yaml).unwrap();
+        assert_eq!(doc.entries.len(), 22); // landmarks unchanged
+        let telos = doc.telos.expect("manifest must now carry a telos");
+        assert_eq!(telos.questions.len(), 6);
+        assert_eq!(telos.framing.len(), 5);
+        assert!(telos.statement.starts_with("Orient an arriving agent"));
+    }
+
     #[cfg(feature = "test-embed")]
     #[test]
     fn manifest_to_request_embeds_each_entry() {
