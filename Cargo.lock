@@ -5182,6 +5182,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
+ "temper-core",
  "temper-ingest",
  "tokio",
  "uuid",
