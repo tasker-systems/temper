@@ -16,7 +16,10 @@ use reqwest::StatusCode;
 use uuid::Uuid;
 
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
-use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileEdge, ReconcileEntry};
+use temper_core::types::reconcile::{
+    CharterDisposition, ReconcileCogmapRequest, ReconcileEdge, ReconcileEntry, ReconcileTelos,
+    ReconcileTelosBlock,
+};
 
 /// The L0 kernel cognitive map reserved id (birth migration `20260625000001`).
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
@@ -41,6 +44,65 @@ fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
     }
     let concat: String = chunk_hashes.concat();
     sha256_hex(&sha256_hex(&concat))
+}
+
+/// The resource `body_hash` for a multi-block telos delivery — per-block `sha256_hex(concat of
+/// that block's chunk content_hashes)`, then resource `sha256_hex(concat of per-block hashes)`;
+/// empty blocks ⇒ `sha256_hex("")`. Documents the telos body-merkle so callers can sanity-check
+/// the diff; the reconcile path recomputes it server-side from `chunks_packed`.
+#[allow(dead_code)]
+fn body_hash_from_block_chunk_hashes(blocks: &[Vec<String>]) -> String {
+    use sha2::{Digest, Sha256};
+    fn sha256_hex(s: &str) -> String {
+        let mut h = Sha256::new();
+        h.update(s.as_bytes());
+        format!("{:x}", h.finalize())
+    }
+    if blocks.is_empty() {
+        return sha256_hex("");
+    }
+    let per_block: Vec<String> = blocks
+        .iter()
+        .map(|hashes| {
+            if hashes.is_empty() {
+                sha256_hex("")
+            } else {
+                sha256_hex(&hashes.concat())
+            }
+        })
+        .collect();
+    sha256_hex(&per_block.concat())
+}
+
+/// Build a synthetic pre-embedded telos block for e2e tests. `role` is the `block_role` tag.
+/// `hash_seed` is a short string zero-padded to 64 chars so each block has a stable, distinct
+/// `content_hash` — a re-PUT with the same seed is hash-equal (idempotency precondition).
+/// Mirrors the pattern in `crates/temper-api/tests/reconcile_charter_test.rs`.
+fn telos_block(role: &str, content: &str, hash_seed: &str) -> ReconcileTelosBlock {
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: content.to_string(),
+        content_hash: format!("{hash_seed:0>64}"),
+        embedding: vec![0.1f32; 768],
+    };
+    let chunks_packed = pack_chunks(std::slice::from_ref(&chunk)).expect("pack telos chunk");
+    ReconcileTelosBlock {
+        role: role.to_string(),
+        chunks_packed,
+    }
+}
+
+/// Build a three-block telos (statement/question/framing) with distinct hash seeds.
+fn three_block_telos() -> ReconcileTelos {
+    ReconcileTelos {
+        blocks: vec![
+            telos_block("statement", "What is temper?", "s1"),
+            telos_block("question", "How does it work?", "q1"),
+            telos_block("framing", "Why does it matter?", "f1"),
+        ],
+    }
 }
 
 /// Build a pre-embedded reconcile entry with a single synthetic chunk. `id` is the STABLE landmark
@@ -174,7 +236,59 @@ async fn admin_reconcile_l0_is_idempotent(pool: sqlx::PgPool) {
     );
 }
 
-// ── (b) non-admin reconcile is denied (the handler's own admin gate) ─────────────────
+// ── (b) admin reconcile with a telos delivers the charter, re-run is Unchanged (idempotent) ────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn admin_reconcile_delivers_telos_charter_idempotently(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    // Provision the admin and enable the L0 write-gate (mirrors the sibling test above).
+    let admin_id = provision_profile(&app, &app.token).await;
+    common::enable_invite_only(&pool, admin_id).await;
+
+    // A landmark-free request that delivers only the telos charter (3 blocks).
+    let req = ReconcileCogmapRequest {
+        entries: vec![],
+        fold_resources: vec![],
+        fold_edges: vec![],
+        telos: Some(three_block_telos()),
+    };
+
+    // First delivery: empty L0 telos → charter Created.
+    let out1 = app
+        .client
+        .cognitive_maps()
+        .reconcile_cognitive_map(L0_COGMAP, &req)
+        .await
+        .expect("first admin reconcile with telos should succeed");
+    assert_eq!(
+        out1.charter,
+        CharterDisposition::Created,
+        "first delivery onto an empty L0 telos must produce charter == Created"
+    );
+    // Landmark counts are all zero (no entries in this request).
+    assert_eq!(
+        (out1.created, out1.updated, out1.folded, out1.unchanged),
+        (0, 0, 0, 0),
+        "landmark counts must all be zero when entries is empty"
+    );
+
+    // Re-PUT the IDENTICAL request: body-merkle matches → charter Unchanged (idempotent through
+    // the real Axum + Postgres + JWT stack — the load-bearing assertion of this test).
+    let out2 = app
+        .client
+        .cognitive_maps()
+        .reconcile_cognitive_map(L0_COGMAP, &req)
+        .await
+        .expect("second admin reconcile with telos should succeed");
+    assert_eq!(
+        out2.charter,
+        CharterDisposition::Unchanged,
+        "re-delivering the same telos charter through the real HTTP stack must be Unchanged (idempotent)"
+    );
+}
+
+// ── (c) non-admin reconcile is denied (the handler's own admin gate) ─────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn non_admin_reconcile_is_denied(pool: sqlx::PgPool) {
