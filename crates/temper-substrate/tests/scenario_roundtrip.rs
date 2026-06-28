@@ -84,9 +84,14 @@ async fn baseline_matches_04b_sql_verdict(pool: sqlx::PgPool) {
     // state run_eval.sh evaluates 04b against.
     let loaded = loader::load_seed(&pool, &load_seed_yaml()).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
-        .await
-        .unwrap();
+    write::materialize_cogmap(
+        &pool,
+        loaded.cogmap.into(),
+        "telos-default",
+        loaded.emitter.into(),
+    )
+    .await
+    .unwrap();
 
     let all_pass: bool = sqlx::query_scalar(VERDICT_SQL)
         .fetch_one(&pool)

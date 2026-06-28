@@ -14,7 +14,7 @@ use sqlx::PgPool;
 
 use temper_core::error::TemperError;
 use temper_core::types::graph;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
@@ -210,16 +210,16 @@ pub(crate) async fn native_resource_row(
     principal: ProfileId,
     new_id: ResourceId,
 ) -> Result<ResourceRow, TemperError> {
-    let p = readback::resource_row(pool, *principal, *new_id)
+    let p = readback::resource_row(pool, principal, new_id)
         .await
         .map_err(map_readback_err)?;
     Ok(ResourceRow {
-        id: ResourceId::from(p.re_minted_id),
-        kb_context_id: ContextId::from(p.re_minted_context_id),
+        id: p.re_minted_id,
+        kb_context_id: p.re_minted_context_id,
         origin_uri: p.origin_uri,
         title: p.title,
-        originator_profile_id: ProfileId::from(p.originator_profile_id),
-        owner_profile_id: ProfileId::from(p.owner_profile_id),
+        originator_profile_id: p.originator_profile_id,
+        owner_profile_id: p.owner_profile_id,
         is_active: p.is_active,
         created: p.created,
         updated: p.updated,
@@ -251,9 +251,9 @@ pub struct DbBackend {
 /// argument instead of threading three identical ids — and to stay under the params-struct threshold.
 #[derive(Clone, Copy, Debug)]
 struct ReconcileCtx {
-    cogmap: temper_substrate::ids::CogmapId,
-    owner: temper_substrate::ids::ProfileId,
-    emitter: temper_substrate::ids::EntityId,
+    cogmap: CogmapId,
+    owner: ProfileId,
+    emitter: EntityId,
 }
 
 impl DbBackend {
@@ -317,10 +317,10 @@ impl DbBackend {
     async fn reconcile_apply(
         &self,
         conn: &mut sqlx::PgConnection,
-        cogmap: temper_substrate::ids::CogmapId,
+        cogmap: CogmapId,
         request: &ReconcileCogmapRequest,
-        owner: temper_substrate::ids::ProfileId,
-        emitter: temper_substrate::ids::EntityId,
+        owner: ProfileId,
+        emitter: EntityId,
     ) -> Result<ReconcileOutcome, TemperError> {
         let ctx = ReconcileCtx {
             cogmap,
@@ -353,10 +353,15 @@ impl DbBackend {
         conn: &mut sqlx::PgConnection,
         cogmap_uuid: uuid::Uuid,
     ) -> Result<std::collections::HashMap<uuid::Uuid, readback::KernelSliceRow>, TemperError> {
-        let live = readback::kernel_slice(&mut *conn, cogmap_uuid)
+        let live = readback::kernel_slice(&mut *conn, CogmapId::from(cogmap_uuid))
             .await
             .map_err(api_err)?;
-        Ok(live.into_iter().map(|r| (r.resource_id, r)).collect())
+        // The reconcile diff keys on the bare uuid (entry ids arrive bare from the wire), so index on
+        // the inner uuid of the now-typed `resource_id`.
+        Ok(live
+            .into_iter()
+            .map(|r| (r.resource_id.uuid(), r))
+            .collect())
     }
 
     /// PHASE 1 — resources (create / update / no-op). NO edges yet (targets may not exist). Keyed on
@@ -442,7 +447,7 @@ impl DbBackend {
                     writes::update_resource_in_tx(
                         &mut *conn,
                         writes::UpdateParams {
-                            resource: temper_substrate::ids::ResourceId::from(row.resource_id),
+                            resource: row.resource_id,
                             // `Some("")` requests a body re-block (the re-block fires iff body is
                             // `Some`); the content comes from `chunks` (always `Some` here), so the
                             // empty string is never embedded — see the CREATE arm's note.
@@ -493,10 +498,16 @@ impl DbBackend {
                 // would append an event (`relationship_assert` fires unconditionally) and break
                 // idempotency, so skip when already present. The kernel has ~15 edges; per-edge
                 // `find_edge` is fine.
-                let present = readback::find_edge(&mut *conn, src, tgt, &kind, Some(&e.polarity))
-                    .await
-                    .map_err(api_err)?
-                    .is_some();
+                let present = readback::find_edge(
+                    &mut *conn,
+                    ResourceId::from(src),
+                    ResourceId::from(tgt),
+                    &kind,
+                    Some(&e.polarity),
+                )
+                .await
+                .map_err(api_err)?
+                .is_some();
                 if present {
                     continue; // already present — re-assert would break idempotency
                 }
@@ -504,8 +515,8 @@ impl DbBackend {
                     &mut *conn,
                     writes::KernelEdgeParams {
                         cogmap: ctx.cogmap,
-                        src: temper_substrate::ids::ResourceId::from(src),
-                        tgt: temper_substrate::ids::ResourceId::from(tgt),
+                        src: ResourceId::from(src),
+                        tgt: ResourceId::from(tgt),
                         kind,
                         polarity,
                         label: e.label.as_deref(),
@@ -530,13 +541,9 @@ impl DbBackend {
     ) -> Result<(), TemperError> {
         for t in &request.fold_resources {
             if let Some(row) = live_by_id.get(&t.id) {
-                writes::delete_resource_in_tx(
-                    &mut *conn,
-                    temper_substrate::ids::ResourceId::from(row.resource_id),
-                    ctx.emitter,
-                )
-                .await
-                .map_err(api_err)?;
+                writes::delete_resource_in_tx(&mut *conn, row.resource_id, ctx.emitter)
+                    .await
+                    .map_err(api_err)?;
                 outcome.folded += 1;
             }
         }
@@ -546,13 +553,19 @@ impl DbBackend {
             // Resolve the live edge by (from, to, kind) over `kb_edges` (any polarity → `None`) —
             // substrate SQL lives in the substrate (`readback::find_edge`), run on this transaction's
             // connection.
-            let edge_id = readback::find_edge(&mut *conn, t.from, t.to, &kind, None)
-                .await
-                .map_err(api_err)?;
+            let edge_id = readback::find_edge(
+                &mut *conn,
+                ResourceId::from(t.from),
+                ResourceId::from(t.to),
+                &kind,
+                None,
+            )
+            .await
+            .map_err(api_err)?;
             if let Some(edge_id) = edge_id {
                 writes::fold_relationship_in_tx(
                     &mut *conn,
-                    temper_substrate::ids::EdgeId::from(edge_id),
+                    edge_id,
                     Some("reconcile fold"),
                     ctx.emitter,
                 )
@@ -581,9 +594,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        // cmd.context is temper_core::types::ids::ContextId (pre-resolved at the surface);
-        // writes::CreateParams.home expects temper_substrate::ids::ContextId. Convert via Uuid.
-        let home = temper_substrate::ids::ContextId::from(uuid::Uuid::from(cmd.context));
+        // cmd.context is the pre-resolved (surface-side) ContextId — the same unified type
+        // writes::CreateParams.home expects, so pass it through directly.
+        let home = cmd.context;
 
         let body = cmd
             .body
@@ -638,13 +651,11 @@ impl Backend for DbBackend {
                 None => temper_substrate::content::body_hash_for_body(&body),
             };
             if let Some(existing) =
-                readback::find_by_body_hash(&self.pool, *self.profile_id, &body_hash)
+                readback::find_by_body_hash(&self.pool, self.profile_id, &body_hash)
                     .await
                     .map_err(api_err)?
             {
-                let row =
-                    native_resource_row(&self.pool, self.profile_id, ResourceId::from(existing))
-                        .await?;
+                let row = native_resource_row(&self.pool, self.profile_id, existing).await?;
                 return Ok(CommandOutput::new(row));
             }
         }
@@ -796,16 +807,14 @@ impl Backend for DbBackend {
                 // The ContextId was already resolved and visibility-gated at the
                 // handler boundary (parse_context_ref + resolve_context_ref). Use it
                 // directly; no second DB lookup needed.
-                rehome_to = Some(temper_substrate::ids::ContextId::from(uuid::Uuid::from(
-                    ctx_to,
-                )));
+                rehome_to = Some(ctx_to);
             }
         }
 
         writes::update_resource(
             &self.pool,
             writes::UpdateParams {
-                resource: temper_substrate::ids::ResourceId::from(new_id),
+                resource: ResourceId::from(new_id),
                 body: body.as_deref(),
                 title: title.as_deref(),
                 origin_uri: None,
@@ -834,13 +843,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::delete_resource(
-            &self.pool,
-            temper_substrate::ids::ResourceId::from(new_id),
-            emitter,
-        )
-        .await
-        .map_err(api_err)?;
+        writes::delete_resource(&self.pool, ResourceId::from(new_id), emitter)
+            .await
+            .map_err(api_err)?;
         Ok(CommandOutput::new(()))
     }
 
@@ -848,7 +853,7 @@ impl Backend for DbBackend {
         &self,
         _cmd: ListResources,
     ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        let rows = readback::list(&self.pool, *self.profile_id)
+        let rows = readback::list(&self.pool, self.profile_id)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let summaries = rows
@@ -874,13 +879,12 @@ impl Backend for DbBackend {
         // `fts_search` returns the preserved resource ids (origin_uri is non-unique — empty for
         // CLI/agent-created resources, so it cannot identify a match). Each id reconstructs to its
         // summary (origin_uri verbatim as the stable handle, like `list_resources`).
-        let ids = readback::fts_search(&self.pool, *self.profile_id, &cmd.query.query)
+        let ids = readback::fts_search(&self.pool, self.profile_id, &cmd.query.query)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let mut hits = Vec::with_capacity(ids.len());
         for new_id in ids {
-            let row =
-                native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+            let row = native_resource_row(&self.pool, self.profile_id, new_id).await?;
             hits.push(SearchHit {
                 summary: ResourceSummary {
                     // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
@@ -931,13 +935,13 @@ impl Backend for DbBackend {
         let edge = writes::assert_relationship(
             &self.pool,
             writes::AssertParams {
-                src: temper_substrate::ids::ResourceId::from(src_next),
-                tgt: temper_substrate::ids::ResourceId::from(tgt_next),
+                src: ResourceId::from(src_next),
+                tgt: ResourceId::from(tgt_next),
                 kind: map_edge_kind(cmd.edge_kind),
                 polarity: map_polarity(cmd.polarity),
                 label,
                 weight: cmd.weight,
-                home: temper_substrate::ids::ContextId::from(home_next),
+                home: ContextId::from(home_next),
                 emitter,
             },
         )
@@ -965,7 +969,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::retype_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(handle),
+            EdgeId::from(handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
@@ -989,14 +993,9 @@ impl Backend for DbBackend {
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::reweight_relationship(
-            &self.pool,
-            temper_substrate::ids::EdgeId::from(handle),
-            cmd.weight,
-            emitter,
-        )
-        .await
-        .map_err(api_err)?;
+        writes::reweight_relationship(&self.pool, EdgeId::from(handle), cmd.weight, emitter)
+            .await
+            .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -1016,7 +1015,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         writes::fold_relationship(
             &self.pool,
-            temper_substrate::ids::EdgeId::from(handle),
+            EdgeId::from(handle),
             cmd.reason.as_deref(),
             emitter,
         )
@@ -1038,7 +1037,7 @@ impl Backend for DbBackend {
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
         let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
-        let cogmap = temper_substrate::ids::CogmapId::from(cogmap_uuid);
+        let cogmap = CogmapId::from(cogmap_uuid);
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.
@@ -1111,14 +1110,15 @@ impl DbBackend {
     ) -> Result<(), TemperError> {
         use std::collections::HashSet;
 
-        let live = readback::kernel_slice(&self.pool, cogmap_uuid)
+        let live = readback::kernel_slice(&self.pool, CogmapId::from(cogmap_uuid))
             .await
             .map_err(api_err)?;
 
-        // The resolvable set: stable ids of live resources ∪ this request's entry ids.
+        // The resolvable set: stable ids of live resources ∪ this request's entry ids (bare uuids
+        // from the wire), so key on the inner uuid of the typed `resource_id`.
         let mut known: HashSet<uuid::Uuid> = HashSet::new();
         for r in &live {
-            known.insert(r.resource_id);
+            known.insert(r.resource_id.uuid());
         }
         for e in &request.entries {
             known.insert(e.id);

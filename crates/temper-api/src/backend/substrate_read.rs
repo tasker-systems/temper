@@ -25,7 +25,7 @@ use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::cognitive_maps::CogmapRegionRow;
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -223,7 +223,7 @@ pub async fn get_content_select(
     profile_id: ProfileId,
     resource_id: ResourceId,
 ) -> ApiResult<ContentResponse> {
-    let markdown = readback::body(pool, *profile_id, *resource_id)
+    let markdown = readback::body(pool, profile_id, resource_id)
         .await
         .map_err(|e| ApiError::from(map_readback_err(e)))?;
     Ok(ContentResponse {
@@ -242,7 +242,7 @@ pub async fn get_meta_select(
     resource_id: ResourceId,
 ) -> ApiResult<ResourceMetaResponse> {
     let new_id = Uuid::from(resource_id);
-    let rb = readback::meta(pool, Uuid::from(profile_id), new_id)
+    let rb = readback::meta(pool, profile_id, resource_id)
         .await
         .map_err(|e| ApiError::from(map_readback_err(e)))?;
     let managed: ManagedMeta =
@@ -340,16 +340,25 @@ pub async fn search_select(
         None => None,
     };
 
+    // The wire `seed_ids` arrive as bare uuids; lift to the typed `&[ResourceId]` the query takes.
+    let seed_ids: Vec<ResourceId> = params
+        .seed_ids
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .copied()
+        .map(ResourceId::from)
+        .collect();
     let hits = readback::unified_search(
         pool,
         readback::UnifiedSearchQuery {
-            principal: *profile_id,
+            principal: profile_id,
             query: params.query.as_deref(),
             embedding: params.embedding.as_deref(),
-            seed_ids: params.seed_ids.as_deref().unwrap_or(&[]),
+            seed_ids: &seed_ids,
             depth: clamped.depth,
             edge_types: params.edge_types.as_deref().unwrap_or(&[]),
-            context_id,
+            context_id: context_id.map(ContextId::from),
             doc_type: params.doc_type.as_deref(),
             graph_expand: params.graph_expand,
             limit: clamped.limit,
@@ -362,9 +371,9 @@ pub async fn search_select(
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
         // Per-row display enrichment (unchanged from the pre-Beat-2 path; the candidate set is ≤ limit).
-        let row = native_resource_row(pool, profile_id, ResourceId::from(h.resource_id)).await?;
+        let row = native_resource_row(pool, profile_id, h.resource_id).await?;
         out.push(UnifiedSearchResultRow {
-            resource_id: h.resource_id,
+            resource_id: h.resource_id.uuid(),
             title: row.title,
             slug: String::new(),
             kb_uri: row.origin_uri.clone(),
@@ -392,7 +401,7 @@ pub async fn cogmap_shape_select(
     cogmap_id: uuid::Uuid,
     lens_id: Option<uuid::Uuid>,
 ) -> ApiResult<Vec<CogmapRegionRow>> {
-    let rows = readback::cogmap_shape(pool, cogmap_id, *profile_id, lens_id)
+    let rows = readback::cogmap_shape(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
         .await
         .map_err(api_err)?;
     Ok(rows

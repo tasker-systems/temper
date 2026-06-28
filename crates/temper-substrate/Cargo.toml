@@ -11,9 +11,10 @@ publish = false
 # Pure core tests (affinity, cluster) are ungated and run in CI.
 artifact-tests = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
-scenario-schema = ["schemars"]
+scenario-schema = ["schemars", "temper-core/scenario-schema"]
 
 [dependencies]
+temper-core = { path = "../temper-core" }
 temper-ingest = { path = "../temper-ingest", features = ["embed"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros", "migrate", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }

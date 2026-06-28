@@ -71,7 +71,7 @@ async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let out = write::materialize_cogmap(&pool, cogmap, &lens_name, emitter)
+        let out = write::materialize_cogmap(&pool, cogmap.into(), &lens_name, emitter.into())
             .await
             .unwrap();
         assert_eq!(

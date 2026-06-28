@@ -6,11 +6,11 @@ use uuid::Uuid;
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(transparent)]
         #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
         #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-        #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+        #[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
         pub struct $name(pub Uuid);
 
         impl $name {
@@ -19,9 +19,14 @@ macro_rules! define_id {
                 Self(Uuid::now_v7())
             }
 
-            /// Access the inner UUID.
+            /// Access the inner UUID by reference.
             pub fn as_uuid(&self) -> &Uuid {
                 &self.0
+            }
+
+            /// The underlying `Uuid` by value (for the sqlx-bind boundary).
+            pub fn uuid(self) -> Uuid {
+                self.0
             }
         }
 
@@ -82,6 +87,19 @@ macro_rules! define_id {
                 Ok(Self(<Uuid as sqlx::Decode<'_, sqlx::Postgres>>::decode(value)?))
             }
         }
+
+        // Array support so `Vec<$name>`/`&[$name]` bind to `= ANY($1)` / `uuid[]` columns, exactly as a
+        // bare `Uuid` does. (Substrate's prior `#[sqlx(transparent)]` derive supplied this; the
+        // hand-written impls above must too, or typed id arrays would not bind.)
+        impl sqlx::postgres::PgHasArrayType for $name {
+            fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+                <Uuid as sqlx::postgres::PgHasArrayType>::array_type_info()
+            }
+
+            fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+                <Uuid as sqlx::postgres::PgHasArrayType>::array_compatible(ty)
+            }
+        }
     };
 }
 
@@ -134,3 +152,76 @@ define_id!(
     /// A `kb_resource_revisions.id` value. Always UUIDv7 (time-sortable).
     RevisionId
 );
+
+define_id!(
+    /// A `kb_content_blocks.id` value — a resource's addressable interior unit.
+    BlockId
+);
+
+define_id!(
+    /// A `kb_entities.id` value — the event emitter (agent instance / integration).
+    EntityId
+);
+
+define_id!(
+    /// A `kb_cogmap_lenses.id` value.
+    LensId
+);
+
+define_id!(
+    /// A `kb_chunks.id` value — one embedding window of a block's prose.
+    ChunkId
+);
+
+define_id!(
+    /// A `kb_properties.id` value — a facet/doc_type/block_role assertion.
+    PropertyId
+);
+
+define_id!(
+    /// A `kb_cogmap_regions.id` value — one materialized region.
+    RegionId
+);
+
+define_id!(
+    /// A `kb_invocations.id` value — an agentic-workflow run (accountability grain).
+    InvocationId
+);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newtype_roundtrips_through_uuid_and_serde() {
+        let u = Uuid::now_v7();
+        let r = ResourceId::from(u);
+        // From<Uuid> / Into<Uuid> / uuid() / as_uuid() / Deref all agree.
+        assert_eq!(r.uuid(), u);
+        assert_eq!(Uuid::from(r), u);
+        assert_eq!(r.0, u);
+        assert_eq!(*r.as_uuid(), u);
+        assert_eq!(*r, u);
+        // Display matches the raw uuid.
+        assert_eq!(r.to_string(), u.to_string());
+        // serde round-trips as a bare uuid string (transparent on the wire).
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, serde_json::to_string(&u).unwrap());
+        assert_eq!(serde_json::from_str::<ResourceId>(&json).unwrap(), r);
+    }
+
+    #[test]
+    fn distinct_newtypes_stay_independent_and_orderable() {
+        let u = Uuid::now_v7();
+        // CogmapId and ResourceId cannot be compared with `==` — different types — which is the point.
+        assert_eq!(CogmapId::from(u).uuid(), ResourceId::from(u).uuid());
+        // Ord is derived: sorting a vec of ids compiles and matches uuid order.
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        let mut v = vec![ResourceId::from(b), ResourceId::from(a)];
+        v.sort();
+        assert_eq!(
+            v,
+            vec![ResourceId::from(a.min(b)), ResourceId::from(a.max(b))]
+        );
+    }
+}

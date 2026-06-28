@@ -133,7 +133,7 @@ async fn create_kernel_resource_homes_to_cogmap_with_facet_and_edge(pool: sqlx::
 
     // kernel_slice returns exactly the two provenance:kernel resources, keyed by origin_uri (the
     // genesis telos has no provenance property and is excluded).
-    let slice = temper_substrate::readback::kernel_slice(&pool, cogmap.uuid())
+    let slice = temper_substrate::readback::kernel_slice(&pool, cogmap)
         .await
         .unwrap();
     assert_eq!(slice.len(), 2, "both kernel resources in the slice");

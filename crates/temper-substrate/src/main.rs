@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
             .bind(cogmap)
             .fetch_one(&pool)
             .await?;
-            let outcome = materialize_cogmap(&pool, cogmap, &lens, emitter).await?;
+            let outcome = materialize_cogmap(&pool, cogmap, &lens, emitter.into()).await?;
             println!(
                 "materialized {} region(s) for '{}' (lens '{}')\nmembership: {}",
                 outcome.regions, name, lens, outcome.membership_fingerprint

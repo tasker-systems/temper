@@ -36,7 +36,7 @@ pub fn component_fingerprint(
 
     let mut es: Vec<String> = edges
         .iter()
-        .filter(|e| member_set.contains(&e.src) && member_set.contains(&e.tgt))
+        .filter(|e| member_set.contains(&e.src.uuid()) && member_set.contains(&e.tgt.uuid()))
         .map(|e| {
             let (a, b) = if e.src <= e.tgt {
                 (e.src, e.tgt)
@@ -55,7 +55,7 @@ pub fn component_fingerprint(
 
     let mut fs: Vec<String> = facets
         .iter()
-        .filter(|f| member_set.contains(&f.owner))
+        .filter(|f| member_set.contains(&f.owner.uuid()))
         .map(|f| {
             format!(
                 "{}:{}={}:{:016x}",
@@ -92,16 +92,21 @@ pub fn component_fingerprint(
 mod tests {
     use super::*;
     use crate::affinity::{Edge, EdgeKind, Facet, Lens};
+    use crate::ids::ResourceId;
     use uuid::Uuid;
 
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(n)
     }
 
+    fn rid(n: u128) -> ResourceId {
+        ResourceId::from(id(n))
+    }
+
     fn edge(src: u128, tgt: u128, kind: EdgeKind, weight: f64, label: Option<&str>) -> Edge {
         Edge {
-            src: id(src),
-            tgt: id(tgt),
+            src: rid(src),
+            tgt: rid(tgt),
             kind,
             weight,
             label: label.map(str::to_owned),
@@ -110,7 +115,7 @@ mod tests {
 
     fn facet(owner: u128, path: &str, value: &str, weight: f64) -> Facet {
         Facet {
-            owner: id(owner),
+            owner: rid(owner),
             path: path.to_owned(),
             value: value.to_owned(),
             weight,

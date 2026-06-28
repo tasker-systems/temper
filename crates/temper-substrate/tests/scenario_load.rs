@@ -39,7 +39,7 @@ async fn loads_minimal_seed_into_readable_substrate(pool: sqlx::PgPool) {
 
     // substrate::load sees the homed nodes (telos + a + b) and both declared edges, against the
     // boot-seeded global telos-default lens.
-    let sub = substrate::load(&pool, loaded.cogmap, "telos-default")
+    let sub = substrate::load(&pool, loaded.cogmap.into(), "telos-default")
         .await
         .unwrap();
     assert_eq!(sub.nodes.len(), 3, "telos + a + b are homed");
@@ -87,10 +87,10 @@ async fn lens_name_parameter_binds_the_lens_query(pool: sqlx::PgPool) {
         .unwrap();
     let s: Seed = serde_yaml::from_str(MINIMAL).unwrap();
     let loaded = loader::load_seed(&pool, &s).await.unwrap();
-    substrate::load(&pool, loaded.cogmap, "telos-default")
+    substrate::load(&pool, loaded.cogmap.into(), "telos-default")
         .await
         .expect("telos-default lens loads by name");
-    let bogus = substrate::load(&pool, loaded.cogmap, "no-such-lens").await;
+    let bogus = substrate::load(&pool, loaded.cogmap.into(), "no-such-lens").await;
     assert!(bogus.is_err(), "loading an unknown lens name must error");
 }
 
@@ -102,7 +102,7 @@ async fn seeded_telos_default_lens_mirrors_the_rust_default(pool: sqlx::PgPool) 
         .unwrap();
     let s: Seed = serde_yaml::from_str(MINIMAL).unwrap();
     let loaded = loader::load_seed(&pool, &s).await.unwrap();
-    let sub = substrate::load(&pool, loaded.cogmap, "telos-default")
+    let sub = substrate::load(&pool, loaded.cogmap.into(), "telos-default")
         .await
         .unwrap();
     let d = Lens::telos_default();

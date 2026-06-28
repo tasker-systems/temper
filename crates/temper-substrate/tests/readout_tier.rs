@@ -38,9 +38,14 @@ async fn revise_reaches_readout_tier_no_component_changes(pool: sqlx::PgPool) {
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
 
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
-        .await
-        .unwrap();
+    write::materialize_cogmap(
+        &pool,
+        loaded.cogmap.into(),
+        "telos-default",
+        loaded.emitter.into(),
+    )
+    .await
+    .unwrap();
 
     // Fresh — nothing has touched the cogmap since the materialize.
     let (tier, diff) = drift::lens_drift(&pool, loaded.cogmap, "telos-default")

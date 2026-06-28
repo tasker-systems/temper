@@ -4,6 +4,7 @@
 //! (zero rows, not an error); folded regions are excluded; the lens filter narrows by lens.
 
 use sqlx::PgPool;
+use temper_substrate::ids::{CogmapId, ProfileId};
 use uuid::Uuid;
 
 mod common;
@@ -103,9 +104,14 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
     .await;
 
     // Readable principal sees exactly the one non-folded region.
-    let rows = temper_substrate::readback::cogmap_shape(&pool, cogmap, p1, None)
-        .await
-        .expect("readable read");
+    let rows = temper_substrate::readback::cogmap_shape(
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p1),
+        None,
+    )
+    .await
+    .expect("readable read");
     assert_eq!(
         rows.len(),
         1,
@@ -117,9 +123,14 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
     assert_eq!(rows[0].content_cohesion, None);
 
     // Non-member is denied by the in-SQL gate: zero rows, NOT an error.
-    let denied = temper_substrate::readback::cogmap_shape(&pool, cogmap, p2, None)
-        .await
-        .expect("gate denial is empty, not an error");
+    let denied = temper_substrate::readback::cogmap_shape(
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p2),
+        None,
+    )
+    .await
+    .expect("gate denial is empty, not an error");
     assert!(
         denied.is_empty(),
         "non-member must see no regions: {denied:?}"
@@ -127,9 +138,14 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
 
     // Lens filter: a non-matching lens id narrows to empty for the readable principal.
     let other_lens = Uuid::now_v7();
-    let filtered = temper_substrate::readback::cogmap_shape(&pool, cogmap, p1, Some(other_lens))
-        .await
-        .expect("lens-filtered read");
+    let filtered = temper_substrate::readback::cogmap_shape(
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p1),
+        Some(other_lens),
+    )
+    .await
+    .expect("lens-filtered read");
     assert!(
         filtered.is_empty(),
         "wrong lens yields no regions: {filtered:?}"

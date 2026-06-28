@@ -118,8 +118,11 @@ pub(crate) async fn live_components(
 /// The current nonzero-affinity components of a substrate as (sorted member ids, fingerprint) — the
 /// lighter sibling of `write::cluster_components` (no agglomeration; drift only needs the fingerprints).
 pub(crate) fn current_component_fingerprints(s: &Substrate) -> Vec<(Vec<Uuid>, String)> {
-    let aff = |x: Uuid, y: Uuid| affinity(x, y, &s.edges, &s.facets, &s.lens);
-    connected_components(&s.nodes, &aff)
+    // `affinity`/`cluster` bridge: feed the opaque node uuids, lift each pair to `ResourceId` (mirrors
+    // `write::cluster_components`).
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.lens);
+    let node_uuids: Vec<Uuid> = s.nodes.iter().map(|n| n.uuid()).collect();
+    connected_components(&node_uuids, &aff)
         .into_iter()
         .map(|members| {
             let fp = component_fingerprint(&members, &s.edges, &s.facets, &s.lens);
@@ -162,11 +165,11 @@ pub async fn lens_drift(
     cogmap: Uuid,
     lens_name: &str,
 ) -> Result<(DriftTier, ComponentDiff)> {
-    let s = crate::substrate::load(pool, cogmap, lens_name).await?;
+    let s = crate::substrate::load(pool, crate::ids::CogmapId::from(cogmap), lens_name).await?;
     let current = current_component_fingerprints(&s);
-    let priors = live_components(pool, cogmap, s.lens_id).await?;
+    let priors = live_components(pool, cogmap, s.lens_id.uuid()).await?;
     let diff = classify(&current, &priors);
-    let touched = touched_since_last_materialize(pool, cogmap, s.lens_id).await?;
+    let touched = touched_since_last_materialize(pool, cogmap, s.lens_id.uuid()).await?;
     Ok((tier(diff.has_structural_change(), touched), diff))
 }
 

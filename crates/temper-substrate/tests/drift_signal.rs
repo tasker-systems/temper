@@ -42,9 +42,14 @@ async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
 
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
-        .await
-        .unwrap();
+    write::materialize_cogmap(
+        &pool,
+        loaded.cogmap.into(),
+        "telos-default",
+        loaded.emitter.into(),
+    )
+    .await
+    .unwrap();
 
     // Fresh — just materialized, nothing has touched the cogmap since.
     let (tier, diff) = drift::lens_drift(&pool, loaded.cogmap, "telos-default")
