@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::cognitive_maps::CogmapRegionRow;
+use temper_core::types::cognitive_maps::{CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 
 /// Sub-client for cognitive-map operations.
@@ -58,6 +58,32 @@ impl<'a> CognitiveMapClient<'a> {
             .send_json(&Method::GET, &path, req, Some(&token))
             .await
     }
+
+    /// GET /api/cognitive-maps/{id}/region-metrics[?lens=] — the per-region analytics tier (the five
+    /// scalar metrics). Empty if the principal cannot read the map.
+    pub async fn region_metrics(
+        &self,
+        cogmap_id: Uuid,
+        lens_id: Option<Uuid>,
+    ) -> Result<Vec<CogmapRegionMetricsRow>> {
+        let token = self.http.resolve_token()?;
+        let path = region_metrics_path(cogmap_id, lens_id);
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/cognitive-maps/{id}/analytics — the map-level analytics picture (telos id, staleness,
+    /// regulation). 404 if the map is not found or not readable.
+    pub async fn analytics(&self, cogmap_id: Uuid) -> Result<CogmapAnalyticsRow> {
+        let token = self.http.resolve_token()?;
+        let path = analytics_path(cogmap_id);
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
 }
 
 /// `/api/cognitive-maps/{id}/shape` with an optional `?lens=` query — shared by the method and its test.
@@ -67,6 +93,20 @@ fn shape_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
     }
+}
+
+/// `/api/cognitive-maps/{id}/region-metrics` with an optional `?lens=` query.
+fn region_metrics_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
+    let base = format!("/api/cognitive-maps/{cogmap_id}/region-metrics");
+    match lens {
+        Some(l) => format!("{base}?lens={l}"),
+        None => base,
+    }
+}
+
+/// `/api/cognitive-maps/{id}/analytics`.
+fn analytics_path(cogmap_id: Uuid) -> String {
+    format!("/api/cognitive-maps/{cogmap_id}/analytics")
 }
 
 #[cfg(test)]
@@ -89,6 +129,29 @@ mod tests {
         assert_eq!(
             shape_path(id, Some(lens)),
             format!("/api/cognitive-maps/{id}/shape?lens={lens}")
+        );
+    }
+
+    #[test]
+    fn region_metrics_path_omits_and_includes_lens() {
+        let id = Uuid::from_u128(7);
+        assert_eq!(
+            region_metrics_path(id, None),
+            format!("/api/cognitive-maps/{id}/region-metrics")
+        );
+        let lens = Uuid::from_u128(9);
+        assert_eq!(
+            region_metrics_path(id, Some(lens)),
+            format!("/api/cognitive-maps/{id}/region-metrics?lens={lens}")
+        );
+    }
+
+    #[test]
+    fn analytics_path_is_plain() {
+        let id = Uuid::from_u128(7);
+        assert_eq!(
+            analytics_path(id),
+            format!("/api/cognitive-maps/{id}/analytics")
         );
     }
 }
