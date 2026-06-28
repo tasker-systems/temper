@@ -139,6 +139,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     stdin: _,
                     body,
                     from,
+                    act,
                 } => {
                     if show_template {
                         let doc_type = temper_workflow::frontmatter::DocType::from_str(&r#type)?;
@@ -165,6 +166,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             body_flag: body,
                             from,
                             format: output_format,
+                            act: act.into_act_input()?,
                         },
                     )
                 }

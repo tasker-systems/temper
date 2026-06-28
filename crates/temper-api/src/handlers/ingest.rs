@@ -57,6 +57,8 @@ pub async fn create(
         Some(BodyUpdate::new(payload.content))
     };
 
+    let act = payload.act.into_act_context().map_err(ApiError::from)?;
+
     let cmd = CreateResource {
         context,
         doctype: payload.doc_type_name,
@@ -68,7 +70,7 @@ pub async fn create(
         origin_uri: Some(payload.origin_uri),
         chunks_packed: payload.chunks_packed,
         content_hash: payload.content_hash,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
 

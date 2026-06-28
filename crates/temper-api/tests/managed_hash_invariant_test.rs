@@ -69,6 +69,7 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: 
         content_hash: None,
         metadata: None,
         open_meta: None,
+        act: Default::default(),
     };
     let resp = app
         .client

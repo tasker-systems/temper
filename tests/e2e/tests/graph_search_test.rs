@@ -45,6 +45,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
         managed_meta: Some(json!({"date": "2026-04-11"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("pack")),
+        act: Default::default(),
     }
 }
 
@@ -69,6 +70,7 @@ async fn assert_edge(
             polarity: Polarity::Forward,
             label: label.to_string(),
             weight: 1.0,
+            act: Default::default(),
         })
         .await
         .unwrap_or_else(|e| panic!("assert edge {label}: {e:?}"));

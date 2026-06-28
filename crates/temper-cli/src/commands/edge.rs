@@ -41,6 +41,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
             polarity,
             label,
             weight,
+            act,
         } => {
             let source = temper_workflow::operations::parse_ref(&source)?;
             let target = temper_workflow::operations::parse_ref(&target)?;
@@ -51,6 +52,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                 polarity: polarity.into(),
                 label,
                 weight,
+                act: act.into_act_input()?,
             };
             crate::actions::runtime::with_client(|client| {
                 Box::pin(async move {
@@ -105,8 +107,12 @@ pub fn run(action: EdgeAction) -> Result<()> {
         EdgeAction::Fold {
             edge_handle,
             reason,
+            act,
         } => {
-            let req = FoldRelationshipRequest { reason };
+            let req = FoldRelationshipRequest {
+                reason,
+                act: act.into_act_input()?,
+            };
             crate::actions::runtime::with_client(|client| {
                 Box::pin(async move {
                     let ack = client
@@ -157,6 +163,7 @@ mod tests {
                         polarity,
                         label,
                         weight,
+                        ..
                     },
             } => {
                 assert_eq!(source, "source-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
@@ -270,6 +277,7 @@ mod tests {
                     EdgeAction::Fold {
                         edge_handle: cid,
                         reason,
+                        ..
                     },
             } => {
                 assert_eq!(cid, edge_handle);

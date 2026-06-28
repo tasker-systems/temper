@@ -79,6 +79,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
         content_hash: None,
         metadata: None,
         open_meta: None,
+        act: Default::default(),
     };
 
     let create_resp = app

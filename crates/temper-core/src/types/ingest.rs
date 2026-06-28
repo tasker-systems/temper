@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::authorship::ActInput;
+
 /// Wire payload for POST /api/ingest — resource + pre-processed chunks.
 ///
 /// The CLI performs extract → chunk → embed locally and sends everything
@@ -35,6 +37,10 @@ pub struct IngestPayload {
     /// Server computes via `temper_ingest::pipeline::prepare_markdown` if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the create act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    #[serde(default, flatten)]
+    pub act: ActInput,
 }
 
 /// A single chunk with its embedding, serialized via MessagePack inside
@@ -195,6 +201,7 @@ mod tests {
             managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
             open_meta: Some(serde_json::json!({"tags": ["rust"]})),
             chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
+            act: Default::default(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -228,6 +235,7 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             chunks_packed: None,
+            act: Default::default(),
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(
@@ -262,6 +270,7 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
+            act: Default::default(),
         };
         let json = serde_json::to_string(&payload).unwrap();
         let deserialized: IngestPayload = serde_json::from_str(&json).unwrap();

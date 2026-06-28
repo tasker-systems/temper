@@ -133,6 +133,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                     body_flag: None, // default body generated
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create should succeed")
@@ -261,6 +262,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         })),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     let seeded = app
         .client
@@ -416,6 +418,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         })),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     let seeded = app
         .client
@@ -581,6 +584,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         })),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     let seeded = app
         .client
@@ -729,6 +733,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         })),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     let seeded = app
         .client
@@ -884,6 +889,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     body_flag: Some(body_flag),
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create for dedup test")
@@ -1021,6 +1027,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
             managed_meta: Some(serde_json::json!({"temper-title": format!("Cloud Only {i}")})),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+            act: Default::default(),
         };
         app.client
             .ingest()
@@ -1131,6 +1138,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create should succeed")
@@ -1227,6 +1235,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     body_flag: None, // default body generated
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create should succeed")
@@ -1375,6 +1384,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create should succeed")
@@ -1486,6 +1496,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
             })),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+            act: Default::default(),
         })
         .await
         .expect("seed resource via client");
@@ -1573,6 +1584,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
             })),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+            act: Default::default(),
         })
         .await
         .expect("seed resource via client");

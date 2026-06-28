@@ -72,6 +72,7 @@ async fn seed_task(
         managed_meta: Some(serde_json::Value::Object(managed)),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     client
         .ingest()

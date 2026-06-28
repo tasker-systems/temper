@@ -162,6 +162,8 @@ pub async fn create(
         .slug
         .unwrap_or_else(|| temper_substrate::text::slugify(&req.title));
 
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
+
     let cmd = CreateResource {
         context,
         doctype: req.doc_type,
@@ -176,7 +178,7 @@ pub async fn create(
         // create path is POST /api/ingest, which threads payload.chunks_packed through.
         chunks_packed: None,
         content_hash: None,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

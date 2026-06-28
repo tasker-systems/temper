@@ -179,6 +179,39 @@ impl ActInput {
     }
 }
 
+impl From<ActContext> for ActInput {
+    /// Flatten an assembled [`ActContext`] back into the discrete wire shape. The inverse of
+    /// [`ActInput::into_act_context`] — used by the CLI translator, which carries an `ActContext`
+    /// on its command but serializes the discrete [`ActInput`] onto the wire DTO. Always valid
+    /// (no validation): a present `authorship` already has its mandatory `confidence`.
+    fn from(ctx: ActContext) -> Self {
+        let ActContext {
+            invocation,
+            authorship,
+        } = ctx;
+        match authorship {
+            Some(AgentAuthorship {
+                reasoning,
+                confidence,
+                rationale,
+                persona,
+                model,
+            }) => ActInput {
+                invocation_id: invocation,
+                reasoning,
+                confidence: Some(confidence),
+                rationale,
+                persona,
+                model,
+            },
+            None => ActInput {
+                invocation_id: invocation,
+                ..Default::default()
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +327,34 @@ mod tests {
             matches!(err, crate::error::TemperError::BadRequest(_)),
             "expected BadRequest, got {err:?}"
         );
+    }
+
+    #[test]
+    fn act_context_to_act_input_roundtrips() {
+        // The translator path turns a command's ActContext back into the discrete ActInput wire
+        // shape; the handler reassembles it. The roundtrip must be identity.
+        let ctx = ActContext {
+            invocation: Some(InvocationId::new()),
+            authorship: Some(AgentAuthorship {
+                reasoning: Some("r".into()),
+                confidence: ConfidenceBand::Confident,
+                rationale: Some("because".into()),
+                persona: None,
+                model: Some("opus".into()),
+            }),
+        };
+        let back = ActInput::from(ctx.clone())
+            .into_act_context()
+            .expect("reassembles");
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn empty_act_context_to_act_input_is_empty() {
+        let back = ActInput::from(ActContext::default())
+            .into_act_context()
+            .expect("reassembles");
+        assert!(back.is_empty());
     }
 
     #[test]
