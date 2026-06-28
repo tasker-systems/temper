@@ -249,6 +249,15 @@ pub struct CogmapSeeded {
     pub telos: TelosManifest,
 }
 
+/// `charter_set` payload — replace a cogmap's telos charter with this ordered role-tagged block set.
+/// `blocks` is the same `BlockManifest` shape `CogmapSeeded::telos.blocks` carries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct CharterSet {
+    pub cogmap_id: CogmapId,
+    pub blocks: Vec<BlockManifest>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ResourceCreated {

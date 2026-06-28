@@ -223,6 +223,23 @@ pub fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
     sha256_hex(&block_hash)
 }
 
+/// The resource `body_hash` for a MULTI-BLOCK caller-supplied chunk set (the charter shape). Reproduces
+/// `_recompute_resource_body_hash`'s two-level merkle: per block, `sha256_hex(concat of the block's chunk
+/// content_hashes in chunk_index order)`; then the resource hash is `sha256_hex(concat of the per-block
+/// hashes in block seq order)`. `blocks` MUST already be in seq order and each inner vec in chunk_index
+/// order. An empty set ⇒ `sha256_hex("")` (the SQL coalesces the empty aggregate to `''`). For a single
+/// block this equals [`body_hash_from_chunk_hashes`].
+pub fn body_hash_from_block_chunk_hashes(blocks: &[Vec<String>]) -> String {
+    if blocks.is_empty() {
+        return sha256_hex("");
+    }
+    let per_block: String = blocks
+        .iter()
+        .map(|chunk_hashes| sha256_hex(&chunk_hashes.concat()))
+        .collect();
+    sha256_hex(&per_block)
+}
+
 /// Prepare an ordered run of blocks (`seq` = position). Each spec is `(role, prose)`: the charter
 /// passes `[(Some("statement"), …), (Some("question"), …), …, (Some("framing"), …)]`; an ordinary
 /// resource passes its single body as one roleless block `[(None, body)]`. A block whose prose exceeds
@@ -417,6 +434,37 @@ mod tests {
         );
         assert_eq!(block.chunks[1].heading_depth, Some(2));
         assert_eq!(block.chunks[1].embedding, vec![0.25; 4]);
+    }
+
+    #[test]
+    fn block_chunk_hashes_single_block_matches_single_block_helper() {
+        // One block ⇒ identical to the single-block helper (which assumes one roleless block).
+        let hashes = vec!["aa".to_string(), "bb".to_string()];
+        assert_eq!(
+            body_hash_from_block_chunk_hashes(std::slice::from_ref(&hashes)),
+            body_hash_from_chunk_hashes(&hashes),
+        );
+    }
+
+    #[test]
+    fn block_chunk_hashes_two_level_merkle() {
+        // Two blocks: per-block sha256(concat), then resource sha256(concat per-block hashes).
+        let b0 = vec!["aa".to_string()];
+        let b1 = vec!["bb".to_string(), "cc".to_string()];
+        let expect = {
+            let h0 = sha256_hex("aa");
+            let h1 = sha256_hex("bbcc");
+            sha256_hex(&format!("{h0}{h1}"))
+        };
+        assert_eq!(body_hash_from_block_chunk_hashes(&[b0, b1]), expect);
+    }
+
+    #[test]
+    fn block_chunk_hashes_empty_matches_empty_body() {
+        assert_eq!(
+            body_hash_from_block_chunk_hashes(&[]),
+            body_hash_for_body("")
+        );
     }
 
     // Blocks serialize to the JSONB shape the SQL functions consume (array of {block_id, seq, chunks:[…]}).
