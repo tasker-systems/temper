@@ -5,6 +5,7 @@ pub mod config;
 pub mod context_cmd;
 pub mod edge;
 pub mod init;
+pub mod invocation;
 pub mod pull;
 pub mod resource;
 pub mod search_cmd;

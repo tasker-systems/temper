@@ -13,6 +13,7 @@ pub mod error;
 pub mod events;
 pub mod http;
 pub mod ingest;
+pub mod invocations;
 pub mod login;
 pub mod profile;
 pub mod relationships;
@@ -153,6 +154,11 @@ impl TemperClient {
     /// Cognitive-map sub-client (reconcile).
     pub fn cognitive_maps(&self) -> cognitive_maps::CognitiveMapClient<'_> {
         cognitive_maps::CognitiveMapClient::new(&self.http)
+    }
+
+    /// Invocation-envelope sub-client (open / close / show / list).
+    pub fn invocations(&self) -> invocations::InvocationsClient<'_> {
+        invocations::InvocationsClient::new(&self.http)
     }
 
     // ----- Auth lifecycle -----
