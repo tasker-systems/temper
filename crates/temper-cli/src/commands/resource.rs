@@ -253,6 +253,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
+        act: Default::default(),
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 

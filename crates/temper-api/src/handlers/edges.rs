@@ -68,6 +68,7 @@ pub async fn assert(
         polarity: req.polarity,
         label: req.label,
         weight: req.weight,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -177,6 +178,7 @@ pub async fn fold(
     let cmd = FoldRelationship {
         edge_handle: EdgeId::from(edge_handle),
         reason: req.reason,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

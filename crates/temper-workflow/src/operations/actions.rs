@@ -738,6 +738,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_create(&cmd).is_ok());
@@ -756,6 +757,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -777,6 +779,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -798,6 +801,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -1082,6 +1086,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
 
@@ -1110,6 +1115,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
 
@@ -1138,6 +1144,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
 
@@ -1160,6 +1167,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
 

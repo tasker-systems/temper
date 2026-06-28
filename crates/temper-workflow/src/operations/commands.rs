@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::types::managed_meta::ManagedMeta;
+use temper_core::types::authorship::ActContext;
 use temper_core::types::ids::{CogmapId, ContextId, EdgeId, ResourceId};
 
 use super::{
@@ -50,6 +51,12 @@ pub struct CreateResource {
     /// canonical body_hash round-trips verbatim into `kb_resource_audits`
     /// and the manifest. When `None`, the server recomputes from `body`.
     pub content_hash: Option<String>,
+    /// Per-act correlation + authorship (`temper_core::types::authorship::ActContext`). Empty by
+    /// default; surfaces fill it from caller-supplied invocation/authorship. The backend stamps the
+    /// authored `resource_created` act's `kb_events.invocation_id`/`metadata`. Correlation here never
+    /// authorizes the write — the resource-create authz runs independently.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -135,6 +142,10 @@ pub struct AssertRelationship {
     pub polarity: temper_core::types::graph::Polarity,
     pub label: String,
     pub weight: f64,
+    /// Per-act correlation + authorship — stamps the authored `relationship_asserted` act. Empty by
+    /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -162,6 +173,10 @@ pub struct ReweightRelationship {
 pub struct FoldRelationship {
     pub edge_handle: EdgeId,
     pub reason: Option<String>,
+    /// Per-act correlation + authorship — stamps the authored `relationship_folded` act. Empty by
+    /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -242,6 +257,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            act: Default::default(),
             origin: Surface::CliCloud,
         };
         assert_eq!(cmd.slug, "new-task");
@@ -267,6 +283,7 @@ mod tests {
             polarity: temper_core::types::graph::Polarity::Inverse,
             label: "depends_on".to_string(),
             weight: 1.0,
+            act: Default::default(),
             origin: Surface::ApiHttp,
         };
         let s = serde_json::to_string(&cmd).unwrap();
@@ -282,6 +299,7 @@ mod tests {
             polarity: temper_core::types::graph::Polarity::Forward,
             label: "rel".into(),
             weight: 1.0,
+            act: Default::default(),
             origin: Surface::Mcp,
         };
         assert_ne!(uuid::Uuid::from(cmd.target), uuid::Uuid::nil());

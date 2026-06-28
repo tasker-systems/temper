@@ -68,6 +68,7 @@ pub async fn create(
         origin_uri: Some(payload.origin_uri),
         chunks_packed: payload.chunks_packed,
         content_hash: payload.content_hash,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
 

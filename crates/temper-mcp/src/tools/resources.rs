@@ -354,6 +354,7 @@ pub async fn create_resource(
         origin_uri: Some(origin_uri),
         chunks_packed: None,
         content_hash: None,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 
