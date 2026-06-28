@@ -7,9 +7,27 @@
 //!
 //! The whole path needs the `embed` feature (it runs ONNX). A non-embed build still compiles and
 //! returns a clear "requires --features embed" error, mirroring `actions::search::embed_query`.
+//!
+//! Also provides `temper cogmap shape <ref>` — read a map's materialized regions (surface tier).
 
 use crate::error::Result;
 use crate::format::OutputFormat;
+
+/// `temper cogmap shape <cogmap_ref> [--lens <ref>]` — read the map's materialized regions.
+pub fn shape(cogmap_ref: &str, lens_ref: Option<&str>, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+    let lens_id = lens_ref
+        .map(|l| temper_workflow::operations::parse_ref(l).map(|p| p.0))
+        .transpose()?;
+
+    let rows = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move { crate::actions::cogmap::shape_api(client, cogmap_id, lens_id).await })
+    })?;
+
+    let rendered = crate::format::render(&rows, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
 
 /// Reconcile the cognitive map addressed by `cogmap_ref` to the manifest at `manifest_path`.
 #[cfg(feature = "embed")]

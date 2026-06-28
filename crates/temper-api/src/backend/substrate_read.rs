@@ -24,7 +24,8 @@ use crate::services::resource_service::{ResourceListParams, ResourceListResponse
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::cognitive_maps::CogmapRegionRow;
+use temper_core::types::ids::{CogmapId, ContextId, ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -389,6 +390,31 @@ pub async fn search_select(
         });
     }
     Ok(out)
+}
+
+/// `cogmap_shape` — the surface-tier read of a cognitive map's materialized regions. Service-direct
+/// (reads bypass the Backend trait). The access gate lives in the SQL function: a principal who cannot
+/// read the map gets an empty vec, never an error. Maps the substrate-local row to the wire type.
+pub async fn cogmap_shape_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap_id: uuid::Uuid,
+    lens_id: Option<uuid::Uuid>,
+) -> ApiResult<Vec<CogmapRegionRow>> {
+    let rows = readback::cogmap_shape(pool, CogmapId::from(cogmap_id), profile_id, lens_id)
+        .await
+        .map_err(api_err)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CogmapRegionRow {
+            region_id: r.region_id,
+            lens_id: r.lens_id,
+            salience: r.salience,
+            content_cohesion: r.content_cohesion,
+            label: r.label,
+            member_count: r.member_count,
+        })
+        .collect())
 }
 
 #[cfg(test)]

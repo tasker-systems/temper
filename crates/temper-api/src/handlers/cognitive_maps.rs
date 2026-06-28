@@ -3,9 +3,12 @@
 //! The request body is a PRE-EMBEDDED desired-state manifest (the operator CLI embeds client-side). The
 //! handler enforces the root-team-cogmap write gate (Auth before writes), then dispatches ONE operations
 //! command through the `Backend` trait — it never calls services or `sqlx::query!` directly for the write.
+//!
+//! Also exposes `GET /api/cognitive-maps/{id}/shape` — the service-direct surface-tier region read.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::backend::DbBackend;
@@ -14,9 +17,16 @@ use crate::middleware::auth::AuthUser;
 use crate::services::access_service;
 use crate::state::AppState;
 
+use temper_core::types::cognitive_maps::CogmapRegionRow;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
 use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
+
+/// Query params for the shape read. `lens` is optional (omit → all lenses).
+#[derive(Debug, Deserialize)]
+pub struct ShapeQuery {
+    pub lens: Option<Uuid>,
+}
 
 #[utoipa::path(
     put,
@@ -56,4 +66,34 @@ pub async fn reconcile(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(out.value))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/cognitive-maps/{id}/shape",
+    tag = "Cognitive Maps",
+    params(
+        ("id" = Uuid, Path, description = "Cognitive map ID"),
+        ("lens" = Option<Uuid>, Query, description = "Optional lens filter; omit for all lenses"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Materialized regions (surface tier)", body = Vec<CogmapRegionRow>),
+        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+    )
+)]
+pub async fn shape(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Query(q): Query<ShapeQuery>,
+) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
+    crate::backend::substrate_read::cogmap_shape_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        q.lens,
+    )
+    .await
+    .map(Json)
 }

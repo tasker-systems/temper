@@ -24,6 +24,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use crate::keys::is_managed_property_key;
@@ -735,6 +736,56 @@ pub async fn vector_search(
     .await?;
 
     Ok(rows.iter().map(|r| r.get::<ResourceId, _>("id")).collect())
+}
+
+/// One surface-tier region of a cognitive map, as returned by `cogmap_shape`. Centroid-derived
+/// readouts only — member identities are NEVER carried (the interior is dereferenced per-member
+/// through `resources_visible_to` elsewhere). Substrate-local because `temper-substrate` cannot
+/// depend on `temper-core`; the `temper-api` wrapper maps this to the `CogmapRegionRow` wire type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CogmapShapeRow {
+    pub region_id: Uuid,
+    pub lens_id: Uuid,
+    pub salience: f64,
+    pub content_cohesion: Option<f64>,
+    pub label: Option<String>,
+    pub member_count: i32,
+}
+
+/// The surface-tier read of a cognitive map's materialized regions (spec §A surfacing; SQL
+/// `cogmap_shape`). The access gate is INSIDE the SQL: a principal who cannot read the map gets zero
+/// rows (never an error). Folded regions are excluded by the function; `lens_id = None` returns all
+/// lenses, `Some(l)` narrows to that lens.
+///
+/// Runtime `sqlx::query` (NOT the `query!` macros) — the SQL is unqualified and self-gating; see the
+/// module-level note. Read-only.
+pub async fn cogmap_shape(
+    pool: &PgPool,
+    cogmap_id: CogmapId,
+    principal: ProfileId,
+    lens_id: Option<Uuid>,
+) -> Result<Vec<CogmapShapeRow>> {
+    let rows = sqlx::query(
+        "SELECT region_id, lens_id, salience, content_cohesion, label, member_count
+           FROM cogmap_shape($1, 'profile', $2, $3)",
+    )
+    .bind(cogmap_id)
+    .bind(principal)
+    .bind(lens_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| CogmapShapeRow {
+            region_id: r.get("region_id"),
+            lens_id: r.get("lens_id"),
+            salience: r.get("salience"),
+            content_cohesion: r.get("content_cohesion"),
+            label: r.get("label"),
+            member_count: r.get("member_count"),
+        })
+        .collect())
 }
 
 /// One 1-hop graph neighbor of a resource: the OTHER endpoint's origin_uri plus the connecting edge's
