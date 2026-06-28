@@ -22,6 +22,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -930,4 +931,109 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     .fetch_all(pool)
     .await?;
     Ok(hits)
+}
+
+/// One region's analytics-tier scalar metrics, as returned by `cogmap_region_metrics`. The stored
+/// readout columns of `kb_cogmap_regions` (computed once at materialization). Substrate-local; the
+/// `temper-api` wrapper maps this to the `CogmapRegionMetricsRow` wire type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CogmapRegionMetricsRow {
+    pub region_id: Uuid,
+    pub lens_id: Uuid,
+    pub centrality: Option<f64>,
+    pub content_cohesion: Option<f64>,
+    pub internal_tension: Option<f64>,
+    pub reference_standing: Option<f64>,
+    pub telos_alignment: Option<f64>,
+}
+
+/// The per-region analytics tier read (`cogmap_region_metrics`). Gate IS in the SQL (deny → empty);
+/// folded regions excluded; `lens_id = None` → all lenses, `Some(l)` → that lens. Runtime `sqlx::query`.
+pub async fn cogmap_region_metrics(
+    pool: &PgPool,
+    cogmap_id: CogmapId,
+    principal: ProfileId,
+    lens_id: Option<Uuid>,
+) -> Result<Vec<CogmapRegionMetricsRow>> {
+    let rows = sqlx::query(
+        "SELECT region_id, lens_id, centrality, content_cohesion, internal_tension,
+                reference_standing, telos_alignment
+           FROM cogmap_region_metrics($1, 'profile', $2, $3)",
+    )
+    .bind(cogmap_id)
+    .bind(principal)
+    .bind(lens_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| CogmapRegionMetricsRow {
+            region_id: r.get("region_id"),
+            lens_id: r.get("lens_id"),
+            centrality: r.get("centrality"),
+            content_cohesion: r.get("content_cohesion"),
+            internal_tension: r.get("internal_tension"),
+            reference_standing: r.get("reference_standing"),
+            telos_alignment: r.get("telos_alignment"),
+        })
+        .collect())
+}
+
+/// One regulation concept from `cogmap_analytics`'s `json_agg` column. `Deserialize` decodes it out of
+/// the aggregated `jsonb`; field names match the `cogmap_regulation` return columns.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CogmapRegulationRow {
+    pub resource_id: Uuid,
+    pub title: String,
+    pub body_text: Option<String>,
+    pub edge_label: String,
+}
+
+/// Map-level staleness, mirrored from `cogmap_staleness` columns. Substrate-local.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CogmapStaleness {
+    pub materialized_at: Option<DateTime<Utc>>,
+    pub latest_touch: Option<DateTime<Utc>>,
+    pub is_stale: bool,
+}
+
+/// The map-level analytics picture (`cogmap_analytics`): telos id + staleness + regulation set.
+/// Substrate-local; the `temper-api` wrapper maps this to the `CogmapAnalyticsRow` wire type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CogmapAnalyticsRow {
+    pub telos_resource_id: Uuid,
+    pub staleness: CogmapStaleness,
+    pub regulation: Vec<CogmapRegulationRow>,
+}
+
+/// The map-level analytics read (`cogmap_analytics`). Gate IS in the SQL: a principal who cannot read
+/// the map gets zero rows → `None` (never an error). Runtime `sqlx::query`; `regulation` is decoded
+/// from the function's `json_agg` `jsonb` column.
+pub async fn cogmap_analytics(
+    pool: &PgPool,
+    cogmap_id: CogmapId,
+    principal: ProfileId,
+) -> Result<Option<CogmapAnalyticsRow>> {
+    let row = sqlx::query(
+        "SELECT telos_resource_id, materialized_at, latest_touch, is_stale, regulation
+           FROM cogmap_analytics($1, 'profile', $2)",
+    )
+    .bind(cogmap_id)
+    .bind(principal)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| {
+        let regulation: sqlx::types::Json<Vec<CogmapRegulationRow>> = r.get("regulation");
+        CogmapAnalyticsRow {
+            telos_resource_id: r.get("telos_resource_id"),
+            staleness: CogmapStaleness {
+                materialized_at: r.get("materialized_at"),
+                latest_touch: r.get("latest_touch"),
+                is_stale: r.get("is_stale"),
+            },
+            regulation: regulation.0,
+        }
+    }))
 }
