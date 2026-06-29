@@ -453,6 +453,7 @@ impl DbBackend {
                             owner: ctx.owner,
                             emitter: ctx.emitter,
                         },
+                        EventContext::default(),
                     )
                     .await
                     .map_err(api_err)?;
@@ -465,6 +466,7 @@ impl DbBackend {
                         "provenance",
                         &serde_json::json!("kernel"),
                         ctx.emitter,
+                        EventContext::default(),
                     )
                     .await
                     .map_err(api_err)?;
@@ -473,9 +475,16 @@ impl DbBackend {
                     // never clustered). Skip the write entirely when there's nothing to cluster.
                     let facets = strip_provenance_facet(&entry.facets);
                     if facet_is_nonempty(&facets) {
-                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, ctx.emitter)
-                            .await
-                            .map_err(api_err)?;
+                        writes::set_facet_in_tx(
+                            &mut *conn,
+                            rid,
+                            &facets,
+                            1.0,
+                            ctx.emitter,
+                            EventContext::default(),
+                        )
+                        .await
+                        .map_err(api_err)?;
                     }
 
                     // `rid` equals `entry.id` (the create minted under it); the diff already keys edges
@@ -502,6 +511,7 @@ impl DbBackend {
                             rehome_to: None,
                             emitter: ctx.emitter,
                         },
+                        EventContext::default(),
                     )
                     .await
                     .map_err(api_err)?;
@@ -566,6 +576,7 @@ impl DbBackend {
                         weight: e.weight,
                         emitter: ctx.emitter,
                     },
+                    EventContext::default(),
                 )
                 .await
                 .map_err(api_err)?;
@@ -584,9 +595,14 @@ impl DbBackend {
     ) -> Result<(), TemperError> {
         for t in &request.fold_resources {
             if let Some(row) = live_by_id.get(&t.id) {
-                writes::delete_resource_in_tx(&mut *conn, row.resource_id, ctx.emitter)
-                    .await
-                    .map_err(api_err)?;
+                writes::delete_resource_in_tx(
+                    &mut *conn,
+                    row.resource_id,
+                    ctx.emitter,
+                    EventContext::default(),
+                )
+                .await
+                .map_err(api_err)?;
                 outcome.folded += 1;
             }
         }
@@ -663,9 +679,15 @@ impl DbBackend {
             return Ok(());
         }
 
-        writes::set_charter_in_tx(&mut *conn, ctx.cogmap, &blocks, ctx.emitter)
-            .await
-            .map_err(api_err)?;
+        writes::set_charter_in_tx(
+            &mut *conn,
+            ctx.cogmap,
+            &blocks,
+            ctx.emitter,
+            EventContext::default(),
+        )
+        .await
+        .map_err(api_err)?;
 
         let empty = temper_substrate::content::body_hash_for_body("");
         // `None` means the telos row exists but has no body yet (genesis / pre-charter state):

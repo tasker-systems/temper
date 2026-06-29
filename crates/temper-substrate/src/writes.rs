@@ -183,17 +183,32 @@ pub struct UpdateParams<'a> {
 }
 
 pub async fn update_resource(pool: &PgPool, p: UpdateParams<'_>) -> Result<()> {
+    update_resource_with(pool, p, EventContext::default()).await
+}
+
+/// [`update_resource`] under an explicit [`EventContext`] — every sub-event of the update fan-out
+/// (`block_mutated` / `property_set` / `resource_updated` / `resource_rehomed`) is correlated to the
+/// caller's invocation (→ `kb_events.invocation_id`) and stamped with its authorship
+/// (→ `kb_events.metadata`). Mirrors the [`crate::events::fire`]/`fire_with` split.
+pub async fn update_resource_with(
+    pool: &PgPool,
+    p: UpdateParams<'_>,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    update_resource_in_tx(&mut tx, p).await?;
+    update_resource_in_tx(&mut tx, p, ctx).await?;
     tx.commit().await?;
     Ok(())
 }
 
 /// In-transaction variant of [`update_resource`] — fires on a caller-supplied connection (no
 /// begin/commit). The body-block lookup runs on `&mut *conn` so it shares the caller's transaction.
+/// `ctx` correlates every sub-event the update fires (`EventContext::default()` for an un-attributed
+/// update); it is cloned per sub-event since an update fans out to several.
 pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     p: UpdateParams<'_>,
+    ctx: EventContext,
 ) -> Result<()> {
     if let Some(body) = p.body {
         // resolve the resource's single non-folded body block (CONFORM scenario runner revise).
@@ -223,19 +238,20 @@ pub async fn update_resource_in_tx(
                 "update_resource: empty/whitespace body — refusing to write a contentless block"
             );
         }
-        fire(
+        fire_with(
             &mut *conn,
             SeedAction::BlockMutate {
                 block: crate::ids::BlockId::from(block_id),
                 chunks: &prepared.chunks,
                 emitter: p.emitter,
             },
+            ctx.clone(),
         )
         .await?;
     }
 
     for (key, value) in p.properties {
-        fire(
+        fire_with(
             &mut *conn,
             SeedAction::PropertySet {
                 resource: p.resource,
@@ -244,12 +260,13 @@ pub async fn update_resource_in_tx(
                 weight: 1.0,
                 emitter: p.emitter,
             },
+            ctx.clone(),
         )
         .await?;
     }
 
     if p.title.is_some() || p.origin_uri.is_some() {
-        fire(
+        fire_with(
             &mut *conn,
             SeedAction::ResourceUpdate {
                 resource: p.resource,
@@ -257,18 +274,20 @@ pub async fn update_resource_in_tx(
                 origin_uri: p.origin_uri,
                 emitter: p.emitter,
             },
+            ctx.clone(),
         )
         .await?;
     }
 
     if let Some(dest) = p.rehome_to {
-        fire(
+        fire_with(
             &mut *conn,
             SeedAction::ResourceRehome {
                 resource: p.resource,
                 home: AnchorRef::context(dest),
                 emitter: p.emitter,
             },
+            ctx,
         )
         .await?;
     }
@@ -278,20 +297,33 @@ pub async fn update_resource_in_tx(
 
 /// Soft-delete a resource.
 pub async fn delete_resource(pool: &PgPool, resource: ResourceId, emitter: EntityId) -> Result<()> {
+    delete_resource_with(pool, resource, emitter, EventContext::default()).await
+}
+
+/// [`delete_resource`] under an explicit [`EventContext`] — the `resource_deleted` act is correlated
+/// to the caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`.
+pub async fn delete_resource_with(
+    pool: &PgPool,
+    resource: ResourceId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    delete_resource_in_tx(&mut tx, resource, emitter).await?;
+    delete_resource_in_tx(&mut tx, resource, emitter, ctx).await?;
     tx.commit().await?;
     Ok(())
 }
 
 /// In-transaction variant of [`delete_resource`] — fires on a caller-supplied connection (no
-/// begin/commit).
+/// begin/commit). `ctx` correlates the `resource_deleted` act (`EventContext::default()` for an
+/// un-attributed delete).
 pub async fn delete_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
     emitter: EntityId,
+    ctx: EventContext,
 ) -> Result<()> {
-    fire(conn, SeedAction::ResourceDelete { resource, emitter }).await?;
+    fire_with(conn, SeedAction::ResourceDelete { resource, emitter }, ctx).await?;
     Ok(())
 }
 
@@ -326,23 +358,26 @@ pub async fn create_kernel_resource(
     p: KernelCreateParams<'_>,
 ) -> Result<ResourceId> {
     let mut tx = begin_scoped(pool).await?;
-    let new_id = create_kernel_resource_in_tx(&mut tx, p).await?;
+    let new_id = create_kernel_resource_in_tx(&mut tx, p, EventContext::default()).await?;
     tx.commit().await?;
     Ok(new_id)
 }
 
 /// In-transaction variant of [`create_kernel_resource`] — fires on a caller-supplied connection (no
-/// begin/commit) so the L0 reconcile can run every mutation in ONE serializable transaction.
+/// begin/commit) so the L0 reconcile can run every mutation in ONE serializable transaction. `ctx`
+/// correlates the `resource_created` act to the reconcile run (`EventContext::default()` for an
+/// un-attributed create).
 pub async fn create_kernel_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     p: KernelCreateParams<'_>,
+    ctx: EventContext,
 ) -> Result<ResourceId> {
     let block = match p.chunks {
         Some(chunks) => prepare_block_from_chunks(0, None, chunks),
         None => prepare_block(0, None, p.body)?,
     };
     let blocks = [block];
-    let new_id = fire(
+    let new_id = fire_with(
         conn,
         SeedAction::ResourceCreate {
             title: p.title,
@@ -358,6 +393,7 @@ pub async fn create_kernel_resource_in_tx(
             doc_type: Some(p.doc_type),
             emitter: p.emitter,
         },
+        ctx,
     )
     .await?
     .resource()?;
@@ -373,14 +409,16 @@ pub async fn set_charter_in_tx(
     cogmap: CogmapId,
     blocks: &[PreparedBlock],
     emitter: EntityId,
+    ctx: EventContext,
 ) -> Result<ResourceId> {
-    fire(
+    fire_with(
         conn,
         SeedAction::CharterSet {
             cogmap,
             blocks,
             emitter,
         },
+        ctx,
     )
     .await?
     .charter()
@@ -397,21 +435,44 @@ pub async fn set_facet(
     weight: f64,
     emitter: EntityId,
 ) -> Result<()> {
+    set_facet_with(
+        pool,
+        resource,
+        values,
+        weight,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+}
+
+/// [`set_facet`] under an explicit [`EventContext`] — the `facet_set` act is correlated to the
+/// caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`.
+pub async fn set_facet_with(
+    pool: &PgPool,
+    resource: ResourceId,
+    values: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    set_facet_in_tx(&mut tx, resource, values, weight, emitter).await?;
+    set_facet_in_tx(&mut tx, resource, values, weight, emitter, ctx).await?;
     tx.commit().await?;
     Ok(())
 }
 
 /// In-transaction variant of [`set_facet`] — fires on a caller-supplied connection (no begin/commit).
+/// `ctx` correlates the `facet_set` act (`EventContext::default()` for an un-attributed facet).
 pub async fn set_facet_in_tx(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
     values: &serde_json::Value,
     weight: f64,
     emitter: EntityId,
+    ctx: EventContext,
 ) -> Result<()> {
-    fire(
+    fire_with(
         conn,
         SeedAction::FacetSet {
             resource,
@@ -419,6 +480,7 @@ pub async fn set_facet_in_tx(
             weight,
             emitter,
         },
+        ctx,
     )
     .await?;
     Ok(())
@@ -434,21 +496,36 @@ pub async fn set_property(
     value: &serde_json::Value,
     emitter: EntityId,
 ) -> Result<()> {
+    set_property_with(pool, resource, key, value, emitter, EventContext::default()).await
+}
+
+/// [`set_property`] under an explicit [`EventContext`] — the `property_set` act is correlated to the
+/// caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`.
+pub async fn set_property_with(
+    pool: &PgPool,
+    resource: ResourceId,
+    key: &str,
+    value: &serde_json::Value,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    set_property_in_tx(&mut tx, resource, key, value, emitter).await?;
+    set_property_in_tx(&mut tx, resource, key, value, emitter, ctx).await?;
     tx.commit().await?;
     Ok(())
 }
 
 /// In-transaction variant of [`set_property`] — fires on a caller-supplied connection (no begin/commit).
+/// `ctx` correlates the `property_set` act (`EventContext::default()` for an un-attributed property).
 pub async fn set_property_in_tx(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
     key: &str,
     value: &serde_json::Value,
     emitter: EntityId,
+    ctx: EventContext,
 ) -> Result<()> {
-    fire(
+    fire_with(
         conn,
         SeedAction::PropertySet {
             resource,
@@ -457,6 +534,7 @@ pub async fn set_property_in_tx(
             weight: 1.0,
             emitter,
         },
+        ctx,
     )
     .await?;
     Ok(())
@@ -501,18 +579,20 @@ pub struct KernelEdgeParams<'a> {
 
 pub async fn assert_kernel_edge(pool: &PgPool, p: KernelEdgeParams<'_>) -> Result<EdgeId> {
     let mut tx = begin_scoped(pool).await?;
-    let edge = assert_kernel_edge_in_tx(&mut tx, p).await?;
+    let edge = assert_kernel_edge_in_tx(&mut tx, p, EventContext::default()).await?;
     tx.commit().await?;
     Ok(edge)
 }
 
 /// In-transaction variant of [`assert_kernel_edge`] — fires on a caller-supplied connection (no
-/// begin/commit).
+/// begin/commit). `ctx` correlates the `relationship_asserted` act to the reconcile run
+/// (`EventContext::default()` for an un-attributed assert).
 pub async fn assert_kernel_edge_in_tx(
     conn: &mut sqlx::PgConnection,
     p: KernelEdgeParams<'_>,
+    ctx: EventContext,
 ) -> Result<EdgeId> {
-    let edge = fire(
+    let edge = fire_with(
         conn,
         SeedAction::RelationshipAssert {
             src: p.src,
@@ -524,6 +604,7 @@ pub async fn assert_kernel_edge_in_tx(
             home: EdgeHome::Cogmap(p.cogmap),
             emitter: p.emitter,
         },
+        ctx,
     )
     .await?
     .relationship()?;
@@ -584,8 +665,21 @@ pub async fn retype_relationship(
     polarity: EdgePolarity,
     emitter: EntityId,
 ) -> Result<()> {
+    retype_relationship_with(pool, edge, kind, polarity, emitter, EventContext::default()).await
+}
+
+/// [`retype_relationship`] under an explicit [`EventContext`] — the `relationship_retyped` act is
+/// correlated to the caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`.
+pub async fn retype_relationship_with(
+    pool: &PgPool,
+    edge: EdgeId,
+    kind: EdgeKind,
+    polarity: EdgePolarity,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fire(
+    fire_with(
         &mut tx,
         SeedAction::RelationshipRetype {
             edge,
@@ -593,6 +687,7 @@ pub async fn retype_relationship(
             polarity,
             emitter,
         },
+        ctx,
     )
     .await?;
     tx.commit().await?;
@@ -605,14 +700,27 @@ pub async fn reweight_relationship(
     weight: f64,
     emitter: EntityId,
 ) -> Result<()> {
+    reweight_relationship_with(pool, edge, weight, emitter, EventContext::default()).await
+}
+
+/// [`reweight_relationship`] under an explicit [`EventContext`] — the `relationship_reweighted` act is
+/// correlated to the caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`.
+pub async fn reweight_relationship_with(
+    pool: &PgPool,
+    edge: EdgeId,
+    weight: f64,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    fire(
+    fire_with(
         &mut tx,
         SeedAction::RelationshipReweight {
             edge,
             weight,
             emitter,
         },
+        ctx,
     )
     .await?;
     tx.commit().await?;

@@ -388,7 +388,7 @@ impl Fired {
 /// Per-fire authored-act context: the agent's authorship metadata (→ kb_events.metadata) and the
 /// invocation it is acting under (→ kb_events.invocation_id). Default = a keyboard-holder/system act
 /// (no authorship, no invocation), so `fire` callers are unchanged.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct EventContext {
     pub authorship: Option<payloads::AgentAuthorship>,
     pub invocation: Option<InvocationId>,

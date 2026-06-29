@@ -8,7 +8,7 @@
 mod common;
 
 use temper_substrate::content;
-use temper_substrate::events::{fire, SeedAction};
+use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes;
@@ -174,10 +174,15 @@ async fn charter_delivery_makes_telos_alignment_computable(pool: sqlx::PgPool) {
     // ── 4. deliver the 3-block charter ────────────────────────────────────────────────────────────
     let blocks = build_charter_blocks();
     let mut tx = pool.begin().await.unwrap();
-    let returned_telos =
-        writes::set_charter_in_tx(&mut tx, CogmapId::from(cogmap), &blocks, emitter)
-            .await
-            .unwrap();
+    let returned_telos = writes::set_charter_in_tx(
+        &mut tx,
+        CogmapId::from(cogmap),
+        &blocks,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     assert_eq!(
         returned_telos.uuid(),
