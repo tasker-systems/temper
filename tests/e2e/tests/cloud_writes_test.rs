@@ -105,7 +105,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -234,7 +234,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -390,7 +390,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -556,7 +556,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -705,7 +705,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -850,7 +850,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -997,7 +997,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -1110,7 +1110,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -1201,7 +1201,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -1351,7 +1351,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -1473,7 +1473,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("edgesctx")
+        .create("edgesctx", None)
         .await
         .expect("create edgesctx context");
 
@@ -1560,7 +1560,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 

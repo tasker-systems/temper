@@ -49,7 +49,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("show-heal")
+        .create("show-heal", None)
         .await
         .expect("context create");
 
@@ -152,7 +152,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("show-mismatch")
+        .create("show-mismatch", None)
         .await
         .expect("context create");
 

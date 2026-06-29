@@ -75,7 +75,7 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
     common::enable_invite_only(&pool, principal).await;
     app.client
         .contexts()
-        .create("act-api")
+        .create("act-api", None)
         .await
         .expect("context create");
 
@@ -195,7 +195,7 @@ async fn cli_edge_assert_under_invocation_stamps_authorship(pool: sqlx::PgPool) 
     common::enable_invite_only(&pool, principal).await;
     app.client
         .contexts()
-        .create("act-cli")
+        .create("act-cli", None)
         .await
         .expect("context create");
 

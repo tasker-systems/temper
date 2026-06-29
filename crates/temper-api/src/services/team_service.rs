@@ -39,7 +39,10 @@ fn team_slug(parent_ref: &str) -> &str {
 }
 
 /// Fetch the caller's role on a team, if any.
-async fn role_on_team(
+///
+/// `pub(crate)` so sibling services (e.g. `context_service`'s team-owned-context
+/// gate) reuse the one role check rather than duplicating the authz.
+pub(crate) async fn role_on_team(
     pool: &PgPool,
     team_id: Uuid,
     profile_id: ProfileId,
@@ -57,7 +60,9 @@ async fn role_on_team(
 }
 
 /// True if the role is `owner` or `maintainer` (may manage the team).
-fn can_manage(role: TeamRole) -> bool {
+///
+/// `pub(crate)` so sibling services reuse the one definition (see `role_on_team`).
+pub(crate) fn can_manage(role: TeamRole) -> bool {
     matches!(role, TeamRole::Owner | TeamRole::Maintainer)
 }
 

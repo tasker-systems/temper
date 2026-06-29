@@ -58,10 +58,20 @@ pub async fn create_context(
     input: ContextCreateRequest,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
+    let caller = ProfileId::from(profile.id);
+
+    let (owner_table, owner_id) = temper_api::services::context_service::resolve_create_owner(
+        &svc.api_state.pool,
+        caller,
+        input.owner.as_ref(),
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to resolve owner: {e}"), None))?;
 
     let row = temper_api::services::context_service::create(
         &svc.api_state.pool,
-        ProfileId::from(profile.id),
+        &owner_table,
+        owner_id,
         &input.name,
     )
     .await

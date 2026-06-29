@@ -19,7 +19,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
     // Create a context owned by the test user so the ingest can resolve it.
     app.client
         .contexts()
-        .create("e2e-test")
+        .create("e2e-test", None)
         .await
         .expect("context create failed");
 

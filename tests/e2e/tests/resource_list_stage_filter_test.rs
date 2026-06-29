@@ -70,7 +70,7 @@ async fn resource_list_filters_by_stage(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("stagefilter")
+        .create("stagefilter", None)
         .await
         .expect("create stagefilter context");
 

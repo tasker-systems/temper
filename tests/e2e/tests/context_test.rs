@@ -16,7 +16,7 @@ async fn context_create_and_list(pool: sqlx::PgPool) {
     let created = app
         .client
         .contexts()
-        .create("e2e-context-list-test")
+        .create("e2e-context-list-test", None)
         .await
         .expect("context create failed");
 
@@ -49,7 +49,7 @@ async fn context_get_by_id(pool: sqlx::PgPool) {
     let created = app
         .client
         .contexts()
-        .create("e2e-context-get-by-id")
+        .create("e2e-context-get-by-id", None)
         .await
         .expect("context create failed");
 
@@ -84,14 +84,14 @@ async fn context_duplicate_name_auto_suffixes_slug(pool: sqlx::PgPool) {
     let first = app
         .client
         .contexts()
-        .create("e2e-context-duplicate")
+        .create("e2e-context-duplicate", None)
         .await
         .expect("first context create failed");
 
     let second = app
         .client
         .contexts()
-        .create("e2e-context-duplicate")
+        .create("e2e-context-duplicate", None)
         .await
         .expect("second create with duplicate name should succeed (slug auto-suffixed)");
 

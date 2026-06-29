@@ -19,7 +19,7 @@ async fn ingest_create_with_at_me_slug_succeeds(pool: sqlx::PgPool) {
     let ctx = app
         .client
         .contexts()
-        .create("e2e-context-ref-test")
+        .create("e2e-context-ref-test", None)
         .await
         .expect("context create failed");
 
@@ -117,7 +117,7 @@ async fn ingest_create_with_uuid_context_ref_succeeds(pool: sqlx::PgPool) {
     let ctx = app
         .client
         .contexts()
-        .create("e2e-context-uuid-ref-test")
+        .create("e2e-context-uuid-ref-test", None)
         .await
         .expect("context create failed");
 
