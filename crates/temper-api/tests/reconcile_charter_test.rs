@@ -97,6 +97,7 @@ fn cmd(cogmap: Uuid, req: ReconcileCogmapRequest) -> ReconcileCognitiveMap {
     ReconcileCognitiveMap {
         cogmap_id: CogmapId::from(cogmap),
         request: req,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     }
 }

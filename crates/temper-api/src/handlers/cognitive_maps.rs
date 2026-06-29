@@ -60,6 +60,7 @@ pub async fn reconcile(
     let cmd = ReconcileCognitiveMap {
         cogmap_id: CogmapId::from(cogmap_id),
         request,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

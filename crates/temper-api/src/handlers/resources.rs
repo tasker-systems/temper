@@ -262,6 +262,7 @@ pub async fn update(
         open_meta: req.open_meta,
         move_to,
         context_ref: None,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -290,6 +291,7 @@ pub async fn delete(
     let cmd = DeleteResource {
         resource: ResourceId::from(resource_id),
         force: false,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

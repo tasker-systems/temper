@@ -589,6 +589,7 @@ pub async fn update_resource(
         open_meta: input.open_meta,
         move_to: None,
         context_ref: None,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 
@@ -644,6 +645,7 @@ pub async fn update_resource_meta(
         open_meta: Some(input.open_meta),
         move_to: None,
         context_ref: None,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 
@@ -685,6 +687,7 @@ pub async fn delete_resource(
         // CLI-side concern; DbBackend ignores per spec (force=true is only
         // relevant when a CLI surface presents a confirmation prompt).
         force: false,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 

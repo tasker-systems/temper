@@ -91,6 +91,7 @@ fn cmd(cogmap: Uuid, req: ReconcileCogmapRequest) -> ReconcileCognitiveMap {
     ReconcileCognitiveMap {
         cogmap_id: temper_core::types::ids::CogmapId::from(cogmap),
         request: req,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     }
 }
@@ -595,4 +596,74 @@ async fn wire_content_hash_is_advisory_rerun_is_unchanged(pool: PgPool) {
         "wire content_hash is advisory — the server diffs on the chunk-merkle, so a same-body re-run \
          must be UNCHANGED even when content_hash is the CLI's (non-matching) whole-body hash",
     );
+}
+
+// ── invocation correlation: every reconcile act carries the run's minted envelope ──────────────────
+
+/// Before this task a reconcile run's act-list was EMPTY: `reconcile_apply` minted an `admin_reconcile`
+/// envelope but fired every mutation with the default `EventContext`, so no event carried the run's
+/// `invocation_id`. Now every act it fires (`resource_created` / `property_set` / `facet_set`) correlates
+/// to that envelope, so `invocation_show` answers "what did this reconcile author?". Asserted at the
+/// backend: the mutation events' `invocation_id` equals the one `admin_reconcile` envelope's id, and NO
+/// reconcile-produced mutation event is left with a NULL correlator.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_acts_correlate_to_the_runs_minted_envelope(pool: PgPool) {
+    let be = backend(&pool).await;
+    let req = request(vec![entry(
+        Uuid::now_v7(),
+        "temper://kernel/concept/cogmap",
+        "cogmap",
+        "A cognitive map: a bounded, telos-governed view.",
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![],
+    )]);
+    be.reconcile_cognitive_map(cmd(L0_COGMAP, req))
+        .await
+        .expect("reconcile")
+        .value;
+
+    // The run's server-minted envelope (the single admin_reconcile invocation). NOTE: the L0 birth
+    // migration itself fires events with a NULL correlator (migration-time, not under a run), so the
+    // assertions below are scoped to events CORRELATED TO this envelope — never a global NULL sweep.
+    let inv: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_invocations WHERE trigger_kind = 'admin_reconcile'")
+            .fetch_one(&pool)
+            .await
+            .expect("exactly one admin_reconcile envelope");
+
+    // The one faceted entry fires exactly three MUTATION acts — resource_created, property_set
+    // (provenance:kernel), property_asserted (the layer facet) — and EACH must carry `inv`. Before this
+    // task all three fired with the default ctx → invocation_id NULL → a reconcile run's act-list empty.
+    let mutation_acts_under_run: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE ev.invocation_id = $1 \
+            AND et.name NOT IN ('delegated_launch', 'invocation_closed')",
+    )
+    .bind(inv)
+    .fetch_one(&pool)
+    .await
+    .expect("count mutation acts under the run");
+    assert_eq!(
+        mutation_acts_under_run, 3,
+        "all three reconcile mutation acts (resource_created/property_set/property_asserted) correlate \
+         to the run's minted envelope"
+    );
+
+    // And each distinct kind is present under the envelope (not just three of one kind).
+    for kind in ["resource_created", "property_set", "property_asserted"] {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+              WHERE et.name = $1 AND ev.invocation_id = $2",
+        )
+        .bind(kind)
+        .bind(inv)
+        .fetch_one(&pool)
+        .await
+        .expect("count by kind under run");
+        assert!(
+            n >= 1,
+            "a `{kind}` act must correlate to the reconcile envelope (got {n})"
+        );
+    }
 }

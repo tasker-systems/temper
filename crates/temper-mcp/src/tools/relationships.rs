@@ -158,6 +158,7 @@ pub async fn retype_relationship(
         edge_handle: EdgeId::from(input.edge_handle),
         edge_kind: input.edge_kind,
         polarity: input.polarity,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 
@@ -186,6 +187,7 @@ pub async fn reweight_relationship(
     let cmd = ReweightRelationship {
         edge_handle: EdgeId::from(input.edge_handle),
         weight: input.weight,
+        act: Default::default(),
         origin: Surface::Mcp,
     };
 

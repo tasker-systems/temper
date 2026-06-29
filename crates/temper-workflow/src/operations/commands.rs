@@ -102,6 +102,11 @@ pub struct UpdateResource {
     /// parses and resolves it server-side. `None` when not a CLI-originated
     /// context move (API handler builds `move_to` directly after resolution).
     pub context_ref: Option<String>,
+    /// Per-act correlation + authorship — stamps every sub-event of the update fan-out
+    /// (`block_mutated` / `property_set` / `resource_updated` / `resource_rehomed`). Empty by default;
+    /// correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -112,6 +117,10 @@ pub struct DeleteResource {
     pub resource: ResourceId,
     /// Bypass the local-file confirmation prompt (required for non-TTY).
     pub force: bool,
+    /// Per-act correlation + authorship — stamps the `resource_deleted` act. Empty by default;
+    /// correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -156,6 +165,10 @@ pub struct RetypeRelationship {
     pub edge_handle: EdgeId,
     pub edge_kind: temper_core::types::graph::EdgeKind,
     pub polarity: temper_core::types::graph::Polarity,
+    /// Per-act correlation + authorship — stamps the `relationship_retyped` act. Empty by default;
+    /// correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -164,6 +177,10 @@ pub struct RetypeRelationship {
 pub struct ReweightRelationship {
     pub edge_handle: EdgeId,
     pub weight: f64,
+    /// Per-act correlation + authorship — stamps the `relationship_reweighted` act. Empty by default;
+    /// correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -208,6 +225,11 @@ pub struct CloseInvocation {
 pub struct ReconcileCognitiveMap {
     pub cogmap_id: CogmapId,
     pub request: temper_core::types::reconcile::ReconcileCogmapRequest,
+    /// Authorship for the reconcile run — stamped on EVERY act the reconcile fires (the run's
+    /// server-minted invocation correlates them; any caller-supplied `act.invocation` is ignored, the
+    /// reconcile owns its envelope). Empty by default.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
     pub origin: Surface,
 }
 
@@ -235,6 +257,7 @@ mod tests {
             open_meta: None,
             move_to: None,
             context_ref: None,
+            act: Default::default(),
             origin: Surface::ApiHttp,
         };
         assert!(cmd.body.is_none());

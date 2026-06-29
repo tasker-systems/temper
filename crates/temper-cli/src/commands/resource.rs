@@ -629,6 +629,7 @@ pub fn delete(
     let cmd = DeleteResource {
         resource: id,
         force,
+        act: Default::default(),
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
@@ -1014,6 +1015,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
         context_ref: params.context_to.map(String::from),
+        act: Default::default(),
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 

@@ -107,6 +107,7 @@ pub async fn retype(
         edge_handle: EdgeId::from(edge_handle),
         edge_kind: req.edge_kind,
         polarity: req.polarity,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -143,6 +144,7 @@ pub async fn reweight(
     let cmd = ReweightRelationship {
         edge_handle: EdgeId::from(edge_handle),
         weight: req.weight,
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
