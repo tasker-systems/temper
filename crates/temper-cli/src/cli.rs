@@ -593,6 +593,21 @@ pub enum CogmapCmd {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
     },
+    /// Bind a cognitive map to a team (admin-only). Widens the map's reach to the
+    /// team's shared resources.
+    Bind {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Team to bind to: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
+    },
+    /// Unbind a cognitive map from a team (admin-only).
+    Unbind {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Team to unbind: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
+    },
 }
 
 /// CLI-local enum mirroring `Disposition` for clap `value_enum` parsing.

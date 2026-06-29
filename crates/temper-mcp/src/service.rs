@@ -281,6 +281,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Bind a cognitive map to a team (system-admin only). Widens the map's producer-intersection reach to include the team's shared resources. Idempotent — re-binding is a no-op (bound: false). Pass the map by ref and the team by UUID."
+    )]
+    async fn cogmap_bind(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapBindInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_bind(self, input).await
+    }
+
+    #[tool(
+        description = "Unbind a cognitive map from a team (system-admin only). No-op safe — unbinding a non-existent binding returns unbound: false. Pass the map by ref and the team by UUID."
+    )]
+    async fn cogmap_unbind(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapBindInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_unbind(self, input).await
+    }
+
+    #[tool(
         description = "Read a cognitive map's surface tier: its materialized regions (salience, cohesion, label, member count) under an optional lens. Pass the map by ref."
     )]
     async fn cogmap_shape(

@@ -14,11 +14,12 @@ use uuid::Uuid;
 use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
-use crate::services::access_service;
+use crate::services::{access_service, cogmap_service};
 use crate::state::AppState;
 
 use temper_core::types::cognitive_maps::{
-    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    UnbindTeamOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::reconcile::{
@@ -194,4 +195,63 @@ pub async fn analytics(
     .await?
     .map(Json)
     .ok_or(ApiError::NotFound)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/cognitive-maps/{id}/teams",
+    tag = "Cognitive Maps",
+    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    security(("bearer_auth" = [])),
+    request_body = BindTeamRequest,
+    responses(
+        (status = 200, description = "Team bound (or idempotent no-op)", body = BindTeamOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+    )
+)]
+pub async fn bind_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Json(body): Json<BindTeamRequest>,
+) -> ApiResult<Json<BindTeamOutcome>> {
+    // Auth before writes lives in the service (`is_system_admin`), so the MCP
+    // surface — which calls the service directly — is gated identically.
+    let outcome = cogmap_service::bind_team(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        &body,
+    )
+    .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/cognitive-maps/{id}/teams/{team_id}",
+    tag = "Cognitive Maps",
+    params(
+        ("id" = Uuid, Path, description = "Cognitive map ID"),
+        ("team_id" = Uuid, Path, description = "Team ID to unbind"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Team unbound (or no-op)", body = UnbindTeamOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+    )
+)]
+pub async fn unbind_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((cogmap_id, team_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<UnbindTeamOutcome>> {
+    let outcome = cogmap_service::unbind_team(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        team_id,
+    )
+    .await?;
+    Ok(Json(outcome))
 }

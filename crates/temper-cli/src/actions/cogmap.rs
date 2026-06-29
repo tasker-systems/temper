@@ -1,10 +1,11 @@
 //! `temper cogmap shape` business logic — thin wrapper over the cognitive-maps client. Cloud-only.
 
 use temper_core::types::cognitive_maps::{
-    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    UnbindTeamOutcome,
 };
 
-use crate::error::Result;
+use crate::error::{Result, TemperError};
 
 /// Call the shape API for the given cogmap (and optional lens), both already resolved to UUIDs.
 pub async fn shape_api(
@@ -44,10 +45,82 @@ pub async fn analytics_api(
         .map_err(crate::commands::client_err)
 }
 
+/// Strip an optional leading `+` sigil from a team ref, yielding the bare team token.
+///
+/// Teams are addressed by their global-unique slug (`team_service` strips the same `+`
+/// on the server). Unlike a context ref (`+team/slug`), a team has no `/slug` half — so
+/// `parse_context_ref` is the wrong tool here; we strip the sigil directly.
+fn strip_team_sigil(team: &str) -> &str {
+    team.strip_prefix('+').unwrap_or(team)
+}
+
+/// Resolve a team ref (a slug, optionally `+`-prefixed, or a bare UUID) to its team id.
+///
+/// A UUID is used directly. Otherwise the slug is matched against the teams the caller is a
+/// member of (`TeamsClient::list`) — the admin who provisions a map is a member (owner) of
+/// the teams they bind it to. Returns a clear error when the slug does not resolve.
+pub async fn resolve_team_id(
+    client: &temper_client::TemperClient,
+    team: &str,
+) -> Result<uuid::Uuid> {
+    let token = strip_team_sigil(team);
+    if let Ok(id) = uuid::Uuid::parse_str(token) {
+        return Ok(id);
+    }
+    let teams = client
+        .teams()
+        .list()
+        .await
+        .map_err(crate::commands::client_err)?;
+    teams
+        .into_iter()
+        .find(|t| t.slug == token)
+        .map(|t| t.id)
+        .ok_or_else(|| {
+            TemperError::Api(format!(
+                "team '{token}' not found among the teams you are a member of"
+            ))
+        })
+}
+
+/// Bind the cogmap (already resolved to a UUID) to a team (resolved from `team`).
+pub async fn bind_api(
+    client: &temper_client::TemperClient,
+    cogmap_id: uuid::Uuid,
+    team: &str,
+) -> Result<BindTeamOutcome> {
+    let team_id = resolve_team_id(client, team).await?;
+    client
+        .cognitive_maps()
+        .bind_team(cogmap_id, &BindTeamRequest { team_id })
+        .await
+        .map_err(crate::commands::client_err)
+}
+
+/// Unbind the cogmap (already resolved to a UUID) from a team (resolved from `team`).
+pub async fn unbind_api(
+    client: &temper_client::TemperClient,
+    cogmap_id: uuid::Uuid,
+    team: &str,
+) -> Result<UnbindTeamOutcome> {
+    let team_id = resolve_team_id(client, team).await?;
+    client
+        .cognitive_maps()
+        .unbind_team(cogmap_id, team_id)
+        .await
+        .map_err(crate::commands::client_err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn strip_team_sigil_handles_prefix_and_bare() {
+        assert_eq!(strip_team_sigil("+my-team"), "my-team");
+        assert_eq!(strip_team_sigil("my-team"), "my-team");
+    }
 
     #[test]
     fn render_region_metrics_rows_json_is_passthrough_array() {

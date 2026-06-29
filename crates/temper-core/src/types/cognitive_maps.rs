@@ -9,6 +9,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use uuid::Uuid;
 
 use crate::types::ids::{LensId, RegionId, ResourceId};
 
@@ -133,10 +134,95 @@ pub struct CogmapAnalyticsRow {
     pub regulation: Vec<CogmapRegulationRow>,
 }
 
+// ---------------------------------------------------------------------------
+// Cogmap ↔ team binding wire types (org-provisioning Chunk 5).
+//
+// Binding a cognitive map to a team writes a `kb_team_cogmaps` row — it widens
+// the map's least-privilege producer-intersection reach (access §4). The surface
+// is SERVICE-DIRECT and admin-gated (mirrors team membership, not a Backend
+// command). Full derive stack mirrors `team::AddMemberRequest`.
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /api/cognitive-maps/{id}/teams` — bind a map to a team.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BindTeamRequest {
+    /// The team to bind the cognitive map to.
+    pub team_id: Uuid,
+}
+
+/// The result of binding a cognitive map to a team. `bound` is `false` when the
+/// binding already existed (idempotent no-op) — the clean mirror of genesis's
+/// `created` flag.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindTeamOutcome {
+    pub cogmap_id: Uuid,
+    pub team_id: Uuid,
+    /// `true` when this call inserted the binding; `false` when it already existed.
+    pub bound: bool,
+}
+
+/// The result of unbinding a cognitive map from a team. `unbound` is `false` when
+/// no binding existed (no-op safe).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnbindTeamOutcome {
+    pub cogmap_id: Uuid,
+    pub team_id: Uuid,
+    /// `true` when this call deleted a binding; `false` when none existed.
+    pub unbound: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn bind_team_request_serde_roundtrip() {
+        let team_id = Uuid::now_v7();
+        let req = BindTeamRequest { team_id };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(json.contains("\"team_id\""), "json: {json}");
+        let back: BindTeamRequest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.team_id, team_id);
+    }
+
+    #[test]
+    fn bind_team_outcome_serde_roundtrip() {
+        let outcome = BindTeamOutcome {
+            cogmap_id: Uuid::now_v7(),
+            team_id: Uuid::now_v7(),
+            bound: true,
+        };
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        assert!(json.contains("\"bound\":true"), "json: {json}");
+        let back: BindTeamOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, outcome);
+    }
+
+    #[test]
+    fn unbind_team_outcome_serde_roundtrip() {
+        let outcome = UnbindTeamOutcome {
+            cogmap_id: Uuid::now_v7(),
+            team_id: Uuid::now_v7(),
+            unbound: false,
+        };
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        assert!(json.contains("\"unbound\":false"), "json: {json}");
+        let back: UnbindTeamOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, outcome);
+    }
 
     #[test]
     fn cogmap_shape_input_serde_roundtrip() {
