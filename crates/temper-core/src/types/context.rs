@@ -6,6 +6,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::ids::ContextId;
+use crate::context_ref::ContextOwnerRef;
 
 /// Response row for context endpoints.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -54,4 +55,9 @@ pub struct ContextRowWithCounts {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ContextCreateRequest {
     pub name: String,
+    /// Who owns the new context. `None` (the default) creates a context owned by
+    /// the calling profile, preserving pre-Chunk-3 behavior. `Team(slug)` creates
+    /// a team-owned context (role-gated server-side to `owner`/`maintainer`).
+    #[serde(default)]
+    pub owner: Option<ContextOwnerRef>,
 }

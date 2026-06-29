@@ -13,6 +13,7 @@
 use sqlx::PgPool;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_workflow::operations::sluggify;
@@ -207,7 +208,8 @@ async fn ensure_context_visible(
 /// constraint is the backstop against the check-then-insert race.
 async fn next_unique_context_slug(
     pool: &PgPool,
-    owner_id: ProfileId,
+    owner_table: &str,
+    owner_id: uuid::Uuid,
     name: &str,
 ) -> ApiResult<String> {
     let base = {
@@ -225,10 +227,11 @@ async fn next_unique_context_slug(
             r#"
             SELECT EXISTS (
                 SELECT 1 FROM kb_contexts
-                 WHERE owner_table = 'kb_profiles' AND owner_id = $1 AND slug = $2
+                 WHERE owner_table = $1 AND owner_id = $2 AND slug = $3
             ) AS "taken!"
             "#,
-            *owner_id,
+            owner_table,
+            owner_id,
             candidate
         )
         .fetch_one(pool)
@@ -242,22 +245,63 @@ async fn next_unique_context_slug(
     }
 }
 
-/// Create a new context owned by the profile: a plain INSERT with a generated
-/// slug and NO event emission (product decision 5 — contexts are infrastructure).
+/// Resolve a context-create request's owner descriptor to `(owner_table, owner_id)`,
+/// enforcing the role gate **before** any write (auth-before-writes).
+///
+/// - `None` / `Me` → the caller's own profile (`kb_profiles`), preserving the
+///   pre-Chunk-3 default.
+/// - `Team(slug)` → the team (must exist, else `NotFound`); the caller must be
+///   `owner`/`maintainer` on it (reuses `team_service`'s role check — no
+///   duplicated authz), else `Forbidden`.
+/// - `Handle(_)` → `BadRequest`: a profile cannot create a context owned by
+///   another profile.
+pub async fn resolve_create_owner(
+    pool: &PgPool,
+    caller: ProfileId,
+    owner: Option<&ContextOwnerRef>,
+) -> ApiResult<(String, uuid::Uuid)> {
+    match owner {
+        None | Some(ContextOwnerRef::Me) => Ok(("kb_profiles".to_owned(), *caller)),
+        Some(ContextOwnerRef::Team(slug)) => {
+            let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
+                .fetch_optional(pool)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            match team_service::role_on_team(pool, team_id, caller).await? {
+                Some(role) if team_service::can_manage(role) => {}
+                _ => return Err(ApiError::Forbidden),
+            }
+            Ok(("kb_teams".to_owned(), team_id))
+        }
+        Some(ContextOwnerRef::Handle(_)) => Err(ApiError::BadRequest(
+            "cannot create a context owned by another profile".to_owned(),
+        )),
+    }
+}
+
+/// Create a new context owned by `(owner_table, owner_id)`: a plain INSERT with a
+/// generated slug and NO event emission (product decision 5 — contexts are
+/// infrastructure). The owner is resolved + role-gated upstream by
+/// [`resolve_create_owner`].
 ///
 /// The substrate enforces uniqueness on the generated slug
 /// (`(owner_table, owner_id, slug)`), not the name — `next_unique_context_slug`
-/// auto-suffixes on collision, so two contexts sharing a name coexist under
-/// distinct slugs rather than 409ing.
-pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResult<ContextRow> {
+/// auto-suffixes on collision (scoped to this owner), so two contexts sharing a
+/// name coexist under distinct slugs rather than 409ing.
+pub async fn create(
+    pool: &PgPool,
+    owner_table: &str,
+    owner_id: uuid::Uuid,
+    name: &str,
+) -> ApiResult<ContextRow> {
     let id = ContextId::new();
-    let slug = next_unique_context_slug(pool, profile_id, name).await?;
+    let slug = next_unique_context_slug(pool, owner_table, owner_id, name).await?;
 
     let row = sqlx::query_as!(
         ContextRow,
         r#"
         INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)
-        VALUES ($1, 'kb_profiles', $2, $3, $4)
+        VALUES ($1, $2, $3, $4, $5)
         RETURNING id, name,
                   owner_table AS "kb_owner_table!",
                   owner_id AS "kb_owner_id!",
@@ -270,7 +314,8 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
                   END AS "owner_ref!"
         "#,
         *id,
-        *profile_id,
+        owner_table,
+        owner_id,
         slug,
         name
     )

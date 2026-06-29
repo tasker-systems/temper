@@ -89,7 +89,7 @@ async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("graph-e2e")
+        .create("graph-e2e", None)
         .await
         .expect("create context");
 
@@ -206,7 +206,7 @@ async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("edges-e2e")
+        .create("edges-e2e", None)
         .await
         .expect("create context");
 
@@ -265,7 +265,7 @@ async fn search_no_graph_flag_disables_expansion(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("nograph-e2e")
+        .create("nograph-e2e", None)
         .await
         .expect("create context");
 
@@ -340,12 +340,12 @@ async fn search_context_ref_scopes_and_unknown_errors(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("scope-a")
+        .create("scope-a", None)
         .await
         .expect("create context scope-a");
     app.client
         .contexts()
-        .create("scope-b")
+        .create("scope-b", None)
         .await
         .expect("create context scope-b");
 

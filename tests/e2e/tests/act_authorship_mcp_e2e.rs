@@ -80,7 +80,7 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
     // A context to create into.
     app.client
         .contexts()
-        .create("act-authorship-mcp")
+        .create("act-authorship-mcp", None)
         .await
         .expect("context create");
 

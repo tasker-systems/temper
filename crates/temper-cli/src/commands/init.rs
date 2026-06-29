@@ -114,7 +114,7 @@ impl ContextEnsurer for ClientContextEnsurer<'_> {
         if self.existing_names.iter().any(|n| n == name) {
             return Ok(());
         }
-        let result = self.rt.block_on(self.client.contexts().create(name));
+        let result = self.rt.block_on(self.client.contexts().create(name, None));
         match result {
             Ok(_) => Ok(()),
             Err(temper_client::error::ClientError::Conflict { .. }) => {

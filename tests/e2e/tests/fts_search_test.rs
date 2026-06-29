@@ -53,7 +53,7 @@ async fn fts_text_query_finds_resource(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("fts-test")
+        .create("fts-test", None)
         .await
         .expect("context create");
 
@@ -103,7 +103,7 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("fts-body")
+        .create("fts-body", None)
         .await
         .expect("context create");
 
@@ -169,7 +169,7 @@ async fn unified_search_both_modes(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("fts-unified")
+        .create("fts-unified", None)
         .await
         .expect("context create");
 
@@ -222,12 +222,12 @@ async fn fts_respects_context_filter(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("ctx-alpha")
+        .create("ctx-alpha", None)
         .await
         .expect("context create alpha");
     app.client
         .contexts()
-        .create("ctx-beta")
+        .create("ctx-beta", None)
         .await
         .expect("context create beta");
 

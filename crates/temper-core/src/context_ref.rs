@@ -4,12 +4,19 @@
 //! Pure string parsing — no DB, no principal. Resolution to a `ContextId`
 //! (owner lookup + visibility gate) lives server-side in temper-api.
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::validation::validate_owner_pattern;
 
 /// The owner half of a decorated context ref.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Derives `Serialize`/`Deserialize` so it can ride in API request bodies as a
+/// typed owner descriptor (e.g. `ContextCreateRequest::owner`), not a flat
+/// `(owner_table, owner_id)` pair.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextOwnerRef {
     /// `@me` — the calling principal's own profile.
     Me,

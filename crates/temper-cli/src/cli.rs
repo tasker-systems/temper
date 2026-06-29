@@ -457,6 +457,10 @@ pub enum ContextAction {
     Create {
         /// Context name to create
         name: String,
+        /// Owner of the context: `@me` (default) or `+<team-slug>` for a
+        /// team-owned context (requires owner/maintainer on the team).
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// List configured contexts
     List,

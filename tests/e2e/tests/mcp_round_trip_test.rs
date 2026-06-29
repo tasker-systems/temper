@@ -97,7 +97,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("round-trip-search")
+        .create("round-trip-search", None)
         .await
         .expect("context create");
 
@@ -156,7 +156,7 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
 
     app.client
         .contexts()
-        .create("validation-test")
+        .create("validation-test", None)
         .await
         .expect("context create");
 
@@ -226,7 +226,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("content-round-trip")
+        .create("content-round-trip", None)
         .await
         .expect("context create");
 
@@ -383,7 +383,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("update-reindex-test")
+        .create("update-reindex-test", None)
         .await
         .expect("context create");
 
@@ -525,7 +525,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
 
     app.client
         .contexts()
-        .create("mcp-meta-parity")
+        .create("mcp-meta-parity", None)
         .await
         .expect("context create");
 
@@ -648,7 +648,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
 
     app.client
         .contexts()
-        .create("gap6-merge")
+        .create("gap6-merge", None)
         .await
         .expect("context create");
 
@@ -747,7 +747,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 
     app.client
         .contexts()
-        .create("gap5-validate")
+        .create("gap5-validate", None)
         .await
         .expect("context create");
 
@@ -846,7 +846,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     // Seed a resource (owned by the caller) with managed + open meta + a real chunk body.
     app.client
         .contexts()
-        .create("selector-route")
+        .create("selector-route", None)
         .await
         .expect("context create");
     let body = "Selector routing keeps the legacy contract intact.";
@@ -978,7 +978,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     // + open meta, so the doctype filter has something to narrow.
     app.client
         .contexts()
-        .create("list-selector")
+        .create("list-selector", None)
         .await
         .expect("context create");
 

@@ -102,7 +102,7 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -197,7 +197,7 @@ async fn load_tasks_filters_by_goal_slug(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -279,7 +279,7 @@ async fn find_task_resolves_by_slug_and_suffix(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 

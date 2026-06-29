@@ -21,7 +21,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
     // Create a context for the test.
     app.client
         .contexts()
-        .create("meta-test")
+        .create("meta-test", None)
         .await
         .expect("context create failed");
 
@@ -133,7 +133,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("meta-chunks")
+        .create("meta-chunks", None)
         .await
         .expect("context create failed");
 
@@ -301,7 +301,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("meta-errors")
+        .create("meta-errors", None)
         .await
         .expect("context create failed");
 
@@ -438,7 +438,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
 
     app.client
         .contexts()
-        .create("meta-get")
+        .create("meta-get", None)
         .await
         .expect("context create failed");
 
