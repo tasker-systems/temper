@@ -109,3 +109,81 @@ async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool)
         .expect_err("no target team");
     assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
+    // Gating team = temper-system (auto_join_role watcher, seeded by migration).
+    let gating_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('temper-system','Temper System') \
+         ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("gating team");
+    // A SECOND auto-join team that is NOT the gating team — proves the hook does
+    // more than the direct gating-team insert.
+    let other_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name, auto_join_role) \
+         VALUES ('everyone','Everyone','member') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("other auto-join team");
+    sqlx::query(
+        "UPDATE kb_system_settings SET access_mode='invite_only', gating_team_slug='temper-system' WHERE id=1",
+    )
+    .execute(&pool)
+    .await
+    .expect("invite_only");
+
+    let admin = common::fixtures::create_test_profile(&pool, "admin@test.example.com").await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1,$2,'owner') \
+         ON CONFLICT (team_id, profile_id) DO UPDATE SET role=EXCLUDED.role",
+    )
+    .bind(gating_id)
+    .bind(admin)
+    .execute(&pool)
+    .await
+    .expect("make admin");
+
+    let joiner = common::fixtures::create_test_profile(&pool, "joiner@test.example.com").await;
+
+    // Joiner submits a request for the gating team.
+    let request_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_join_requests (id, team_id, requesting_profile_id, status, source) \
+         VALUES (gen_random_uuid(), $1, $2, 'pending', 'test') RETURNING id",
+    )
+    .bind(gating_id)
+    .bind(joiner)
+    .fetch_one(&pool)
+    .await
+    .expect("join request");
+
+    // Admin approves via the service.
+    access_service::review_request(
+        &pool,
+        access_service::ReviewRequestParams {
+            request_id,
+            reviewer_profile_id: temper_core::types::ids::ProfileId::from(admin),
+            decision: temper_core::types::access_gate::JoinRequestStatus::Approved,
+            decision_note: None,
+        },
+    )
+    .await
+    .expect("approve");
+
+    // The joiner is now enrolled in the OTHER auto-join team via the hook.
+    let in_other: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM kb_team_members WHERE team_id=$1 AND profile_id=$2)",
+    )
+    .bind(other_id)
+    .bind(joiner)
+    .fetch_one(&pool)
+    .await
+    .expect("check");
+    assert!(
+        in_other,
+        "approval should enroll the profile into auto-join teams"
+    );
+}

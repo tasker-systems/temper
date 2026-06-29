@@ -469,6 +469,16 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         )
         .execute(&mut *tx)
         .await?;
+
+        // Now that gating-team membership establishes access, enroll the
+        // profile into the rest of the auto-join "everyone" pool (Chunk 1's
+        // deferred call site). No-op if has_system_access is still false.
+        sqlx::query!(
+            "SELECT ensure_auto_join_memberships($1)",
+            row.requesting_profile_id,
+        )
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit()

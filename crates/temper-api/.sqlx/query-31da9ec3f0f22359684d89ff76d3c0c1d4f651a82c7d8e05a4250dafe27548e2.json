@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) FROM kb_cogmap_region_members WHERE region_id=$1",
+  "query": "SELECT ensure_auto_join_memberships($1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "count",
-        "type_info": "Int8"
+        "name": "ensure_auto_join_memberships",
+        "type_info": "Void"
       }
     ],
     "parameters": {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "cf38bc4ada288bed5e61876b627193f9cce26370b46f5680d4d951f7b79736b7"
+  "hash": "31da9ec3f0f22359684d89ff76d3c0c1d4f651a82c7d8e05a4250dafe27548e2"
 }
