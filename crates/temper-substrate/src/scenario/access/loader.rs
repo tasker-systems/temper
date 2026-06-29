@@ -347,6 +347,8 @@ async fn insert_cogmaps(
                         name: &c.name,
                         telos_title: &telos.title,
                         charter: &blocks,
+                        cogmap_id: None,
+                        telos_resource_id: None,
                         owner,
                         emitter,
                     },

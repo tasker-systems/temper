@@ -21,8 +21,10 @@ use temper_core::types::cognitive_maps::{
     CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
-use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
-use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
+use temper_core::types::reconcile::{
+    CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
+};
+use temper_workflow::operations::{Backend, CreateCognitiveMap, ReconcileCognitiveMap, Surface};
 
 /// Query params for the shape read. `lens` is optional (omit → all lenses).
 #[derive(Debug, Deserialize)]
@@ -65,6 +67,43 @@ pub async fn reconcile(
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
         .reconcile_cognitive_map(cmd)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(out.value))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/cognitive-maps",
+    tag = "Cognitive Maps",
+    security(("bearer_auth" = [])),
+    request_body = CreateCogmapRequest,
+    responses(
+        (status = 200, description = "Genesis applied (or idempotent no-op)", body = CreateCogmapOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+        (status = 409, description = "A concurrent genesis conflicted; retry"),
+    )
+)]
+pub async fn genesis(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(request): Json<CreateCogmapRequest>,
+) -> ApiResult<Json<CreateCogmapOutcome>> {
+    // Auth before writes (Global Constraints): genesis is system-admin-only. A brand-new cogmap id is
+    // neither the reserved L0 kernel nor yet root-team-bound, so `require_cogmap_write_admin` would
+    // FAIL-OPEN here — the genesis gate is plain `is_system_admin`, checked at the TOP before any write.
+    let profile_id = ProfileId::from(auth.0.profile.id);
+    if !access_service::is_system_admin(&state.pool, profile_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let cmd = CreateCognitiveMap {
+        request,
+        origin: Surface::ApiHttp,
+    };
+    let backend = DbBackend::new(state.pool.clone(), profile_id);
+    let out = backend
+        .create_cognitive_map(cmd)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(out.value))

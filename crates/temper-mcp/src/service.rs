@@ -269,6 +269,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Create (genesis) a new cognitive map: a cogmap plus its telos charter resource. System-admin only. The map is born with an EMPTY charter — author the charter and deliver it afterwards with `temper cogmap reconcile` (which embeds client-side). Idempotent at a supplied cogmap_id (re-creating is a no-op)."
+    )]
+    async fn cogmap_create(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapCreateInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_create(self, input).await
+    }
+
+    #[tool(
         description = "Read a cognitive map's surface tier: its materialized regions (salience, cohesion, label, member count) under an optional lens. Pass the map by ref."
     )]
     async fn cogmap_shape(

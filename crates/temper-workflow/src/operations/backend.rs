@@ -18,9 +18,9 @@ use temper_core::error::TemperError;
 use temper_core::types::ids::EdgeId;
 
 use super::commands::{
-    AssertRelationship, CloseInvocation, CreateResource, DeleteResource, FoldRelationship,
-    ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
-    SearchResources, ShowResource, UpdateResource,
+    AssertRelationship, CloseInvocation, CreateCognitiveMap, CreateResource, DeleteResource,
+    FoldRelationship, ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
+    ReweightRelationship, SearchResources, ShowResource, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -107,6 +107,16 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<temper_core::types::reconcile::ReconcileOutcome>, TemperError>;
+
+    // ── cognitive-map genesis (org-provisioning Chunk 4) ──
+    // Create a new cognitive map (cogmap + telos charter resource) from a manifest, under the system
+    // actor. Idempotent at a manifest-supplied id (re-genesis → `created: false`, no event). Dispatched
+    // by `POST /api/cognitive-maps`. The HTTP/MCP surfaces gate on `is_system_admin` before dispatch.
+
+    async fn create_cognitive_map(
+        &self,
+        cmd: CreateCognitiveMap,
+    ) -> Result<CommandOutput<temper_core::types::reconcile::CreateCogmapOutcome>, TemperError>;
 
     // ── agent-invocation envelope (trace primitive) ──
     // Open mints a server-side invocation id and returns it; close terminates the envelope with a

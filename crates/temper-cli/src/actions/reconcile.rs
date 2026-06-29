@@ -109,7 +109,7 @@ pub fn manifest_to_request(
     use crate::actions::ingest::{compute_body_chunks, BodyChunks};
     use temper_core::types::reconcile::{
         ReconcileCogmapRequest, ReconcileEdge, ReconcileEdgeTombstone, ReconcileEntry,
-        ReconcileTelos, ReconcileTelosBlock, ReconcileTombstone,
+        ReconcileTombstone,
     };
 
     let mut entries = Vec::with_capacity(doc.entries.len());
@@ -155,22 +155,7 @@ pub fn manifest_to_request(
         })
         .collect();
 
-    let telos = match &doc.telos {
-        None => None,
-        Some(t) => {
-            let specs =
-                temper_core::charter::charter_block_specs(&t.statement, &t.questions, &t.framing);
-            let mut blocks = Vec::with_capacity(specs.len());
-            for (role, prose) in specs {
-                let BodyChunks { chunks_packed, .. } = compute_body_chunks(&prose)?;
-                blocks.push(ReconcileTelosBlock {
-                    role: role.to_string(),
-                    chunks_packed,
-                });
-            }
-            Some(ReconcileTelos { blocks })
-        }
-    };
+    let telos = doc.telos.as_ref().map(embed_telos).transpose()?;
 
     Ok(ReconcileCogmapRequest {
         entries,
@@ -178,6 +163,28 @@ pub fn manifest_to_request(
         fold_edges,
         telos,
     })
+}
+
+/// Embed an authored telos charter CLIENT-SIDE (`compute_body_chunks`) into a pre-embedded
+/// [`ReconcileTelos`](temper_core::types::reconcile::ReconcileTelos) — one role-tagged block per
+/// `charter_block_specs` entry (block-0 statement, then questions-with-context, then framing). Shared by
+/// `manifest_to_request` (reconcile) and the genesis manifest bridge so the two embed the charter
+/// identically.
+#[cfg(feature = "embed")]
+pub fn embed_telos(t: &ManifestTelos) -> Result<temper_core::types::reconcile::ReconcileTelos> {
+    use crate::actions::ingest::{compute_body_chunks, BodyChunks};
+    use temper_core::types::reconcile::{ReconcileTelos, ReconcileTelosBlock};
+
+    let specs = temper_core::charter::charter_block_specs(&t.statement, &t.questions, &t.framing);
+    let mut blocks = Vec::with_capacity(specs.len());
+    for (role, prose) in specs {
+        let BodyChunks { chunks_packed, .. } = compute_body_chunks(&prose)?;
+        blocks.push(ReconcileTelosBlock {
+            role: role.to_string(),
+            chunks_packed,
+        });
+    }
+    Ok(ReconcileTelos { blocks })
 }
 
 #[cfg(test)]

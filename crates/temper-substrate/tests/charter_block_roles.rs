@@ -67,6 +67,8 @@ async fn framing_never_projects_as_a_question(pool: sqlx::PgPool) {
             name: "onboarding-cogmap",
             telos_title: "Onboarding charter",
             charter: &blocks,
+            cogmap_id: None,
+            telos_resource_id: None,
             owner: ProfileId::from(owner),
             emitter: EntityId::from(emitter),
         },

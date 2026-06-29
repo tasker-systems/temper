@@ -111,6 +111,8 @@ async fn genesis_cogmap(
             name: &s.name,
             telos_title: &s.cogmap.telos.title,
             charter: &charter_blocks,
+            cogmap_id: None,
+            telos_resource_id: None,
             owner,
             emitter,
         },
