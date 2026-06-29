@@ -166,4 +166,25 @@ async fn non_admin_is_forbidden_on_all_admin_endpoints(pool: sqlx::PgPool) {
         .await
         .expect("promote");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // GET admin requests → 403 (admin gate fires before list logic).
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/access/admin/requests"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .send()
+        .await
+        .expect("get requests");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // PATCH admin request review → 403 (admin gate fires before request lookup).
+    let resp = app
+        .reqwest_client
+        .patch(app.url(&format!("/api/access/admin/requests/{}", Uuid::new_v4())))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .json(&json!({"status": "approved"}))
+        .send()
+        .await
+        .expect("patch request");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

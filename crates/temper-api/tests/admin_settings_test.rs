@@ -111,6 +111,57 @@ async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool)
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_settings_invite_only_rejects_nonexistent_gating_team(pool: sqlx::PgPool) {
+    reset_settings(&pool).await; // gating_team_slug is NULL, no team named "does-not-exist"
+
+    let req = UpdateSettingsRequest {
+        access_mode: Some("invite_only".to_owned()),
+        gating_team_slug: Some("does-not-exist".to_owned()),
+        ..Default::default()
+    };
+    let err = access_service::update_system_settings(&pool, &req)
+        .await
+        .expect_err("invite_only with a nonexistent gating team should be rejected");
+    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn promote_admin_rejects_nonexistent_team(pool: sqlx::PgPool) {
+    reset_settings(&pool).await;
+    let profile = common::fixtures::create_test_profile(&pool, "p@test.example.com").await;
+    // Pass a random team_id that does not exist in kb_teams.
+    let bad_team_id = Uuid::new_v4();
+    let err = access_service::promote_admin(&pool, profile, Some(bad_team_id))
+        .await
+        .expect_err("explicit nonexistent team should be rejected");
+    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
+    reset_settings(&pool).await;
+    // Configure a real gating team so the None branch resolves.
+    sqlx::query(
+        "INSERT INTO kb_teams (slug, name) VALUES ('temper-system','Temper System') \
+         ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name",
+    )
+    .execute(&pool)
+    .await
+    .expect("team");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug='temper-system' WHERE id=1")
+        .execute(&pool)
+        .await
+        .expect("set gating");
+
+    // Pass a random profile_id that does not exist in kb_profiles.
+    let bad_profile_id = Uuid::new_v4();
+    let err = access_service::promote_admin(&pool, bad_profile_id, None)
+        .await
+        .expect_err("nonexistent profile should be rejected");
+    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
     // Gating team = temper-system (auto_join_role watcher, seeded by migration).
     let gating_id: Uuid = sqlx::query_scalar(

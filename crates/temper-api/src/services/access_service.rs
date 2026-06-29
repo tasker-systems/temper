@@ -152,6 +152,24 @@ pub async fn update_system_settings(
                 .to_string(),
         ));
     }
+    // Guard: if the effective gating slug names a team that doesn't exist,
+    // enabling invite_only would lock everyone out.
+    if effective_mode == "invite_only" {
+        if let Some(ref slug) = effective_gating {
+            let exists: bool = sqlx::query_scalar!(
+                "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+                slug
+            )
+            .fetch_one(pool)
+            .await?
+            .unwrap_or(false);
+            if !exists {
+                return Err(ApiError::BadRequest(format!(
+                    "gating_team_slug '{slug}' does not exist — create the team before enabling invite_only"
+                )));
+            }
+        }
+    }
 
     let row = sqlx::query_as!(
         SystemSettings,
@@ -192,7 +210,17 @@ pub async fn promote_admin(
 ) -> ApiResult<TeamMemberRow> {
     // Resolve the target team: explicit, else the configured gating team.
     let target_team = match team_id {
-        Some(id) => id,
+        Some(id) => {
+            let exists: bool =
+                sqlx::query_scalar!("SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1)", id)
+                    .fetch_one(pool)
+                    .await?
+                    .unwrap_or(false);
+            if !exists {
+                return Err(ApiError::BadRequest(format!("team '{id}' does not exist")));
+            }
+            id
+        }
         None => {
             let settings = get_system_settings(pool).await?;
             let Some(slug) = settings.gating_team_slug else {
@@ -209,6 +237,20 @@ pub async fn promote_admin(
                 })?
         }
     };
+
+    // Validate the target profile exists before writing.
+    let profile_exists: bool = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1)",
+        profile_id
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    if !profile_exists {
+        return Err(ApiError::BadRequest(format!(
+            "profile '{profile_id}' does not exist"
+        )));
+    }
 
     let row = sqlx::query_as!(
         TeamMemberRow,
