@@ -11,8 +11,8 @@ use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
 use crate::middleware::auth::AuthUser;
+use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::{access_service, cogmap_service};
 use temper_services::state::AppState;
@@ -136,7 +136,7 @@ pub async fn shape(
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
-    crate::backend::substrate_read::cogmap_shape_select(
+    temper_services::backend::substrate_read::cogmap_shape_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         cogmap_id,
@@ -166,7 +166,7 @@ pub async fn region_metrics(
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
-    crate::backend::substrate_read::cogmap_region_metrics_select(
+    temper_services::backend::substrate_read::cogmap_region_metrics_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         cogmap_id,
@@ -193,7 +193,7 @@ pub async fn analytics(
     auth: AuthUser,
     Path(cogmap_id): Path<Uuid>,
 ) -> ApiResult<Json<CogmapAnalyticsRow>> {
-    crate::backend::substrate_read::cogmap_analytics_select(
+    temper_services::backend::substrate_read::cogmap_analytics_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         cogmap_id,

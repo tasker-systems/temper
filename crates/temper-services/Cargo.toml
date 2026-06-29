@@ -7,6 +7,8 @@ description = "Shared business-logic + auth-infra layer for temper-api and tempe
 [dependencies]
 temper-core = { path = "../temper-core", features = ["web-api"] }
 temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
+temper-substrate = { path = "../temper-substrate" }
+async-trait = "0.1"
 axum = { version = "0.8", features = ["json"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid"] }
 tokio = { version = "1", features = ["sync"] }

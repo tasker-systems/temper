@@ -2,8 +2,8 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
 use crate::middleware::auth::AuthUser;
+use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
 
@@ -29,7 +29,7 @@ pub async fn get_meta(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceMetaResponse>> {
-    crate::backend::substrate_read::get_meta_select(
+    temper_services::backend::substrate_read::get_meta_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         ResourceId::from(resource_id),

@@ -4968,7 +4968,6 @@ dependencies = [
 name = "temper-api"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "axum",
  "chrono",
  "jsonwebtoken",
@@ -5172,6 +5171,7 @@ dependencies = [
 name = "temper-services"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "jsonwebtoken",
@@ -5181,6 +5181,7 @@ dependencies = [
  "serde_yaml",
  "sqlx",
  "temper-core",
+ "temper-substrate",
  "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
