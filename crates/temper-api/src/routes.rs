@@ -13,7 +13,7 @@ use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn create_app(state: AppState) -> Router {
-    use axum::routing::{get, post, put};
+    use axum::routing::{delete, get, post, put};
 
     let public = Router::new().route("/api/health", get(handlers::health::health_check));
 
@@ -107,6 +107,14 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/cognitive-maps/{id}/analytics",
             get(handlers::cognitive_maps::analytics),
+        )
+        .route(
+            "/api/cognitive-maps/{id}/teams",
+            post(handlers::cognitive_maps::bind_team),
+        )
+        .route(
+            "/api/cognitive-maps/{id}/teams/{team_id}",
+            delete(handlers::cognitive_maps::unbind_team),
         )
         .route(
             "/api/invocations",

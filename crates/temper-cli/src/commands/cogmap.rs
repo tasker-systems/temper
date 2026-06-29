@@ -60,6 +60,37 @@ pub fn analytics(cogmap_ref: &str, fmt: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (admin-only).
+///
+/// The team is resolved to its id CLIENT-SIDE (slug → id via the teams list, or a bare UUID); the
+/// wire shape is id-based (mirroring `team add-member`).
+pub fn bind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+    let team = team.to_owned();
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move { crate::actions::cogmap::bind_api(client, cogmap_id, &team).await })
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// `temper cogmap unbind <cogmap_ref> <team>` — unbind the map from a team (admin-only).
+pub fn unbind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+    let team = team.to_owned();
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move { crate::actions::cogmap::unbind_api(client, cogmap_id, &team).await })
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// Reconcile the cognitive map addressed by `cogmap_ref` to the manifest at `manifest_path`.
 #[cfg(feature = "embed")]
 pub fn reconcile(cogmap_ref: &str, manifest_path: &str, fmt: OutputFormat) -> Result<()> {

@@ -7,10 +7,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
-use temper_api::services::access_service;
+use temper_api::error::ApiError;
+use temper_api::services::{access_service, cogmap_service};
 use temper_core::error::TemperError;
 use temper_core::types::cognitive_maps::{
-    CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
+    BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
 };
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reconcile::CreateCogmapRequest;
@@ -198,9 +199,96 @@ pub async fn cogmap_create(
     )]))
 }
 
+// ── cogmap_bind / cogmap_unbind (service-direct) ─────────────────────────────
+
+/// MCP input for cogmap_bind / cogmap_unbind. `cogmap` is a ref (UUID or decorated `slug-<uuid>`);
+/// `team_id` is the team's raw UUID (id-based, mirroring the HTTP wire shape).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapBindInput {
+    /// The cognitive map to bind, by ref (UUID or `slug-<uuid>`).
+    pub cogmap: String,
+    /// The team's UUID.
+    pub team_id: Uuid,
+}
+
+/// Map a service `ApiError` to an rmcp protocol error. `Forbidden` ⇒ invalid_params (the admin gate);
+/// everything else ⇒ internal_error.
+fn map_api_error(context: &str, err: ApiError) -> rmcp::ErrorData {
+    match err {
+        ApiError::Forbidden => {
+            rmcp::ErrorData::invalid_params(format!("{context} requires system-admin"), None)
+        }
+        other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
+    }
+}
+
+/// Bind a cognitive map to a team. SERVICE-DIRECT (binding is not a Backend command) — calls
+/// `cogmap_service::bind_team` directly, which enforces the `is_system_admin` gate before any write.
+pub async fn cogmap_bind(
+    svc: &TemperMcpService,
+    input: CogmapBindInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let outcome = cogmap_service::bind_team(
+        &svc.api_state.pool,
+        ProfileId::from(profile.id),
+        cogmap_id,
+        &BindTeamRequest {
+            team_id: input.team_id,
+        },
+    )
+    .await
+    .map_err(|e| map_api_error("cogmap_bind", e))?;
+
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// Unbind a cognitive map from a team. SERVICE-DIRECT, admin-gated (see [`cogmap_bind`]).
+pub async fn cogmap_unbind(
+    svc: &TemperMcpService,
+    input: CogmapBindInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let outcome = cogmap_service::unbind_team(
+        &svc.api_state.pool,
+        ProfileId::from(profile.id),
+        cogmap_id,
+        input.team_id,
+    )
+    .await
+    .map_err(|e| map_api_error("cogmap_unbind", e))?;
+
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cogmap_bind_input_deserializes() {
+        let id = Uuid::now_v7();
+        let raw = serde_json::json!({ "cogmap": "m", "team_id": id.to_string() });
+        let input: CogmapBindInput = serde_json::from_value(raw).expect("bind input");
+        assert_eq!(input.cogmap, "m");
+        assert_eq!(input.team_id, id);
+    }
 
     #[test]
     fn cogmap_create_input_deserializes_minimal() {
