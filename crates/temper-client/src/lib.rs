@@ -5,6 +5,7 @@
 //! for every R5 API endpoint.
 
 pub mod access;
+pub mod admin;
 pub mod auth;
 pub mod cognitive_maps;
 pub mod config;
@@ -140,6 +141,11 @@ impl TemperClient {
     /// Context CRUD sub-client.
     pub fn contexts(&self) -> contexts::ContextClient<'_> {
         contexts::ContextClient::new(&self.http)
+    }
+
+    /// Admin / system-settings sub-client (settings, promote, request review).
+    pub fn admin(&self) -> admin::AdminClient<'_> {
+        admin::AdminClient::new(&self.http)
     }
 
     /// Team lifecycle sub-client (create / add-member / list).

@@ -138,6 +138,14 @@ pub fn create_app(state: AppState) -> Router {
             "/api/access/admin/requests/{id}",
             axum::routing::patch(handlers::access::review_request),
         )
+        .route(
+            "/api/access/admin/settings",
+            get(handlers::access::get_admin_settings).patch(handlers::access::update_settings),
+        )
+        .route(
+            "/api/access/admin/promote",
+            post(handlers::access::promote_admin),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::system_access::require_system_access,

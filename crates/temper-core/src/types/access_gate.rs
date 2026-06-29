@@ -40,7 +40,7 @@ pub struct JoinRequest {
 /// A join request with the requesting profile's display info (for admin queue).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct JoinRequestWithProfile {
     pub id: Uuid,
     pub team_id: Uuid,
@@ -94,7 +94,7 @@ impl AccessMode {
 }
 
 /// Instance-wide system settings (singleton row).
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SystemSettings {
     pub id: i32,
     pub access_mode: String,
