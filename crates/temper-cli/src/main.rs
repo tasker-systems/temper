@@ -7,7 +7,12 @@ use temper_cli::commands;
 use temper_cli::format::OutputFormat;
 
 fn main() {
+    // Logs go to STDERR, never stdout: stdout is reserved for machine-readable
+    // output (JSON/TOON) so `temper … | jq` stays clean. Without this, library
+    // logs — notably ONNX Runtime's `ort` INFO chatter on embed paths — would
+    // interleave with the command's JSON on stdout and break parsing.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )

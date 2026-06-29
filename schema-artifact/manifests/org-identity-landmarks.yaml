@@ -1,0 +1,83 @@
+# Org-identity cognitive map — RECONCILE (content delivery) manifest.
+#
+# Consumed by:  temper cogmap reconcile <org-cogmap-id> \
+#                 --manifest schema-artifact/manifests/org-identity-landmarks.yaml
+#
+# Genesis (org-identity.yaml) BIRTHS the map with its telos charter. This manifest DELIVERS the
+# map's landmark content — the same split L0 uses (birth migration vs. operator reconcile). It is
+# the org analogue of schema-artifact/manifests/l0-kernel.yaml: each `entries[*]` is a landmark
+# resource keyed by a STABLE pre-generated uuidv7 (the reconcile diff key; `origin_uri` is pure
+# attribution, never a key). The CLI embeds each body CLIENT-SIDE before the PUT.
+#
+# Reconcile is IDEMPOTENT: a re-run against unchanged content reports zero changes
+# ({ created: 0, updated: 0, folded: 0, unchanged: N, charter: "unchanged" }). First delivery
+# creates. Re-carrying `telos:` keeps the charter in lock-step; omit it to leave the charter
+# untouched.
+#
+# Replace these EXAMPLE landmarks with your org's. Keep the shape; mint a fresh uuidv7 per new
+# landmark and never reuse a retired one (fold it with `fold_resources:` instead).
+
+telos:
+  statement: >-
+    Orient an agent or member arriving into Acme's temper instance so it can act correctly under
+    this org's settled way of working — by holding what Acme is, the shared vocabulary its corpus
+    is written in, the invariants it must not break, and the wayfinding that routes to the right
+    team, context, and more-specific map. This is the org's bottom-referent: every domain map is
+    situated by it and routes through it.
+  questions:
+    - question: >-
+        Is this something an arriving member needs the moment they join to know what Acme is and
+        where they stand — the org's mission, its teams, the contexts work lives in?
+      context: "The first thing anyone asks is where am I. Hold the few situating landmarks, not their depth."
+    - question: >-
+        Is this a shared term an agent must know to read Acme's corpus at all, versus jargon a
+        specific team or domain map can own?
+      context: "Shared vocabulary is the floor for collaboration; deeper or team-local terms live where they are used."
+    - question: >-
+        Is this a settled way-of-working an agent must not break — review gates, what needs a human,
+        which acts are not an agent's to make on this org's behalf?
+      context: "State the always/nevers plainly as landmarks; a weaker model will not infer them."
+    - question: >-
+        When a member or agent needs to do something here, does this map name the team, context, or
+        more-specific map to reach for — and make reaching the obvious next move?
+      context: "Routing is the org map's keep: need X, the place is Y, go there."
+  framing:
+    - "This map is the org's self-portrait: what Acme is, mapped in Acme's own temper substrate."
+    - "It is a reference layer — born curated, not accreted from work — and every domain map routes through it."
+    - "Authored for the arriving member or agent: invariant-forward, scannable, landmark-shaped."
+
+entries:
+  - id: "019f1601-0000-7000-8000-000000000001"
+    origin_uri: "org://acme/landmark/what-is-acme"
+    title: "What Acme is"
+    body: |
+      Acme is the organization that owns this temper instance. This map is its bottom-referent:
+      it says "this is the org you are in" and routes to the teams, contexts, and domain maps where
+      the work actually lives. Hold the situating landmark here, not the depth.
+    facets:
+      layer: concept
+    edges:
+      - to: "019f1601-0000-7000-8000-000000000002"
+        kind: leads_to
+        label: "routes to the org's teams"
+
+  - id: "019f1601-0000-7000-8000-000000000002"
+    origin_uri: "org://acme/landmark/teams-and-contexts"
+    title: "Teams and contexts"
+    body: |
+      Work in Acme is organized by teams (the unit of membership and sharing) and contexts (where
+      resources are written). The everyone-team is the org-wide audience pool every member auto-joins;
+      this org-identity map is bound to it so the map reaches the org's shared corpus. More-specific
+      domain maps route through this one.
+    facets:
+      layer: reference
+
+  - id: "019f1601-0000-7000-8000-000000000003"
+    origin_uri: "org://acme/landmark/ways-of-working"
+    title: "Settled ways of working"
+    body: |
+      The invariants an agent must not break on Acme's behalf: human-gated promotion across maps,
+      attribution on every act, and the scoped-principal access floor. State the always/nevers
+      plainly — a weaker model will not infer them.
+    facets:
+      layer: invariant

@@ -8,3 +8,6 @@ brew "onnxruntime"
 # actions checkers
 brew "actionlint"
 brew "shellcheck"
+
+# YAML processor — used by scripts/bootstrap/system-bootstrap.sh to read install-profile.yaml
+brew "yq"
