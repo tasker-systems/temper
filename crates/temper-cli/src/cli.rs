@@ -200,6 +200,12 @@ pub enum Commands {
         action: TeamAction,
     },
 
+    /// Administer the instance (system settings, promote admins, review requests)
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+    },
+
     /// Materialize a context's resources into the local read-only projection
     Pull {
         /// Context name to pull
@@ -551,6 +557,61 @@ pub enum TeamAction {
     },
     /// List the teams you are a member of
     List,
+}
+
+#[derive(Subcommand)]
+pub enum AdminAction {
+    /// Show system settings, or update them when any flag is provided
+    Settings {
+        /// Access mode: open | invite_only
+        #[arg(long = "access-mode")]
+        access_mode: Option<String>,
+        /// Gating team slug (the team that gates invite_only access)
+        #[arg(long = "gating-team")]
+        gating_team_slug: Option<String>,
+        /// Human-facing instance name
+        #[arg(long = "instance-name")]
+        instance_name: Option<String>,
+        /// Terms-of-service version label
+        #[arg(long = "terms-version")]
+        terms_version: Option<String>,
+        /// Terms-of-service resource URI
+        #[arg(long = "terms-uri")]
+        terms_resource_uri: Option<String>,
+    },
+    /// Promote a profile to admin (owner on a team; defaults to the gating team)
+    Promote {
+        /// Profile ID (UUID) to promote
+        profile: String,
+        /// Team ref (`+slug`, bare slug, or UUID); defaults to the gating team
+        #[arg(long)]
+        team: Option<String>,
+    },
+    /// Review pending join requests
+    Requests {
+        #[command(subcommand)]
+        action: AdminRequestsAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AdminRequestsAction {
+    /// List pending join requests for the gating team
+    List,
+    /// Approve or reject a join request
+    Review {
+        /// Join request ID (UUID)
+        id: String,
+        /// Approve the request
+        #[arg(long, conflicts_with = "reject")]
+        approve: bool,
+        /// Reject the request
+        #[arg(long)]
+        reject: bool,
+        /// Optional decision note
+        #[arg(long)]
+        note: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
