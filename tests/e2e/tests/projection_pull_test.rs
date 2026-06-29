@@ -43,6 +43,7 @@ async fn seed_resource(
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        act: Default::default(),
     };
     app.client
         .ingest()

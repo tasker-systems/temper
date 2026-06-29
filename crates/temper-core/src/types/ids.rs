@@ -11,6 +11,11 @@ macro_rules! define_id {
         #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
         #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
         #[cfg_attr(any(feature = "mcp", feature = "scenario-schema"), derive(schemars::JsonSchema))]
+        // Inline the newtype in MCP tool schemas. As a named type schemars would otherwise emit
+        // a `$ref` into `$defs`, and a `$ref` reaches the Anthropic tool-use layer with no type
+        // signal and comes back as `null` (same bug fixed for the scalar enums in `types::graph`).
+        // Inlining emits `{"type":"string","format":"uuid"}` directly at the field.
+        #[cfg_attr(feature = "mcp", schemars(inline))]
         pub struct $name(pub Uuid);
 
         impl $name {

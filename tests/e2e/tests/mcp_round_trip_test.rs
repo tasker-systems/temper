@@ -121,6 +121,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(packed),
+        act: Default::default(),
     };
     let resource = app
         .client
@@ -179,6 +180,7 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
         ),
         open_meta: None,
         chunks_packed: Some(empty_chunks),
+        act: Default::default(),
     };
 
     // The production ingest path (through the client) rejects the bad enum. The
@@ -247,6 +249,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
         managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(packed),
+        act: Default::default(),
     };
 
     let resource = app
@@ -406,6 +409,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(original_packed),
+        act: Default::default(),
     };
     let resource = app
         .client
@@ -543,6 +547,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         managed_meta: Some(serde_json::json!({"temper-type": "research"})),
         open_meta: Some(serde_json::json!({"tags": ["mcp", "parity"]})),
         chunks_packed: Some(packed),
+        act: Default::default(),
     };
     let resource = app
         .client
@@ -669,6 +674,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
         })),
         open_meta: None,
         chunks_packed: Some(packed),
+        act: Default::default(),
     };
     let resource = app
         .client
@@ -766,6 +772,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
         })),
         open_meta: None,
         chunks_packed: Some(packed),
+        act: Default::default(),
     };
     let resource = app
         .client
@@ -860,6 +867,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         ),
         open_meta: Some(serde_json::json!({"tags": ["selector", "route"]})),
         chunks_packed: Some(packed),
+        act: Default::default(),
     };
     let resource = app
         .client
@@ -1006,6 +1014,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
             managed_meta: Some(managed),
             open_meta: Some(serde_json::json!({"tags": [slug]})),
             chunks_packed: Some(packed),
+            act: Default::default(),
         };
         app.client
             .ingest()

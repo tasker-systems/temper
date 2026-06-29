@@ -68,6 +68,7 @@ async fn seed_resource(
             managed_meta: Some(managed_meta.clone()),
             open_meta: Some(open_meta.clone()),
             chunks_packed: Some(pack_chunks(&[]).expect("pack empty chunks")),
+            act: Default::default(),
         })
         .await
         .expect("ingest create")

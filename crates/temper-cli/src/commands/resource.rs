@@ -184,6 +184,8 @@ pub struct CreateResourceArgs<'a> {
     pub body_flag: Option<String>,
     pub from: Option<String>,
     pub format: crate::format::OutputFormat,
+    /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
+    pub act: temper_core::types::ActInput,
 }
 
 /// Create a new resource.
@@ -200,6 +202,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         body_flag,
         from,
         format,
+        act,
     } = args;
     use std::io::IsTerminal;
 
@@ -253,7 +256,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
-        act: Default::default(),
+        act: act.into_act_context()?,
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
@@ -378,6 +381,8 @@ fn link_session_to_task(
                     polarity: Polarity::Forward,
                     label: "advances".to_string(),
                     weight: 1.0,
+                    // System-driven link (not a caller-authored act): empty act context.
+                    act: Default::default(),
                 };
                 client
                     .relationships()

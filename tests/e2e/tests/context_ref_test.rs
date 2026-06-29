@@ -45,6 +45,7 @@ async fn ingest_create_with_at_me_slug_succeeds(pool: sqlx::PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
 
     let resource = app
@@ -81,6 +82,7 @@ async fn ingest_create_with_bare_name_returns_400(pool: sqlx::PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
 
     // The client's `create` returns an error for non-2xx. Check the status code
@@ -136,6 +138,7 @@ async fn ingest_create_with_uuid_context_ref_succeeds(pool: sqlx::PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
 
     let resource = app

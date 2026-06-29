@@ -17,6 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::TemperError;
 use crate::types::ids::InvocationId;
 
 /// The agent's SUBJECTIVE self-assessment of an authored act — a graded band, not a false-precision
@@ -28,6 +29,10 @@ use crate::types::ids::InvocationId;
     any(feature = "mcp", feature = "scenario-schema"),
     derive(schemars::JsonSchema)
 )]
+// Inline the enum in MCP tool schemas. A `$ref` into `$defs` reaches the Anthropic tool-use
+// layer with no type signal and comes back as `null` (the same bug fixed for EdgeKind/Polarity
+// in `types::graph`); inlining emits `{"type":"string","enum":[…]}` so the band is visible.
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum ConfidenceBand {
     Tentative,
@@ -88,6 +93,125 @@ impl ActContext {
     }
 }
 
+/// The flat, discrete authorship + correlation fields a caller surface collects — MCP tool input,
+/// HTTP request DTO, or CLI flags. Flattened onto each authored-write surface struct so the fields
+/// appear as discrete top-level keys/flags (the resolved design: discrete fields, not a JSON blob),
+/// then assembled into an [`ActContext`] by [`ActInput::into_act_context`].
+///
+/// The assembler owns the **one** cross-surface validation — "confidence is required iff any other
+/// authorship field is supplied" — in a single place, so MCP/API/CLI can never drift on it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
+pub struct ActInput {
+    /// The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+    /// correlation aid, never a substitute for authn/authz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<InvocationId>,
+    /// Free-text reasoning for the act. Authorship field — requires `confidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<ConfidenceBand>,
+    /// Structured rationale for the act. Authorship field — requires `confidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// The persona/role the author acted as. Authorship field — requires `confidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
+    /// The model that authored the act. Authorship field — requires `confidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl ActInput {
+    /// Assemble the discrete fields into an [`ActContext`].
+    ///
+    /// Authorship is `Some` iff `confidence` is supplied. Supplying any other authorship field
+    /// (`reasoning`/`rationale`/`persona`/`model`) without a `confidence` band is a hard
+    /// [`TemperError::BadRequest`] — `AgentAuthorship::confidence` is non-`Option`, so a graded
+    /// band is mandatory once authorship is claimed. The `invocation_id` correlator rides
+    /// independently and may be present with no authorship at all.
+    pub fn into_act_context(self) -> Result<ActContext, TemperError> {
+        let ActInput {
+            invocation_id,
+            reasoning,
+            confidence,
+            rationale,
+            persona,
+            model,
+        } = self;
+
+        let authorship = match confidence {
+            Some(confidence) => Some(AgentAuthorship {
+                reasoning,
+                confidence,
+                rationale,
+                persona,
+                model,
+            }),
+            None => {
+                if reasoning.is_some()
+                    || rationale.is_some()
+                    || persona.is_some()
+                    || model.is_some()
+                {
+                    return Err(TemperError::BadRequest(
+                        "agent authorship requires a confidence band \
+                         (tentative|probable|confident) when any of \
+                         reasoning/rationale/persona/model is supplied"
+                            .to_string(),
+                    ));
+                }
+                None
+            }
+        };
+
+        Ok(ActContext {
+            invocation: invocation_id,
+            authorship,
+        })
+    }
+}
+
+impl From<ActContext> for ActInput {
+    /// Flatten an assembled [`ActContext`] back into the discrete wire shape. The inverse of
+    /// [`ActInput::into_act_context`] — used by the CLI translator, which carries an `ActContext`
+    /// on its command but serializes the discrete [`ActInput`] onto the wire DTO. Always valid
+    /// (no validation): a present `authorship` already has its mandatory `confidence`.
+    fn from(ctx: ActContext) -> Self {
+        let ActContext {
+            invocation,
+            authorship,
+        } = ctx;
+        match authorship {
+            Some(AgentAuthorship {
+                reasoning,
+                confidence,
+                rationale,
+                persona,
+                model,
+            }) => ActInput {
+                invocation_id: invocation,
+                reasoning,
+                confidence: Some(confidence),
+                rationale,
+                persona,
+                model,
+            },
+            None => ActInput {
+                invocation_id: invocation,
+                ..Default::default()
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +268,106 @@ mod tests {
         };
         let back: ActContext = serde_json::from_value(serde_json::to_value(&ctx).unwrap()).unwrap();
         assert_eq!(back, ctx);
+    }
+
+    // ── ActInput discrete-fields assembler ──────────────────────────────────
+
+    #[test]
+    fn act_input_default_assembles_empty_context() {
+        let ctx = ActInput::default()
+            .into_act_context()
+            .expect("empty input is valid");
+        assert!(ctx.is_empty(), "no fields supplied → empty ActContext");
+    }
+
+    #[test]
+    fn act_input_invocation_only_assembles_correlation_without_authorship() {
+        let inv = InvocationId::new();
+        let ctx = ActInput {
+            invocation_id: Some(inv),
+            ..Default::default()
+        }
+        .into_act_context()
+        .expect("invocation-only input is valid");
+        assert_eq!(ctx.invocation, Some(inv));
+        assert!(
+            ctx.authorship.is_none(),
+            "no authorship fields → authorship None (correlation rides alone)"
+        );
+    }
+
+    #[test]
+    fn act_input_confidence_assembles_authorship() {
+        let ctx = ActInput {
+            confidence: Some(ConfidenceBand::Probable),
+            reasoning: Some("because X".into()),
+            persona: Some("steward".into()),
+            ..Default::default()
+        }
+        .into_act_context()
+        .expect("authorship with confidence is valid");
+        let authorship = ctx.authorship.expect("authorship present");
+        assert_eq!(authorship.confidence, ConfidenceBand::Probable);
+        assert_eq!(authorship.reasoning.as_deref(), Some("because X"));
+        assert_eq!(authorship.persona.as_deref(), Some("steward"));
+        assert!(ctx.invocation.is_none());
+    }
+
+    #[test]
+    fn act_input_authorship_field_without_confidence_is_rejected() {
+        // reasoning supplied but no confidence band → hard error (confidence required iff
+        // authorship supplied). This is the one validation the shared assembler owns.
+        let err = ActInput {
+            reasoning: Some("no band given".into()),
+            ..Default::default()
+        }
+        .into_act_context()
+        .expect_err("authorship without confidence must be rejected");
+        assert!(
+            matches!(err, crate::error::TemperError::BadRequest(_)),
+            "expected BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn act_context_to_act_input_roundtrips() {
+        // The translator path turns a command's ActContext back into the discrete ActInput wire
+        // shape; the handler reassembles it. The roundtrip must be identity.
+        let ctx = ActContext {
+            invocation: Some(InvocationId::new()),
+            authorship: Some(AgentAuthorship {
+                reasoning: Some("r".into()),
+                confidence: ConfidenceBand::Confident,
+                rationale: Some("because".into()),
+                persona: None,
+                model: Some("opus".into()),
+            }),
+        };
+        let back = ActInput::from(ctx.clone())
+            .into_act_context()
+            .expect("reassembles");
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn empty_act_context_to_act_input_is_empty() {
+        let back = ActInput::from(ActContext::default())
+            .into_act_context()
+            .expect("reassembles");
+        assert!(back.is_empty());
+    }
+
+    #[test]
+    fn act_input_confidence_alone_is_valid_authorship() {
+        // Confidence with no other field is a valid, minimal authorship.
+        let ctx = ActInput {
+            confidence: Some(ConfidenceBand::Confident),
+            ..Default::default()
+        }
+        .into_act_context()
+        .expect("confidence-only authorship is valid");
+        let authorship = ctx.authorship.expect("authorship present");
+        assert_eq!(authorship.confidence, ConfidenceBand::Confident);
+        assert!(authorship.reasoning.is_none());
     }
 }

@@ -84,6 +84,7 @@ async fn seed_session(
         managed_meta: Some(serde_json::json!({ "temper-title": title })),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("encode session chunk")),
+        act: Default::default(),
     };
     client
         .ingest()
@@ -120,6 +121,7 @@ async fn seed_task(
         managed_meta: Some(managed),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     client
         .ingest()

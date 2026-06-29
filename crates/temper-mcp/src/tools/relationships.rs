@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
 use temper_core::error::TemperError;
+use temper_core::types::authorship::ActInput;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::{EdgeId, ProfileId};
 use temper_core::types::relationship_requests::RelationshipAck;
@@ -39,6 +40,10 @@ pub struct AssertRelationshipInput {
     pub label: String,
     /// Numeric edge weight (0.0–1.0 by convention; exact range is schema-defined).
     pub weight: f64,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// MCP input for retype_relationship.
@@ -68,6 +73,10 @@ pub struct FoldRelationshipInput {
     pub edge_handle: Uuid,
     /// Optional human-readable reason for retracting the relationship.
     pub reason: Option<String>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -107,6 +116,11 @@ pub async fn assert_relationship(
     let target = temper_workflow::operations::parse_ref(&input.target)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
     let cmd = AssertRelationship {
         source,
         target,
@@ -114,7 +128,7 @@ pub async fn assert_relationship(
         polarity: input.polarity,
         label: input.label,
         weight: input.weight,
-        act: Default::default(),
+        act,
         origin: Surface::Mcp,
     };
 
@@ -197,10 +211,15 @@ pub async fn fold_relationship(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
     let cmd = FoldRelationship {
         edge_handle: EdgeId::from(input.edge_handle),
         reason: input.reason,
-        act: Default::default(),
+        act,
         origin: Surface::Mcp,
     };
 
@@ -241,6 +260,45 @@ mod tests {
         assert_eq!(input.polarity, Polarity::Inverse);
         assert_eq!(input.label, "depends_on");
         assert_eq!(input.weight, 1.0);
+    }
+
+    #[test]
+    fn assert_relationship_input_accepts_act_authorship_fields() {
+        let json = serde_json::json!({
+            "source": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "target": "019e84ab-26ba-7560-9d34-c60d74a9fbe3",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "depends_on",
+            "weight": 1.0,
+            "invocation_id": "019f0e28-1750-7490-919f-5e51c92c8391",
+            "reasoning": "these two co-vary",
+            "confidence": "confident",
+        });
+        let input: AssertRelationshipInput = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            input.act.confidence,
+            Some(temper_core::types::ConfidenceBand::Confident)
+        );
+        assert!(input.act.invocation_id.is_some());
+        let ctx = input.act.into_act_context().expect("assembles");
+        assert!(!ctx.is_empty());
+    }
+
+    #[test]
+    fn fold_relationship_input_accepts_act_authorship_fields() {
+        let id = Uuid::new_v4();
+        let json = serde_json::json!({
+            "edge_handle": id.to_string(),
+            "reason": "superseded",
+            "confidence": "tentative",
+        });
+        let input: FoldRelationshipInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.edge_handle, id);
+        assert_eq!(
+            input.act.confidence,
+            Some(temper_core::types::ConfidenceBand::Tentative)
+        );
     }
 
     #[test]

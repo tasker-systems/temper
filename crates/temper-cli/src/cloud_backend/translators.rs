@@ -105,6 +105,9 @@ pub(crate) fn cmd_to_ingest_payload(
         managed_meta,
         open_meta,
         chunks_packed,
+        // Carry the per-act correlation + authorship from the command onto the wire (discrete
+        // ActInput shape); the ingest handler reassembles it into the act on its CreateResource.
+        act: cmd.act.clone().into(),
     })
 }
 

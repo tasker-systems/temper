@@ -143,6 +143,10 @@ pub struct ResourceCreateRequest {
     pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the create act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    #[serde(default, flatten)]
+    pub act: temper_core::types::authorship::ActInput,
 }
 
 /// Request body for updating a resource.

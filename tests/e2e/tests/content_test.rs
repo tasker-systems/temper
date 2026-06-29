@@ -47,6 +47,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("encode chunks")),
+        act: Default::default(),
     };
 
     let resource = app

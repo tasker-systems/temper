@@ -21,6 +21,81 @@ pub enum CliPolarity {
     Inverse,
 }
 
+/// CLI-local enum mirroring `ConfidenceBand` for clap `value_enum` parsing.
+///
+/// Kept in `cli.rs` (not `temper-core`) to avoid adding a `clap` dependency to `temper-core`,
+/// mirroring `CliEdgeKind`/`CliPolarity`. Maps to `temper_core::types::ConfidenceBand`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliConfidence {
+    Tentative,
+    Probable,
+    Confident,
+}
+
+impl From<CliConfidence> for temper_core::types::ConfidenceBand {
+    fn from(c: CliConfidence) -> Self {
+        use temper_core::types::ConfidenceBand;
+        match c {
+            CliConfidence::Tentative => ConfidenceBand::Tentative,
+            CliConfidence::Probable => ConfidenceBand::Probable,
+            CliConfidence::Confident => ConfidenceBand::Confident,
+        }
+    }
+}
+
+/// Per-act agent-authorship + invocation-correlation flags shared by every authored-write CLI
+/// command (resource create, edge assert/fold) via `#[command(flatten)]`. All optional and
+/// available to any caller — agent-driven CLI is the *expected* case, not a restricted one.
+/// `confidence` is required iff any other authorship flag is set (enforced by
+/// [`temper_core::types::ActInput::into_act_context`] at the consuming surface).
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ActArgs {
+    /// Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`).
+    #[arg(long)]
+    pub invocation: Option<String>,
+    /// Graded authorship confidence: tentative, probable, or confident.
+    #[arg(long, value_enum)]
+    pub confidence: Option<CliConfidence>,
+    /// Free-text reasoning for the act (authorship; requires --confidence).
+    #[arg(long)]
+    pub reasoning: Option<String>,
+    /// Structured rationale for the act (authorship; requires --confidence).
+    #[arg(long)]
+    pub rationale: Option<String>,
+    /// Persona/role the author acted as (authorship; requires --confidence).
+    #[arg(long)]
+    pub persona: Option<String>,
+    /// Model that authored the act (authorship; requires --confidence).
+    #[arg(long)]
+    pub model: Option<String>,
+}
+
+impl ActArgs {
+    /// Parse the flags into the shared [`temper_core::types::ActInput`] wire shape. The invocation
+    /// ref resolves trailing-UUID-only (like every other ref). The
+    /// confidence-required-iff-authorship rule is enforced downstream by `into_act_context`.
+    pub fn into_act_input(
+        self,
+    ) -> Result<temper_core::types::ActInput, temper_core::error::TemperError> {
+        let invocation_id = self
+            .invocation
+            .as_deref()
+            .map(|r| {
+                temper_workflow::operations::parse_ref(r)
+                    .map(|id| temper_core::types::ids::InvocationId::from(id.0))
+            })
+            .transpose()?;
+        Ok(temper_core::types::ActInput {
+            invocation_id,
+            reasoning: self.reasoning,
+            confidence: self.confidence.map(Into::into),
+            rationale: self.rationale,
+            persona: self.persona,
+            model: self.model,
+        })
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "temper",
@@ -187,10 +262,6 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "clap arg-definition enum, parsed once"
-)]
 pub enum ResourceAction {
     /// Create a new resource
     Create {
@@ -232,6 +303,9 @@ pub enum ResourceAction {
         /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
     /// List resources of a given type
     List {
@@ -583,6 +657,9 @@ pub enum EdgeAction {
         /// Edge weight (default: 1.0)
         #[arg(long, default_value = "1.0")]
         weight: f64,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
     /// Change the kind and polarity of an existing relationship.
     ///
@@ -616,6 +693,9 @@ pub enum EdgeAction {
         /// Optional human-readable reason for folding
         #[arg(long)]
         reason: Option<String>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
 }
 

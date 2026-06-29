@@ -30,6 +30,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/resource-create-get".to_string(),
         title: "E2E Create & Get Test".to_string(),
         slug: Some("e2e-create-get-test".to_string()),
+        act: Default::default(),
     };
 
     let created = app
@@ -84,6 +85,7 @@ async fn resource_update(pool: sqlx::PgPool) {
             origin_uri: "test://e2e/resource-update".to_string(),
             title: "Original Title".to_string(),
             slug: None,
+            act: Default::default(),
         })
         .await
         .expect("resource create failed");
@@ -144,6 +146,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
             origin_uri: "test://e2e/resource-delete".to_string(),
             title: "Resource To Delete".to_string(),
             slug: None,
+            act: Default::default(),
         })
         .await
         .expect("resource create failed");
@@ -205,6 +208,7 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
             origin_uri: "test://e2e/resource-timestamps".to_string(),
             title: "Timestamp Test".to_string(),
             slug: None,
+            act: Default::default(),
         })
         .await
         .expect("resource create failed");
@@ -286,6 +290,7 @@ async fn resource_row_native_shape_drops_shim_fields(pool: sqlx::PgPool) {
             origin_uri: "test://e2e/native-shape".to_string(),
             title: "Native Shape".to_string(),
             slug: None,
+            act: Default::default(),
         })
         .await
         .expect("resource create failed");
@@ -341,6 +346,7 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
                 origin_uri: format!("test://e2e/resource-page/{i}"),
                 title: format!("Pagination Resource {i}"),
                 slug: None,
+                act: Default::default(),
             })
             .await
             .unwrap_or_else(|e| panic!("resource create {i} failed: {e}"));

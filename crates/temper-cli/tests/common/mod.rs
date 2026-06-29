@@ -69,6 +69,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             body_flag: None,
             from: None,
             format: temper_cli::format::OutputFormat::Json,
+            act: Default::default(),
         },
     )
     .unwrap();
@@ -107,6 +108,7 @@ pub fn create_task(
             body_flag: None,
             from: None,
             format: temper_cli::format::OutputFormat::Json,
+            act: Default::default(),
         },
     )
     .unwrap();
