@@ -278,6 +278,21 @@ The remote MCP server exposes vault operations as structured tools over [Streama
 
 The client handles OAuth automatically — you'll be prompted to log in on first connection.
 
+## Development
+
+Working from a checkout? `bin/setup.sh` provisions the full dev/admin environment —
+Homebrew deps, the cargo tooling, git hooks, a Docker Postgres, and migrations — and is
+idempotent, so re-running just converges:
+
+```bash
+git clone git@github.com:tasker-systems/temper.git && cd temper
+bin/setup.sh                 # add --with-cli to also install the `temper` binary
+cargo make check && cargo make test-db
+```
+
+See [docs/guides/development.md](docs/guides/development.md) for the full walk-through,
+daily commands, and troubleshooting.
+
 ## Related Work
 
 Temper draws on ideas from several projects working on adjacent problems:
