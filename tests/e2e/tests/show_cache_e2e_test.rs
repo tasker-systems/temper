@@ -78,6 +78,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         managed_meta: Some(serde_json::json!({"temper-stage": "draft"})),
         open_meta: Some(serde_json::json!({"tags": ["regression"]})),
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        act: Default::default(),
     };
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 
@@ -176,6 +177,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        act: Default::default(),
     };
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 

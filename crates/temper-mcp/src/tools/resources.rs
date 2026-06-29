@@ -9,6 +9,7 @@ use temper_api::backend::{substrate_read, DbBackend};
 use temper_api::services::context_service::resolve_context_ref;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
+use temper_core::types::authorship::ActInput;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
@@ -45,6 +46,11 @@ pub struct CreateResourceInput {
     /// Open frontmatter (user-owned fields) as JSON.
     #[serde(default)]
     pub open_meta: Option<serde_json::Value>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship
+    /// (`reasoning`/`confidence`/`rationale`/`persona`/`model`). Flattened as top-level keys;
+    /// all optional. `confidence` is required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// MCP input for get_resource.
@@ -343,6 +349,14 @@ pub async fn create_resource(
         Some(BodyUpdate::new(content))
     };
 
+    // Assemble the per-act correlation + authorship from the flattened discrete fields. The
+    // shared assembler enforces "confidence required iff authorship supplied"; map its
+    // BadRequest to invalid_params.
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
@@ -354,7 +368,7 @@ pub async fn create_resource(
         origin_uri: Some(origin_uri),
         chunks_packed: None,
         content_hash: None,
-        act: Default::default(),
+        act,
         origin: Surface::Mcp,
     };
 
@@ -734,6 +748,74 @@ mod tests {
                 .stage
                 .as_deref(),
             Some("done"),
+        );
+    }
+
+    /// Chunk B: the flattened [`ActInput`] discrete fields deserialize as top-level keys on the
+    /// MCP input (invocation_id + the authorship fields), and assemble into an `ActContext`.
+    #[test]
+    fn create_resource_input_accepts_act_authorship_fields() {
+        let raw = serde_json::json!({
+            "context_ref": "@me/demo",
+            "doc_type_name": "task",
+            "title": "Demo Task",
+            "invocation_id": "019f0e28-1750-7490-919f-5e51c92c8391",
+            "reasoning": "seeding the demo corpus",
+            "confidence": "probable",
+            "persona": "steward",
+        });
+        let input: CreateResourceInput =
+            serde_json::from_value(raw).expect("flattened act fields must deserialize");
+        assert_eq!(
+            input.act.confidence,
+            Some(temper_core::types::ConfidenceBand::Probable)
+        );
+        assert_eq!(
+            input.act.reasoning.as_deref(),
+            Some("seeding the demo corpus")
+        );
+        assert_eq!(input.act.persona.as_deref(), Some("steward"));
+        assert!(input.act.invocation_id.is_some(), "invocation_id present");
+        // And it assembles into a non-empty ActContext.
+        let ctx = input.act.into_act_context().expect("assembles");
+        assert!(!ctx.is_empty());
+    }
+
+    /// Chunk B: the flattened authorship/correlation fields must inline as a string enum
+    /// (`confidence`) and a string-uuid (`invocation_id`) in the generated schema — a `$ref` into
+    /// `$defs` reaches the Anthropic tool-use layer with no type signal and comes back as `null`
+    /// (the same bug fixed for EdgeKind/Polarity). Generated via the exact rmcp runtime path.
+    #[test]
+    fn create_resource_input_schema_inlines_act_fields() {
+        let generator = schemars::generate::SchemaSettings::draft2020_12().into_generator();
+        let schema = serde_json::to_value(generator.into_root_schema_for::<CreateResourceInput>())
+            .expect("schema serializes");
+
+        // confidence: inline string enum (the trailing `null` is the field's Option-ness).
+        let confidence = &schema["properties"]["confidence"];
+        assert!(
+            confidence.get("$ref").is_none(),
+            "confidence must inline, not $ref: {confidence}"
+        );
+        let variants: Vec<&str> = confidence
+            .get("enum")
+            .and_then(|e| e.as_array())
+            .expect("confidence carries inline enum variants")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(variants, ["tentative", "probable", "confident"]);
+
+        // invocation_id: inline string-uuid, not a $ref into $defs.
+        let invocation = &schema["properties"]["invocation_id"];
+        assert!(
+            invocation.get("$ref").is_none(),
+            "invocation_id must inline, not $ref: {invocation}"
+        );
+        assert_eq!(
+            invocation.get("format").and_then(|f| f.as_str()),
+            Some("uuid"),
+            "invocation_id inlines as a uuid-format string: {invocation}"
         );
     }
 

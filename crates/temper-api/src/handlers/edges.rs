@@ -61,6 +61,7 @@ pub async fn assert(
     auth: AuthUser,
     Json(req): Json<AssertRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = AssertRelationship {
         source: req.source,
         target: req.target,
@@ -68,7 +69,7 @@ pub async fn assert(
         polarity: req.polarity,
         label: req.label,
         weight: req.weight,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -175,10 +176,11 @@ pub async fn fold(
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<FoldRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = FoldRelationship {
         edge_handle: EdgeId::from(edge_handle),
         reason: req.reason,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::types::authorship::ActInput;
 use crate::types::graph::{EdgeKind, Polarity};
 use crate::types::ids::ResourceId;
 
@@ -24,6 +25,10 @@ pub struct AssertRelationshipRequest {
     pub polarity: Polarity,
     pub label: String,
     pub weight: f64,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the assert act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    #[serde(default, flatten)]
+    pub act: ActInput,
 }
 
 /// Request body for `POST /api/relationships/{edge_handle}/retype`.
@@ -46,6 +51,10 @@ pub struct ReweightRelationshipRequest {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct FoldRelationshipRequest {
     pub reason: Option<String>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the fold act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    #[serde(default, flatten)]
+    pub act: ActInput,
 }
 
 /// Acknowledgement returned by all relationship write endpoints.

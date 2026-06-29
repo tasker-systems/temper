@@ -32,6 +32,7 @@ async fn ingest_with_chunks(
         managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        act: Default::default(),
     };
     app.client
         .ingest()

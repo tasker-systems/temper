@@ -829,6 +829,12 @@ pub struct InvocationActRecord {
     pub event_kind: String,
     pub emitter_entity_id: Uuid,
     pub occurred_at: DateTime<Utc>,
+    /// The invocation this act is correlated under (`kb_events.invocation_id`). Always `Some` here
+    /// (the acts query is keyed on it), exposed so the wire row is self-describing.
+    pub invocation_id: Option<Uuid>,
+    /// Raw `kb_events.metadata` — the per-act agent authorship (`{}` for an unauthored act). The
+    /// `temper-api` wrapper decodes it into the typed `AgentAuthorship`.
+    pub metadata: Value,
 }
 
 /// The full show projection of an invocation envelope: the `kb_invocations` row (minus the internal
@@ -890,7 +896,7 @@ pub async fn invocation_show(
     };
 
     let acts = sqlx::query(
-        "SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at
+        "SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at, e.invocation_id, e.metadata
            FROM kb_events e
            JOIN kb_event_types et ON et.id = e.event_type_id
           WHERE e.invocation_id = $1
@@ -905,6 +911,8 @@ pub async fn invocation_show(
         event_kind: r.get("name"),
         emitter_entity_id: r.get("emitter_entity_id"),
         occurred_at: r.get("occurred_at"),
+        invocation_id: r.get("invocation_id"),
+        metadata: r.get("metadata"),
     })
     .collect();
 

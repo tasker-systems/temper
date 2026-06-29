@@ -55,6 +55,7 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
         })),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        act: Default::default(),
     };
     client
         .ingest()
@@ -141,6 +142,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create with --task must succeed")
@@ -262,6 +264,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
             .expect("cloud create without --task must succeed")
@@ -329,6 +332,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
         })
@@ -400,6 +404,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
         })
@@ -470,6 +475,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
                     body_flag: None,
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
                 },
             )
         })
