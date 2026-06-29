@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_update($1,$2)",
+  "query": "SELECT resource_update($1,$2,$3,$4)",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,8 @@
     "parameters": {
       "Left": [
         "Jsonb",
+        "Uuid",
+        "Jsonb",
         "Uuid"
       ]
     },
@@ -19,5 +21,5 @@
       null
     ]
   },
-  "hash": "4cd9bb7870cae76f617f7a1c941571b82dc513e6873961442db37cab60d90793"
+  "hash": "a4b15be4c789413d3e763b2da21817edb6c0b766b3563d86b470b7e9d7174025"
 }

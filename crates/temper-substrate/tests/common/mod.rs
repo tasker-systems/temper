@@ -15,19 +15,31 @@
 /// replay/projection diff, or to re-clean between snapshot→replay phases.
 pub async fn reset_schema(pool: &sqlx::PgPool) {
     use sqlx::Executor;
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    // Rebuild the FULL current substrate schema (every migration), then empty all data tables. This is
+    // reset_schema's contract: a complete-schema, SEED-FREE baseline the tests seed via
+    // bootseed::seed_system and repopulate via ledger replay. It tracks the real migration chain instead
+    // of a hand-copied file list — the hand list drifted once a later migration added a param to a
+    // canonical mutation function (block_mutate et al.), making the old 2-file baseline reject any
+    // scenario that fires it. TRUNCATE (rather than a partial "structural-only" apply) is what keeps the
+    // seed-free contract: the seed migrations (canonical_seed, l0_kernel) populate kb_event_types / the
+    // system actor / L0 rows, which would otherwise collide with each test's bootseed + replay
+    // re-seeding (replay re-inserts event types with no ON CONFLICT).
     pool.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("drop/recreate public schema");
-    for f in [
-        "migrations/20260624000001_canonical_schema.sql",
-        "migrations/20260624000002_canonical_functions.sql",
-    ] {
-        let sql = std::fs::read_to_string(format!("{root}/{f}")).expect("read canonical sql");
-        pool.execute(sql.as_str())
-            .await
-            .unwrap_or_else(|e| panic!("apply {f}: {e}"));
-    }
+    temper_substrate::MIGRATOR
+        .run(pool)
+        .await
+        .expect("apply full migration chain");
+    pool.execute(
+        "DO $$ DECLARE r record; BEGIN \
+           FOR r IN SELECT tablename FROM pg_tables \
+                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
+           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
+           END LOOP; END $$;",
+    )
+    .await
+    .expect("truncate kb_ data tables to a seed-free baseline");
 }
 
 /// Fire a cogmap genesis + one `resource_create` homed in it, whose single chunk's sidecar entry

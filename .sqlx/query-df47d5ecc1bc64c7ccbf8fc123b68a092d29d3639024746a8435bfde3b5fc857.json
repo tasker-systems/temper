@@ -1,16 +1,18 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_delete($1,$2)",
+  "query": "SELECT relationship_reweight($1,$2,$3,$4)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "resource_delete",
+        "name": "relationship_reweight",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
+        "Jsonb",
+        "Uuid",
         "Jsonb",
         "Uuid"
       ]
@@ -19,5 +21,5 @@
       null
     ]
   },
-  "hash": "6666ff7b0a55b030fe532ca4907d4cdb8c04e0dea11bf7876721a359cd9bc182"
+  "hash": "df47d5ecc1bc64c7ccbf8fc123b68a092d29d3639024746a8435bfde3b5fc857"
 }

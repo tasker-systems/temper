@@ -598,9 +598,11 @@ pub async fn fire_with(
                 weight,
             };
             let id = sqlx::query_scalar!(
-                "SELECT property_set($1,$2)",
+                "SELECT property_set($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -708,10 +710,12 @@ pub async fn fire_with(
             let mut sidecar = std::collections::HashMap::new();
             payloads::content_sidecar_chunks(&mut sidecar, chunks);
             let id = sqlx::query_scalar!(
-                "SELECT block_mutate($1,$2,$3)",
+                "SELECT block_mutate($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 serde_json::to_value(&sidecar)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -730,10 +734,12 @@ pub async fn fire_with(
             };
             let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
             let telos = sqlx::query_scalar!(
-                "SELECT cogmap_charter_set($1,$2,$3)",
+                "SELECT cogmap_charter_set($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 sidecar,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -746,9 +752,11 @@ pub async fn fire_with(
                 resource_id: resource,
             };
             let id = sqlx::query_scalar!(
-                "SELECT resource_delete($1,$2)",
+                "SELECT resource_delete($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -768,9 +776,11 @@ pub async fn fire_with(
                 origin_uri: origin_uri.map(str::to_owned),
             };
             let id = sqlx::query_scalar!(
-                "SELECT resource_update($1,$2)",
+                "SELECT resource_update($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -788,9 +798,11 @@ pub async fn fire_with(
                 home,
             };
             let id = sqlx::query_scalar!(
-                "SELECT resource_rehome($1,$2)",
+                "SELECT resource_rehome($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -810,9 +822,11 @@ pub async fn fire_with(
                 polarity,
             };
             let id = sqlx::query_scalar!(
-                "SELECT relationship_retype($1,$2)",
+                "SELECT relationship_retype($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -830,9 +844,11 @@ pub async fn fire_with(
                 weight,
             };
             let id = sqlx::query_scalar!(
-                "SELECT relationship_reweight($1,$2)",
+                "SELECT relationship_reweight($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?

@@ -1,16 +1,18 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT relationship_reweight($1,$2)",
+  "query": "SELECT resource_rehome($1,$2,$3,$4)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "relationship_reweight",
+        "name": "resource_rehome",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
+        "Jsonb",
+        "Uuid",
         "Jsonb",
         "Uuid"
       ]
@@ -19,5 +21,5 @@
       null
     ]
   },
-  "hash": "4df545f0afd6ac27ca3cb3da7ff5f159979423296046d0c3ccf0f42d8827a984"
+  "hash": "f3b41a4639448aa89f047022d7f368225c4637b306370882847b75582b35e59c"
 }

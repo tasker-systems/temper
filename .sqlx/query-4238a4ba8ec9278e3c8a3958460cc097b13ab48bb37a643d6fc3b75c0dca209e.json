@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT block_mutate($1,$2,$3)",
+  "query": "SELECT block_mutate($1,$2,$3,$4,$5)",
   "describe": {
     "columns": [
       {
@@ -13,6 +13,8 @@
       "Left": [
         "Jsonb",
         "Jsonb",
+        "Uuid",
+        "Jsonb",
         "Uuid"
       ]
     },
@@ -20,5 +22,5 @@
       null
     ]
   },
-  "hash": "6f1cbddf52d607c087f9677caf883c4ff034d1ad22c9ba4a1936a190d70232ff"
+  "hash": "4238a4ba8ec9278e3c8a3958460cc097b13ab48bb37a643d6fc3b75c0dca209e"
 }
