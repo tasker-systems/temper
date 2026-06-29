@@ -168,15 +168,19 @@ pub fn generate_second_user_jwt() -> String {
     generate_test_jwt("e2e-second-user", "second@test.example.com")
 }
 
-/// Enable invite-only mode in tests by adding admin to the `temper-system`
-/// gating team and flipping the setting.
+/// Enable invite-only mode in tests by making the admin an `owner` of the
+/// `temper-system` gating team and flipping the setting.
 ///
-/// The substrate has no seeded `temper-system` team (the canonical seed only
-/// provisions the `system` actor); the access predicates resolve the gating
-/// team by slug (`has_system_access`/`is_system_admin` JOIN `kb_teams` on
-/// `slug = gating_team_slug`). So we create it by slug on demand. `kb_teams`
-/// mints its own `id`; `kb_team_members` is keyed on `(team_id, profile_id)`
-/// with no surrogate id / `joined_at` (substrate shape).
+/// `temper-system` is seeded by the L0 kernel migration (`20260625000001`) and,
+/// since the auto-join generalization (`20260629000002`), is flagged as an
+/// auto-join team — so in `open` mode (the default before this call) the admin
+/// profile has ALREADY been auto-joined as a `watcher`. The owner write must
+/// therefore UPSERT (`DO UPDATE SET role`), promoting the existing watcher row
+/// to `owner`; a plain `DO NOTHING` would leave the admin a watcher and
+/// `is_system_admin` would stay false. This mirrors the production root step
+/// (the L0 content-delivery guide grants owner via `ON CONFLICT DO UPDATE`).
+/// The `kb_teams` upsert by slug tolerates the row already existing; access
+/// predicates resolve the gating team by `slug = gating_team_slug`.
 pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
     let team_id: uuid::Uuid = sqlx::query_scalar(
         "INSERT INTO kb_teams (slug, name)
@@ -191,7 +195,7 @@ pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
     sqlx::query(
         "INSERT INTO kb_team_members (team_id, profile_id, role)
          VALUES ($1, $2, 'owner')
-         ON CONFLICT (team_id, profile_id) DO NOTHING",
+         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
     )
     .bind(team_id)
     .bind(admin_profile_id)
