@@ -9,6 +9,7 @@
 
 pub mod access;
 pub mod access_gate;
+pub mod admin;
 pub mod api;
 pub mod audit;
 pub mod auth;

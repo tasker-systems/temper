@@ -94,7 +94,7 @@ impl AccessMode {
 }
 
 /// Instance-wide system settings (singleton row).
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SystemSettings {
     pub id: i32,
     pub access_mode: String,
