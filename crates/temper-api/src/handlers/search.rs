@@ -1,11 +1,11 @@
 use axum::extract::State;
 use axum::Json;
 
-use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
-use crate::state::AppState;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::ids::ProfileId;
+use temper_services::error::{ApiResult, ErrorBody};
+use temper_services::state::AppState;
 
 #[utoipa::path(
     post,

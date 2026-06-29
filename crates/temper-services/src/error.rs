@@ -26,14 +26,15 @@ pub enum ApiError {
 pub type ApiResult<T> = Result<T, ApiError>;
 
 #[derive(Serialize, ToSchema)]
-pub(crate) struct ErrorBody {
+pub struct ErrorBody {
     error: ErrorDetail,
 }
 
 impl ErrorBody {
     /// Build a typed error body with no `details` payload — the shape used by
-    /// both `ApiError::into_response` and the router fallback handler.
-    pub(crate) fn new(code: &'static str, message: String) -> Self {
+    /// both `ApiError::into_response` and the router fallback handler (the latter
+    /// lives in temper-api, so this constructor is `pub` across the crate boundary).
+    pub fn new(code: &'static str, message: String) -> Self {
         Self {
             error: ErrorDetail {
                 code,
@@ -45,7 +46,7 @@ impl ErrorBody {
 }
 
 #[derive(Serialize, ToSchema)]
-pub(crate) struct ErrorDetail {
+pub struct ErrorDetail {
     code: &'static str,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]

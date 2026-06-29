@@ -12,10 +12,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::backend::DbBackend;
-use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
 use crate::services::{access_service, cogmap_service};
-use crate::state::AppState;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
@@ -127,7 +127,7 @@ pub async fn genesis(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Materialized regions (surface tier)", body = Vec<CogmapRegionRow>),
-        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn shape(
@@ -157,7 +157,7 @@ pub async fn shape(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Per-region analytics-tier scalar metrics", body = Vec<CogmapRegionMetricsRow>),
-        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn region_metrics(
@@ -185,7 +185,7 @@ pub async fn region_metrics(
     responses(
         (status = 200, description = "Map-level analytics (telos, staleness, regulation)", body = CogmapAnalyticsRow),
         (status = 404, description = "Map not found or not readable"),
-        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn analytics(

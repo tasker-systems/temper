@@ -9,9 +9,9 @@ use std::future::Future;
 
 use temper_core::types::{AuthClaims, AuthenticatedProfile};
 
-use crate::error::ApiError;
 use crate::services::profile_service;
-use crate::state::AppState;
+use temper_services::error::ApiError;
+use temper_services::state::AppState;
 
 /// Internal JWT claim structure for deserialization.
 #[derive(Debug, Deserialize)]

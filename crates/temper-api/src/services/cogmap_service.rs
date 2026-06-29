@@ -14,10 +14,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::cognitive_maps::{BindTeamOutcome, BindTeamRequest, UnbindTeamOutcome};
 use temper_core::types::ids::ProfileId;
+use temper_services::error::{ApiError, ApiResult};
 
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).
 ///

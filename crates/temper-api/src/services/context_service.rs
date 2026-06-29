@@ -12,10 +12,10 @@
 
 use sqlx::PgPool;
 
-use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
+use temper_services::error::{ApiError, ApiResult};
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};

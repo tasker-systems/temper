@@ -1,8 +1,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
 use temper_core::types::ids::{ContextId, ProfileId};
+use temper_services::error::ApiResult;
 
 /// The most recent event id produced against a context the profile owns (directly, or via a team it
 /// belongs to). Returns `None` when the context has no events the profile may see. Post-collapse events

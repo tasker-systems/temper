@@ -5,10 +5,10 @@ use temper_core::types::access_gate::Entitlements;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
-use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::{access_service, profile_service};
-use crate::state::AppState;
+use temper_services::error::{ApiResult, ErrorBody};
+use temper_services::state::AppState;
 
 #[derive(Debug, serde::Serialize)]
 pub struct ProfileWithEntitlements {

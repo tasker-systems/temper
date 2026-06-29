@@ -4979,6 +4979,7 @@ dependencies = [
  "sqlx",
  "temper-core",
  "temper-ingest",
+ "temper-services",
  "temper-substrate",
  "temper-workflow",
  "thiserror 2.0.18",
@@ -5167,6 +5168,24 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "temper-services"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "jsonwebtoken",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "temper-core",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "utoipa",
 ]
 
 [[package]]

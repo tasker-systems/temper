@@ -2,12 +2,12 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::event_service;
-use crate::state::AppState;
 use temper_core::types::api::EventCursorResponse;
 use temper_core::types::ids::{ContextId, ProfileId};
+use temper_services::error::{ApiResult, ErrorBody};
+use temper_services::state::AppState;
 
 #[utoipa::path(
     get,

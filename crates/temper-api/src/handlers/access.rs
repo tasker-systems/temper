@@ -11,10 +11,10 @@ use temper_core::types::access_gate::{
 };
 use temper_core::types::ids::ProfileId;
 
-use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
 use crate::services::access_service;
-use crate::state::AppState;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Request body types

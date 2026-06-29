@@ -3,9 +3,9 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::backend::DbBackend;
-use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
-use crate::state::AppState;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::state::AppState;
 
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::ids::{ProfileId, ResourceId};
