@@ -55,6 +55,10 @@ pub struct RetypeRelationshipInput {
     pub edge_kind: EdgeKind,
     /// New edge direction sign.
     pub polarity: Polarity,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// MCP input for reweight_relationship.
@@ -64,6 +68,10 @@ pub struct ReweightRelationshipInput {
     pub edge_handle: Uuid,
     /// New edge weight.
     pub weight: f64,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// MCP input for fold_relationship.
@@ -154,11 +162,15 @@ pub async fn retype_relationship(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = RetypeRelationship {
         edge_handle: EdgeId::from(input.edge_handle),
         edge_kind: input.edge_kind,
         polarity: input.polarity,
-        act: Default::default(),
+        act,
         origin: Surface::Mcp,
     };
 
@@ -184,10 +196,14 @@ pub async fn reweight_relationship(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = ReweightRelationship {
         edge_handle: EdgeId::from(input.edge_handle),
         weight: input.weight,
-        act: Default::default(),
+        act,
         origin: Surface::Mcp,
     };
 
@@ -327,6 +343,41 @@ mod tests {
         let input: ReweightRelationshipInput = serde_json::from_value(json).unwrap();
         assert_eq!(input.edge_handle, id);
         assert_eq!(input.weight, 0.5);
+    }
+
+    #[test]
+    fn retype_relationship_input_accepts_act_authorship_fields() {
+        let id = Uuid::new_v4();
+        let json = serde_json::json!({
+            "edge_handle": id.to_string(),
+            "edge_kind": "near",
+            "polarity": "forward",
+            "invocation_id": "019f0e28-1750-7490-919f-5e51c92c8391",
+            "reasoning": "kind was mislabelled",
+            "confidence": "probable",
+        });
+        let input: RetypeRelationshipInput = serde_json::from_value(json).unwrap();
+        assert!(input.act.invocation_id.is_some());
+        assert_eq!(
+            input.act.confidence,
+            Some(temper_core::types::ConfidenceBand::Probable)
+        );
+        assert!(!input.act.into_act_context().expect("assembles").is_empty());
+    }
+
+    #[test]
+    fn reweight_relationship_input_accepts_act_authorship_fields() {
+        let id = Uuid::new_v4();
+        let json = serde_json::json!({
+            "edge_handle": id.to_string(),
+            "weight": 0.5,
+            "confidence": "tentative",
+        });
+        let input: ReweightRelationshipInput = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            input.act.confidence,
+            Some(temper_core::types::ConfidenceBand::Tentative)
+        );
     }
 
     #[test]
