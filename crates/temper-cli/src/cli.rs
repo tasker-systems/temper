@@ -511,6 +511,32 @@ pub enum TeamAction {
         #[arg(long)]
         team: Option<String>,
     },
+    /// Create a team (you become its owner)
+    Create {
+        /// Globally-unique team slug
+        slug: String,
+        /// Display name (defaults to the slug)
+        #[arg(long)]
+        name: Option<String>,
+        /// Parent team ref (`+slug` or bare slug); creates a child team
+        #[arg(long)]
+        parent: Option<String>,
+        /// Auto-join role for an "everyone" pool (admin-only): owner/maintainer/member/watcher
+        #[arg(long = "auto-join-role")]
+        auto_join_role: Option<String>,
+    },
+    /// Add a member to a team (owner/maintainer only)
+    AddMember {
+        /// Team ID (UUID)
+        team: String,
+        /// Profile ID (UUID)
+        profile: String,
+        /// Role to grant: owner/maintainer/member/watcher
+        #[arg(long)]
+        role: String,
+    },
+    /// List the teams you are a member of
+    List,
 }
 
 #[derive(Subcommand)]

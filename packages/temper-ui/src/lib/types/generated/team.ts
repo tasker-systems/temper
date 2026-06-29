@@ -2,6 +2,11 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * Request body for `POST /api/teams/{id}/members`.
+ */
+export type AddMemberRequest = { profile_id: string, role: TeamRole, };
+
+/**
  * A team — the unit of collaboration in temper.
  *
  * Teams are fully owned by temper, not delegated to the auth provider.
@@ -11,9 +16,23 @@ import type { JsonValue } from "./serde_json/JsonValue";
 export type Team = { id: string, name: string, slug: string, description: string | null, metadata: JsonValue, created_by_profile_id: string, is_active: boolean, created: string, updated: string, };
 
 /**
+ * Request body for `POST /api/teams`.
+ *
+ * `parent` is an optional team ref (`+slug` or bare `slug`); when present the
+ * new team is created as a child in `kb_teams_parents` and the caller must be
+ * `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
+ */
+export type TeamCreateRequest = { slug: string, name: string | null, parent: string | null, auto_join_role: TeamRole | null, };
+
+/**
  * A profile's membership in a team with a specific role.
  */
 export type TeamMember = { id: string, team_id: string, profile_id: string, role: TeamRole, joined_at: string, invited_by_profile_id: string | null, };
+
+/**
+ * Response row for team membership — matches the real `kb_team_members` columns.
+ */
+export type TeamMemberRow = { team_id: string, profile_id: string, role: TeamRole, created: string, };
 
 /**
  * Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.
@@ -22,4 +41,14 @@ export type TeamMember = { id: string, team_id: string, profile_id: string, role
  * that explicit matching in SQL functions and Rust logic is clearer than a
  * join-table permission model.
  */
-export type TeamRole = "Owner" | "Maintainer" | "Member" | "Watcher";
+export type TeamRole = "owner" | "maintainer" | "member" | "watcher";
+
+/**
+ * Response row for team endpoints — matches the real `kb_teams` columns.
+ */
+export type TeamRow = { id: string, slug: string, name: string, created: string, 
+/**
+ * NULL = not an auto-join ("everyone") team; otherwise the role new
+ * members are enrolled at. Admin-gated to set.
+ */
+auto_join_role: TeamRole | null, };

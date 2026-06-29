@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT backfill_auto_join_team($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "backfill_auto_join_team",
+        "type_info": "Void"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b4d779577f16c239f567be2e2807d9a9d65ac54db7c75ba9b67df3288cf3b2cd"
+}
