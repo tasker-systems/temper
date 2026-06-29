@@ -19,6 +19,7 @@ pub mod profile;
 pub mod relationships;
 pub mod resources;
 pub mod search;
+pub mod teams;
 pub mod upload;
 
 use std::sync::Arc;
@@ -139,6 +140,11 @@ impl TemperClient {
     /// Context CRUD sub-client.
     pub fn contexts(&self) -> contexts::ContextClient<'_> {
         contexts::ContextClient::new(&self.http)
+    }
+
+    /// Team lifecycle sub-client (create / add-member / list).
+    pub fn teams(&self) -> teams::TeamsClient<'_> {
+        teams::TeamsClient::new(&self.http)
     }
 
     /// Upload sub-client.

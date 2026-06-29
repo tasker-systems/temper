@@ -81,6 +81,11 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::contexts::list).post(handlers::contexts::create),
         )
         .route("/api/contexts/{id}", get(handlers::contexts::get))
+        .route(
+            "/api/teams",
+            get(handlers::teams::list).post(handlers::teams::create),
+        )
+        .route("/api/teams/{id}/members", post(handlers::teams::add_member))
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route(

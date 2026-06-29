@@ -287,6 +287,45 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             }
             TeamAction::Status { team: _ } => temper_cli::commands::team::status(),
             TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
+            TeamAction::Create {
+                slug,
+                name,
+                parent,
+                auto_join_role,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::create_remote(
+                        client,
+                        &slug,
+                        name.as_deref(),
+                        parent.as_deref(),
+                        auto_join_role.as_deref(),
+                        output_format,
+                    )
+                    .await
+                })
+            }),
+            TeamAction::AddMember {
+                team,
+                profile,
+                role,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::add_member_remote(
+                        client,
+                        &team,
+                        &profile,
+                        &role,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
+            TeamAction::List => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::list_remote(client, output_format).await
+                })
+            }),
         },
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(output_format),
