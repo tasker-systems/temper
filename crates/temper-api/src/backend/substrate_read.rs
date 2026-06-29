@@ -520,6 +520,10 @@ pub async fn invocation_show_select(
                 event_kind: a.event_kind,
                 emitter_entity_id: a.emitter_entity_id,
                 occurred_at: a.occurred_at,
+                invocation_id: a.invocation_id,
+                // Decode the raw kb_events.metadata into typed authorship; `{}` (an unauthored act)
+                // fails to deserialize (confidence is required) → None.
+                authorship: serde_json::from_value(a.metadata).ok(),
             })
             .collect(),
     }))

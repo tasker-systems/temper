@@ -142,6 +142,42 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
     let assert_meta = act_metadata(&pool, invocation_id, "relationship_asserted").await;
     assert_eq!(assert_meta["confidence"], "confident");
     assert_eq!(assert_meta["reasoning"], "api assert act");
+
+    // Chunk D readback: invocation_show surfaces the per-act authorship through the client/API.
+    let view = app
+        .client
+        .invocations()
+        .show(invocation_id)
+        .await
+        .expect("show invocation");
+    let create_act = view
+        .acts
+        .iter()
+        .find(|a| a.event_kind == "resource_created")
+        .expect("create act present in show");
+    let create_authorship = create_act
+        .authorship
+        .as_ref()
+        .expect("create act carries decoded authorship");
+    assert_eq!(create_authorship.confidence, ConfidenceBand::Probable);
+    assert_eq!(
+        create_authorship.reasoning.as_deref(),
+        Some("api create act")
+    );
+    assert_eq!(create_act.invocation_id, Some(invocation_id));
+    let assert_act = view
+        .acts
+        .iter()
+        .find(|a| a.event_kind == "relationship_asserted")
+        .expect("assert act present in show");
+    assert_eq!(
+        assert_act
+            .authorship
+            .as_ref()
+            .expect("assert act carries authorship")
+            .confidence,
+        ConfidenceBand::Confident
+    );
 }
 
 /// CLI path: drive the `temper` binary's `edge assert` with the discrete authorship flags under an

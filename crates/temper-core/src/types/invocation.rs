@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::types::authorship::AgentAuthorship;
+
 /// Terminal outcome of an invocation. Mirrors the Postgres / temper-substrate
 /// `Disposition`. `open` is NOT representable here — closing requires a
 /// terminal value.
@@ -41,6 +43,13 @@ pub struct InvocationActRow {
     pub emitter_entity_id: Uuid,
     /// When the act occurred.
     pub occurred_at: DateTime<Utc>,
+    /// The invocation this act is correlated under (`kb_events.invocation_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<Uuid>,
+    /// The graded agent authorship of this act (decoded from `kb_events.metadata`); `None` for an
+    /// act with no authorship attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorship: Option<AgentAuthorship>,
 }
 
 /// The full show projection of an invocation envelope: the `kb_invocations`
@@ -181,13 +190,39 @@ mod tests {
                 event_kind: "facet_set".to_string(),
                 emitter_entity_id: Uuid::from_u128(6),
                 occurred_at: Utc::now(),
+                invocation_id: Some(Uuid::from_u128(1)),
+                authorship: Some(AgentAuthorship {
+                    reasoning: Some("seeded".to_string()),
+                    confidence: crate::types::ConfidenceBand::Probable,
+                    rationale: None,
+                    persona: None,
+                    model: None,
+                }),
             }],
         };
         let json = serde_json::to_string(&view).expect("serialize");
         // open invocation: null closed_at survives the round-trip
         assert!(json.contains("\"closed_at\":null"), "json: {json}");
+        // per-act authorship rides on the wire row
+        assert!(json.contains("\"confidence\":\"probable\""), "json: {json}");
         let back: InvocationView = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, view);
+    }
+
+    #[test]
+    fn invocation_act_row_omits_empty_authorship() {
+        // An unauthored act serializes without invocation_id/authorship noise (both skip when None).
+        let row = InvocationActRow {
+            event_id: Uuid::from_u128(7),
+            event_kind: "resource_created".to_string(),
+            emitter_entity_id: Uuid::from_u128(8),
+            occurred_at: Utc::now(),
+            invocation_id: None,
+            authorship: None,
+        };
+        let json = serde_json::to_string(&row).expect("serialize");
+        assert!(!json.contains("authorship"), "json: {json}");
+        assert!(!json.contains("invocation_id"), "json: {json}");
     }
 
     #[test]
