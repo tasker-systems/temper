@@ -10,9 +10,12 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::cognitive_maps::{
-    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    UnbindTeamOutcome,
 };
-use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
+use temper_core::types::reconcile::{
+    CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
+};
 
 /// Sub-client for cognitive-map operations.
 pub struct CognitiveMapClient<'a> {
@@ -45,6 +48,21 @@ impl<'a> CognitiveMapClient<'a> {
         let req = self.http.put(&path).json(payload).query(act);
         self.http
             .send_json(&Method::PUT, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/cognitive-maps — genesis (create) a new cognitive map (cogmap + telos charter
+    /// resource) from a manifest (admin-gated, idempotent at a given id). Returns the realized identity
+    /// plus whether this call created it (`created: false` ⇒ the map already existed).
+    pub async fn create_cognitive_map(
+        &self,
+        payload: &CreateCogmapRequest,
+    ) -> Result<CreateCogmapOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/cognitive-maps";
+        let req = self.http.post(path).json(payload);
+        self.http
+            .send_json(&Method::POST, path, req, Some(&token))
             .await
     }
 
@@ -87,6 +105,32 @@ impl<'a> CognitiveMapClient<'a> {
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/cognitive-maps/{id}/teams — bind the map to a team (admin-gated, idempotent).
+    /// Returns whether this call inserted the binding (`bound: false` ⇒ it already existed).
+    pub async fn bind_team(
+        &self,
+        cogmap_id: Uuid,
+        body: &BindTeamRequest,
+    ) -> Result<BindTeamOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/cognitive-maps/{cogmap_id}/teams");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/cognitive-maps/{id}/teams/{team_id} — unbind the map from a team (admin-gated,
+    /// no-op safe). Returns whether this call deleted a binding (`unbound: false` ⇒ none existed).
+    pub async fn unbind_team(&self, cogmap_id: Uuid, team_id: Uuid) -> Result<UnbindTeamOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/cognitive-maps/{cogmap_id}/teams/{team_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
             .await
     }
 }

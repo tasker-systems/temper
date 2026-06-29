@@ -17,7 +17,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
 
     app.client
         .contexts()
-        .create("content-test")
+        .create("content-test", None)
         .await
         .expect("context create failed");
 

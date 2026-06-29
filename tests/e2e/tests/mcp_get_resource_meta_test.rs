@@ -46,7 +46,7 @@ async fn seed_resource(
 ) -> temper_workflow::types::resource::ResourceRow {
     app.client
         .contexts()
-        .create(context_name)
+        .create(context_name, None)
         .await
         .expect("context create");
 

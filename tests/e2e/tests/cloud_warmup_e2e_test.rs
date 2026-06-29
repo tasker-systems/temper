@@ -156,7 +156,7 @@ async fn warmup_lists_sessions_and_filters_tasks(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -277,7 +277,7 @@ async fn warmup_caps_sessions_at_limit(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -333,7 +333,7 @@ async fn warmup_truncates_long_session_body(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 

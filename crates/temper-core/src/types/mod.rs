@@ -63,7 +63,9 @@ pub use invitation::{InvitationStatus, TeamInvitation};
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
-pub use team::{Team, TeamMember, TeamRole};
+pub use team::{
+    AddMemberRequest, Team, TeamCreateRequest, TeamMember, TeamMemberRow, TeamRole, TeamRow,
+};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};
 pub use upload::{UploadProcessingStatus, UploadResponse};
 pub use vault::{IngestionSource, ResourceFrontmatter, VaultAddResult};

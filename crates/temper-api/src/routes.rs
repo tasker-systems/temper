@@ -13,7 +13,7 @@ use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn create_app(state: AppState) -> Router {
-    use axum::routing::{get, post, put};
+    use axum::routing::{delete, get, post, put};
 
     let public = Router::new().route("/api/health", get(handlers::health::health_check));
 
@@ -81,8 +81,17 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::contexts::list).post(handlers::contexts::create),
         )
         .route("/api/contexts/{id}", get(handlers::contexts::get))
+        .route(
+            "/api/teams",
+            get(handlers::teams::list).post(handlers::teams::create),
+        )
+        .route("/api/teams/{id}/members", post(handlers::teams::add_member))
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))
+        .route(
+            "/api/cognitive-maps",
+            post(handlers::cognitive_maps::genesis),
+        )
         .route(
             "/api/cognitive-maps/{id}",
             put(handlers::cognitive_maps::reconcile),
@@ -98,6 +107,14 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/cognitive-maps/{id}/analytics",
             get(handlers::cognitive_maps::analytics),
+        )
+        .route(
+            "/api/cognitive-maps/{id}/teams",
+            post(handlers::cognitive_maps::bind_team),
+        )
+        .route(
+            "/api/cognitive-maps/{id}/teams/{team_id}",
+            delete(handlers::cognitive_maps::unbind_team),
         )
         .route(
             "/api/invocations",

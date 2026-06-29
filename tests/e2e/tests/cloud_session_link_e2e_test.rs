@@ -112,7 +112,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -236,7 +236,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -304,7 +304,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -378,7 +378,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 
@@ -443,7 +443,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("myapp")
+        .create("myapp", None)
         .await
         .expect("create myapp context");
 

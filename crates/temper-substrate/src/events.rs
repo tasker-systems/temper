@@ -136,6 +136,12 @@ pub enum SeedAction<'a> {
         telos_title: &'a str,
         /// The Rust-prepared charter blocks (block-0 statement, questions-with-context, framing).
         charter: &'a [PreparedBlock],
+        /// The id to mint the cogmap under (identity-as-input; the projection reads `cogmap_id` from the
+        /// payload — this is how the L0 migration supplies a reserved id). `None` ⇒ a fresh
+        /// `Uuid::now_v7()` is minted (the scenario path). Mirrors `ResourceCreate::resource_id`.
+        cogmap_id: Option<CogmapId>,
+        /// The id to mint the telos charter resource under. `None` ⇒ a fresh `Uuid::now_v7()` is minted.
+        telos_resource_id: Option<ResourceId>,
         owner: ProfileId,
         emitter: EntityId,
     },
@@ -430,15 +436,18 @@ pub async fn fire_with(
             name,
             telos_title,
             charter,
+            cogmap_id,
+            telos_resource_id,
             owner,
             emitter,
         } => {
             let payload = payloads::CogmapSeeded {
-                cogmap_id: CogmapId::from(Uuid::now_v7()),
+                cogmap_id: cogmap_id.unwrap_or_else(|| CogmapId::from(Uuid::now_v7())),
                 name: name.to_owned(),
                 owner_profile_id: owner,
                 telos: payloads::TelosManifest {
-                    resource_id: ResourceId::from(Uuid::now_v7()),
+                    resource_id: telos_resource_id
+                        .unwrap_or_else(|| ResourceId::from(Uuid::now_v7())),
                     title: telos_title.to_owned(),
                     origin_uri: "temper://genesis".into(),
                     blocks: charter.iter().map(payloads::BlockManifest::from).collect(),
@@ -924,6 +933,8 @@ mod tests {
                 name: "n",
                 telos_title: "t",
                 charter: &charter,
+                cogmap_id: None,
+                telos_resource_id: None,
                 owner,
                 emitter,
             }

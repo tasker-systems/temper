@@ -82,7 +82,7 @@ async fn api_nonauthored_writes_under_invocation_stamp_authorship(pool: sqlx::Pg
     common::enable_invite_only(&pool, principal).await;
     app.client
         .contexts()
-        .create("nonauth-api")
+        .create("nonauth-api", None)
         .await
         .expect("context create");
 
@@ -239,7 +239,7 @@ async fn cli_delete_under_invocation_stamps_authorship(pool: sqlx::PgPool) {
     common::enable_invite_only(&pool, principal).await;
     app.client
         .contexts()
-        .create("nonauth-cli")
+        .create("nonauth-cli", None)
         .await
         .expect("context create");
 

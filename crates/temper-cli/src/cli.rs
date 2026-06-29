@@ -467,6 +467,10 @@ pub enum ContextAction {
     Create {
         /// Context name to create
         name: String,
+        /// Owner of the context: `@me` (default) or `+<team-slug>` for a
+        /// team-owned context (requires owner/maintainer on the team).
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// List configured contexts
     List,
@@ -521,6 +525,32 @@ pub enum TeamAction {
         #[arg(long)]
         team: Option<String>,
     },
+    /// Create a team (you become its owner)
+    Create {
+        /// Globally-unique team slug
+        slug: String,
+        /// Display name (defaults to the slug)
+        #[arg(long)]
+        name: Option<String>,
+        /// Parent team ref (`+slug` or bare slug); creates a child team
+        #[arg(long)]
+        parent: Option<String>,
+        /// Auto-join role for an "everyone" pool (admin-only): owner/maintainer/member/watcher
+        #[arg(long = "auto-join-role")]
+        auto_join_role: Option<String>,
+    },
+    /// Add a member to a team (owner/maintainer only)
+    AddMember {
+        /// Team ID (UUID)
+        team: String,
+        /// Profile ID (UUID)
+        profile: String,
+        /// Role to grant: owner/maintainer/member/watcher
+        #[arg(long)]
+        role: String,
+    },
+    /// List the teams you are a member of
+    List,
 }
 
 #[derive(Subcommand)]
@@ -538,6 +568,22 @@ pub enum CogmapCmd {
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
+    },
+    /// Genesis (create) a new cognitive map from a committed manifest.
+    ///
+    /// Reads the authored genesis manifest (name, telos title, optional ids + telos charter),
+    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (admin-gated, idempotent).
+    /// Ids absent from the manifest are minted client-side for a stable, reproducible identity.
+    Create {
+        /// Path to the genesis manifest (YAML)
+        #[arg(long)]
+        manifest: String,
+        /// Override the manifest's cogmap name
+        #[arg(long)]
+        name: Option<String>,
+        /// Override the manifest's cogmap id (a UUID or the decorated `slug-<uuid>` form)
+        #[arg(long)]
+        id: Option<String>,
     },
     /// Read a cognitive map's materialized regions (surface tier).
     Shape {
@@ -559,6 +605,21 @@ pub enum CogmapCmd {
     Analytics {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
+    },
+    /// Bind a cognitive map to a team (admin-only). Widens the map's reach to the
+    /// team's shared resources.
+    Bind {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Team to bind to: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
+    },
+    /// Unbind a cognitive map from a team (admin-only).
+    Unbind {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Team to unbind: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
     },
 }
 

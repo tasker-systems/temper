@@ -1,7 +1,31 @@
 use crate::commands::resource::inject_context_ref;
 use crate::config::{self, Config};
-use crate::error::Result;
+use crate::error::{Result, TemperError};
 use crate::output;
+use temper_core::context_ref::ContextOwnerRef;
+
+/// Parse the `--owner` CLI value into a typed owner descriptor.
+///
+/// Accepts `@me` (the caller's own profile) or `+<team-slug>` (a team). Anything
+/// else — including `@<handle>` — is rejected here; the server would refuse a
+/// foreign-profile owner anyway.
+fn parse_owner(owner: &str) -> Result<ContextOwnerRef> {
+    if owner == "@me" {
+        Ok(ContextOwnerRef::Me)
+    } else if let Some(slug) = owner.strip_prefix('+') {
+        if slug.is_empty() {
+            Err(TemperError::BadRequest(
+                "context owner `+<team-slug>` is missing the team slug".to_owned(),
+            ))
+        } else {
+            Ok(ContextOwnerRef::Team(slug.to_owned()))
+        }
+    } else {
+        Err(TemperError::BadRequest(format!(
+            "invalid context owner {owner:?}: use `@me` or `+<team-slug>`"
+        )))
+    }
+}
 
 /// Add a context to sync.subscriptions.contexts in the global config.
 pub fn add(name: &str) -> Result<()> {
@@ -85,11 +109,13 @@ pub fn remove(name: &str) -> Result<()> {
 pub async fn create_remote(
     client: &temper_client::TemperClient,
     name: &str,
+    owner: Option<&str>,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
+    let owner = owner.map(parse_owner).transpose()?;
     let context = client
         .contexts()
-        .create(name)
+        .create(name, owner)
         .await
         .map_err(crate::commands::client_err)?;
 

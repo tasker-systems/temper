@@ -14,15 +14,18 @@ use uuid::Uuid;
 use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
-use crate::services::access_service;
+use crate::services::{access_service, cogmap_service};
 use crate::state::AppState;
 
 use temper_core::types::cognitive_maps::{
-    CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    UnbindTeamOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
-use temper_core::types::reconcile::{ReconcileCogmapRequest, ReconcileOutcome};
-use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
+use temper_core::types::reconcile::{
+    CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
+};
+use temper_workflow::operations::{Backend, CreateCognitiveMap, ReconcileCognitiveMap, Surface};
 
 /// Query params for the shape read. `lens` is optional (omit → all lenses).
 #[derive(Debug, Deserialize)]
@@ -71,6 +74,43 @@ pub async fn reconcile(
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
         .reconcile_cognitive_map(cmd)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(out.value))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/cognitive-maps",
+    tag = "Cognitive Maps",
+    security(("bearer_auth" = [])),
+    request_body = CreateCogmapRequest,
+    responses(
+        (status = 200, description = "Genesis applied (or idempotent no-op)", body = CreateCogmapOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+        (status = 409, description = "A concurrent genesis conflicted; retry"),
+    )
+)]
+pub async fn genesis(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(request): Json<CreateCogmapRequest>,
+) -> ApiResult<Json<CreateCogmapOutcome>> {
+    // Auth before writes (Global Constraints): genesis is system-admin-only. A brand-new cogmap id is
+    // neither the reserved L0 kernel nor yet root-team-bound, so `require_cogmap_write_admin` would
+    // FAIL-OPEN here — the genesis gate is plain `is_system_admin`, checked at the TOP before any write.
+    let profile_id = ProfileId::from(auth.0.profile.id);
+    if !access_service::is_system_admin(&state.pool, profile_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let cmd = CreateCognitiveMap {
+        request,
+        origin: Surface::ApiHttp,
+    };
+    let backend = DbBackend::new(state.pool.clone(), profile_id);
+    let out = backend
+        .create_cognitive_map(cmd)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(out.value))
@@ -161,4 +201,63 @@ pub async fn analytics(
     .await?
     .map(Json)
     .ok_or(ApiError::NotFound)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/cognitive-maps/{id}/teams",
+    tag = "Cognitive Maps",
+    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    security(("bearer_auth" = [])),
+    request_body = BindTeamRequest,
+    responses(
+        (status = 200, description = "Team bound (or idempotent no-op)", body = BindTeamOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+    )
+)]
+pub async fn bind_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Json(body): Json<BindTeamRequest>,
+) -> ApiResult<Json<BindTeamOutcome>> {
+    // Auth before writes lives in the service (`is_system_admin`), so the MCP
+    // surface — which calls the service directly — is gated identically.
+    let outcome = cogmap_service::bind_team(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        &body,
+    )
+    .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/cognitive-maps/{id}/teams/{team_id}",
+    tag = "Cognitive Maps",
+    params(
+        ("id" = Uuid, Path, description = "Cognitive map ID"),
+        ("team_id" = Uuid, Path, description = "Team ID to unbind"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Team unbound (or no-op)", body = UnbindTeamOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+    )
+)]
+pub async fn unbind_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((cogmap_id, team_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<UnbindTeamOutcome>> {
+    let outcome = cogmap_service::unbind_team(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        team_id,
+    )
+    .await?;
+    Ok(Json(outcome))
 }

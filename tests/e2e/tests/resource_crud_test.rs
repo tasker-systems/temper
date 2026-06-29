@@ -20,7 +20,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("e2e-resource-create-get")
+        .create("e2e-resource-create-get", None)
         .await
         .expect("context create failed");
 
@@ -72,7 +72,7 @@ async fn resource_update(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("e2e-resource-update")
+        .create("e2e-resource-update", None)
         .await
         .expect("context create failed");
 
@@ -133,7 +133,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("e2e-resource-delete")
+        .create("e2e-resource-delete", None)
         .await
         .expect("context create failed");
 
@@ -195,7 +195,7 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("e2e-resource-timestamps")
+        .create("e2e-resource-timestamps", None)
         .await
         .expect("context create failed");
 
@@ -277,7 +277,7 @@ async fn resource_row_native_shape_drops_shim_fields(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("e2e-native-shape")
+        .create("e2e-native-shape", None)
         .await
         .expect("context create failed");
 
@@ -333,7 +333,7 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
     let context = app
         .client
         .contexts()
-        .create("e2e-resource-pagination")
+        .create("e2e-resource-pagination", None)
         .await
         .expect("context create failed");
 

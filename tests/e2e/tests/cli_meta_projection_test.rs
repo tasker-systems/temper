@@ -18,7 +18,7 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("meta-cli")
+        .create("meta-cli", None)
         .await
         .expect("ctx create");
 
@@ -86,7 +86,7 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("meta-cli")
+        .create("meta-cli", None)
         .await
         .expect("ctx create");
 
@@ -150,7 +150,11 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
 async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client.profile().get().await.expect("profile");
-    app.client.contexts().create("meta-cli").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("meta-cli", None)
+        .await
+        .expect("ctx");
 
     // The dotted-path error fires after the API call (projection is applied
     // to the fetched meta), so the resource must exist.
@@ -200,7 +204,11 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
 async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client.profile().get().await.expect("profile");
-    app.client.contexts().create("meta-cli").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("meta-cli", None)
+        .await
+        .expect("ctx");
 
     // Ingest two task resources
     for (slug, hash) in &[
@@ -286,7 +294,11 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
 async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client.profile().get().await.expect("profile");
-    app.client.contexts().create("meta-cli").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("meta-cli", None)
+        .await
+        .expect("ctx");
 
     let payload = IngestPayload {
         title: "List Fields Test".to_string(),

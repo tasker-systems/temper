@@ -63,7 +63,7 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
         .expect("profile pre-flight");
     app.client
         .contexts()
-        .create("cursor-ctx")
+        .create("cursor-ctx", None)
         .await
         .expect("ctx");
 
@@ -111,7 +111,11 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("wctx").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("wctx", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "wctx", "research", "Write Me").await;
 
     let listed = app
@@ -162,7 +166,11 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("fpctx").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("fpctx", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "fpctx", "research", "Parts Doc").await;
 
     let listed = app
@@ -209,7 +217,11 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("pctx").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("pctx", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "pctx", "research", "Doc One").await;
     seed_resource(&app, "pctx", "research", "Doc Two").await;
 
@@ -243,7 +255,11 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("dctx").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("dctx", None)
+        .await
+        .expect("ctx");
     let keep_id = seed_resource(&app, "dctx", "research", "Keeper").await;
     let doomed_id = seed_resource(&app, "dctx", "research", "Doomed").await;
 
@@ -282,7 +298,11 @@ async fn pull_is_idempotent(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("ictx").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("ictx", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "ictx", "research", "Stable Doc").await;
 
     let config = projection_test_config(&app);
@@ -311,7 +331,11 @@ async fn staleness_not_projected_when_context_never_pulled(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("snp").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("snp", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "snp", "research", "Doc").await;
 
     let config = projection_test_config(&app);
@@ -332,7 +356,11 @@ async fn staleness_fresh_immediately_after_pull(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("sfr").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("sfr", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "sfr", "research", "Doc").await;
 
     // Pull and check using the same decorated ref — resolve_context_id now
@@ -357,7 +385,11 @@ async fn staleness_stale_after_post_pull_write(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    app.client.contexts().create("sst").await.expect("ctx");
+    app.client
+        .contexts()
+        .create("sst", None)
+        .await
+        .expect("ctx");
     seed_resource(&app, "sst", "research", "First Doc").await;
 
     // Pull and check using the same decorated ref — no cursor rekey needed.
@@ -412,7 +444,12 @@ async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let ctx = app.client.contexts().create("ectx").await.expect("ctx");
+    let ctx = app
+        .client
+        .contexts()
+        .create("ectx", None)
+        .await
+        .expect("ctx");
     // Use the context UUID as the ref — it is a valid addressable form (no bare
     // name) and avoids ambiguity in cursor keying.
     let context_ref = ctx.id.to_string();

@@ -273,12 +273,19 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         Commands::Context { action } => match action {
             ContextAction::Add { name } => temper_cli::commands::context_cmd::add(&name),
             ContextAction::Remove { name } => temper_cli::commands::context_cmd::remove(&name),
-            ContextAction::Create { name } => temper_cli::actions::runtime::with_client(|client| {
-                Box::pin(async move {
-                    temper_cli::commands::context_cmd::create_remote(client, &name, output_format)
+            ContextAction::Create { name, owner } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::create_remote(
+                            client,
+                            &name,
+                            owner.as_deref(),
+                            output_format,
+                        )
                         .await
+                    })
                 })
-            }),
+            }
             ContextAction::List => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 temper_cli::commands::context_cmd::list(&config, output_format)
@@ -295,6 +302,45 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             }
             TeamAction::Status { team: _ } => temper_cli::commands::team::status(),
             TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
+            TeamAction::Create {
+                slug,
+                name,
+                parent,
+                auto_join_role,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::create_remote(
+                        client,
+                        &slug,
+                        name.as_deref(),
+                        parent.as_deref(),
+                        auto_join_role.as_deref(),
+                        output_format,
+                    )
+                    .await
+                })
+            }),
+            TeamAction::AddMember {
+                team,
+                profile,
+                role,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::add_member_remote(
+                        client,
+                        &team,
+                        &profile,
+                        &role,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
+            TeamAction::List => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::list_remote(client, output_format).await
+                })
+            }),
         },
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(output_format),
@@ -389,6 +435,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             } => {
                 commands::cogmap::reconcile(&r#ref, &manifest, act.into_act_input()?, output_format)
             }
+            CogmapCmd::Create { manifest, name, id } => {
+                commands::cogmap::create(&manifest, name.as_deref(), id.as_deref(), output_format)
+            }
             CogmapCmd::Shape { cogmap, lens } => {
                 commands::cogmap::shape(&cogmap, lens.as_deref(), output_format)
             }
@@ -396,6 +445,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 commands::cogmap::region_metrics(&cogmap, lens.as_deref(), output_format)
             }
             CogmapCmd::Analytics { cogmap } => commands::cogmap::analytics(&cogmap, output_format),
+            CogmapCmd::Bind { r#ref, team } => commands::cogmap::bind(&r#ref, &team, output_format),
+            CogmapCmd::Unbind { r#ref, team } => {
+                commands::cogmap::unbind(&r#ref, &team, output_format)
+            }
         },
         Commands::Invocation { cmd } => match cmd {
             InvocationCmd::Open {

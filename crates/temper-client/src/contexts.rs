@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use temper_core::context_ref::ContextOwnerRef;
 use temper_core::types::context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 
 /// Sub-client for context operations.
@@ -42,11 +43,14 @@ impl<'a> ContextClient<'a> {
             .await
     }
 
-    /// Create a new context.
-    pub async fn create(&self, name: &str) -> Result<ContextRow> {
+    /// Create a new context. `owner` is `None` for a profile-owned context (the
+    /// default) or `Some(ContextOwnerRef::Team(slug))` for a team-owned one
+    /// (role-gated server-side).
+    pub async fn create(&self, name: &str, owner: Option<ContextOwnerRef>) -> Result<ContextRow> {
         let token = self.http.resolve_token()?;
         let body = ContextCreateRequest {
             name: name.to_owned(),
+            owner,
         };
         let req = self.http.post("/api/contexts").json(&body);
         self.http

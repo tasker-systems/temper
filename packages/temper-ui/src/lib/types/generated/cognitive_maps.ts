@@ -4,6 +4,26 @@ import type { RegionId } from "./RegionId";
 import type { ResourceId } from "./ResourceId";
 
 /**
+ * The result of binding a cognitive map to a team. `bound` is `false` when the
+ * binding already existed (idempotent no-op) — the clean mirror of genesis's
+ * `created` flag.
+ */
+export type BindTeamOutcome = { cogmap_id: string, team_id: string, 
+/**
+ * `true` when this call inserted the binding; `false` when it already existed.
+ */
+bound: boolean, };
+
+/**
+ * Request body for `POST /api/cognitive-maps/{id}/teams` — bind a map to a team.
+ */
+export type BindTeamRequest = { 
+/**
+ * The team to bind the cognitive map to.
+ */
+team_id: string, };
+
+/**
  * The map-level analytics picture as returned by `cogmap_analytics`: the telos charter resource id,
  * staleness, and the regulation set. Per-region scalar metrics are a SEPARATE read
  * (`cogmap_region_metrics`). The access gate is INSIDE the SQL: a principal who cannot read the map
@@ -92,3 +112,13 @@ export type CogmapRegulationRow = { resource_id: ResourceId, title: string, body
  * never blocking. `materialized_at` is `None` when the map has never been materialized.
  */
 export type CogmapStaleness = { materialized_at: string | null, latest_touch: string | null, is_stale: boolean, };
+
+/**
+ * The result of unbinding a cognitive map from a team. `unbound` is `false` when
+ * no binding existed (no-op safe).
+ */
+export type UnbindTeamOutcome = { cogmap_id: string, team_id: string, 
+/**
+ * `true` when this call deleted a binding; `false` when none existed.
+ */
+unbound: boolean, };

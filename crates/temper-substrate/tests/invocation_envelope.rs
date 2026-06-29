@@ -119,6 +119,8 @@ async fn genesis(pool: &sqlx::PgPool, owner: ProfileId, emitter: EntityId, name:
             name,
             telos_title: "Telos",
             charter: &charter,
+            cogmap_id: None,
+            telos_resource_id: None,
             owner,
             emitter,
         },

@@ -47,6 +47,8 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting(pool: sqlx::Pg
             name: "home",
             telos_title: "Charter",
             charter: &charter,
+            cogmap_id: None,
+            telos_resource_id: None,
             owner: ProfileId::from(owner),
             emitter: EntityId::from(emitter),
         },
