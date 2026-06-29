@@ -180,6 +180,12 @@ pub struct MetaUpdatePayload {
     pub managed_hash: String,
     /// SHA-256 hash of the open_meta JSON (computed over canonical form)
     pub open_hash: String,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level keys;
+    /// all optional. `confidence` required when any other authorship field is supplied. Parity with the
+    /// MCP `update_resource_meta` tool — a frontmatter-only update under a run is correlated like any
+    /// other authored act.
+    #[serde(default, flatten)]
+    pub act: temper_core::types::authorship::ActInput,
 }
 
 /// Row type mapping to the `kb_resource_manifests` table.
@@ -289,6 +295,7 @@ mod tests {
             open_meta: serde_json::json!({"tags": ["rust"]}),
             managed_hash: "sha256:abc123".to_string(),
             open_hash: "sha256:def456".to_string(),
+            act: Default::default(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();

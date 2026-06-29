@@ -187,6 +187,7 @@ async fn genesis_creates_cogmap_and_telos_then_reconcilable(pool: PgPool) {
             fold_edges: vec![],
             telos: None,
         },
+        act: Default::default(),
         origin: Surface::ApiHttp,
     };
     let recon_out = be

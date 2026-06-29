@@ -58,6 +58,7 @@ pub async fn update_meta(
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<MetaUpdatePayload>,
 ) -> ApiResult<Json<ResourceRow>> {
+    let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         body: None,
@@ -65,6 +66,7 @@ pub async fn update_meta(
         open_meta: Some(payload.open_meta),
         move_to: None,
         context_ref: None,
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

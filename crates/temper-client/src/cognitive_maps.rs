@@ -39,10 +39,13 @@ impl<'a> CognitiveMapClient<'a> {
         &self,
         cogmap_id: Uuid,
         payload: &ReconcileCogmapRequest,
+        act: &temper_core::types::authorship::ActInput,
     ) -> Result<ReconcileOutcome> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/cognitive-maps/{cogmap_id}");
-        let req = self.http.put(&path).json(payload);
+        // The manifest body stays pure; authorship rides query params. An empty `ActInput`
+        // serializes to nothing and appends no query string.
+        let req = self.http.put(&path).json(payload).query(act);
         self.http
             .send_json(&Method::PUT, &path, req, Some(&token))
             .await

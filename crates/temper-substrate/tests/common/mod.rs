@@ -15,19 +15,49 @@
 /// replay/projection diff, or to re-clean between snapshot→replay phases.
 pub async fn reset_schema(pool: &sqlx::PgPool) {
     use sqlx::Executor;
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    // Rebuild the substrate schema by applying every migration in version order, then empty all data
+    // tables. This is reset_schema's contract: a complete-schema, SEED-FREE baseline the tests seed via
+    // bootseed::seed_system and repopulate via ledger replay. Applying the whole chain (vs a hand-copied
+    // file list) keeps it from drifting — the old 2-file list rejected scenarios once a later migration
+    // added a param to a canonical mutation function (block_mutate et al.). TRUNCATE (not a partial
+    // "structural-only" apply) keeps the seed-free contract: the seed migrations (canonical_seed,
+    // l0_kernel) populate kb_event_types / the system actor / L0 rows, which would otherwise collide with
+    // each test's bootseed + replay re-seeding (replay re-inserts event types with no ON CONFLICT).
+    //
+    // EXCEPTION: `auto_join_team_generalization` is skipped. It CREATE-OR-REPLACEs
+    // `sync_system_membership` from the slug-based temper-system root join to a flag-based
+    // (`auto_join_role`) one. The access-scenario tests here (and the access loader) are written for the
+    // slug-based root join (alice joins by approval, nomad excluded); the generalized flag+mode trigger
+    // is covered directly by `auto_join_team.rs` (full `MIGRATOR`, fresh DB). Skipping it on this baseline
+    // keeps both worlds testable. (Applied via the filesystem rather than `MIGRATOR.run` so the one
+    // migration can be excluded; ordering is by version-prefixed filename.)
     pool.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("drop/recreate public schema");
-    for f in [
-        "migrations/20260624000001_canonical_schema.sql",
-        "migrations/20260624000002_canonical_functions.sql",
-    ] {
-        let sql = std::fs::read_to_string(format!("{root}/{f}")).expect("read canonical sql");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut migrations: Vec<String> = std::fs::read_dir(format!("{root}/migrations"))
+        .expect("read migrations dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".sql") && !n.contains("auto_join_team_generalization"))
+        .collect();
+    migrations.sort();
+    for f in &migrations {
+        let sql = std::fs::read_to_string(format!("{root}/migrations/{f}"))
+            .unwrap_or_else(|e| panic!("read migration {f}: {e}"));
         pool.execute(sql.as_str())
             .await
-            .unwrap_or_else(|e| panic!("apply {f}: {e}"));
+            .unwrap_or_else(|e| panic!("apply migration {f}: {e}"));
     }
+    pool.execute(
+        "DO $$ DECLARE r record; BEGIN \
+           FOR r IN SELECT tablename FROM pg_tables \
+                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
+           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
+           END LOOP; END $$;",
+    )
+    .await
+    .expect("truncate kb_ data tables to a seed-free baseline");
 }
 
 /// Fire a cogmap genesis + one `resource_create` homed in it, whose single chunk's sidecar entry

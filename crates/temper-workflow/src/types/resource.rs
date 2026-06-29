@@ -187,6 +187,15 @@ pub struct ResourceUpdateRequest {
     /// resource. Forwarded verbatim from the CLI `--context-to` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_to: Option<String>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the update act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    ///
+    /// `ts(skip)`-ped: ts-rs cannot codegen a `#[serde(flatten)]` field, and the SvelteKit UI
+    /// never sends authorship — so the generated TypeScript type omits it (precedent: the
+    /// `extra` bucket in `managed_meta.rs`).
+    #[serde(default, flatten)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub act: temper_core::types::authorship::ActInput,
 }
 
 /// Chunk used to reconstitute markdown content.
@@ -320,6 +329,7 @@ mod tests {
             content_hash: Some("sha256:abc".to_string()),
             chunks_packed: Some("base64-blob".to_string()),
             context_to: Some("@me/knowledge".to_string()),
+            act: Default::default(),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
@@ -353,6 +363,7 @@ mod tests {
             content_hash: None,
             chunks_packed: None,
             context_to: None,
+            act: Default::default(),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         assert!(!serialized.contains("\"title\""));

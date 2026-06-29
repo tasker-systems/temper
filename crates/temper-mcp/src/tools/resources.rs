@@ -109,6 +109,10 @@ pub struct UpdateResourceInput {
     /// Open frontmatter (user-owned fields) as JSON.
     #[serde(default)]
     pub open_meta: Option<serde_json::Value>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// MCP input for update_resource_meta.
@@ -132,6 +136,10 @@ pub struct UpdateResourceMetaInput {
     pub managed_meta: ManagedMeta,
     /// New open (user-defined) frontmatter as JSON.
     pub open_meta: serde_json::Value,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// MCP input for delete_resource.
@@ -139,6 +147,10 @@ pub struct UpdateResourceMetaInput {
 pub struct DeleteResourceInput {
     /// UUID of the resource to delete.
     pub id: Uuid,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 // ── Response types ─────────────────────────────────────────────────
@@ -582,6 +594,10 @@ pub async fn update_resource(
         managed_meta.slug = input.slug.clone();
     }
 
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         body: input.content.map(BodyUpdate::new),
@@ -589,6 +605,7 @@ pub async fn update_resource(
         open_meta: input.open_meta,
         move_to: None,
         context_ref: None,
+        act,
         origin: Surface::Mcp,
     };
 
@@ -637,6 +654,10 @@ pub async fn update_resource_meta(
     // fields (doc_type / context), recomputes managed_hash / open_hash
     // server-side (Phase 5: caller-supplied hashes are no longer trusted),
     // emits the update_meta audit, and reconciles edges.
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         body: None,
@@ -644,6 +665,7 @@ pub async fn update_resource_meta(
         open_meta: Some(input.open_meta),
         move_to: None,
         context_ref: None,
+        act,
         origin: Surface::Mcp,
     };
 
@@ -680,11 +702,16 @@ pub async fn delete_resource(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = temper_workflow::operations::DeleteResource {
         resource: ResourceId::from(input.id),
         // CLI-side concern; DbBackend ignores per spec (force=true is only
         // relevant when a CLI surface presents a confirmation prompt).
         force: false,
+        act,
         origin: Surface::Mcp,
     };
 
@@ -749,6 +776,43 @@ mod tests {
                 .as_deref(),
             Some("done"),
         );
+    }
+
+    /// The non-authored MCP write inputs (update / delete) accept the same flattened act fields, so
+    /// an agent can correlate + author an update/delete the same way it does a create.
+    #[test]
+    fn update_resource_input_accepts_act_authorship_fields() {
+        let raw = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "open_meta": { "reviewed_by": "qa" },
+            "invocation_id": "019f0e28-1750-7490-919f-5e51c92c8391",
+            "reasoning": "applying review outcome",
+            "confidence": "confident",
+        });
+        let input: UpdateResourceInput =
+            serde_json::from_value(raw).expect("flattened act fields must deserialize");
+        assert!(input.act.invocation_id.is_some());
+        assert_eq!(
+            input.act.confidence,
+            Some(temper_core::types::ConfidenceBand::Confident)
+        );
+        assert!(!input.act.into_act_context().expect("assembles").is_empty());
+    }
+
+    #[test]
+    fn delete_resource_input_accepts_act_authorship_fields() {
+        let raw = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "reasoning": "tombstoning the duplicate",
+            "confidence": "tentative",
+        });
+        let input: DeleteResourceInput =
+            serde_json::from_value(raw).expect("flattened act fields must deserialize");
+        assert_eq!(
+            input.act.reasoning.as_deref(),
+            Some("tombstoning the duplicate")
+        );
+        assert!(!input.act.into_act_context().expect("assembles").is_empty());
     }
 
     /// Chunk B: the flattened [`ActInput`] discrete fields deserialize as top-level keys on the

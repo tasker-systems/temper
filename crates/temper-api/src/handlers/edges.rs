@@ -103,10 +103,12 @@ pub async fn retype(
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<RetypeRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = RetypeRelationship {
         edge_handle: EdgeId::from(edge_handle),
         edge_kind: req.edge_kind,
         polarity: req.polarity,
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -140,9 +142,11 @@ pub async fn reweight(
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<ReweightRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = ReweightRelationship {
         edge_handle: EdgeId::from(edge_handle),
         weight: req.weight,
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

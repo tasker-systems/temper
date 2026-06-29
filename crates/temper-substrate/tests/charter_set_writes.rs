@@ -10,7 +10,7 @@
 mod common;
 
 use temper_substrate::content;
-use temper_substrate::events::{fire, SeedAction};
+use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{EntityId, ProfileId};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::{readback, writes};
@@ -149,9 +149,10 @@ async fn charter_set_populates_empty_telos_then_idempotent(pool: sqlx::PgPool) {
     // 2. deliver the 3-block charter through the substrate write-path wrapper.
     let blocks = build_charter();
     let mut tx = pool.begin().await.unwrap();
-    let telos = writes::set_charter_in_tx(&mut tx, cogmap, &blocks, emitter)
-        .await
-        .unwrap();
+    let telos =
+        writes::set_charter_in_tx(&mut tx, cogmap, &blocks, emitter, EventContext::default())
+            .await
+            .unwrap();
     tx.commit().await.unwrap();
     assert_eq!(
         telos, genesis_telos,
@@ -180,7 +181,7 @@ async fn charter_set_populates_empty_telos_then_idempotent(pool: sqlx::PgPool) {
     //    seq-uniqueness index is partial on NOT is_folded).
     let blocks2 = build_charter();
     let mut tx2 = pool.begin().await.unwrap();
-    writes::set_charter_in_tx(&mut tx2, cogmap, &blocks2, emitter)
+    writes::set_charter_in_tx(&mut tx2, cogmap, &blocks2, emitter, EventContext::default())
         .await
         .unwrap();
     tx2.commit().await.unwrap();

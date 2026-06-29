@@ -394,7 +394,7 @@ impl Fired {
 /// Per-fire authored-act context: the agent's authorship metadata (→ kb_events.metadata) and the
 /// invocation it is acting under (→ kb_events.invocation_id). Default = a keyboard-holder/system act
 /// (no authorship, no invocation), so `fire` callers are unchanged.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct EventContext {
     pub authorship: Option<payloads::AgentAuthorship>,
     pub invocation: Option<InvocationId>,
@@ -418,9 +418,12 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
     fire_with(conn, action, EventContext::default()).await
 }
 
-/// Fire one seeding action under an explicit [`EventContext`] (authorship + invocation). The four
-/// authored-act arms thread `ctx` into their SQL calls (→ `kb_events.metadata`/`invocation_id`); all
-/// other arms ignore it. [`fire`] is the `EventContext::default()` delegate.
+/// Fire one seeding action under an explicit [`EventContext`] (authorship + invocation). Every
+/// correlatable mutation arm threads `ctx` into its SQL call (→ `kb_events.metadata`/`invocation_id`):
+/// the authored-4 (`ResourceCreate`/`RelationshipAssert`/`FacetSet`/`RelationshipFold`) plus the
+/// non-authored writes (`ResourceUpdate`/`ResourceDelete`/`ResourceRehome`/`PropertySet`/`BlockMutate`/
+/// `CharterSet`/`RelationshipRetype`/`RelationshipReweight`). The pure-seed/lens/materialize arms (and
+/// the legacy 2-arg `PropertyAssert`) ignore it. [`fire`] is the `EventContext::default()` delegate.
 pub async fn fire_with(
     conn: &mut sqlx::PgConnection,
     action: SeedAction<'_>,
@@ -607,9 +610,11 @@ pub async fn fire_with(
                 weight,
             };
             let id = sqlx::query_scalar!(
-                "SELECT property_set($1,$2)",
+                "SELECT property_set($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -717,10 +722,12 @@ pub async fn fire_with(
             let mut sidecar = std::collections::HashMap::new();
             payloads::content_sidecar_chunks(&mut sidecar, chunks);
             let id = sqlx::query_scalar!(
-                "SELECT block_mutate($1,$2,$3)",
+                "SELECT block_mutate($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 serde_json::to_value(&sidecar)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -739,10 +746,12 @@ pub async fn fire_with(
             };
             let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
             let telos = sqlx::query_scalar!(
-                "SELECT cogmap_charter_set($1,$2,$3)",
+                "SELECT cogmap_charter_set($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 sidecar,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -755,9 +764,11 @@ pub async fn fire_with(
                 resource_id: resource,
             };
             let id = sqlx::query_scalar!(
-                "SELECT resource_delete($1,$2)",
+                "SELECT resource_delete($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -777,9 +788,11 @@ pub async fn fire_with(
                 origin_uri: origin_uri.map(str::to_owned),
             };
             let id = sqlx::query_scalar!(
-                "SELECT resource_update($1,$2)",
+                "SELECT resource_update($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -797,9 +810,11 @@ pub async fn fire_with(
                 home,
             };
             let id = sqlx::query_scalar!(
-                "SELECT resource_rehome($1,$2)",
+                "SELECT resource_rehome($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -819,9 +834,11 @@ pub async fn fire_with(
                 polarity,
             };
             let id = sqlx::query_scalar!(
-                "SELECT relationship_retype($1,$2)",
+                "SELECT relationship_retype($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -839,9 +856,11 @@ pub async fn fire_with(
                 weight,
             };
             let id = sqlx::query_scalar!(
-                "SELECT relationship_reweight($1,$2)",
+                "SELECT relationship_reweight($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?

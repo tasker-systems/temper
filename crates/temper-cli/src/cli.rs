@@ -262,6 +262,10 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap arg-definition enum, parsed once"
+)]
 pub enum ResourceAction {
     /// Create a new resource
     Create {
@@ -425,6 +429,9 @@ pub enum ResourceAction {
         /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
         #[arg(long)]
         body: Option<String>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
     /// Delete a resource (soft-delete via the API).
     ///
@@ -441,6 +448,9 @@ pub enum ResourceAction {
         /// Skip the local-file confirmation prompt
         #[arg(long)]
         force: bool,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
 }
 
@@ -555,6 +565,9 @@ pub enum CogmapCmd {
         /// Path to the committed manifest (YAML)
         #[arg(long)]
         manifest: String,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
     /// Genesis (create) a new cognitive map from a committed manifest.
     ///
@@ -734,6 +747,9 @@ pub enum EdgeAction {
         /// New edge polarity
         #[arg(long, value_enum)]
         polarity: CliPolarity,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
     /// Adjust the weight of an existing relationship.
     ///
@@ -744,6 +760,9 @@ pub enum EdgeAction {
         /// New weight value
         #[arg(long)]
         weight: f64,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
     /// Retract (soft-delete) an existing relationship.
     ///

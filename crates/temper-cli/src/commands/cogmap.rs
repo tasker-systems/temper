@@ -93,7 +93,12 @@ pub fn unbind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
 
 /// Reconcile the cognitive map addressed by `cogmap_ref` to the manifest at `manifest_path`.
 #[cfg(feature = "embed")]
-pub fn reconcile(cogmap_ref: &str, manifest_path: &str, fmt: OutputFormat) -> Result<()> {
+pub fn reconcile(
+    cogmap_ref: &str,
+    manifest_path: &str,
+    act: temper_core::types::ActInput,
+    fmt: OutputFormat,
+) -> Result<()> {
     use crate::actions::reconcile as reconcile_action;
     use crate::error::TemperError;
 
@@ -105,11 +110,12 @@ pub fn reconcile(cogmap_ref: &str, manifest_path: &str, fmt: OutputFormat) -> Re
     let doc = reconcile_action::parse_manifest(&yaml)?;
     let req = reconcile_action::manifest_to_request(&doc)?;
 
+    // The manifest body stays pure; authorship rides query params (discrete ActInput shape).
     let outcome = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
                 .cognitive_maps()
-                .reconcile_cognitive_map(cogmap_id, &req)
+                .reconcile_cognitive_map(cogmap_id, &req, &act)
                 .await
                 .map_err(crate::commands::client_err)
         })
@@ -122,7 +128,12 @@ pub fn reconcile(cogmap_ref: &str, manifest_path: &str, fmt: OutputFormat) -> Re
 
 /// Non-embed build: the command cannot run (no ONNX to embed the manifest).
 #[cfg(not(feature = "embed"))]
-pub fn reconcile(_cogmap_ref: &str, _manifest_path: &str, _fmt: OutputFormat) -> Result<()> {
+pub fn reconcile(
+    _cogmap_ref: &str,
+    _manifest_path: &str,
+    _act: temper_core::types::ActInput,
+    _fmt: OutputFormat,
+) -> Result<()> {
     Err(crate::error::TemperError::Config(
         "cogmap reconcile requires the 'embed' feature — rebuild with --features embed".into(),
     ))

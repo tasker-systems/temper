@@ -275,7 +275,7 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
     // Soft-delete one resource on the server, then re-pull.
     app.client
         .resources()
-        .delete(Uuid::from(doomed_id))
+        .delete(Uuid::from(doomed_id), &Default::default())
         .await
         .expect("delete");
     let summary = temper_cli::projection::pull_context(&app.client, &config, "dctx")

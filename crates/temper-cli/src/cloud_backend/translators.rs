@@ -198,6 +198,9 @@ pub(crate) fn cmd_to_resource_update_request(
         content_hash,
         chunks_packed,
         context_to,
+        // Carry the per-act correlation + authorship from the command onto the wire (discrete
+        // ActInput shape); the update handler reassembles it into the act on its UpdateResource.
+        act: cmd.act.clone().into(),
     })
 }
 
@@ -340,6 +343,7 @@ mod tests {
             open_meta: None,
             move_to: None,
             context_ref: None,
+            act: Default::default(),
             origin: Surface::CliCloud,
         }
     }

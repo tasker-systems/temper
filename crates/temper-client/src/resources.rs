@@ -82,10 +82,17 @@ impl<'a> ResourceClient<'a> {
     }
 
     /// Delete a resource.
-    pub async fn delete(&self, id: Uuid) -> Result<DeleteResponse> {
+    ///
+    /// DELETE has no body, so per-act authorship (`act`) rides query params; an empty
+    /// `ActInput` serializes to nothing and appends no query string.
+    pub async fn delete(
+        &self,
+        id: Uuid,
+        act: &temper_core::types::authorship::ActInput,
+    ) -> Result<DeleteResponse> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}");
-        let req = self.http.delete(&path);
+        let req = self.http.delete(&path).query(act);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
             .await

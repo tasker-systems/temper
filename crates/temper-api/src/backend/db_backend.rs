@@ -287,13 +287,17 @@ pub struct DbBackend {
 }
 
 /// The invariant attribution carried through every reconcile phase: which cognitive map, on whose
-/// behalf (`owner`), and under which event `emitter`. Bundled so each phase helper takes one context
-/// argument instead of threading three identical ids — and to stay under the params-struct threshold.
-#[derive(Clone, Copy, Debug)]
+/// behalf (`owner`), under which event `emitter`, and the run's authored-act context (`act` —
+/// `invocation: Some(inv)` for the reconcile's own minted envelope + the caller's `authorship`). Every
+/// mutation a phase fires stamps `act`, so the whole reconcile is queryable by its `invocation_id`.
+/// Bundled so each phase helper takes one context argument instead of threading the ids — and to stay
+/// under the params-struct threshold. `Clone` (not `Copy`): `act` carries owned authorship.
+#[derive(Clone, Debug)]
 struct ReconcileCtx {
     cogmap: CogmapId,
     owner: ProfileId,
     emitter: EntityId,
+    act: EventContext,
 }
 
 impl DbBackend {
@@ -384,11 +388,13 @@ impl DbBackend {
         request: &ReconcileCogmapRequest,
         owner: ProfileId,
         emitter: EntityId,
+        run_ctx: EventContext,
     ) -> Result<ReconcileOutcome, TemperError> {
         let ctx = ReconcileCtx {
             cogmap,
             owner,
             emitter,
+            act: run_ctx,
         };
 
         // The diff source: the live `provenance: kernel` slice, indexed by the STABLE resource id
@@ -402,9 +408,11 @@ impl DbBackend {
         // edges, then explicit tombstones. Every phase runs on the one transaction — any `Err`
         // propagates and the caller drops the tx, so Postgres rolls back the WHOLE reconcile (every
         // mutation AND the envelope open). A partial reconcile is structurally impossible.
-        Self::apply_resource_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
-        Self::apply_edge_phase(&mut *conn, request, ctx).await?;
-        Self::apply_tombstone_phase(&mut *conn, request, &live_by_id, ctx, &mut outcome).await?;
+        Self::apply_resource_phase(&mut *conn, request, &live_by_id, ctx.clone(), &mut outcome)
+            .await?;
+        Self::apply_edge_phase(&mut *conn, request, ctx.clone()).await?;
+        Self::apply_tombstone_phase(&mut *conn, request, &live_by_id, ctx.clone(), &mut outcome)
+            .await?;
         Self::apply_telos_phase(&mut *conn, request, ctx, &mut outcome).await?;
 
         Ok(outcome)
@@ -474,6 +482,7 @@ impl DbBackend {
                             owner: ctx.owner,
                             emitter: ctx.emitter,
                         },
+                        ctx.act.clone(),
                     )
                     .await
                     .map_err(api_err)?;
@@ -486,6 +495,7 @@ impl DbBackend {
                         "provenance",
                         &serde_json::json!("kernel"),
                         ctx.emitter,
+                        ctx.act.clone(),
                     )
                     .await
                     .map_err(api_err)?;
@@ -494,9 +504,16 @@ impl DbBackend {
                     // never clustered). Skip the write entirely when there's nothing to cluster.
                     let facets = strip_provenance_facet(&entry.facets);
                     if facet_is_nonempty(&facets) {
-                        writes::set_facet_in_tx(&mut *conn, rid, &facets, 1.0, ctx.emitter)
-                            .await
-                            .map_err(api_err)?;
+                        writes::set_facet_in_tx(
+                            &mut *conn,
+                            rid,
+                            &facets,
+                            1.0,
+                            ctx.emitter,
+                            ctx.act.clone(),
+                        )
+                        .await
+                        .map_err(api_err)?;
                     }
 
                     // `rid` equals `entry.id` (the create minted under it); the diff already keys edges
@@ -523,6 +540,7 @@ impl DbBackend {
                             rehome_to: None,
                             emitter: ctx.emitter,
                         },
+                        ctx.act.clone(),
                     )
                     .await
                     .map_err(api_err)?;
@@ -587,6 +605,7 @@ impl DbBackend {
                         weight: e.weight,
                         emitter: ctx.emitter,
                     },
+                    ctx.act.clone(),
                 )
                 .await
                 .map_err(api_err)?;
@@ -605,9 +624,14 @@ impl DbBackend {
     ) -> Result<(), TemperError> {
         for t in &request.fold_resources {
             if let Some(row) = live_by_id.get(&t.id) {
-                writes::delete_resource_in_tx(&mut *conn, row.resource_id, ctx.emitter)
-                    .await
-                    .map_err(api_err)?;
+                writes::delete_resource_in_tx(
+                    &mut *conn,
+                    row.resource_id,
+                    ctx.emitter,
+                    ctx.act.clone(),
+                )
+                .await
+                .map_err(api_err)?;
                 outcome.folded += 1;
             }
         }
@@ -632,9 +656,9 @@ impl DbBackend {
                     edge_id,
                     Some("reconcile fold"),
                     ctx.emitter,
-                    // Reconcile-loop folds are system-internal; per-act authorship for the reconcile
-                    // path is the follow-on (see the act-authorship plan). Un-attributed for now.
-                    EventContext::default(),
+                    // Correlated to the reconcile run (its minted invocation + the caller's authorship),
+                    // like every other act this loop fires.
+                    ctx.act.clone(),
                 )
                 .await
                 .map_err(api_err)?;
@@ -676,9 +700,15 @@ impl DbBackend {
             return Ok(());
         }
 
-        writes::set_charter_in_tx(&mut *conn, ctx.cogmap, &blocks, ctx.emitter)
-            .await
-            .map_err(api_err)?;
+        writes::set_charter_in_tx(
+            &mut *conn,
+            ctx.cogmap,
+            &blocks,
+            ctx.emitter,
+            ctx.act.clone(),
+        )
+        .await
+        .map_err(api_err)?;
 
         let empty = temper_substrate::content::body_hash_for_body("");
         // `None` means the telos row exists but has no body yet (genesis / pre-charter state):
@@ -878,6 +908,9 @@ impl Backend for DbBackend {
         let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(new_id).await?;
+        // Correlation-integrity gate for any claimed invocation — additive to the modify authz above,
+        // before any mutation. No-op when the act carries no invocation.
+        self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -977,7 +1010,12 @@ impl Backend for DbBackend {
             }
         }
 
-        writes::update_resource(
+        // ActContext → EventContext: every sub-event of the update fan-out is correlated + authored.
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        writes::update_resource_with(
             &self.pool,
             writes::UpdateParams {
                 resource: ResourceId::from(new_id),
@@ -989,6 +1027,7 @@ impl Backend for DbBackend {
                 rehome_to,
                 emitter,
             },
+            act_ctx,
         )
         .await
         .map_err(api_err)?;
@@ -1003,13 +1042,19 @@ impl Backend for DbBackend {
         let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2).
         self.check_can_modify_next(new_id).await?;
+        // Correlation-integrity gate — additive to the modify authz above, before the write.
+        self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::delete_resource(&self.pool, ResourceId::from(new_id), emitter)
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        writes::delete_resource_with(&self.pool, ResourceId::from(new_id), emitter, act_ctx)
             .await
             .map_err(api_err)?;
         Ok(CommandOutput::new(()))
@@ -1134,18 +1179,25 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): gate on the edge's source resource.
         let src = self.edge_source_resource(handle).await?;
         self.check_can_modify_next(src).await?;
+        // Correlation-integrity gate — additive to the modify authz above, before the write.
+        self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::retype_relationship(
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        writes::retype_relationship_with(
             &self.pool,
             EdgeId::from(handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
+            act_ctx,
         )
         .await
         .map_err(api_err)?;
@@ -1160,15 +1212,27 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): gate on the edge's source resource.
         let src = self.edge_source_resource(handle).await?;
         self.check_can_modify_next(src).await?;
+        // Correlation-integrity gate — additive to the modify authz above, before the write.
+        self.check_act_invocation(cmd.act.invocation).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-        writes::reweight_relationship(&self.pool, EdgeId::from(handle), cmd.weight, emitter)
-            .await
-            .map_err(api_err)?;
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        writes::reweight_relationship_with(
+            &self.pool,
+            EdgeId::from(handle),
+            cmd.weight,
+            emitter,
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -1251,10 +1315,18 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
+        // The run's authored-act context: every mutation reconcile_apply fires correlates to THIS
+        // reconcile's own minted envelope (`inv`) and carries the caller's authorship. Any
+        // caller-supplied `cmd.act.invocation` is ignored — the reconcile owns its envelope.
+        let run_ctx = EventContext {
+            invocation: Some(inv),
+            authorship: cmd.act.authorship.clone(),
+        };
+
         // APPLY on the same connection. On ANY error the `?` returns here with `tx` dropped → full
         // rollback (mutations + the envelope open). No Failed-close needed.
         let outcome = self
-            .reconcile_apply(&mut tx, cogmap, &cmd.request, owner, emitter)
+            .reconcile_apply(&mut tx, cogmap, &cmd.request, owner, emitter, run_ctx)
             .await?;
 
         // CLOSE the envelope `Completed` in the same transaction.

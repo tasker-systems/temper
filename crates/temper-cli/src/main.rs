@@ -230,6 +230,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     pr,
                     status,
                     body,
+                    act,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
                         r#ref: &r#ref,
@@ -254,11 +255,18 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         status: status.as_deref(),
                         body,
                         format: output_format,
+                        act: act.into_act_input()?,
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
-                ResourceAction::Delete { r#ref, force } => {
-                    temper_cli::commands::resource::delete(&config, &r#ref, force, output_format)
+                ResourceAction::Delete { r#ref, force, act } => {
+                    temper_cli::commands::resource::delete(
+                        &config,
+                        &r#ref,
+                        force,
+                        act.into_act_input()?,
+                        output_format,
+                    )
                 }
             }
         }
@@ -420,8 +428,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         }
         Commands::Edge { action } => temper_cli::commands::edge::run(action),
         Commands::Cogmap { cmd } => match cmd {
-            CogmapCmd::Reconcile { r#ref, manifest } => {
-                commands::cogmap::reconcile(&r#ref, &manifest, output_format)
+            CogmapCmd::Reconcile {
+                r#ref,
+                manifest,
+                act,
+            } => {
+                commands::cogmap::reconcile(&r#ref, &manifest, act.into_act_input()?, output_format)
             }
             CogmapCmd::Create { manifest, name, id } => {
                 commands::cogmap::create(&manifest, name.as_deref(), id.as_deref(), output_format)
