@@ -17,7 +17,7 @@ use temper_core::types::access_gate::{
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 
-use temper_services::error::{ApiError, ApiResult};
+use crate::error::{ApiError, ApiResult};
 
 // ---------------------------------------------------------------------------
 // System access checks (called by middleware)

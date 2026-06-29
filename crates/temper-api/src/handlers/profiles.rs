@@ -6,8 +6,8 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
 use crate::middleware::auth::AuthUser;
-use crate::services::{access_service, profile_service};
 use temper_services::error::{ApiResult, ErrorBody};
+use temper_services::services::{access_service, profile_service};
 use temper_services::state::AppState;
 
 #[derive(Debug, serde::Serialize)]

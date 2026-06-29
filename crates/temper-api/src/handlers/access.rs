@@ -12,8 +12,8 @@ use temper_core::types::access_gate::{
 use temper_core::types::ids::ProfileId;
 
 use crate::middleware::auth::AuthUser;
-use crate::services::access_service;
 use temper_services::error::{ApiError, ApiResult};
+use temper_services::services::access_service;
 use temper_services::state::AppState;
 
 // ---------------------------------------------------------------------------

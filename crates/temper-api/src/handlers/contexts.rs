@@ -4,11 +4,11 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use crate::services::context_service::{
-    self, ContextCreateRequest, ContextRow, ContextRowWithCounts,
-};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::error::ApiResult;
+use temper_services::services::context_service::{
+    self, ContextCreateRequest, ContextRow, ContextRowWithCounts,
+};
 use temper_services::state::AppState;
 
 #[utoipa::path(

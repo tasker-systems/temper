@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::backend::DbBackend;
 use crate::middleware::auth::AuthUser;
-use crate::services::{access_service, cogmap_service};
 use temper_services::error::{ApiError, ApiResult};
+use temper_services::services::{access_service, cogmap_service};
 use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{

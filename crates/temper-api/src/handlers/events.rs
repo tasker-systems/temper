@@ -3,10 +3,10 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use crate::services::event_service;
 use temper_core::types::api::EventCursorResponse;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::error::{ApiResult, ErrorBody};
+use temper_services::services::event_service;
 use temper_services::state::AppState;
 
 #[utoipa::path(

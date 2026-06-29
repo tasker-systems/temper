@@ -8,10 +8,10 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use crate::services::team_service;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamMemberRow, TeamRow};
 use temper_services::error::ApiResult;
+use temper_services::services::team_service;
 use temper_services::state::AppState;
 
 #[utoipa::path(

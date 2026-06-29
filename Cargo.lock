@@ -4975,14 +4975,12 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "serde_yaml",
  "sqlx",
  "temper-core",
  "temper-ingest",
  "temper-services",
  "temper-substrate",
  "temper-workflow",
- "thiserror 2.0.18",
  "tokio",
  "tower-http",
  "tracing",
@@ -5175,6 +5173,7 @@ name = "temper-services"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "jsonwebtoken",
  "reqwest 0.12.28",
  "serde",
@@ -5182,10 +5181,12 @@ dependencies = [
  "serde_yaml",
  "sqlx",
  "temper-core",
+ "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]

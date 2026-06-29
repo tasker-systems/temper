@@ -14,8 +14,8 @@ use axum::response::Response;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::AuthenticatedProfile;
 
-use crate::services::access_service;
 use temper_services::error::ApiError;
+use temper_services::services::access_service;
 use temper_services::state::AppState;
 
 /// Axum middleware that checks system-level access after authentication.

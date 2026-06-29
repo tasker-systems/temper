@@ -91,6 +91,18 @@ cd crates/temper-api
 cargo sqlx prepare -- --all-targets --all-features
 '''
 
+[tasks.prepare-services]
+description = "Regenerate temper-services' per-crate .sqlx cache (--all-targets: includes test-target queries)"
+env = { SQLX_OFFLINE = "false" }   # prepare must introspect the live dev DB to build the cache
+script = '''
+# Per-crate (run from the crate dir) — NOT `--workspace`, which clobbers per-crate caches.
+# `--all-targets` captures the lib service query! macros under the test-target build
+# (e.g. profile_service's `#[sqlx::test]`), which the offline clippy sweep in `cargo make
+# check` compiles but plain `cargo sqlx prepare` misses.
+cd crates/temper-services
+cargo sqlx prepare -- --all-targets --all-features
+'''
+
 [tasks.prepare-e2e]
 description = "Regenerate temper-e2e's per-crate .sqlx cache (--all-targets: test-target queries)"
 env = { SQLX_OFFLINE = "false" }   # prepare must introspect the live dev DB to build the cache

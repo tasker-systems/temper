@@ -5,7 +5,7 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, Profile, ProfileAuthLink};
 
-use temper_services::error::{ApiError, ApiResult};
+use crate::error::{ApiError, ApiResult};
 
 /// Maximum serialized size for the preferences JSON field (64KB).
 const MAX_PREFERENCES_BYTES: usize = 65_536;

@@ -4,12 +4,12 @@ use uuid::Uuid;
 
 use crate::backend::DbBackend;
 use crate::middleware::auth::AuthUser;
-use crate::services::context_service;
-use crate::services::resource_service::{
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::services::context_service;
+use temper_services::services::resource_service::{
     ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
     ResourceUpdateRequest,
 };
-use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
 
 use temper_core::context_ref::ContextRef;

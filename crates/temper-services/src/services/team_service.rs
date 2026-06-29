@@ -15,12 +15,12 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{
     AddMemberRequest, TeamCreateRequest, TeamMemberRow, TeamRole, TeamRow,
 };
-use temper_services::error::{ApiError, ApiResult};
 
 /// Map a sqlx error to `Conflict` when it is a unique-constraint violation
 /// (the globally-UNIQUE `kb_teams.slug`), else pass it through.

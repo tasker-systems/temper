@@ -18,8 +18,6 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::backend::db_backend::{map_readback_err, native_resource_row};
-use crate::services::context_service::resolve_context_ref;
-use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
@@ -30,6 +28,8 @@ use temper_core::types::cognitive_maps::{
 use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
 use temper_core::types::invocation::{InvocationActRow, InvocationSummary, InvocationView};
 use temper_services::error::{ApiError, ApiResult};
+use temper_services::services::context_service::resolve_context_ref;
+use temper_services::services::resource_service::{ResourceListParams, ResourceListResponse};
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -337,8 +337,10 @@ pub async fn search_select(
             let cref = temper_core::context_ref::parse_context_ref(s)
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             Some(
-                *crate::services::context_service::resolve_context_ref(pool, profile_id, &cref)
-                    .await?,
+                *temper_services::services::context_service::resolve_context_ref(
+                    pool, profile_id, &cref,
+                )
+                .await?,
             )
         }
         None => None,
