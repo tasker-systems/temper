@@ -1,0 +1,55 @@
+# install-profile.yaml — declarative desired-state for bootstrapping a blank temper org.
+#
+# This is the input to scripts/bootstrap/system-bootstrap.sh, which loops the now-surfaced
+# idempotent `temper` commands (+ the one irreducible SQL root step) to take a blank-but-stable
+# self-hosted install (DB + schema + binary + MCP) to a usable org. It is the org analogue of the
+# L0 kernel delivery: declared once, applied through the same idempotent reconcile/create machinery.
+#
+# Idempotency is INHERITED from the primitives — every `temper team create` / `cogmap create` /
+# `cogmap reconcile` / `cogmap bind` / `admin …` is idempotent, so re-applying this profile
+# converges rather than duplicating. There is no state backend; plan/diff (Terraform-like)
+# semantics are deferred (see the spec's Deferred section).
+#
+# SoP runbook (the manual sequence this profile automates, step by step):
+#   docs/guides/org-bootstrap.md
+
+# ── Identity ────────────────────────────────────────────────────────────────────────────────────
+# Human-facing instance name, surfaced via `temper admin settings --instance-name`.
+instance_name: "Acme Temper"
+
+# ── The irreducible SQL root step (operator-with-DB-credentials) ──────────────────────────────────
+# Set gating_team_slug + promote the first admin. This is the ONE step that is NOT a surfaced
+# `temper` command — there is nothing to authenticate against until the first admin exists. The
+# applier runs it only when DATABASE_URL is set AND --run-root is passed; otherwise it is a manual
+# prerequisite (see the runbook). The gating team is created here if absent.
+root:
+  # The team whose OWNERS are system admins (is_system_admin reads ownership of this team).
+  gating_team_slug: "temper-system"
+  # access_mode: open (default) | invite_only. With `open`, gating_team_slug only enables
+  # system-admin-by-team-ownership; the invite/join-request flow engages only under invite_only.
+  access_mode: "open"
+  # The first admin's profile id (uuidv7). Found via `SELECT id FROM kb_profiles WHERE …` after the
+  # operator has authenticated once (a profile auto-provisions on first authed request).
+  first_admin_profile_id: "REPLACE-WITH-FIRST-ADMIN-PROFILE-UUID"
+
+# ── The org-wide "everyone" audience pool ─────────────────────────────────────────────────────────
+# A flat, parentless audience team every member auto-joins (NOT the DAG root — that would over-share
+# down every sub-team). Org-wide cogmaps are bound to it explicitly. `auto_join_role` is admin-gated
+# to set and makes enrollment idempotent + complete across open/invite_only.
+auto_join_team:
+  slug: "everyone"
+  name: "Everyone"
+  auto_join_role: "watcher"
+
+# ── The org-identity cognitive map ────────────────────────────────────────────────────────────────
+# Born via `cogmap create` from the genesis manifest (telos charter), then its landmark content is
+# delivered via `cogmap reconcile` from the landmarks manifest. Bound to the auto-join team so it
+# reaches the org's shared corpus. Pin `id` (uncomment) for a reproducible, re-runnable genesis;
+# leave it null and the applier captures the minted id from `cogmap create` output for this run.
+org_identity:
+  # id: "019f1600-0000-7000-8000-000000000001"
+  genesis_manifest: "schema-artifact/manifests/org-identity.yaml"
+  landmarks_manifest: "schema-artifact/manifests/org-identity-landmarks.yaml"
+  # Teams this map is bound to (widens the map's reach to each team's shared resources).
+  bind_teams:
+    - "everyone"
