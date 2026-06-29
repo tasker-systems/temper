@@ -319,6 +319,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: None,
+                    act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                 },
             )
@@ -481,6 +482,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: Some(body_flag),
+                    act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                 },
             )
@@ -641,6 +643,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: Some(body_flag),
+                    act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                 },
             )
@@ -790,6 +793,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
                     pr: None,
                     status: None,
                     body: Some(body_flag),
+                    act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                 },
             )
@@ -944,6 +948,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: Some(body_flag2),
+                    act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                 },
             )
@@ -1303,6 +1308,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: None, // meta-only, no chunks_packed needed
+                    act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                 },
             )
@@ -1422,6 +1428,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                 &cli_config3,
                 &ref_for_delete,
                 true, // force — accepted for CLI compatibility; cloud delete is non-interactive
+                temper_core::types::ActInput::default(),
                 temper_cli::format::OutputFormat::Json,
             )
             .expect("cloud delete should succeed")

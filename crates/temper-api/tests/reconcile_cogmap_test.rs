@@ -620,8 +620,7 @@ async fn reconcile_acts_correlate_to_the_runs_minted_envelope(pool: PgPool) {
     )]);
     be.reconcile_cognitive_map(cmd(L0_COGMAP, req))
         .await
-        .expect("reconcile")
-        .value;
+        .expect("reconcile");
 
     // The run's server-minted envelope (the single admin_reconcile invocation). NOTE: the L0 birth
     // migration itself fires events with a NULL correlator (migration-time, not under a run), so the

@@ -41,6 +41,7 @@ fn rejects_unparseable_ref() {
         &config,
         "not-a-ref",
         true,
+        temper_core::types::ActInput::default(),
         temper_cli::format::OutputFormat::Json,
     );
 

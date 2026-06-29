@@ -47,6 +47,7 @@ pub async fn reconcile(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(cogmap_id): Path<Uuid>,
+    Query(act_in): Query<temper_core::types::authorship::ActInput>,
     Json(request): Json<ReconcileCogmapRequest>,
 ) -> ApiResult<Json<ReconcileOutcome>> {
     // Auth before writes (Global Constraints): the root-team-cogmap write gate.
@@ -57,10 +58,14 @@ pub async fn reconcile(
     )
     .await?;
 
+    // The manifest body stays pure; authorship rides query params (reconcile uses only
+    // `act.authorship` — its invocation is server-minted). Reassembled here, validated once.
+    let act = act_in.into_act_context().map_err(ApiError::from)?;
+
     let cmd = ReconcileCognitiveMap {
         cogmap_id: CogmapId::from(cogmap_id),
         request,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));

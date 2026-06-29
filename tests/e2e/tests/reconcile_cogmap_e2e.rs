@@ -185,7 +185,7 @@ async fn admin_reconcile_l0_is_idempotent(pool: sqlx::PgPool) {
     let out1 = app
         .client
         .cognitive_maps()
-        .reconcile_cognitive_map(L0_COGMAP, &req)
+        .reconcile_cognitive_map(L0_COGMAP, &req, &Default::default())
         .await
         .expect("admin reconcile should succeed");
     assert_eq!(
@@ -198,7 +198,7 @@ async fn admin_reconcile_l0_is_idempotent(pool: sqlx::PgPool) {
     let out2 = app
         .client
         .cognitive_maps()
-        .reconcile_cognitive_map(L0_COGMAP, &req)
+        .reconcile_cognitive_map(L0_COGMAP, &req, &Default::default())
         .await
         .expect("second admin reconcile should succeed");
     assert_eq!(
@@ -230,7 +230,7 @@ async fn admin_reconcile_delivers_telos_charter_idempotently(pool: sqlx::PgPool)
     let out1 = app
         .client
         .cognitive_maps()
-        .reconcile_cognitive_map(L0_COGMAP, &req)
+        .reconcile_cognitive_map(L0_COGMAP, &req, &Default::default())
         .await
         .expect("first admin reconcile with telos should succeed");
     assert_eq!(
@@ -250,7 +250,7 @@ async fn admin_reconcile_delivers_telos_charter_idempotently(pool: sqlx::PgPool)
     let out2 = app
         .client
         .cognitive_maps()
-        .reconcile_cognitive_map(L0_COGMAP, &req)
+        .reconcile_cognitive_map(L0_COGMAP, &req, &Default::default())
         .await
         .expect("second admin reconcile with telos should succeed");
     assert_eq!(

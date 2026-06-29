@@ -154,7 +154,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
     let delete_resp = app
         .client
         .resources()
-        .delete(created.id.into())
+        .delete(created.id.into(), &Default::default())
         .await
         .expect("resource delete failed");
 

@@ -608,6 +608,7 @@ pub fn delete(
     config: &Config,
     r#ref: &str,
     force: bool,
+    act: temper_core::types::ActInput,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use temper_workflow::operations::DeleteResource;
@@ -629,7 +630,7 @@ pub fn delete(
     let cmd = DeleteResource {
         resource: id,
         force,
-        act: Default::default(),
+        act: act.into_act_context()?,
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
@@ -834,6 +835,8 @@ pub struct UpdateParams<'a> {
     pub body: Option<String>,
     /// Output format, resolved globally upstream in `main`.
     pub format: crate::format::OutputFormat,
+    /// Per-act correlation + authorship for the update act (from `--invocation`/`--confidence`/…).
+    pub act: temper_core::types::ActInput,
 }
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
@@ -1015,7 +1018,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
         context_ref: params.context_to.map(String::from),
-        act: Default::default(),
+        act: params.act.clone().into_act_context()?,
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
@@ -1131,6 +1134,7 @@ mod build_helpers_tests {
             status: None,
             body: None,
             format: crate::format::OutputFormat::Json,
+            act: temper_core::types::ActInput::default(),
         }
     }
 

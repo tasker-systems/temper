@@ -37,6 +37,10 @@ pub struct AssertRelationshipRequest {
 pub struct RetypeRelationshipRequest {
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the retype act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    #[serde(default, flatten)]
+    pub act: ActInput,
 }
 
 /// Request body for `POST /api/relationships/{edge_handle}/reweight`.
@@ -44,6 +48,10 @@ pub struct RetypeRelationshipRequest {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReweightRelationshipRequest {
     pub weight: f64,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the reweight act.
+    /// Flattened as top-level keys; all optional (empty when nothing is supplied).
+    #[serde(default, flatten)]
+    pub act: ActInput,
 }
 
 /// Request body for `POST /api/relationships/{edge_handle}/fold`.

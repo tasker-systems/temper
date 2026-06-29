@@ -70,10 +70,12 @@ pub fn run(action: EdgeAction) -> Result<()> {
             edge_handle,
             kind,
             polarity,
+            act,
         } => {
             let req = RetypeRelationshipRequest {
                 edge_kind: kind.into(),
                 polarity: polarity.into(),
+                act: act.into_act_input()?,
             };
             crate::actions::runtime::with_client(|client| {
                 Box::pin(async move {
@@ -90,8 +92,12 @@ pub fn run(action: EdgeAction) -> Result<()> {
         EdgeAction::Reweight {
             edge_handle,
             weight,
+            act,
         } => {
-            let req = ReweightRelationshipRequest { weight };
+            let req = ReweightRelationshipRequest {
+                weight,
+                act: act.into_act_input()?,
+            };
             crate::actions::runtime::with_client(|client| {
                 Box::pin(async move {
                     let ack = client
@@ -222,6 +228,7 @@ mod tests {
                         edge_handle: cid,
                         kind,
                         polarity,
+                        ..
                     },
             } => {
                 assert_eq!(cid, edge_handle);
@@ -250,6 +257,7 @@ mod tests {
                     EdgeAction::Reweight {
                         edge_handle: cid,
                         weight,
+                        ..
                     },
             } => {
                 assert_eq!(cid, edge_handle);

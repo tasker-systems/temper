@@ -126,9 +126,12 @@ mod embed_impl {
             // CLI hint). The pre-Phase-5 `delete_cloud` used `client_err` here
             // for this reason; CloudBackend now mirrors that on the delete step.
             let id = uuid::Uuid::from(cmd.resource);
+            // Carry the per-act correlation + authorship from the command onto the wire (discrete
+            // ActInput shape, query params); the delete handler reassembles it into the act.
+            let act: temper_core::types::ActInput = cmd.act.clone().into();
             self.client
                 .resources()
-                .delete(id)
+                .delete(id, &act)
                 .await
                 .map_err(crate::commands::client_err)?;
             let resource_id = cmd.resource;

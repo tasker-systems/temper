@@ -255,6 +255,8 @@ pub async fn update(
         None
     };
 
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
+
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         body,
@@ -262,7 +264,7 @@ pub async fn update(
         open_meta: req.open_meta,
         move_to,
         context_ref: None,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -287,11 +289,15 @@ pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
+    Query(act_in): Query<temper_core::types::authorship::ActInput>,
 ) -> ApiResult<Json<DeleteResponse>> {
+    // DELETE carries no body — authorship rides query params
+    // (`?invocation_id=…&reasoning=…&confidence=…`), deserialized flat via serde_urlencoded.
+    let act = act_in.into_act_context().map_err(ApiError::from)?;
     let cmd = DeleteResource {
         resource: ResourceId::from(resource_id),
         force: false,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
