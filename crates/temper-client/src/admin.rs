@@ -1,0 +1,95 @@
+//! Typed sub-client for the `/api/access/admin/*` endpoints (Chunk 6).
+
+use reqwest::Method;
+use uuid::Uuid;
+
+use crate::error::Result;
+use crate::http::HttpClient;
+use temper_core::types::access_gate::{
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, SystemSettings,
+};
+use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
+use temper_core::types::team::TeamMemberRow;
+
+/// Sub-client for admin / system-settings operations.
+pub struct AdminClient<'a> {
+    http: &'a HttpClient,
+}
+
+impl std::fmt::Debug for AdminClient<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminClient").finish_non_exhaustive()
+    }
+}
+
+impl<'a> AdminClient<'a> {
+    pub(crate) fn new(http: &'a HttpClient) -> Self {
+        Self { http }
+    }
+
+    /// Read full system settings (admin only).
+    pub async fn get_settings(&self) -> Result<SystemSettings> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/settings";
+        let req = self.http.get(path);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// Partial-update system settings (admin only).
+    pub async fn update_settings(&self, body: &UpdateSettingsRequest) -> Result<SystemSettings> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/settings";
+        let req = self.http.patch(path).json(body);
+        self.http
+            .send_json(&Method::PATCH, path, req, Some(&token))
+            .await
+    }
+
+    /// Promote a profile to `owner` on a team (admin only).
+    pub async fn promote(&self, body: &PromoteAdminRequest) -> Result<TeamMemberRow> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/promote";
+        let req = self.http.post(path).json(body);
+        self.http
+            .send_json(&Method::POST, path, req, Some(&token))
+            .await
+    }
+
+    /// List pending join requests for the gating team (admin only).
+    pub async fn list_requests(&self) -> Result<Vec<JoinRequestWithProfile>> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/requests";
+        let req = self.http.get(path);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// Approve or reject a join request (admin only).
+    pub async fn review_request(
+        &self,
+        request_id: Uuid,
+        decision: JoinRequestStatus,
+        decision_note: Option<String>,
+    ) -> Result<JoinRequest> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/access/admin/requests/{request_id}");
+        let body = ReviewBody {
+            status: decision,
+            decision_note,
+        };
+        let req = self.http.patch(&path).json(&body);
+        self.http
+            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .await
+    }
+}
+
+/// Mirrors `handlers::access::ReviewRequestBody` (the handler's private body type).
+#[derive(serde::Serialize)]
+struct ReviewBody {
+    status: JoinRequestStatus,
+    decision_note: Option<String>,
+}
