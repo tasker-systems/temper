@@ -123,6 +123,8 @@ async fn charter_set_populates_empty_telos_then_idempotent(pool: sqlx::PgPool) {
             name: "l0-charter-cogmap",
             telos_title: "L0 telos",
             charter: &[],
+            cogmap_id: None,
+            telos_resource_id: None,
             owner: ProfileId::from(owner),
             emitter,
         },

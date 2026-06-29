@@ -556,6 +556,22 @@ pub enum CogmapCmd {
         #[arg(long)]
         manifest: String,
     },
+    /// Genesis (create) a new cognitive map from a committed manifest.
+    ///
+    /// Reads the authored genesis manifest (name, telos title, optional ids + telos charter),
+    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (admin-gated, idempotent).
+    /// Ids absent from the manifest are minted client-side for a stable, reproducible identity.
+    Create {
+        /// Path to the genesis manifest (YAML)
+        #[arg(long)]
+        manifest: String,
+        /// Override the manifest's cogmap name
+        #[arg(long)]
+        name: Option<String>,
+        /// Override the manifest's cogmap id (a UUID or the decorated `slug-<uuid>` form)
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Read a cognitive map's materialized regions (surface tier).
     Shape {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).

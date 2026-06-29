@@ -17,16 +17,20 @@ use temper_core::types::graph;
 use temper_core::types::ids::{
     CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
 };
-use temper_core::types::reconcile::{CharterDisposition, ReconcileCogmapRequest, ReconcileOutcome};
+use temper_core::types::reconcile::{
+    CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
+    ReconcileTelos,
+};
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateResource, DeleteResource,
-    FoldRelationship, ListResources, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
-    RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface,
-    UpdateResource,
+    AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
+    ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
+    SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
-use temper_substrate::events::EventContext;
+use temper_substrate::content::PreparedBlock;
+use temper_substrate::events::{fire_with, EventContext, SeedAction};
 use temper_substrate::keys::{key_fate, KeyFate};
 use temper_substrate::readback;
 use temper_substrate::writes;
@@ -113,6 +117,23 @@ fn unpack_incoming_chunks(
         .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
     chunks.sort_by_key(|c| c.chunk_index);
     Ok(chunks.iter().map(packed_to_incoming).collect())
+}
+
+/// Build the substrate-native charter [`PreparedBlock`]s from a wire [`ReconcileTelos`] (client-embedded
+/// chunks, carried verbatim — NO server-side ONNX). One block per role-tagged entry, seq-ordered by
+/// position. Shared by `apply_telos_phase` (reconcile) and `create_cognitive_map` (genesis) so the two
+/// build charter blocks identically.
+fn prepare_telos_blocks(telos: &ReconcileTelos) -> Result<Vec<PreparedBlock>, TemperError> {
+    let mut blocks = Vec::with_capacity(telos.blocks.len());
+    for (seq, b) in telos.blocks.iter().enumerate() {
+        let chunks = unpack_incoming_chunks(&b.chunks_packed)?;
+        blocks.push(temper_substrate::content::prepare_block_from_chunks(
+            seq as i32,
+            Some(&b.role),
+            chunks,
+        ));
+    }
+    Ok(blocks)
 }
 
 /// Strip a stray top-level `provenance` key from a clustering-facet object (Decision #6): `provenance`
@@ -637,15 +658,7 @@ impl DbBackend {
         }; // charter stays Absent
 
         // Unpack + prepare each role-tagged block (client-embedded chunks, verbatim).
-        let mut blocks = Vec::with_capacity(telos.blocks.len());
-        for (seq, b) in telos.blocks.iter().enumerate() {
-            let chunks = unpack_incoming_chunks(&b.chunks_packed)?;
-            blocks.push(temper_substrate::content::prepare_block_from_chunks(
-                seq as i32,
-                Some(&b.role),
-                chunks,
-            ));
-        }
+        let blocks = prepare_telos_blocks(telos)?;
 
         // Incoming resource merkle (two-level), compared to the live telos body_hash — the diff key.
         let per_block: Vec<Vec<String>> = blocks
@@ -1260,6 +1273,135 @@ impl Backend for DbBackend {
 
         // COMMIT — a serialization failure (40001) maps to `Conflict` (retryable), any other DB error to
         // a 500. Success returns the outcome.
+        match tx.commit().await {
+            Ok(()) => Ok(CommandOutput::new(outcome)),
+            Err(e) => Err(map_commit_err(e)),
+        }
+    }
+
+    /// Genesis (create) a new cognitive map (cogmap + telos charter resource) from a manifest, under the
+    /// system actor, as a SINGLE `SERIALIZABLE` transaction. Identity is manifest-supplied uuidv7
+    /// (backend-minted when absent — the identity-as-input contract). Idempotent at a given id:
+    /// re-genesis returns the existing identity with `created: false` and fires NOTHING. No HTTP/authz
+    /// here (the surface gates on `is_system_admin` first); this is the backend command.
+    async fn create_cognitive_map(
+        &self,
+        cmd: CreateCognitiveMap,
+    ) -> Result<CommandOutput<CreateCogmapOutcome>, TemperError> {
+        // Resolve genesis identity: manifest-supplied uuidv7, or backend-minted when absent. Resolving
+        // HERE (not deferring to the firing arm's `unwrap_or_else`) lets the existence pre-check key on
+        // the realized id and lets the outcome echo a stable id even on the mint path.
+        let cogmap_id = cmd
+            .request
+            .cogmap_id
+            .map(CogmapId::from)
+            .unwrap_or_else(|| CogmapId::from(uuid::Uuid::now_v7()));
+        let telos_resource_id = cmd
+            .request
+            .telos_resource_id
+            .map(ResourceId::from)
+            .unwrap_or_else(|| ResourceId::from(uuid::Uuid::now_v7()));
+        let cogmap_uuid = uuid::Uuid::from(cogmap_id);
+
+        // IDEMPOTENT NO-OP (FIX #3): re-genesis at an existing id is a no-op. `_project_cogmap_seeded`
+        // does plain INSERTs (no ON CONFLICT), so a second genesis at a live id would duplicate-key.
+        // Pre-check existence on the pool BEFORE opening any transaction: if the map exists, return its
+        // STORED telos id with `created: false` and open NO envelope / fire NOTHING (no duplicate
+        // kb_events row). The `kb_cogmaps` PK is the concurrency backstop — a genesis race that slips
+        // past this read maps to a duplicate-key/serialization error → `Conflict` at commit.
+        if let Some(existing_telos) = sqlx::query_scalar!(
+            "SELECT telos_resource_id FROM kb_cogmaps WHERE id = $1",
+            cogmap_uuid,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        {
+            return Ok(CommandOutput::new(CreateCogmapOutcome {
+                cogmap_id: cogmap_uuid,
+                telos_resource_id: existing_telos,
+                created: false,
+            }));
+        }
+
+        // The system actor: genesis fires under (owner = system profile, emitter = system entity) — the
+        // L0 birth migration's actor (mirrors reconcile).
+        let (owner, emitter) = readback::system_actor(&self.pool).await.map_err(api_err)?;
+
+        // Charter blocks: client-embedded chunks carried verbatim (NO server ONNX). Absent telos ⇒ an
+        // empty charter (the map is born empty, deliverable later via reconcile's `CharterSet`).
+        let blocks = match &cmd.request.telos {
+            Some(telos) => prepare_telos_blocks(telos)?,
+            None => Vec::new(),
+        };
+
+        // ONE SERIALIZABLE transaction for the whole run (mirrors reconcile). `SET TRANSACTION ISOLATION
+        // LEVEL SERIALIZABLE` must be the first statement after BEGIN.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .map_err(api_err)?;
+
+        // FIRE GENESIS FIRST — unlike reconcile (which reconciles an EXISTING map), genesis CREATES the
+        // cogmap, and `kb_invocations.originating_cogmap_id` FK-references `kb_cogmaps(id)` (the
+        // `delegated_launch` projection RAISEs if the originating cogmap is absent). So the cogmap must
+        // exist before the envelope can reference it. The `cogmap_seeded` event is its own correlation
+        // root (matching reconcile's mutations, which the envelope likewise does not stamp).
+        let (born_cogmap, born_telos) = fire_with(
+            &mut tx,
+            SeedAction::CogmapGenesis {
+                name: &cmd.request.name,
+                telos_title: &cmd.request.telos_title,
+                charter: &blocks,
+                cogmap_id: Some(cogmap_id),
+                telos_resource_id: Some(telos_resource_id),
+                owner,
+                emitter,
+            },
+            EventContext::default(),
+        )
+        .await
+        .map_err(api_err)?
+        .cogmap_genesis()
+        .map_err(api_err)?;
+
+        let outcome = CreateCogmapOutcome {
+            cogmap_id: uuid::Uuid::from(born_cogmap),
+            telos_resource_id: uuid::Uuid::from(born_telos),
+            created: true,
+        };
+
+        // OPEN the `admin_genesis` envelope on the now-existing cogmap, then CLOSE it `Completed` — both
+        // in the same transaction, bracketing the genesis the way `admin_reconcile` brackets a reconcile
+        // run. On ANY error before commit the `?` drops `tx` → full rollback (the genesis AND the open).
+        let inv = writes::open_invocation_in_tx(
+            &mut tx,
+            writes::OpenParams {
+                trigger_kind: "admin_genesis".to_string(),
+                originating: born_cogmap,
+                parent: None,
+                scoped_entity: emitter,
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        let outcome_json =
+            serde_json::to_value(&outcome).map_err(|e| TemperError::Api(e.to_string()))?;
+        writes::close_invocation_in_tx(
+            &mut tx,
+            inv,
+            born_cogmap,
+            temper_substrate::payloads::Disposition::Completed,
+            outcome_json,
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+
+        // COMMIT — serialization failure (40001) → `Conflict` (a genesis race), any other DB error → 500.
         match tx.commit().await {
             Ok(()) => Ok(CommandOutput::new(outcome)),
             Err(e) => Err(map_commit_err(e)),

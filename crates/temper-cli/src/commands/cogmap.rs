@@ -96,3 +96,53 @@ pub fn reconcile(_cogmap_ref: &str, _manifest_path: &str, _fmt: OutputFormat) ->
         "cogmap reconcile requires the 'embed' feature — rebuild with --features embed".into(),
     ))
 }
+
+/// Genesis (create) a new cognitive map from the manifest at `manifest_path`. `--id` / `--name`
+/// override the manifest's `cogmap_id` / `name`; absent ids are minted client-side (stable, reproducible).
+#[cfg(feature = "embed")]
+pub fn create(
+    manifest_path: &str,
+    name: Option<&str>,
+    id: Option<&str>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    use crate::actions::genesis as genesis_action;
+    use crate::error::TemperError;
+
+    // Resolve the optional --id flag (trailing-UUID-only; the slug half is ignored), if supplied.
+    let id_override = id
+        .map(|r| temper_workflow::operations::parse_ref(r).map(|p| p.0))
+        .transpose()?;
+
+    let yaml = std::fs::read_to_string(manifest_path)
+        .map_err(|e| TemperError::Config(format!("reading manifest {manifest_path}: {e}")))?;
+    let doc = genesis_action::parse_manifest(&yaml)?;
+    let req = genesis_action::manifest_to_request(&doc, id_override, name)?;
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .cognitive_maps()
+                .create_cognitive_map(&req)
+                .await
+                .map_err(crate::commands::client_err)
+        })
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// Non-embed build: the command cannot run (no ONNX to embed the charter manifest).
+#[cfg(not(feature = "embed"))]
+pub fn create(
+    _manifest_path: &str,
+    _name: Option<&str>,
+    _id: Option<&str>,
+    _fmt: OutputFormat,
+) -> Result<()> {
+    Err(crate::error::TemperError::Config(
+        "cogmap create requires the 'embed' feature — rebuild with --features embed".into(),
+    ))
+}

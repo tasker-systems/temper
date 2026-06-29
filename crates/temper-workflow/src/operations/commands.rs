@@ -211,6 +211,16 @@ pub struct ReconcileCognitiveMap {
     pub origin: Surface,
 }
 
+/// Genesis (create) a new cognitive map (cogmap + telos charter resource) from a manifest. The new
+/// map's identity lives INSIDE the `request` (manifest-supplied uuidv7, or backend-minted when absent) —
+/// there is no separate path id (unlike reconcile's `cogmap_id`). Idempotent at a given id: re-genesis
+/// is a no-op returning `created: false`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateCognitiveMap {
+    pub request: temper_core::types::reconcile::CreateCogmapRequest,
+    pub origin: Surface,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

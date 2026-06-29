@@ -106,6 +106,8 @@ async fn charter_delivery_makes_telos_alignment_computable(pool: sqlx::PgPool) {
             name: "telos-alignment-cogmap",
             telos_title: "Alignment Test Telos",
             charter: &[],
+            cogmap_id: None,
+            telos_resource_id: None,
             owner,
             emitter,
         },

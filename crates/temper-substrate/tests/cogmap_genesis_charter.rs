@@ -89,6 +89,8 @@ async fn cogmap_genesis_persists_multi_block_multi_chunk_charter(pool: sqlx::PgP
             name: "onboarding-cogmap",
             telos_title: "Onboarding charter",
             charter: &blocks,
+            cogmap_id: None,
+            telos_resource_id: None,
             owner: ProfileId::from(owner),
             emitter: EntityId::from(emitter),
         },

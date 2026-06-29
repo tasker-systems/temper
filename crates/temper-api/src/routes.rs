@@ -89,6 +89,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route(
+            "/api/cognitive-maps",
+            post(handlers::cognitive_maps::genesis),
+        )
+        .route(
             "/api/cognitive-maps/{id}",
             put(handlers::cognitive_maps::reconcile),
         )

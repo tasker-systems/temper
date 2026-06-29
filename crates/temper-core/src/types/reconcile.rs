@@ -119,6 +119,41 @@ pub struct ReconcileCogmapRequest {
     pub telos: Option<ReconcileTelos>,
 }
 
+/// The `POST /api/cognitive-maps` request body — a cognitive-map **genesis** (create) manifest.
+///
+/// Genesis identity is manifest-supplied uuidv7: `cogmap_id` is the new map's id and
+/// `telos_resource_id` is its telos charter resource's id. Both are `Option` — when absent the backend
+/// mints a fresh `Uuid::now_v7()` (mirroring `CreateResource`'s identity-as-input precedent). Supplying
+/// them makes genesis reproducible (the operator gets a stable id) and is how the reserved-id L0 kernel
+/// is born.
+///
+/// `name` is the cogmap's name; `telos_title` is the telos charter resource's title. `telos` is the
+/// optional pre-embedded charter (same role-tagged block shape `ReconcileCogmapRequest::telos` carries):
+/// absent ⇒ the map is born with an empty charter (deliverable later via reconcile). Genesis is
+/// idempotent at a given id — re-genesis is a no-op returning `created: false`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct CreateCogmapRequest {
+    #[serde(default)]
+    pub cogmap_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub telos_resource_id: Option<uuid::Uuid>,
+    pub name: String,
+    pub telos_title: String,
+    #[serde(default)]
+    pub telos: Option<ReconcileTelos>,
+}
+
+/// The result of one genesis run — the realized identity plus whether this call created it.
+/// `created: false` means the map already existed at `cogmap_id` (idempotent no-op).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct CreateCogmapOutcome {
+    pub cogmap_id: uuid::Uuid,
+    pub telos_resource_id: uuid::Uuid,
+    pub created: bool,
+}
+
 /// The result of one reconcile run — also serialized into `kb_invocations.outcome`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -195,6 +230,46 @@ mod tests {
         let landmark_only: ReconcileCogmapRequest =
             serde_json::from_str(r#"{"entries":[]}"#).unwrap();
         assert!(landmark_only.telos.is_none());
+    }
+
+    #[test]
+    fn create_request_round_trips_with_optional_ids_and_telos() {
+        let req = CreateCogmapRequest {
+            cogmap_id: Some(uuid::Uuid::now_v7()),
+            telos_resource_id: Some(uuid::Uuid::now_v7()),
+            name: "Org provisioning map".into(),
+            telos_title: "Org telos".into(),
+            telos: Some(ReconcileTelos {
+                blocks: vec![ReconcileTelosBlock {
+                    role: "statement".into(),
+                    chunks_packed: "[]".into(),
+                }],
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: CreateCogmapRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+
+        // Ids and telos all default to None/absent — a minimal genesis request.
+        let minimal: CreateCogmapRequest =
+            serde_json::from_str(r#"{"name":"m","telos_title":"t"}"#).unwrap();
+        assert!(minimal.cogmap_id.is_none());
+        assert!(minimal.telos_resource_id.is_none());
+        assert!(minimal.telos.is_none());
+    }
+
+    #[test]
+    fn create_outcome_round_trips() {
+        let o = CreateCogmapOutcome {
+            cogmap_id: uuid::Uuid::now_v7(),
+            telos_resource_id: uuid::Uuid::now_v7(),
+            created: true,
+        };
+        let json = serde_json::to_string(&o).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CreateCogmapOutcome>(&json).unwrap(),
+            o
+        );
     }
 
     #[test]
