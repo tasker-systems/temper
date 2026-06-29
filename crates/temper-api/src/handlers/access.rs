@@ -7,9 +7,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, SystemSettings,
 };
+use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
 use temper_core::types::ids::ProfileId;
+use temper_core::types::team::TeamMemberRow;
 
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
@@ -121,6 +123,58 @@ pub async fn review_request(
     };
 
     access_service::review_request(&state.pool, params)
+        .await
+        .map(Json)
+}
+
+/// GET /api/access/admin/settings — read FULL system settings (admin only).
+///
+/// Unlike the public `GET /api/access/settings`, this returns `gating_team_slug`
+/// and `updated`, which an admin needs to administer the gate.
+pub async fn get_admin_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<SystemSettings>> {
+    let is_admin =
+        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    if !is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    access_service::get_system_settings(&state.pool)
+        .await
+        .map(Json)
+}
+
+/// PATCH /api/access/admin/settings — partial update of system settings (admin only).
+pub async fn update_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<UpdateSettingsRequest>,
+) -> ApiResult<Json<SystemSettings>> {
+    let is_admin =
+        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    if !is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    access_service::update_system_settings(&state.pool, &body)
+        .await
+        .map(Json)
+}
+
+/// POST /api/access/admin/promote — grant a profile `owner` on a team (admin only).
+///
+/// `team_id` omitted ⇒ the configured gating team (mints a second system admin).
+pub async fn promote_admin(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<PromoteAdminRequest>,
+) -> ApiResult<Json<TeamMemberRow>> {
+    let is_admin =
+        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    if !is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    access_service::promote_admin(&state.pool, body.profile_id, body.team_id)
         .await
         .map(Json)
 }

@@ -1,7 +1,7 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction, InvocationCmd,
-    ResourceAction, SkillAction, TeamAction,
+    AdminAction, AdminRequestsAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
+    ContextAction, InvocationCmd, ResourceAction, SkillAction, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -341,6 +341,65 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::team::list_remote(client, output_format).await
                 })
             }),
+        },
+        Commands::Admin { action } => match action {
+            AdminAction::Settings {
+                access_mode,
+                gating_team_slug,
+                instance_name,
+                terms_version,
+                terms_resource_uri,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    let req = temper_core::types::admin::UpdateSettingsRequest {
+                        access_mode,
+                        gating_team_slug,
+                        instance_name,
+                        terms_version,
+                        terms_resource_uri,
+                    };
+                    temper_cli::commands::admin::settings_remote(client, req, output_format).await
+                })
+            }),
+            AdminAction::Promote { profile, team } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin::promote_remote(
+                            client,
+                            &profile,
+                            team.as_deref(),
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            AdminAction::Requests { action } => match action {
+                AdminRequestsAction::List => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin::requests_list_remote(client, output_format)
+                            .await
+                    })
+                }),
+                AdminRequestsAction::Review {
+                    id,
+                    approve,
+                    reject,
+                    note,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin::requests_review_remote(
+                            client,
+                            &id,
+                            approve,
+                            reject,
+                            note.as_deref(),
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+            },
         },
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(output_format),

@@ -15,7 +15,9 @@ use temper_core::types::access_gate::{
     AccessMode, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
     PublicSystemSettings, SystemSettings,
 };
+use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::team::{TeamMemberRow, TeamRole};
 
 use crate::error::{ApiError, ApiResult};
 
@@ -111,6 +113,160 @@ pub async fn get_public_settings(pool: &PgPool) -> ApiResult<PublicSystemSetting
     get_system_settings(pool)
         .await
         .map(PublicSystemSettings::from)
+}
+
+/// Admin-only partial update of the singleton `kb_system_settings` row.
+///
+/// COALESCE semantics: each `Some` field overwrites its column; each `None`
+/// leaves the column unchanged. `access_mode` is validated against
+/// `{open, invite_only}`. Guards against the lockout footgun: an effective
+/// `invite_only` mode with no `gating_team_slug` would make `has_system_access`
+/// false for everyone, so it is rejected.
+pub async fn update_system_settings(
+    pool: &PgPool,
+    req: &UpdateSettingsRequest,
+) -> ApiResult<SystemSettings> {
+    // Validate access_mode (parse-don't-validate against the DB CHECK).
+    if let Some(mode) = req.access_mode.as_deref() {
+        if AccessMode::from_db_str(mode).is_none() {
+            return Err(ApiError::BadRequest(format!(
+                "invalid access_mode {mode:?} (expected 'open' or 'invite_only')"
+            )));
+        }
+    }
+
+    // Compute the EFFECTIVE post-update mode + gating slug to guard lockout.
+    let current = get_system_settings(pool).await?;
+    let effective_mode = req
+        .access_mode
+        .clone()
+        .unwrap_or(current.access_mode.clone());
+    let effective_gating = req
+        .gating_team_slug
+        .clone()
+        .or(current.gating_team_slug.clone());
+    if effective_mode == "invite_only" && effective_gating.is_none() {
+        return Err(ApiError::BadRequest(
+            "invite_only mode requires a gating_team_slug (set --gating-team in the same call \
+             or beforehand) — otherwise no one can access the instance"
+                .to_string(),
+        ));
+    }
+    // Guard: if the effective gating slug names a team that doesn't exist,
+    // enabling invite_only would lock everyone out.
+    if effective_mode == "invite_only" {
+        if let Some(ref slug) = effective_gating {
+            let exists: bool = sqlx::query_scalar!(
+                "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+                slug
+            )
+            .fetch_one(pool)
+            .await?
+            .unwrap_or(false);
+            if !exists {
+                return Err(ApiError::BadRequest(format!(
+                    "gating_team_slug '{slug}' does not exist — create the team before enabling invite_only"
+                )));
+            }
+        }
+    }
+
+    let row = sqlx::query_as!(
+        SystemSettings,
+        r#"
+        UPDATE kb_system_settings
+           SET access_mode        = COALESCE($1, access_mode),
+               gating_team_slug   = COALESCE($2, gating_team_slug),
+               instance_name      = COALESCE($3, instance_name),
+               terms_version      = COALESCE($4, terms_version),
+               terms_resource_uri = COALESCE($5, terms_resource_uri),
+               updated            = now()
+         WHERE id = 1
+        RETURNING id, access_mode, gating_team_slug, terms_version,
+                  terms_resource_uri, instance_name, updated
+        "#,
+        req.access_mode,
+        req.gating_team_slug,
+        req.instance_name,
+        req.terms_version,
+        req.terms_resource_uri,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// Admin-only: grant `profile_id` the `owner` role on a team (idempotent).
+///
+/// `team_id == None` resolves to the configured gating team — system-admin ≡
+/// owner of the gating team, so this mints a second system admin. Decoupled
+/// from `kb_profiles.system_access` (the auth gate reads gating-team ownership,
+/// not the enum). Auth is enforced by the caller (handler `is_system_admin`).
+pub async fn promote_admin(
+    pool: &PgPool,
+    profile_id: Uuid,
+    team_id: Option<Uuid>,
+) -> ApiResult<TeamMemberRow> {
+    // Resolve the target team: explicit, else the configured gating team.
+    let target_team = match team_id {
+        Some(id) => {
+            let exists: bool =
+                sqlx::query_scalar!("SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1)", id)
+                    .fetch_one(pool)
+                    .await?
+                    .unwrap_or(false);
+            if !exists {
+                return Err(ApiError::BadRequest(format!("team '{id}' does not exist")));
+            }
+            id
+        }
+        None => {
+            let settings = get_system_settings(pool).await?;
+            let Some(slug) = settings.gating_team_slug else {
+                return Err(ApiError::BadRequest(
+                    "no gating team configured; pass --team to promote on a specific team"
+                        .to_string(),
+                ));
+            };
+            sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!("gating team '{slug}' does not exist"))
+                })?
+        }
+    };
+
+    // Validate the target profile exists before writing.
+    let profile_exists: bool = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1)",
+        profile_id
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    if !profile_exists {
+        return Err(ApiError::BadRequest(format!(
+            "profile '{profile_id}' does not exist"
+        )));
+    }
+
+    let row = sqlx::query_as!(
+        TeamMemberRow,
+        r#"
+        INSERT INTO kb_team_members (team_id, profile_id, role)
+        VALUES ($1, $2, 'owner')
+        ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role
+        RETURNING team_id, profile_id, role AS "role: TeamRole", created
+        "#,
+        target_team,
+        profile_id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +507,16 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
             ON CONFLICT (team_id, profile_id) DO NOTHING
             "#,
             row.team_id,
+            row.requesting_profile_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // Now that gating-team membership establishes access, enroll the
+        // profile into the rest of the auto-join "everyone" pool (Chunk 1's
+        // deferred call site). No-op if has_system_access is still false.
+        sqlx::query!(
+            "SELECT ensure_auto_join_memberships($1)",
             row.requesting_profile_id,
         )
         .execute(&mut *tx)
