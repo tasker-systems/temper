@@ -6,8 +6,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_api::backend::substrate_read::cogmap_shape_select;
 use temper_core::types::ids::ProfileId;
+use temper_services::backend::substrate_read::cogmap_shape_select;
 
 mod common;
 

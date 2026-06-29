@@ -11,11 +11,11 @@ ignored = ["base64", "rmp-serde", "serde_json"]
 test-db = []
 # Enables tests that exercise the CLI-side embed pipeline (compute_body_chunks /
 # build_ingest_payload). Requires ONNX Runtime at test time. CI runs these in
-# the dedicated "Embed & MCP Round-Trip Tests" job. Also enables
-# temper-api/ingest-pipeline so the in-process server can run the body-trio
-# pipeline on PATCH /api/resources/{id} — Phase 3b tightened that handler to
-# always recompute server-side, so cloud body-update tests now require both.
-test-embed = ["temper-cli/test-embed", "temper-api/ingest-pipeline"]
+# the dedicated "Embed & MCP Round-Trip Tests" job. The in-process server's
+# body-trio recompute on PATCH /api/resources/{id} (Phase 3b tightened that
+# handler to always recompute server-side) links ort unconditionally via
+# temper-substrate → temper-ingest(embed), so no api-side feature is needed.
+test-embed = ["temper-cli/test-embed"]
 
 [dev-dependencies]
 axum = "0.8"
@@ -36,6 +36,7 @@ sqlx = { version = "0.8", features = [
   "runtime-tokio-rustls"
 ] }
 temper-api = { path = "../../crates/temper-api" }
+temper-services = { path = "../../crates/temper-services" }
 temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }

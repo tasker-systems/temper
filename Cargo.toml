@@ -17,7 +17,8 @@ name = "mcp"
 path = "api/mcp.rs"
 
 [dependencies]
-temper-api = { path = "crates/temper-api", features = ["ingest-pipeline"] }
+temper-api = { path = "crates/temper-api" }
+temper-services = { path = "crates/temper-services" }
 temper-mcp = { path = "crates/temper-mcp" }
 vercel_runtime = { version = "2", features = ["axum"] }
 tokio = { version = "1", features = ["full"] }

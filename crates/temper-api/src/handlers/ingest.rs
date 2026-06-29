@@ -2,10 +2,10 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
-use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
-use crate::state::AppState;
+use temper_services::backend::DbBackend;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::state::AppState;
 
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -36,7 +36,7 @@ pub async fn create(
         parse_context_ref(&payload.context_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Resolve to a ContextId, visibility-gated to the calling principal.
-    let context = crate::services::context_service::resolve_context_ref(
+    let context = temper_services::services::context_service::resolve_context_ref(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         &cref,

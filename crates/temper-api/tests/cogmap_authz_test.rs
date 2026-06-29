@@ -11,9 +11,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_api::error::ApiError;
-use temper_api::services::access_service;
 use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_services::error::ApiError;
+use temper_services::services::access_service;
 
 mod common;
 

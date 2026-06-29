@@ -16,12 +16,12 @@ mod common;
 
 use uuid::Uuid;
 
-use temper_api::config::ApiConfig;
-use temper_api::state::{AppState, JwksKeyStore};
 use temper_core::types::authorship::ActInput;
 use temper_core::types::ids::InvocationId;
 use temper_core::types::invocation_requests::OpenInvocationRequest;
 use temper_core::types::ConfidenceBand;
+use temper_services::config::ApiConfig;
+use temper_services::state::{AppState, JwksKeyStore};
 
 /// The L0 kernel cognitive map reserved id (birth migration `20260625000001`) — the invocation's
 /// originating cogmap; root-team membership (via `enable_invite_only`) grants the READ that the

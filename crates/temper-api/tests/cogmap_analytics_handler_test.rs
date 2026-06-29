@@ -7,8 +7,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_api::backend::substrate_read::{cogmap_analytics_select, cogmap_region_metrics_select};
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_services::backend::substrate_read::{
+    cogmap_analytics_select, cogmap_region_metrics_select,
+};
 
 mod common;
 

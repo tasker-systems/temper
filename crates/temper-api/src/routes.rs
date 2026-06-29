@@ -10,7 +10,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::handlers;
 use crate::middleware::auth;
 use crate::openapi::ApiDoc;
-use crate::state::AppState;
+use temper_services::state::AppState;
 
 pub fn create_app(state: AppState) -> Router {
     use axum::routing::{delete, get, post, put};
@@ -198,8 +198,10 @@ async fn fallback_handler(req: axum::extract::Request) -> axum::response::Respon
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
     tracing::warn!(path = %path, method = %method, "unmatched route");
-    let body =
-        crate::error::ErrorBody::new("NOT_FOUND", format!("No route matches {method} {path}"));
+    let body = temper_services::error::ErrorBody::new(
+        "NOT_FOUND",
+        format!("No route matches {method} {path}"),
+    );
     (axum::http::StatusCode::NOT_FOUND, axum::Json(body)).into_response()
 }
 

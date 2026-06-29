@@ -1,0 +1,30 @@
+[package]
+name = "temper-services"
+version = "0.1.0"
+edition = "2021"
+description = "Shared business-logic + auth-infra layer for temper-api and temper-mcp"
+
+[dependencies]
+temper-core = { path = "../temper-core", features = ["web-api"] }
+temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
+temper-substrate = { path = "../temper-substrate" }
+async-trait = "0.1"
+axum = { version = "0.8", features = ["json"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid"] }
+tokio = { version = "1", features = ["sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tracing = "0.1"
+thiserror = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+
+[features]
+test-db = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+serde_yaml = "0.9"

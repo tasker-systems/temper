@@ -5,8 +5,8 @@
 //! Wire-supplied `content_hash`/`chunks_packed` fields are silently ignored.
 //!
 //! Tests that verify body persistence (hash update, chunk dedupe, combined
-//! body+meta) are gated on `test-embed` because `prepare_body_trio` requires
-//! the `ingest-pipeline` feature (ONNX Runtime).
+//! body+meta) are gated on `test-embed` because they need the bge ONNX model
+//! present at runtime to recompute real chunks server-side.
 //!
 //! The `update_response_includes_body_hash` test is safe under `test-db` only
 //! because it does a meta-only PATCH (no content body sent).

@@ -3,9 +3,9 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use temper_api::config::ApiConfig;
 use temper_api::routes::create_app;
-use temper_api::state::{AppState, JwksKeyStore};
+use temper_services::config::ApiConfig;
+use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() {

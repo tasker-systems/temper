@@ -8,13 +8,13 @@
 
 use rmcp::model::CallToolResult;
 
-use temper_api::backend::DbBackend;
 use temper_core::error::TemperError;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::invocation::{
     InvocationCloseInput, InvocationListInput, InvocationOpenInput, InvocationShowInput,
 };
 use temper_core::types::invocation_requests::{InvocationAck, InvocationCloseAck};
+use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation, Surface};
 
 use crate::service::TemperMcpService;
@@ -128,7 +128,7 @@ pub async fn invocation_show(
     let profile = svc.require_profile().await?;
     let invocation = parse_invocation(&input.invocation)?;
 
-    let view = temper_api::backend::substrate_read::invocation_show_select(
+    let view = temper_services::backend::substrate_read::invocation_show_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         invocation,
@@ -153,7 +153,7 @@ pub async fn invocation_list(
         None => None,
     };
 
-    let rows = temper_api::backend::substrate_read::invocation_list_select(
+    let rows = temper_services::backend::substrate_read::invocation_list_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         cogmap,

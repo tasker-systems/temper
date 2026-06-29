@@ -11,7 +11,7 @@ use rmcp::transport::streamable_http_server::{
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
-use temper_api::state::AppState;
+use temper_services::state::AppState;
 
 use crate::config::McpConfig;
 use crate::discovery;

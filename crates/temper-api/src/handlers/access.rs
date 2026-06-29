@@ -13,10 +13,10 @@ use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::TeamMemberRow;
 
-use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
-use crate::services::access_service;
-use crate::state::AppState;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::services::access_service;
+use temper_services::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Request body types

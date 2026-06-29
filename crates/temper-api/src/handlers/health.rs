@@ -2,7 +2,7 @@ use axum::Json;
 
 use temper_core::types::api::HealthResponse;
 
-use crate::error::ApiResult;
+use temper_services::error::ApiResult;
 
 #[utoipa::path(
     get,

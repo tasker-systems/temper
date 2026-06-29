@@ -2,8 +2,8 @@
 
 mod common;
 
-use temper_api::services::access_service;
 use temper_core::types::admin::UpdateSettingsRequest;
+use temper_services::services::access_service;
 use uuid::Uuid;
 
 /// Seed the singleton settings row to a known baseline (the seed migration
@@ -46,7 +46,10 @@ async fn update_settings_rejects_unknown_access_mode(pool: sqlx::PgPool) {
     let err = access_service::update_system_settings(&pool, &req)
         .await
         .expect_err("should reject");
-    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+    assert!(matches!(
+        err,
+        temper_services::error::ApiError::BadRequest(_)
+    ));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -60,7 +63,10 @@ async fn update_settings_invite_only_requires_gating_team(pool: sqlx::PgPool) {
     let err = access_service::update_system_settings(&pool, &req)
         .await
         .expect_err("invite_only without a gating team should be rejected");
-    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+    assert!(matches!(
+        err,
+        temper_services::error::ApiError::BadRequest(_)
+    ));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -107,7 +113,10 @@ async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool)
     let err = access_service::promote_admin(&pool, profile, None)
         .await
         .expect_err("no target team");
-    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+    assert!(matches!(
+        err,
+        temper_services::error::ApiError::BadRequest(_)
+    ));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -122,7 +131,10 @@ async fn update_settings_invite_only_rejects_nonexistent_gating_team(pool: sqlx:
     let err = access_service::update_system_settings(&pool, &req)
         .await
         .expect_err("invite_only with a nonexistent gating team should be rejected");
-    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+    assert!(matches!(
+        err,
+        temper_services::error::ApiError::BadRequest(_)
+    ));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -134,7 +146,10 @@ async fn promote_admin_rejects_nonexistent_team(pool: sqlx::PgPool) {
     let err = access_service::promote_admin(&pool, profile, Some(bad_team_id))
         .await
         .expect_err("explicit nonexistent team should be rejected");
-    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+    assert!(matches!(
+        err,
+        temper_services::error::ApiError::BadRequest(_)
+    ));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -158,7 +173,10 @@ async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
     let err = access_service::promote_admin(&pool, bad_profile_id, None)
         .await
         .expect_err("nonexistent profile should be rejected");
-    assert!(matches!(err, temper_api::error::ApiError::BadRequest(_)));
+    assert!(matches!(
+        err,
+        temper_services::error::ApiError::BadRequest(_)
+    ));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

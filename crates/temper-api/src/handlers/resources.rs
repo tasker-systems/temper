@@ -2,15 +2,15 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
-use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
-use crate::services::context_service;
-use crate::services::resource_service::{
+use temper_services::backend::DbBackend;
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::services::context_service;
+use temper_services::services::resource_service::{
     ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
     ResourceUpdateRequest,
 };
-use crate::state::AppState;
+use temper_services::state::AppState;
 
 use temper_core::context_ref::ContextRef;
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -55,7 +55,7 @@ pub async fn list(
     Query(params): Query<ResourceListParams>,
 ) -> ApiResult<ListResourcesResponse> {
     if params.meta_only.unwrap_or(false) {
-        let response = crate::backend::substrate_read::list_meta_select(
+        let response = temper_services::backend::substrate_read::list_meta_select(
             &state.pool,
             ProfileId::from(auth.0.profile.id),
             params,
@@ -63,7 +63,7 @@ pub async fn list(
         .await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
-        let response = crate::backend::substrate_read::list_select(
+        let response = temper_services::backend::substrate_read::list_select(
             &state.pool,
             ProfileId::from(auth.0.profile.id),
             params,
@@ -119,7 +119,7 @@ pub async fn get_content(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
-    crate::backend::substrate_read::get_content_select(
+    temper_services::backend::substrate_read::get_content_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         ResourceId::from(resource_id),

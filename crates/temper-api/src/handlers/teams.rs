@@ -7,12 +7,12 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
 use crate::middleware::auth::AuthUser;
-use crate::services::team_service;
-use crate::state::AppState;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamMemberRow, TeamRow};
+use temper_services::error::ApiResult;
+use temper_services::services::team_service;
+use temper_services::state::AppState;
 
 #[utoipa::path(
     get,

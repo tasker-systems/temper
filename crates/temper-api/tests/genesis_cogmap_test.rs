@@ -14,13 +14,13 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_api::backend::DbBackend;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_core::types::reconcile::{
     CreateCogmapRequest, ReconcileCogmapRequest, ReconcileEntry, ReconcileTelos,
     ReconcileTelosBlock,
 };
+use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, CreateCognitiveMap, ReconcileCognitiveMap, Surface};
 
 // ── builders ────────────────────────────────────────────────────────────────────

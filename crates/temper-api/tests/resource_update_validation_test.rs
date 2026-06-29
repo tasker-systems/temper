@@ -6,8 +6,8 @@
 //! - Wire-supplied `content_hash` and `chunks_packed` are intentionally ignored;
 //!   the server recomputes them from `content` via `prepare_body_trio`.
 //! - Sending `content` without `content_hash` or `chunks_packed` is now valid
-//!   (server fills in the pair). Without the `ingest-pipeline` feature, the
-//!   server returns 400 because `prepare_body_trio` is not available.
+//!   (server fills in the pair) — the substrate computes the structural
+//!   `body_hash` inline, independent of the embed pipeline.
 //! - Sending only `content_hash` or `chunks_packed` without `content` is now a
 //!   meta-only no-op — wire hash/chunks fields are silently ignored and the
 //!   request succeeds with no body change (200).
@@ -67,12 +67,10 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// PATCH with content but no content_hash succeeds (200) even without the
-/// `ingest-pipeline` feature. WS6 collapse retired the all-or-nothing 400 guard:
-/// the substrate computes the structural `body_hash` inline (`body_hash_for_body`,
-/// Task F), independent of the embed pipeline, so a content PATCH no longer
-/// requires a wire-supplied hash/chunks pair.
-#[cfg(not(feature = "ingest-pipeline"))]
+/// PATCH with content but no content_hash succeeds (200). WS6 collapse retired
+/// the all-or-nothing 400 guard: the substrate computes the structural
+/// `body_hash` inline (`body_hash_for_body`, Task F), independent of the embed
+/// pipeline, so a content PATCH no longer requires a wire-supplied hash/chunks pair.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn patch_with_content_without_pipeline_succeeds(pool: PgPool) {
     let app = common::setup_test_app(pool).await;

@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use std::path::Path;
 use uuid::Uuid;
 
-use temper_api::services::graph_service::{aggregator_subgraph, AggregatorSubgraphParams};
+use temper_services::services::graph_service::{aggregator_subgraph, AggregatorSubgraphParams};
 use temper_workflow::frontmatter::document::DocType;
 
 // Well-known UUIDs from scripts/seed-graph-fixtures.sql.

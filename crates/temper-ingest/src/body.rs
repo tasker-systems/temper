@@ -1,15 +1,8 @@
-//! Shared body-trio computation for create/update resource flows.
-//!
-//! Both `temper-api` (server-side, `DbBackend::update_resource`) and
-//! `temper-cli` (client-side, `CloudBackend::update_resource`) need to compute
-//! `(content_hash, chunks_packed)` for a body when the caller didn't pre-compute
-//! it. Lives here because the success path needs `temper_ingest::pipeline::prepare_markdown`,
-//! which is not reachable from `temper-core` (would create a circular dep —
-//! `temper-ingest` already depends on `temper-core`).
-//!
-//! Callers keep their own no-pipeline fallback (CLI's `embed` feature off, API's
-//! `ingest-pipeline` feature off) because the higher-level feature gate is
-//! caller-driven, not pipeline-driven.
+//! Shared body-trio computation helper: computes `(content_hash, chunks_packed)`
+//! for a body when the caller didn't pre-compute it. Lives here because the
+//! success path needs `temper_ingest::pipeline::prepare_markdown`, which is not
+//! reachable from `temper-core` (would create a circular dep — `temper-ingest`
+//! already depends on `temper-core`).
 //!
 //! Gated alongside `pipeline` on `embed` / `embed-download` at the lib.rs level,
 //! which is what makes `prepare_markdown` available.

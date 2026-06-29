@@ -6,15 +6,15 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::DbBackend;
-use temper_api::error::ApiError;
-use temper_api::services::{access_service, cogmap_service};
 use temper_core::error::TemperError;
 use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
 };
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reconcile::CreateCogmapRequest;
+use temper_services::backend::DbBackend;
+use temper_services::error::ApiError;
+use temper_services::services::{access_service, cogmap_service};
 use temper_workflow::operations::{Backend, CreateCognitiveMap, Surface};
 
 use crate::service::TemperMcpService;
@@ -38,7 +38,7 @@ pub async fn cogmap_shape(
         None => None,
     };
 
-    let rows = temper_api::backend::substrate_read::cogmap_shape_select(
+    let rows = temper_services::backend::substrate_read::cogmap_shape_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         cogmap_id,
@@ -71,7 +71,7 @@ pub async fn cogmap_region_metrics(
         None => None,
     };
 
-    let rows = temper_api::backend::substrate_read::cogmap_region_metrics_select(
+    let rows = temper_services::backend::substrate_read::cogmap_region_metrics_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         cogmap_id,
@@ -98,7 +98,7 @@ pub async fn cogmap_analytics(
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
 
-    let got = temper_api::backend::substrate_read::cogmap_analytics_select(
+    let got = temper_services::backend::substrate_read::cogmap_analytics_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         cogmap_id,
