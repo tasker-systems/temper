@@ -1,0 +1,54 @@
+# Org-identity cognitive map — GENESIS manifest.
+#
+# Consumed by:  temper cogmap create --manifest schema-artifact/manifests/org-identity.yaml
+#
+# This is an EXAMPLE org-identity map an operator delivers during bootstrap (Chunk 7 of the
+# org-provisioning + bootstrap surface). It is to a self-hosted org what the L0 kernel
+# (schema-artifact/manifests/l0-kernel.yaml) is to temper itself: the bottom-referent "what is
+# THIS org" map, born populated with a telos charter and later bound to the org's everyone-team
+# so it reaches the org's shared corpus.
+#
+# Replace the prose below with your org's identity. Keep the SHAPE:
+#   - `name`         — the map's display name.
+#   - `telos_title`  — the title of the telos charter resource the map is born with.
+#   - `telos`        — the authored charter (statement + questions-with-context + framing).
+#                      Embedded CLIENT-SIDE by the CLI (ONNX) before the POST, so the server stays
+#                      embed-free on the request path.
+#
+# IDENTITY: omit `cogmap_id` / `telos_resource_id` and the CLI mints stable uuidv7s for you and
+# prints them. Pin them here (uncomment + paste the printed ids) once you want a reproducible,
+# re-runnable genesis — a re-run at the same id is an idempotent no-op (`created: false`).
+#
+#   cogmap_id: "019f1600-0000-7000-8000-000000000001"
+#   telos_resource_id: "019f1600-0000-7000-8000-000000000002"
+
+name: "Acme — organizational foundation"
+telos_title: "Acme organizational telos"
+telos:
+  statement: >-
+    Orient an agent or member arriving into Acme's temper instance so it can act correctly under
+    this org's settled way of working — by holding what Acme is, the shared vocabulary its corpus
+    is written in, the invariants it must not break, and the wayfinding that routes to the right
+    team, context, and more-specific map. This is the org's bottom-referent: every domain map is
+    situated by it and routes through it.
+  questions:
+    - question: >-
+        Is this something an arriving member needs the moment they join to know what Acme is and
+        where they stand — the org's mission, its teams, the contexts work lives in?
+      context: "The first thing anyone asks is where am I. Hold the few situating landmarks, not their depth."
+    - question: >-
+        Is this a shared term an agent must know to read Acme's corpus at all, versus jargon a
+        specific team or domain map can own?
+      context: "Shared vocabulary is the floor for collaboration; deeper or team-local terms live where they are used."
+    - question: >-
+        Is this a settled way-of-working an agent must not break — review gates, what needs a human,
+        which acts are not an agent's to make on this org's behalf?
+      context: "State the always/nevers plainly as landmarks; a weaker model will not infer them."
+    - question: >-
+        When a member or agent needs to do something here, does this map name the team, context, or
+        more-specific map to reach for — and make reaching the obvious next move?
+      context: "Routing is the org map's keep: need X, the place is Y, go there."
+  framing:
+    - "This map is the org's self-portrait: what Acme is, mapped in Acme's own temper substrate."
+    - "It is a reference layer — born curated, not accreted from work — and every domain map routes through it."
+    - "Authored for the arriving member or agent: invariant-forward, scannable, landmark-shaped."
