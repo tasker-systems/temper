@@ -68,6 +68,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         open_meta,
         managed_hash: "sha256:placeholder_managed_hash".to_string(),
         open_hash: "sha256:placeholder_open_hash".to_string(),
+        act: Default::default(),
     };
 
     // PUT /api/resources/:id/meta via reqwest
@@ -214,6 +215,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         }),
         managed_hash: "sha256:new_managed_hash_placeholder".to_string(),
         open_hash: "sha256:new_open_hash_placeholder".to_string(),
+        act: Default::default(),
     };
 
     let resp = app
@@ -337,6 +339,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:second_user".to_string(),
         open_hash: "sha256:second_user".to_string(),
+        act: Default::default(),
     };
     let resp = app
         .reqwest_client
@@ -363,6 +366,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:ghost".to_string(),
         open_hash: "sha256:ghost".to_string(),
+        act: Default::default(),
     };
     let resp = app
         .reqwest_client
@@ -396,6 +400,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:bad_doctype".to_string(),
         open_hash: "sha256:bad_doctype".to_string(),
+        act: Default::default(),
     };
     let resp = app
         .reqwest_client

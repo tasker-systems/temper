@@ -412,9 +412,12 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
     fire_with(conn, action, EventContext::default()).await
 }
 
-/// Fire one seeding action under an explicit [`EventContext`] (authorship + invocation). The four
-/// authored-act arms thread `ctx` into their SQL calls (→ `kb_events.metadata`/`invocation_id`); all
-/// other arms ignore it. [`fire`] is the `EventContext::default()` delegate.
+/// Fire one seeding action under an explicit [`EventContext`] (authorship + invocation). Every
+/// correlatable mutation arm threads `ctx` into its SQL call (→ `kb_events.metadata`/`invocation_id`):
+/// the authored-4 (`ResourceCreate`/`RelationshipAssert`/`FacetSet`/`RelationshipFold`) plus the
+/// non-authored writes (`ResourceUpdate`/`ResourceDelete`/`ResourceRehome`/`PropertySet`/`BlockMutate`/
+/// `CharterSet`/`RelationshipRetype`/`RelationshipReweight`). The pure-seed/lens/materialize arms (and
+/// the legacy 2-arg `PropertyAssert`) ignore it. [`fire`] is the `EventContext::default()` delegate.
 pub async fn fire_with(
     conn: &mut sqlx::PgConnection,
     action: SeedAction<'_>,

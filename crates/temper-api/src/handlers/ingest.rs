@@ -120,6 +120,7 @@ pub async fn update(
         })
     };
 
+    let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         body,
@@ -127,7 +128,7 @@ pub async fn update(
         open_meta: payload.open_meta,
         move_to: None,
         context_ref: None,
-        act: Default::default(),
+        act,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
