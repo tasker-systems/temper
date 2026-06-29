@@ -14,12 +14,12 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_api::backend::DbBackend;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_core::types::reconcile::{
     ReconcileCogmapRequest, ReconcileEdge, ReconcileEntry, ReconcileTombstone,
 };
+use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);

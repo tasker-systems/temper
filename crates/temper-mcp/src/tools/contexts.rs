@@ -20,7 +20,7 @@ pub struct GetContextInput {
 pub async fn list_contexts(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let rows = temper_api::services::context_service::list_visible(
+    let rows = temper_services::services::context_service::list_visible(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
     )
@@ -39,7 +39,7 @@ pub async fn get_context(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let row = temper_api::services::context_service::get_visible(
+    let row = temper_services::services::context_service::get_visible(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         ContextId::from(input.id),
@@ -60,7 +60,7 @@ pub async fn create_context(
     let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
 
-    let (owner_table, owner_id) = temper_api::services::context_service::resolve_create_owner(
+    let (owner_table, owner_id) = temper_services::services::context_service::resolve_create_owner(
         &svc.api_state.pool,
         caller,
         input.owner.as_ref(),
@@ -68,7 +68,7 @@ pub async fn create_context(
     .await
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to resolve owner: {e}"), None))?;
 
-    let row = temper_api::services::context_service::create(
+    let row = temper_services::services::context_service::create(
         &svc.api_state.pool,
         &owner_table,
         owner_id,

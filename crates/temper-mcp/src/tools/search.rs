@@ -13,7 +13,7 @@ pub async fn search(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let rows = temper_api::backend::substrate_read::search_select(
+    let rows = temper_services::backend::substrate_read::search_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         input,

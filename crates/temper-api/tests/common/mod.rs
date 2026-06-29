@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
-use temper_api::{
+use temper_api::create_app;
+use temper_services::{
     config::ApiConfig,
-    create_app,
     state::{AppState, JwksKeyStore},
 };
 

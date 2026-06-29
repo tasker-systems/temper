@@ -14,12 +14,12 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_api::error::ApiError;
-use temper_api::services::{context_service, team_service};
 use temper_core::context_ref::{parse_context_ref, ContextOwnerRef};
 use temper_core::types::context::ContextRow;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamRole};
+use temper_services::error::ApiError;
+use temper_services::services::{context_service, team_service};
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

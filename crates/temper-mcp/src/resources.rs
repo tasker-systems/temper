@@ -11,9 +11,9 @@ use rmcp::model::{
 };
 use uuid::Uuid;
 
-use temper_api::state::AppState;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::Profile;
+use temper_services::state::AppState;
 
 /// Page size for the resource-browsing list calls. MCP resource listing is a
 /// flat browse surface (no client-driven pagination), so we cap each fetch at a
@@ -35,7 +35,7 @@ pub async fn list_resources(
         ..Default::default()
     };
 
-    let response = temper_api::backend::substrate_read::list_select(
+    let response = temper_services::backend::substrate_read::list_select(
         &state.pool,
         ProfileId::from(profile.id),
         params,
@@ -112,7 +112,7 @@ pub async fn read_resource(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let content = temper_api::backend::substrate_read::get_content_select(
+        let content = temper_services::backend::substrate_read::get_content_select(
             &state.pool,
             ProfileId::from(profile.id),
             ResourceId::from(id),
@@ -134,7 +134,7 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let row = temper_api::backend::substrate_read::show_select(
+        let row = temper_services::backend::substrate_read::show_select(
             &state.pool,
             ProfileId::from(profile.id),
             ResourceId::from(id),
@@ -144,7 +144,7 @@ pub async fn read_resource(
             rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
         })?;
 
-        let content = temper_api::backend::substrate_read::get_content_select(
+        let content = temper_services::backend::substrate_read::get_content_select(
             &state.pool,
             ProfileId::from(profile.id),
             ResourceId::from(id),
@@ -178,7 +178,7 @@ pub async fn read_resource(
                 None,
             )
         })?;
-        let context_id = temper_api::services::context_service::resolve_context_ref(
+        let context_id = temper_services::services::context_service::resolve_context_ref(
             &state.pool,
             temper_core::types::ids::ProfileId::from(profile.id),
             &r,
@@ -197,7 +197,7 @@ pub async fn read_resource(
             ..Default::default()
         };
 
-        let response = temper_api::backend::substrate_read::list_select(
+        let response = temper_services::backend::substrate_read::list_select(
             &state.pool,
             ProfileId::from(profile.id),
             params,
