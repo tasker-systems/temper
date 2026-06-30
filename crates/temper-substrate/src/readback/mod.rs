@@ -1131,6 +1131,39 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     Ok(hits)
 }
 
+/// Request parameters for [`wayfind_scope_ids`] (params struct). Borrowed embedding view; the caller
+/// owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under that lens's
+/// `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None` `regions` ⇒ the
+/// SQL `k`-CTE default.
+#[derive(Debug, Clone)]
+pub struct WayfindScopeQuery<'a> {
+    pub principal: Uuid,
+    pub lens_id: Option<Uuid>,
+    pub embedding: Option<&'a [f32]>,
+    pub regions: Option<i32>,
+}
+
+/// Surface B Half 2: resolve the wayfind bounding resource-id set — the region-salience funnel across
+/// the principal's visible maps, UNION the direct homed scope of region-less/thin maps (spec §4/§5).
+/// The returned ids feed `unified_search` as `p_scope_ids`; this function only establishes scope.
+///
+/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
+/// macros (the same established exception as [`unified_search`] / [`vector_search`]). All tuning
+/// constants (α/β, default/ceiling N, thin threshold, recall floor, normalization) live in the SQL
+/// function's `k` CTE, never here. Gate is in the SQL at every stage: a principal who can see no maps
+/// gets zero rows, never an error.
+pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Result<Vec<Uuid>> {
+    let emb_text = q.embedding.map(format_pgvector);
+    let ids: Vec<(Uuid,)> = sqlx::query_as("SELECT wayfind_scope_ids($1, $2, $3::vector, $4)")
+        .bind(q.principal)
+        .bind(q.lens_id)
+        .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
+        .bind(q.regions)
+        .fetch_all(pool)
+        .await?;
+    Ok(ids.into_iter().map(|(id,)| id).collect())
+}
+
 /// One region's analytics-tier scalar metrics, as returned by `cogmap_region_metrics`. The stored
 /// readout columns of `kb_cogmap_regions` (computed once at materialization). Substrate-local; the
 /// `temper-api` wrapper maps this to the `CogmapRegionMetricsRow` wire type.
