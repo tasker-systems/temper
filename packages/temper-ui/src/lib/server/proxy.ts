@@ -41,18 +41,44 @@ export function buildUpstreamUrl(upstreamBase: string, pathname: string, search:
 }
 
 /**
- * Forward the inbound request to the configured upstream, preserving method,
- * headers (incl. cookies/authorization), body, and query. The upstream response
- * (status, headers, body) is streamed back unchanged.
+ * Forward a request to `upstreamBase`, preserving method, headers (incl.
+ * cookies/authorization), body, and query, and relaying the upstream response.
  *
- * `new Request(target, event.request)` copies the method/headers/body stream and
- * lets fetch manage the `Host` header for the new target URL.
+ * Two details the platform-level rewrite used to handle for us, now ours:
+ *   - `redirect: 'manual'` so an upstream 3xx is relayed to the browser rather
+ *     than followed server-side (OAuth/MCP flows depend on the browser seeing
+ *     the redirect).
+ *   - `fetch` (undici) transparently decompresses the body but leaves the
+ *     upstream's `content-encoding`/`content-length` in place; those now
+ *     mis-describe the decoded bytes, so we strip them before relaying or the
+ *     browser fails to decode the response.
+ *
+ * `new Request(target, request)` copies the method/headers/body stream and lets
+ * fetch manage the `Host` header for the new target URL.
  */
+export async function forwardRequest(
+	upstreamBase: string,
+	pathname: string,
+	search: string,
+	request: Request
+): Promise<Response> {
+	const target = buildUpstreamUrl(upstreamBase, pathname, search);
+	const upstream = await fetch(new Request(target, request), { redirect: 'manual' });
+	const headers = new Headers(upstream.headers);
+	headers.delete('content-encoding');
+	headers.delete('content-length');
+	return new Response(upstream.body, {
+		status: upstream.status,
+		statusText: upstream.statusText,
+		headers
+	});
+}
+
+/** Forward the inbound SvelteKit request to the operator-configured upstream. */
 export async function proxyRequest(event: RequestEvent): Promise<Response> {
 	const upstream = env.API_BASE_URL;
 	if (!upstream) {
 		throw error(500, 'Proxy upstream not configured: set API_BASE_URL');
 	}
-	const target = buildUpstreamUrl(upstream, event.url.pathname, event.url.search);
-	return fetch(new Request(target, event.request));
+	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);
 }
