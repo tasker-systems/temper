@@ -328,6 +328,24 @@ pub async fn search_select(
     params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     let clamped = clamp_search_params(&params);
+
+    // Three mutually-exclusive scope-resolution paths (§6): `context_ref` (Surface A context
+    // scope), `cogmap_id` (single-map Surface B), and `wayfind` (the region-salience discovery
+    // funnel, Surface B Half 2). At most one may be set; more than one is a BadRequest.
+    let scope_selectors = [
+        params.context_ref.is_some(),
+        params.cogmap_id.is_some(),
+        params.wayfind,
+    ]
+    .into_iter()
+    .filter(|&set| set)
+    .count();
+    if scope_selectors > 1 {
+        return Err(ApiError::BadRequest(
+            "context_ref, cogmap_id, and wayfind are mutually exclusive".into(),
+        ));
+    }
+
     // Resolve context_ref → context UUID before the SQL call. A bare name is
     // rejected by `parse_context_ref` (spec Decision 1); an @owner/slug or UUID
     // ref is resolved via `resolve_context_ref` (visibility-gated). Parse error
@@ -344,27 +362,38 @@ pub async fn search_select(
         None => None,
     };
 
-    // Resolve cogmap_id → scope ids (the set of visible homed-resource ids for this map).
-    // Mutually exclusive with context_ref. An empty result set means deny (zero rows), which
-    // correctly yields zero search results via `c.id = ANY('{}')` in the SQL function.
-    let scope_ids: Option<Vec<Uuid>> = match params.cogmap_id {
-        Some(map) => {
-            if context_id.is_some() {
-                return Err(ApiError::BadRequest(
-                    "context_ref and cogmap_id are mutually exclusive".into(),
-                ));
-            }
-            Some(
-                sqlx::query_scalar!("SELECT cogmap_scope_ids($1, $2)", profile_id.uuid(), map)
-                    .fetch_all(pool)
-                    .await
-                    .map_err(api_err)?
-                    .into_iter()
-                    .flatten()
-                    .collect(),
+    // Resolve the active scope selector → scope ids (the bounding visible resource-id set).
+    // `wayfind` runs the region-salience funnel (Task A); `cogmap_id` runs the single-map scope.
+    // An empty result set means deny (zero rows), which correctly yields zero search results via
+    // `c.id = ANY('{}')` in the SQL function — deny is zero rows, never an error.
+    let scope_ids: Option<Vec<Uuid>> = if params.wayfind {
+        Some(
+            readback::wayfind_scope_ids(
+                pool,
+                readback::WayfindScopeQuery {
+                    principal: profile_id.uuid(),
+                    lens_id: params.lens_id,
+                    // The query embedding feeds BOTH region selection here and the blend inside
+                    // `unified_search` below — intentionally the same signal.
+                    embedding: params.embedding.as_deref(),
+                    regions: params.regions.map(|n| n as i32),
+                },
             )
-        }
-        None => None,
+            .await
+            .map_err(api_err)?,
+        )
+    } else if let Some(map) = params.cogmap_id {
+        Some(
+            sqlx::query_scalar!("SELECT cogmap_scope_ids($1, $2)", profile_id.uuid(), map)
+                .fetch_all(pool)
+                .await
+                .map_err(api_err)?
+                .into_iter()
+                .flatten()
+                .collect(),
+        )
+    } else {
+        None
     };
 
     // The wire `seed_ids` arrive as bare uuids; lift to the typed `&[ResourceId]` the query takes.

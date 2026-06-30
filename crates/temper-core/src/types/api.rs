@@ -76,6 +76,17 @@ pub struct SearchParams {
     /// participants the principal can see.
     #[serde(default)]
     pub cogmap_id: Option<Uuid>,
+    /// Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the
+    /// principal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`.
+    #[serde(default)]
+    pub wayfind: bool,
+    /// Optional lens override for wayfind region selection (resolved client-side, trailing-UUID).
+    /// `None` ⇒ each region's memoized salience under its own lens.
+    #[serde(default)]
+    pub lens_id: Option<Uuid>,
+    /// Top-N regions to scope into for wayfind (default/ceiling are SQL-resident). Ignored unless `wayfind`.
+    #[serde(default)]
+    pub regions: Option<i64>,
 }
 
 impl Default for SearchParams {
@@ -93,6 +104,9 @@ impl Default for SearchParams {
             graph_depth: None,
             graph_expand: default_graph_expand(),
             cogmap_id: None,
+            wayfind: false,
+            lens_id: None,
+            regions: None,
         }
     }
 }
