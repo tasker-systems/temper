@@ -10,6 +10,7 @@
 //! zero ids (4); lens override recomputes salience from the stored components, reordering selection (5).
 
 use sqlx::PgPool;
+use temper_core::types::ids::{LensId, ProfileId};
 use temper_substrate::readback::{wayfind_scope_ids, WayfindScopeQuery};
 use uuid::Uuid;
 
@@ -218,7 +219,7 @@ async fn wayfind_selects_top_n_regions(pool: PgPool) {
     let scope = wayfind_scope_ids(
         &pool,
         WayfindScopeQuery {
-            principal: fx.p1,
+            principal: ProfileId::from(fx.p1),
             lens_id: None,
             embedding: Some(&q),
             regions: Some(2),
@@ -241,6 +242,40 @@ async fn wayfind_selects_top_n_regions(pool: PgPool) {
     );
 }
 
+// 1b. Regression (review finding): a negative / zero / overflow-wrapped N must never reach
+//     `LIMIT <negative>` — Postgres rejects that. The SQL `k`/`n` CTE clamps N into [1, max_n], so
+//     regions=-1 behaves like regions=1 (top region only) and never errors.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn wayfind_regions_below_one_clamps_to_one(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let high_cos = vec768(&[(0, 1.0)]);
+    let low_cos = vec768(&[(1, 1.0)]);
+    let a = seed_region(&pool, &fx, 1.0, None, &high_cos, &["a"]).await;
+    let b = seed_region(&pool, &fx, 0.5, None, &low_cos, &["b"]).await;
+    let q = query_axis0();
+
+    let scope = wayfind_scope_ids(
+        &pool,
+        WayfindScopeQuery {
+            principal: ProfileId::from(fx.p1),
+            lens_id: None,
+            embedding: Some(&q),
+            regions: Some(-1),
+        },
+    )
+    .await
+    .expect("negative regions must clamp into range, not error");
+
+    assert!(
+        scope.contains(&a[0]),
+        "clamped to top-1: region A (score 1.0) present: {scope:?}"
+    );
+    assert!(
+        !scope.contains(&b[0]),
+        "clamped to top-1: region B (lower score) excluded: {scope:?}"
+    );
+}
+
 // 2. THE §9 REGRESSION: region B is thin (1 member, salience 0.0) but high query-cosine; region A is
 //    large (3 members, salience 1.0) but low query-cosine. regions=1. Scores: A = 0.4·1 + 0.6·0 = 0.4;
 //    B = 0.4·0 + 0.6·1 = 0.6. B wins the single slot — relevance buys it. Margin 0.6 vs 0.4 (clear).
@@ -256,7 +291,7 @@ async fn sparse_high_cosine_region_beats_large_low_cosine(pool: PgPool) {
     let scope = wayfind_scope_ids(
         &pool,
         WayfindScopeQuery {
-            principal: fx.p1,
+            principal: ProfileId::from(fx.p1),
             lens_id: None,
             embedding: Some(&q),
             regions: Some(1),
@@ -289,7 +324,7 @@ async fn region_less_map_degrades_to_direct_scope(pool: PgPool) {
     let scope = wayfind_scope_ids(
         &pool,
         WayfindScopeQuery {
-            principal: fx.p1,
+            principal: ProfileId::from(fx.p1),
             lens_id: None,
             embedding: Some(&q),
             regions: Some(3), // no-op against a region-less map; must not error
@@ -320,7 +355,7 @@ async fn wayfind_excludes_unreadable_maps(pool: PgPool) {
     let scope = wayfind_scope_ids(
         &pool,
         WayfindScopeQuery {
-            principal: fx.p2, // not a member of the fixture map's team
+            principal: ProfileId::from(fx.p2), // not a member of the fixture map's team
             lens_id: None,
             embedding: Some(&q),
             regions: Some(3),
@@ -374,7 +409,7 @@ async fn lens_override_recomputes_salience_from_components(pool: PgPool) {
     let def = wayfind_scope_ids(
         &pool,
         WayfindScopeQuery {
-            principal: fx.p1,
+            principal: ProfileId::from(fx.p1),
             lens_id: None,
             embedding: Some(&q),
             regions: Some(1),
@@ -395,8 +430,8 @@ async fn lens_override_recomputes_salience_from_components(pool: PgPool) {
     let ov = wayfind_scope_ids(
         &pool,
         WayfindScopeQuery {
-            principal: fx.p1,
-            lens_id: Some(override_lens),
+            principal: ProfileId::from(fx.p1),
+            lens_id: Some(LensId::from(override_lens)),
             embedding: Some(&q),
             regions: Some(1),
         },

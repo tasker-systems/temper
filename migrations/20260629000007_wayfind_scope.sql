@@ -30,8 +30,11 @@ RETURNS SETOF uuid LANGUAGE sql STABLE AS $$
                20  AS max_n,                -- per-call ceiling
                0   AS thin_threshold,       -- region-count <= this ⇒ bypass to direct scope (region-less)
                false AS recall_floor),      -- always admit best-cosine region (default OFF, §4.2)
-  n AS (SELECT LEAST(COALESCE(p_regions_n, (SELECT default_n FROM k)),
-                     (SELECT max_n FROM k)) AS regions_n),
+  -- Clamp N into [1, max_n]: COALESCE the default, cap at the ceiling, and floor at 1 so a
+  -- negative / zero / overflow-wrapped N never reaches `LIMIT` (which Postgres rejects when
+  -- negative) — deny degrades to zero rows, never an error (spec §5/§7/§8).
+  n AS (SELECT GREATEST(LEAST(COALESCE(p_regions_n, (SELECT default_n FROM k)),
+                              (SELECT max_n FROM k)), 1) AS regions_n),
   vmaps AS (SELECT t.cogmap_id FROM cogmap_visible_maps(p_principal) AS t(cogmap_id)),
   lens AS (SELECT s_telos, s_ref, s_central FROM kb_cogmap_lenses WHERE id = p_lens),
   -- candidate regions in visible maps; salience = memoized (default) or recomputed (override lens)
@@ -61,9 +64,11 @@ RETURNS SETOF uuid LANGUAGE sql STABLE AS $$
     FROM scored
   ),
   top_regions AS (
-    (SELECT id FROM ranked ORDER BY region_score DESC LIMIT (SELECT regions_n FROM n))
+    -- NULLS LAST defends the bogus-override-lens edge: a non-existent `p_lens` makes the recompute
+    -- subqueries NULL → NULL region_score, which must sort BELOW real-scored regions, not above.
+    (SELECT id FROM ranked ORDER BY region_score DESC NULLS LAST LIMIT (SELECT regions_n FROM n))
     UNION
-    (SELECT id FROM ranked WHERE (SELECT recall_floor FROM k) ORDER BY query_cos DESC LIMIT 1)
+    (SELECT id FROM ranked WHERE (SELECT recall_floor FROM k) ORDER BY query_cos DESC NULLS LAST LIMIT 1)
   ),
   region_ids AS (
     SELECT m.member_id AS resource_id

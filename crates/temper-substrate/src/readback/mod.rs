@@ -1137,8 +1137,8 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
 /// SQL `k`-CTE default.
 #[derive(Debug, Clone)]
 pub struct WayfindScopeQuery<'a> {
-    pub principal: Uuid,
-    pub lens_id: Option<Uuid>,
+    pub principal: ProfileId,
+    pub lens_id: Option<LensId>,
     pub embedding: Option<&'a [f32]>,
     pub regions: Option<i32>,
 }

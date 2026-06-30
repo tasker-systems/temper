@@ -319,19 +319,16 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
     }
 }
 
-/// `search` — Surface A general search (Beat 2): one composed `unified_search` readback blending FTS +
-/// vector + graph into ranked, scored hits, then per-row display enrichment. Replaces the either/or,
-/// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
-pub async fn search_select(
+/// Resolve the one active scope selector (§6) into the corpus bounds for `unified_search`: an optional
+/// context id (Surface A `context_ref`) and an optional explicit scope-id set (Surface B — `cogmap_id`
+/// single-map, or `wayfind` region-salience funnel). At most one of `{context_ref, cogmap_id, wayfind}`
+/// may be set; more than one is a `BadRequest`. An empty scope-id set is the deny case — it yields zero
+/// rows downstream via `c.id = ANY('{}')`, never an error ("no view from nowhere", spec §5/§7).
+async fn resolve_search_scope(
     pool: &PgPool,
     profile_id: ProfileId,
-    params: SearchParams,
-) -> ApiResult<Vec<UnifiedSearchResultRow>> {
-    let clamped = clamp_search_params(&params);
-
-    // Three mutually-exclusive scope-resolution paths (§6): `context_ref` (Surface A context
-    // scope), `cogmap_id` (single-map Surface B), and `wayfind` (the region-salience discovery
-    // funnel, Surface B Half 2). At most one may be set; more than one is a BadRequest.
+    params: &SearchParams,
+) -> ApiResult<(Option<uuid::Uuid>, Option<Vec<Uuid>>)> {
     let scope_selectors = [
         params.context_ref.is_some(),
         params.cogmap_id.is_some(),
@@ -346,10 +343,8 @@ pub async fn search_select(
         ));
     }
 
-    // Resolve context_ref → context UUID before the SQL call. A bare name is
-    // rejected by `parse_context_ref` (spec Decision 1); an @owner/slug or UUID
-    // ref is resolved via `resolve_context_ref` (visibility-gated). Parse error
-    // → BadRequest; not-found/forbidden propagates from the resolver.
+    // Resolve context_ref → context UUID. A bare name is rejected by `parse_context_ref` (spec
+    // Decision 1); an @owner/slug or UUID ref resolves via `resolve_context_ref` (visibility-gated).
     let context_id: Option<uuid::Uuid> = match params.context_ref.as_deref() {
         Some(s) => {
             let cref = temper_core::context_ref::parse_context_ref(s)
@@ -362,21 +357,21 @@ pub async fn search_select(
         None => None,
     };
 
-    // Resolve the active scope selector → scope ids (the bounding visible resource-id set).
-    // `wayfind` runs the region-salience funnel (Task A); `cogmap_id` runs the single-map scope.
-    // An empty result set means deny (zero rows), which correctly yields zero search results via
-    // `c.id = ANY('{}')` in the SQL function — deny is zero rows, never an error.
+    // `wayfind` runs the region-salience funnel (Task A); `cogmap_id` the single-map scope. Both
+    // visibility-gate inside the SQL; an empty result is deny → zero rows, never an error.
     let scope_ids: Option<Vec<Uuid>> = if params.wayfind {
         Some(
             readback::wayfind_scope_ids(
                 pool,
                 readback::WayfindScopeQuery {
-                    principal: profile_id.uuid(),
-                    lens_id: params.lens_id,
+                    principal: profile_id,
+                    lens_id: params.lens_id.map(LensId::from),
                     // The query embedding feeds BOTH region selection here and the blend inside
-                    // `unified_search` below — intentionally the same signal.
+                    // `unified_search` — intentionally the same signal.
                     embedding: params.embedding.as_deref(),
-                    regions: params.regions.map(|n| n as i32),
+                    // Saturate the i64→i32 narrowing so a huge N can't wrap negative; the SQL `k`
+                    // CTE then clamps into [1, max_n].
+                    regions: params.regions.map(|n| n.clamp(0, i32::MAX as i64) as i32),
                 },
             )
             .await
@@ -395,6 +390,20 @@ pub async fn search_select(
     } else {
         None
     };
+
+    Ok((context_id, scope_ids))
+}
+
+/// `search` — Surface A general search (Beat 2): one composed `unified_search` readback blending FTS +
+/// vector + graph into ranked, scored hits, then per-row display enrichment. Replaces the either/or,
+/// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
+pub async fn search_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    params: SearchParams,
+) -> ApiResult<Vec<UnifiedSearchResultRow>> {
+    let clamped = clamp_search_params(&params);
+    let (context_id, scope_ids) = resolve_search_scope(pool, profile_id, &params).await?;
 
     // The wire `seed_ids` arrive as bare uuids; lift to the typed `&[ResourceId]` the query takes.
     let seed_ids: Vec<ResourceId> = params
