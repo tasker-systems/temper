@@ -124,7 +124,7 @@ If you deploy the [web UI](#deploy-the-ui-okta), set these in its **separate** V
 
 | Variable | Okta value |
 | -------- | ---------- |
-| `API_BASE_URL` | `https://<instance>` — your API origin |
+| `API_BASE_URL` | The API backend's **own** origin (not the UI's public origin — see the loop warning in the [main guide](./self-hosting.md#deploy-the-ui-optional)), e.g. `https://<api-host>` |
 | `OIDC_ISSUER` | `https://<okta-domain>/oauth2/<authServerId>` — **no trailing slash**. Discovery is served at `<issuer>/.well-known/openid-configuration` |
 | `OIDC_CLIENT_ID` | The UI web application's Client ID |
 | `OIDC_CLIENT_SECRET` | The UI web application's Client secret |

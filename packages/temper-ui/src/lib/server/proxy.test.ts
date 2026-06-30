@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
-import { isProxiedPath, buildUpstreamUrl, forwardRequest } from './proxy';
+import {
+	isProxiedPath,
+	buildUpstreamUrl,
+	forwardRequest,
+	isSelfReferentialUpstream
+} from './proxy';
 
 describe('isProxiedPath', () => {
 	it('matches the MCP entrypoint (exact and subpaths)', () => {
@@ -49,6 +54,24 @@ describe('buildUpstreamUrl', () => {
 		expect(buildUpstreamUrl('https://api.example.com/', '/oauth/token', '')).toBe(
 			'https://api.example.com/oauth/token'
 		);
+	});
+});
+
+describe('isSelfReferentialUpstream', () => {
+	it('flags an upstream whose host equals the UI origin (the self-proxy loop)', () => {
+		expect(isSelfReferentialUpstream('https://temperkb.io', 'temperkb.io')).toBe(true);
+		// host comparison ignores path / trailing slash on the base
+		expect(isSelfReferentialUpstream('https://temperkb.io/', 'temperkb.io')).toBe(true);
+	});
+
+	it('allows an upstream on a different host (the correct config)', () => {
+		expect(isSelfReferentialUpstream('https://temper-cloud.vercel.app', 'temperkb.io')).toBe(
+			false
+		);
+	});
+
+	it('does not throw on a malformed upstream base', () => {
+		expect(isSelfReferentialUpstream('not a url', 'temperkb.io')).toBe(false);
 	});
 });
 

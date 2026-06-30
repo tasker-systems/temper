@@ -41,6 +41,23 @@ export function buildUpstreamUrl(upstreamBase: string, pathname: string, search:
 }
 
 /**
+ * True when the upstream base resolves to the same host as the inbound request —
+ * i.e. `API_BASE_URL` points at the UI's own origin. Forwarding to it would proxy
+ * to ourselves forever (a platform 508 loop). This is a configuration mistake
+ * that's easy to make when the UI and API share a public domain (the UI proxies
+ * `/api` to the API): `API_BASE_URL` must be the API backend's *own* origin, not
+ * the shared public origin. A malformed base is a different failure handled at
+ * the `fetch` layer, so we don't flag it here.
+ */
+export function isSelfReferentialUpstream(upstreamBase: string, requestHost: string): boolean {
+	try {
+		return new URL(upstreamBase).host === requestHost;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Forward a request to `upstreamBase`, preserving method, headers (incl.
  * cookies/authorization), body, and query, and relaying the upstream response.
  *
@@ -79,6 +96,13 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 	const upstream = env.API_BASE_URL;
 	if (!upstream) {
 		throw error(500, 'Proxy upstream not configured: set API_BASE_URL');
+	}
+	if (isSelfReferentialUpstream(upstream, event.url.host)) {
+		throw error(
+			500,
+			`Proxy upstream (API_BASE_URL=${upstream}) resolves to this same origin (${event.url.host}); ` +
+				`set API_BASE_URL to the API backend's own origin, not the UI origin.`
+		);
 	}
 	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);
 }
