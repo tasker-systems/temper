@@ -228,6 +228,15 @@ pub enum Commands {
         /// Scope search to a single cognitive map (UUID or decorated ref). Mutually exclusive with --context.
         #[arg(long)]
         cogmap: Option<String>,
+        /// Wayfind: lens-driven region-salience search across your visible maps. Mutually exclusive with --context / --cogmap.
+        #[arg(long)]
+        wayfind: bool,
+        /// Lens ref (UUID or decorated) overriding wayfind region selection (requires --wayfind).
+        #[arg(long)]
+        lens: Option<String>,
+        /// Top-N regions to scope into for --wayfind (default and ceiling are server-side).
+        #[arg(long)]
+        regions: Option<i64>,
         /// Filter by document type
         #[arg(long)]
         doc_type: Option<String>,

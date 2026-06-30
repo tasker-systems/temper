@@ -740,16 +740,16 @@ async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
     );
 }
 
-// ── (7) co-member does NOT see a peer's homed resource — pins the deferred multi-author boundary ──
+// ── (7) co-member DOES see a peer's homed resource on a shared map (multi-author read RBAC) ──
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn cogmap_search_excludes_unowned_peer_resource_pending_rbac(pool: PgPool) {
-    // DEFERRED-BOUNDARY PIN: `resources_visible_to` has NO cogmap-membership clause, so a
-    // `--cogmap` search returns only the searcher's OWN cogmap-homed resources — a co-member who
-    // can READ the map still does NOT see a peer's resource homed in it. This is fail-closed and
-    // spec-compliant by letter, deferred to the cogmap-arc RBAC. When that arc adds a cogmap clause
-    // to `resources_visible_to`, this assertion FLIPS (the peer resource becomes visible) — revisit
-    // this test then.
+async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
+    // MULTI-AUTHOR READ RBAC (Surface B Half 2 Beat A0): `resources_visible_to` now has a
+    // cogmap-membership clause (the resource-grain mirror of `cogmap_readable_by_profile`,
+    // membership-flat), so a `--cogmap` search by a co-member of the map's team SEES a peer's
+    // resource homed in the map — map-read and resource-read agree by construction. A principal
+    // who is NOT a member of any team joined to the map still sees nothing (additive false-negative
+    // fix, never a leak — the deny path is asserted at the end of this test).
     let app = common::setup_test_app(pool).await;
 
     // Author/owner births the map, joins it to a team, and homes a resource in it.
@@ -828,10 +828,51 @@ async fn cogmap_search_excludes_unowned_peer_resource_pending_rbac(pool: PgPool)
         .iter()
         .filter_map(|r| r["resource_id"].as_str().map(String::from))
         .collect();
-    // CURRENT deferred boundary: the peer's resource is NOT visible to the co-member (no cogmap
-    // clause in `resources_visible_to`). This assertion FLIPS when the RBAC arc lands.
+    // MULTI-AUTHOR READ RBAC: the co-member (a member of the map's team) now SEES the peer's
+    // cogmap-homed resource — the cogmap-membership clause on `resources_visible_to` flows through
+    // the `--cogmap` scope set.
     assert!(
-        !ids.contains(&peer_resource_id.to_string()),
-        "pending RBAC: a co-member must NOT see a peer's cogmap-homed resource; got {ids:?}"
+        ids.contains(&peer_resource_id.to_string()),
+        "multi-author read RBAC: a co-member must SEE a peer's cogmap-homed resource; got {ids:?}"
+    );
+
+    // DENY PATH (additive fix, never a leak): a principal who is NOT a member of any team joined to
+    // the map sees nothing — the readability gate empties the scope set, so zero rows.
+    let outsider_email = format!("cogmap-search-7-outsider-{}@example.com", Uuid::new_v4());
+    let (outsider, _oc) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &outsider_email).await;
+    let outsider_token = common::generate_test_jwt(&format!("test|{outsider}"), &outsider_email);
+
+    // Sanity: the outsider genuinely CANNOT read the map (so a zero result is the deny gate).
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(outsider)
+        .bind(cogmap)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(!readable, "outsider must NOT be able to read the map");
+
+    let resp = app
+        .client
+        .post(app.url("/api/search"))
+        .header("Authorization", format!("Bearer {outsider_token}"))
+        .json(&json!({
+            "query": "zmapword7",
+            "cogmap_id": cogmap,
+            "graph_expand": false,
+            "limit": 50,
+        }))
+        .send()
+        .await
+        .expect("search request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "outsider cogmap search must return 200 (deny-as-empty)"
+    );
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    assert!(
+        rows.is_empty(),
+        "non-member cogmap search must be empty; got {rows:?}"
     );
 }

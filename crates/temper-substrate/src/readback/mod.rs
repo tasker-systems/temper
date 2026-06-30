@@ -17,8 +17,9 @@
 //! Most reads are runtime `sqlx::query` (the pgvector `::vector` cast forces runtime; the rest follow
 //! for consistency). The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
 //! (`public`), and the connection's search_path resolves unqualified names and the visibility
-//! function's own unqualified internals correctly with no per-txn `SET LOCAL`. The lone compile-time
-//! macro ([`find_by_body_hash`]) is likewise unqualified and uses the workspace sqlx cache.
+//! function's own unqualified internals correctly with no per-txn `SET LOCAL`. The handful of
+//! compile-time `query!` macros (e.g. [`kernel_slice`]) are likewise unqualified and use the
+//! workspace sqlx cache.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -484,35 +485,6 @@ pub async fn body(
     Ok(crate::content::reconstruct_body(&chunks))
 }
 
-/// Substrate body-hash dedup for the create path (WS6 collapse Task F). Returns the id of an existing
-/// active, visible resource whose `body_hash` matches `body_hash`, or `None`. Mirrors production's
-/// `ingest_service::find_by_body_hash` but keys on the substrate `kb_resources.body_hash` (the
-/// structural sha256 merkle over chunk content-hashes, `_recompute_resource_body_hash`) instead of the
-/// dead `kb_resource_manifests`. Visibility-gated through `resources_visible_to`, like every other read.
-///
-/// Unlike the rest of this module (runtime, schema-qualified `sqlx::query`), this is a **compile-time
-/// macro** — the one in `readback`. The SQL is UNQUALIFIED (`kb_resources` / `resources_visible_to`):
-/// the workspace sqlx cache covers it, and at runtime the connection search_path (`public`) resolves
-/// the unqualified table and `resources_visible_to`'s own unqualified internals correctly.
-pub async fn find_by_body_hash(
-    pool: &PgPool,
-    principal: ProfileId,
-    body_hash: &str,
-) -> Result<Option<ResourceId>> {
-    let dup = sqlx::query_scalar!(
-        r#"SELECT r.id
-             FROM kb_resources r
-             JOIN resources_visible_to($1) v ON v.resource_id = r.id
-            WHERE r.body_hash = $2 AND r.is_active
-            LIMIT 1"#,
-        principal.uuid(),
-        body_hash,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(dup.map(ResourceId::from))
-}
-
 /// The telos resource id + its current body merkle for a cogmap — the charter reconcile diff source.
 /// `body_hash` is `sha256_hex("")` for a fresh genesis telos (empty block set, the SQL's empty-aggregate
 /// coalesce) — never SQL-NULL once the resource exists — or the structural merkle of the current charter.
@@ -523,7 +495,7 @@ pub struct TelosCharterState {
 }
 
 /// Resolve `cogmap` → telos resource, returning its current `body_hash` for the charter diff. Compile-time
-/// macro (like [`find_by_body_hash`]/[`kernel_slice`]; resolves against `public`, workspace `.sqlx` cache).
+/// macro (like [`kernel_slice`]; resolves against `public`, workspace `.sqlx` cache).
 pub async fn telos_charter_state(
     conn: &mut sqlx::PgConnection,
     cogmap: CogmapId,
@@ -574,8 +546,9 @@ pub struct KernelSliceRow {
 /// own (provenance-less) telos — are excluded by construction. `body_hash` is the bare
 /// `kb_resources.body_hash` column, byte-identical to [`resource_row`]'s `r.body_hash`.
 ///
-/// Compile-time macro (like [`find_by_body_hash`], the only other macro here): the SQL resolves against
-/// the single `public` schema, cached in the workspace `.sqlx` (post-`temper_next`-elimination, #178).
+/// Compile-time `query!` macro (like [`telos_charter_state`]; most reads in this module are runtime
+/// `sqlx::query`): the SQL resolves against the single `public` schema, cached in the workspace
+/// `.sqlx` (post-`temper_next`-elimination, #178).
 pub async fn kernel_slice(
     executor: impl sqlx::PgExecutor<'_>,
     cogmap_id: CogmapId,
@@ -1129,6 +1102,39 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     .fetch_all(pool)
     .await?;
     Ok(hits)
+}
+
+/// Request parameters for [`wayfind_scope_ids`] (params struct). Borrowed embedding view; the caller
+/// owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under that lens's
+/// `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None` `regions` ⇒ the
+/// SQL `k`-CTE default.
+#[derive(Debug, Clone)]
+pub struct WayfindScopeQuery<'a> {
+    pub principal: ProfileId,
+    pub lens_id: Option<LensId>,
+    pub embedding: Option<&'a [f32]>,
+    pub regions: Option<i32>,
+}
+
+/// Surface B Half 2: resolve the wayfind bounding resource-id set — the region-salience funnel across
+/// the principal's visible maps, UNION the direct homed scope of region-less/thin maps (spec §4/§5).
+/// The returned ids feed `unified_search` as `p_scope_ids`; this function only establishes scope.
+///
+/// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
+/// macros (the same established exception as [`unified_search`] / [`vector_search`]). All tuning
+/// constants (α/β, default/ceiling N, thin threshold, recall floor, normalization) live in the SQL
+/// function's `k` CTE, never here. Gate is in the SQL at every stage: a principal who can see no maps
+/// gets zero rows, never an error.
+pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Result<Vec<Uuid>> {
+    let emb_text = q.embedding.map(format_pgvector);
+    let ids: Vec<(Uuid,)> = sqlx::query_as("SELECT wayfind_scope_ids($1, $2, $3::vector, $4)")
+        .bind(q.principal)
+        .bind(q.lens_id)
+        .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
+        .bind(q.regions)
+        .fetch_all(pool)
+        .await?;
+    Ok(ids.into_iter().map(|(id,)| id).collect())
 }
 
 /// One region's analytics-tier scalar metrics, as returned by `cogmap_region_metrics`. The stored
