@@ -93,10 +93,23 @@ pub(crate) fn cmd_to_ingest_payload(
         .transpose()
         .map_err(|e| TemperError::Project(format!("serialize open_meta: {e}")))?;
 
+    // A cogmap home is the single source of truth: when present, the server
+    // branches on `home_cogmap_id` first and ignores `context_ref` (sent empty).
+    let home_cogmap_id = match &cmd.home {
+        temper_core::types::home::HomeAnchor::Cogmap(m) => Some(m.uuid()),
+        temper_core::types::home::HomeAnchor::Context(_) => None,
+    };
+    let context_ref = if home_cogmap_id.is_some() {
+        String::new()
+    } else {
+        context_ref.to_owned()
+    };
+
     Ok(IngestPayload {
         title: cmd.title.clone(),
         origin_uri: String::new(),
-        context_ref: context_ref.to_owned(),
+        context_ref,
+        home_cogmap_id,
         doc_type_name: cmd.doctype.clone(),
         content_hash,
         slug: cmd.slug.clone(),
@@ -234,7 +247,9 @@ mod tests {
         CreateResource {
             slug: "2026-05-18-test".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Test task".to_string(),
             body: Some(BodyUpdate {
                 content: "# Test\n\nBody.\n".to_string(),
@@ -461,7 +476,7 @@ mod tests {
         let nil = Uuid::nil();
         ResourceRow {
             id: ResourceId(nil),
-            kb_context_id: ContextId(nil),
+            kb_context_id: Some(ContextId(nil)),
             origin_uri: "kb://@me/temper/task/test-task".to_string(),
             title: "Test Task".to_string(),
             originator_profile_id: ProfileId(nil),
@@ -469,11 +484,13 @@ mod tests {
             is_active: true,
             created: chrono::DateTime::UNIX_EPOCH,
             updated: chrono::DateTime::UNIX_EPOCH,
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: Some("active".to_string()),
             seq: None,
             mode: None,
@@ -488,7 +505,7 @@ mod tests {
         let row = wire_resource_to_resource_row(&wire);
         assert_eq!(row.title, "Test Task");
         assert_eq!(row.id, ResourceId(Uuid::nil()));
-        assert_eq!(row.context_name, "temper");
+        assert_eq!(row.context_name.as_deref(), Some("temper"));
         assert_eq!(row.doc_type_name, "task");
         assert_eq!(row.body_hash, Some("abc123".to_string()));
         assert_eq!(row.owner_handle, "@me");

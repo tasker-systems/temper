@@ -17,7 +17,10 @@ use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceRow {
     pub id: ResourceId,
-    pub kb_context_id: ContextId,
+    /// Home context — `Some` for a context-homed resource, `None` when the
+    /// resource is homed in a cognitive map (Surface B). Mutually exclusive
+    /// with the `cogmap_*` fields below.
+    pub kb_context_id: Option<ContextId>,
     pub origin_uri: String,
     pub title: String,
     pub originator_profile_id: ProfileId,
@@ -25,15 +28,23 @@ pub struct ResourceRow {
     pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
-    // Joined display fields
-    pub context_name: String,
+    // Joined display fields — `context_*` present for a context home,
+    // `cogmap_*` for a cogmap home.
+    pub context_name: Option<String>,
     pub doc_type_name: String,
     pub owner_handle: String,
     /// Slug of the home context (the natural-key half of `@owner/slug`).
-    pub context_slug: String,
+    /// `None` for a cogmap-homed resource.
+    pub context_slug: Option<String>,
     /// Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
     /// Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
-    pub context_owner_ref: String,
+    /// `None` for a cogmap-homed resource.
+    pub context_owner_ref: Option<String>,
+    /// Set when the resource is homed in a cognitive map (Surface B).
+    /// Mutually exclusive with the `context_*` fields.
+    pub cogmap_id: Option<Uuid>,
+    /// Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.
+    pub cogmap_name: Option<String>,
     // Managed meta projections
     pub stage: Option<String>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
@@ -44,6 +55,16 @@ pub struct ResourceRow {
     /// `None` when no manifest row exists (resource created via POST without a
     /// body trio, or the manifest join returned NULL).
     pub body_hash: Option<String>,
+}
+
+impl ResourceRow {
+    /// The display name of this resource's home — its context name, or its cognitive-map
+    /// name when cogmap-homed. `None` only if neither is set (should not occur). The single
+    /// accessor for the `context_* | cogmap_*` mutual exclusion: surfaces apply their own
+    /// placeholder for the `None` case rather than re-deriving the fallback chain.
+    pub fn home_display(&self) -> Option<&str> {
+        self.context_name.as_deref().or(self.cogmap_name.as_deref())
+    }
 }
 
 /// Sort field for resource listing.

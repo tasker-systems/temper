@@ -14,6 +14,7 @@ use sqlx::PgPool;
 
 use temper_core::error::TemperError;
 use temper_core::types::graph;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
     CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
 };
@@ -21,6 +22,7 @@ use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
 };
+use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateCognitiveMap,
     CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
@@ -268,6 +270,8 @@ pub(crate) async fn native_resource_row(
         owner_handle: p.owner_handle,
         context_slug: p.context_slug,
         context_owner_ref: p.context_owner_ref,
+        cogmap_id: p.cogmap_id,
+        cogmap_name: p.cogmap_name,
         stage: p.stage,
         seq: p.seq,
         mode: p.mode,
@@ -770,7 +774,7 @@ impl Backend for DbBackend {
         cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         // Resolve the caller's synthesized identity (natural-key).
-        // `cmd.context` is a pre-resolved ContextId — surfaces parse+resolve the ref
+        // `cmd.home` is a pre-resolved HomeAnchor — surfaces parse+resolve the ref
         // before building the command, so no `writes::resolve_context` call is needed here.
         let prod_profile: uuid::Uuid = *self.profile_id;
         let owner = writes::resolve_profile(&self.pool, prod_profile)
@@ -782,9 +786,12 @@ impl Backend for DbBackend {
         // Correlation-integrity gate for any claimed invocation — additive to the create authz above,
         // before any mutation (auth-before-write). No-op when the act carries no invocation.
         self.check_act_invocation(cmd.act.invocation).await?;
-        // cmd.context is the pre-resolved (surface-side) ContextId — the same unified type
-        // writes::CreateParams.home expects, so pass it through directly.
-        let home = cmd.context;
+        // Map the command's HomeAnchor to the substrate's AnchorRef so CreateParams.home
+        // accepts either a context or a cognitive map without further branching downstream.
+        let home = match cmd.home {
+            HomeAnchor::Context(c) => AnchorRef::context(c),
+            HomeAnchor::Cogmap(m) => AnchorRef::cogmap(m),
+        };
 
         let body = cmd
             .body
@@ -817,7 +824,10 @@ impl Backend for DbBackend {
             title: &cmd.title,
             identity_slug: injected_slug,
             validator_slug: &cmd.slug,
-            context_name: &cmd.context.to_string(),
+            // Validation-only placeholder. For a cogmap home this is the raw cogmap UUID, not a
+            // context name — `context_name` is display-only in the validation document (§7-dissolving),
+            // so the mislabel is intentional and never persisted as a name.
+            context_name: &home.id.to_string(),
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
         })?;
@@ -954,7 +964,8 @@ impl Backend for DbBackend {
                 .move_to
                 .as_ref()
                 .and_then(|m| m.context_to.map(|id| id.to_string()))
-                .unwrap_or_else(|| current.context_name.clone());
+                .or_else(|| current.context_name.clone())
+                .unwrap_or_default();
             // temper-title updates the kb_resources.title column when supplied; otherwise the
             // current title carries (and seeds validation). temper-slug is §7-Die (not stored,
             // so `current.slug` is None) — derive the canonical slug from the title so the
@@ -1096,12 +1107,13 @@ impl Backend for DbBackend {
         let mut hits = Vec::with_capacity(ids.len());
         for new_id in ids {
             let row = native_resource_row(&self.pool, self.profile_id, new_id).await?;
+            let context = row.home_display().unwrap_or_default().to_owned();
             hits.push(SearchHit {
                 summary: ResourceSummary {
                     // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
                     slug: row.origin_uri,
                     doctype: row.doc_type_name,
-                    context: row.context_name,
+                    context,
                     title: row.title,
                 },
                 // §9 floor asserts the matching SET, not the score.

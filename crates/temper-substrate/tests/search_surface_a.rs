@@ -51,7 +51,7 @@ async fn mk(
             origin_uri: uri,
             body,
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -575,6 +575,7 @@ fn q<'a>(principal: ProfileId) -> UnifiedSearchQuery<'a> {
         graph_expand: true,
         limit: 10,
         offset: 0,
+        scope_ids: None,
     }
 }
 
@@ -757,4 +758,48 @@ async fn blend_context_and_doctype_filters(pool: sqlx::PgPool) {
         some.iter().any(|h| h.resource_id.uuid() == r),
         "matching doc_type passes the filter"
     );
+}
+
+/// When `scope_ids` is `Some([id_a])`, only `id_a` surfaces — `id_b` is filtered out even though
+/// both share the same FTS term, visibility, and context.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn scope_ids_restricts_corpus(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "sc").await;
+    // Both resources share the term "zscopeword" so FTS matches both.
+    let id_a = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "scope resource a",
+        "body contains zscopeword alfa",
+        "temper://sc/a",
+    )
+    .await;
+    let id_b = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "scope resource b",
+        "body contains zscopeword beta",
+        "temper://sc/b",
+    )
+    .await;
+
+    let hits = readback::unified_search(
+        &pool,
+        UnifiedSearchQuery {
+            query: Some("zscopeword"),
+            scope_ids: Some(&[id_a]),
+            ..q(owner)
+        },
+    )
+    .await
+    .unwrap();
+    let ids: Vec<uuid::Uuid> = hits.iter().map(|h| h.resource_id.uuid()).collect();
+    assert!(ids.contains(&id_a), "in-scope A should be present");
+    assert!(!ids.contains(&id_b), "out-of-scope B must be filtered");
 }

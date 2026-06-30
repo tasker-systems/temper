@@ -249,13 +249,26 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
 ///
 /// Frontmatter assembly reuses `actions::ingest::build_frontmatter_from_resource`
 /// so projected files are byte-identical to sync-pulled ones. Returns the
-/// absolute path written.
+/// absolute path written, or `None` when the resource is cogmap-homed and
+/// therefore skipped (see below).
 pub fn write_resource_file_from_parts(
     vault_root: &Path,
     row: &ResourceRow,
     content: &ContentResponse,
-) -> Result<PathBuf> {
+) -> Result<Option<PathBuf>> {
     use crate::actions::ingest;
+
+    // A cogmap-homed resource has no context path on disk; the local vault
+    // projection layout for cogmap homes is a later beat. Skip projection —
+    // the cloud stays authoritative; the local cache simply doesn't
+    // materialize it. (Surface B follow-up.)
+    let Some(context) = row.context_name.as_deref() else {
+        tracing::debug!(
+            resource = %Uuid::from(row.id),
+            "projection skipped: cogmap-homed resources are not projected locally yet"
+        );
+        return Ok(None);
+    };
 
     // `owner_handle` is literal "@me" for the requester's own resources and
     // "+team-slug" for team contexts — both are canonical vault directory
@@ -265,7 +278,6 @@ pub fn write_resource_file_from_parts(
     } else {
         &row.owner_handle
     };
-    let context = row.context_name.as_str();
     let doc_type = row.doc_type_name.as_str();
 
     let slug = ingest::slug_from_title(&row.title);
@@ -295,7 +307,7 @@ pub fn write_resource_file_from_parts(
     }
     fm.write_to(&path)
         .map_err(|e| TemperError::Config(format!("projection write {}: {e}", path.display())))?;
-    Ok(path)
+    Ok(Some(path))
 }
 
 /// Fetch a resource's content and write it as a complete markdown file at
@@ -304,11 +316,12 @@ pub fn write_resource_file_from_parts(
 /// `row` is a resource summary already obtained from a `list` call; this
 /// makes one further API call (`content`) for the body + frontmatter meta,
 /// then delegates the assembly + write to [`write_resource_file_from_parts`].
+/// Returns `None` when the resource is cogmap-homed (projection skipped).
 pub async fn write_resource_file(
     client: &TemperClient,
     vault_root: &Path,
     row: &ResourceRow,
-) -> Result<PathBuf> {
+) -> Result<Option<PathBuf>> {
     let content = client
         .resources()
         .content(Uuid::from(row.id))
@@ -331,15 +344,19 @@ pub fn remove_resource_file_for_row(
 ) -> Result<()> {
     use crate::actions::ingest;
 
-    let owner = config.owner_for_context(&row.context_name);
+    // A cogmap-homed resource was never projected to disk (no context path),
+    // so there is nothing to remove. Skip — same bounded edge as the writer.
+    let Some(context) = row.context_name.as_deref() else {
+        tracing::debug!(
+            resource = %Uuid::from(row.id),
+            "projection removal skipped: cogmap-homed resources are not projected locally yet"
+        );
+        return Ok(());
+    };
+
+    let owner = config.owner_for_context(context);
     let slug = ingest::slug_from_title(&row.title);
-    remove_resource_file(
-        vault_root,
-        &owner,
-        &row.context_name,
-        &row.doc_type_name,
-        &slug,
-    )
+    remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &slug)
 }
 
 /// Remove a resource's projection file at its canonical vault path.
@@ -436,8 +453,9 @@ async fn write_projection_files(
 ) -> Result<HashSet<PathBuf>> {
     let mut keep: HashSet<PathBuf> = HashSet::new();
     for row in rows {
-        let path = write_resource_file(client, vault_root, row).await?;
-        keep.insert(path);
+        if let Some(path) = write_resource_file(client, vault_root, row).await? {
+            keep.insert(path);
+        }
     }
     Ok(keep)
 }
@@ -455,8 +473,10 @@ fn prune_absent_files(
     rows: &[ResourceRow],
     keep: &HashSet<PathBuf>,
 ) -> Result<usize> {
-    let context_dir_name: Option<String> =
-        rows.first().map(|r| r.context_name.clone()).or_else(|| {
+    let context_dir_name: Option<String> = rows
+        .first()
+        .and_then(|r| r.context_name.clone())
+        .or_else(|| {
             parse_context_ref(context).ok().and_then(|r| match r {
                 ContextRef::OwnerSlug { slug, .. } => Some(slug),
                 ContextRef::Id(_) => None,
@@ -476,7 +496,7 @@ async fn record_context_cursor(
     context: &str,
     rows: &[ResourceRow],
 ) -> Result<()> {
-    let context_id = rows.first().map(|r| Uuid::from(r.kb_context_id));
+    let context_id = rows.first().and_then(|r| r.kb_context_id.map(Uuid::from));
     let last_event_id = match context_id {
         Some(cid) => client
             .events()

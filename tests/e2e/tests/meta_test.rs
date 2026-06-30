@@ -30,6 +30,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         title: "Meta Test Doc".to_string(),
         origin_uri: "test://e2e/meta-test".to_string(),
         context_ref: "@me/meta-test".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "meta0test0000000000000000000000000000000000000000000000000000000".to_string(),
@@ -161,6 +162,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         title: "Chunks Preserved".to_string(),
         origin_uri: "test://e2e/meta-chunks".to_string(),
         context_ref: "@me/meta-chunks".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "chunkpreserve0000000000000000000000000000000000000000000000000000".to_string(),
@@ -311,6 +313,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         title: "Errors Doc".to_string(),
         origin_uri: "test://e2e/meta-errors".to_string(),
         context_ref: "@me/meta-errors".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64}", "e")),
         slug: "errors-doc".to_string(),
@@ -478,6 +481,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         title: "Get Meta Doc".to_string(),
         origin_uri: "test://e2e/meta-get".to_string(),
         context_ref: "@me/meta-get".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64}", "c")),
         slug: "get-meta-doc".to_string(),

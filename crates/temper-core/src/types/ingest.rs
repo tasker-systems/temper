@@ -18,6 +18,10 @@ pub struct IngestPayload {
     /// Context **ref** (UUID or `@owner/slug`), resolved server-side.
     /// Bare names (no `@` prefix, not a UUID) are rejected with 400.
     pub context_ref: String,
+    /// When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`)
+    /// and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_cogmap_id: Option<uuid::Uuid>,
     pub doc_type_name: String,
     /// `"sha256:<hex>"` — server computes if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +197,7 @@ mod tests {
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
+            home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
             content_hash: Some("sha256:abc".to_owned()),
             slug: "test".to_owned(),
@@ -227,6 +232,7 @@ mod tests {
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
+            home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
             slug: "test".to_owned(),
             content: "# Test".to_owned(),
@@ -262,6 +268,7 @@ mod tests {
             title: "Test".to_owned(),
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_ref: "ctx".to_owned(),
+            home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
             slug: "test".to_owned(),
             content: "# Test".to_owned(),

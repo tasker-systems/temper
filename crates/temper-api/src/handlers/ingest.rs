@@ -8,7 +8,8 @@ use temper_services::error::{ApiError, ApiResult};
 use temper_services::state::AppState;
 
 use temper_core::context_ref::parse_context_ref;
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::home::HomeAnchor;
+use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
@@ -31,17 +32,41 @@ pub async fn create(
     auth: AuthUser,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
-    // Parse the context ref string (UUID or @owner/slug). Bare names are rejected with 400.
-    let cref =
-        parse_context_ref(&payload.context_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let profile_id = ProfileId::from(auth.0.profile.id);
 
-    // Resolve to a ContextId, visibility-gated to the calling principal.
-    let context = temper_services::services::context_service::resolve_context_ref(
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        &cref,
-    )
-    .await?;
+    // Resolve the home anchor — exactly one of a cognitive map or a context.
+    // The cogmap branch takes precedence: when `home_cogmap_id` is set the home
+    // is that map and `context_ref` is ignored.
+    let home = match payload.home_cogmap_id {
+        Some(map) => {
+            // Auth before writes: the producer gate (a named service seam delegating to
+            // team-cogmap membership) runs and denies BEFORE any home-row write.
+            let cogmap = CogmapId::from(map);
+            if !temper_services::services::cogmap_service::authorable_by_profile(
+                &state.pool,
+                profile_id,
+                cogmap,
+            )
+            .await?
+            {
+                return Err(ApiError::Forbidden);
+            }
+            HomeAnchor::Cogmap(cogmap)
+        }
+        None => {
+            // Parse the context ref string (UUID or @owner/slug). Bare names are rejected with 400.
+            let cref = parse_context_ref(&payload.context_ref)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            // Resolve to a ContextId, visibility-gated to the calling principal.
+            let context = temper_services::services::context_service::resolve_context_ref(
+                &state.pool,
+                profile_id,
+                &cref,
+            )
+            .await?;
+            HomeAnchor::Context(context)
+        }
+    };
 
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     // Parse failures (malformed JSON for ManagedMeta shape) surface as BadRequest.
@@ -60,7 +85,7 @@ pub async fn create(
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
 
     let cmd = CreateResource {
-        context,
+        home,
         doctype: payload.doc_type_name,
         slug: payload.slug,
         title: payload.title,

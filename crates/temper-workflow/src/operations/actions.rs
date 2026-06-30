@@ -343,8 +343,8 @@ pub fn merge_open_meta(existing: &mut Value, patch: Value) {
 pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
     validate_slug(&cmd.slug)?;
     validate_doctype(&cmd.doctype)?;
-    // context is a ContextId (always non-empty by construction); validation
-    // of the context ref string happens at the surface boundary before this.
+    // home is a HomeAnchor (always set by construction); validation
+    // of the ref string happens at the surface boundary before this.
     if cmd.title.is_empty() {
         return Err(ActionError::MissingRequiredField("title".to_string()));
     }
@@ -730,7 +730,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "valid-slug".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Valid title".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),
@@ -749,7 +751,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "INVALID".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "X".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),
@@ -771,7 +775,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "valid-slug".to_string(),
             doctype: "widget".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "X".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),
@@ -793,7 +799,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "valid".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),
@@ -1074,7 +1082,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "2026-05-14-test-task".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Test task".to_string(),
             body: None,
             managed_meta: ManagedMeta {
@@ -1103,7 +1113,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "2026-05-14-test-task".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Test task".to_string(),
             body: None,
             managed_meta: ManagedMeta {
@@ -1132,7 +1144,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "2026-05-14-test-task".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Test task".to_string(),
             body: None,
             managed_meta: ManagedMeta {
@@ -1157,7 +1171,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "2026-05-14-test-research".to_string(),
             doctype: "research".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Test research".to_string(),
             body: None,
             managed_meta: ManagedMeta {

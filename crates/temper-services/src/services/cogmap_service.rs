@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::cognitive_maps::{BindTeamOutcome, BindTeamRequest, UnbindTeamOutcome};
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{CogmapId, ProfileId};
 
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).
 ///
@@ -52,6 +52,29 @@ pub async fn bind_team(
         team_id: req.team_id,
         bound: inserted.is_some(),
     })
+}
+
+/// Producer write gate: can `profile` author a resource homed in `cogmap`?
+///
+/// The named service seam for the `cogmap_authorable_by_profile` SQL predicate (team↔cogmap
+/// membership intersection). Surfaces (HTTP ingest, MCP create) call this as their
+/// auth-before-writes gate instead of inlining the `query_scalar!` — SQL stays in the service
+/// layer, and the gate is defined once rather than mirrored across surfaces. The nullable scalar
+/// is normalized to `false` (deny) here.
+pub async fn authorable_by_profile(
+    pool: &PgPool,
+    profile: ProfileId,
+    cogmap: CogmapId,
+) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT cogmap_authorable_by_profile($1, $2)",
+        profile.uuid(),
+        cogmap.uuid()
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
 }
 
 /// Unbind a cognitive map from a team (delete the `kb_team_cogmaps` row).

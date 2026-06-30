@@ -27,6 +27,8 @@ pub struct CliSearchArgs<'a> {
     pub query: &'a str,
     pub embedding: Option<Vec<f32>>,
     pub context: Option<&'a str>,
+    /// Cogmap ref (UUID or decorated) for single-map scope. Mutually exclusive with `context`.
+    pub cogmap: Option<&'a str>,
     pub doc_type: Option<&'a str>,
     pub limit: Option<i64>,
     pub seed_ids: Vec<uuid::Uuid>,
@@ -36,11 +38,28 @@ pub struct CliSearchArgs<'a> {
 }
 
 /// Build a SearchParams from CLI arguments.
-pub fn build_search_params(args: CliSearchArgs<'_>) -> SearchParams {
-    SearchParams {
+pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
+    // Mirror the `resource create` client-side guard: `--context` and `--cogmap` are mutually
+    // exclusive scopes. Reject here rather than relying solely on the server's BadRequest, so the
+    // error is symmetric with create and surfaces before any network round-trip.
+    if args.context.is_some() && args.cogmap.is_some() {
+        return Err(TemperError::BadRequest(
+            "--context and --cogmap are mutually exclusive; specify exactly one scope".into(),
+        ));
+    }
+    let cogmap_id = args
+        .cogmap
+        .map(|r| {
+            temper_workflow::operations::parse_ref(r)
+                .map(|id| id.0)
+                .map_err(|e| TemperError::Config(format!("invalid cogmap ref: {e}")))
+        })
+        .transpose()?;
+    Ok(SearchParams {
         query: Some(args.query.to_string()),
         embedding: args.embedding,
         context_ref: args.context.map(String::from),
+        cogmap_id,
         doc_type: args.doc_type.map(String::from),
         limit: args.limit,
         seed_ids: if args.seed_ids.is_empty() {
@@ -56,7 +75,7 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> SearchParams {
         graph_depth: args.depth,
         graph_expand: !args.no_graph,
         ..SearchParams::default()
-    }
+    })
 }
 
 /// Call the search API with full SearchParams.
@@ -116,6 +135,7 @@ mod tests {
             query: "hello",
             embedding: None,
             context: Some("temper"),
+            cogmap: None,
             doc_type: None,
             limit: Some(5),
             seed_ids: vec![],
@@ -123,7 +143,7 @@ mod tests {
             depth: Some(3),
             no_graph: false,
         };
-        let params = build_search_params(args);
+        let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.query.as_deref(), Some("hello"));
         assert_eq!(params.context_ref.as_deref(), Some("temper"));
         assert_eq!(params.limit, Some(5));
@@ -141,6 +161,7 @@ mod tests {
             query: "x",
             embedding: None,
             context: None,
+            cogmap: None,
             doc_type: None,
             limit: None,
             seed_ids: vec![],
@@ -148,8 +169,51 @@ mod tests {
             depth: None,
             no_graph: true,
         };
-        let params = build_search_params(args);
+        let params = build_search_params(args).expect("build_search_params");
         assert!(!params.graph_expand);
+    }
+
+    #[test]
+    fn test_build_search_params_cogmap_uuid() {
+        let id = uuid::Uuid::now_v7();
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: None,
+            cogmap: Some(&id.to_string()),
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+        };
+        let params = build_search_params(args).expect("build_search_params");
+        assert_eq!(params.cogmap_id, Some(id));
+        assert!(params.context_ref.is_none());
+    }
+
+    #[test]
+    fn test_build_search_params_context_and_cogmap_mutually_exclusive() {
+        let id = uuid::Uuid::now_v7();
+        let id_str = id.to_string();
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: Some("temper"),
+            cogmap: Some(&id_str),
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+        };
+        let err = build_search_params(args).expect_err("both scopes must be rejected client-side");
+        assert!(
+            err.to_string().contains("mutually exclusive"),
+            "error should name the mutual-exclusion guard; got {err}"
+        );
     }
 
     #[test]

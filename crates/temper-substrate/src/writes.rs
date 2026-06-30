@@ -97,7 +97,7 @@ pub struct CreateParams<'a> {
     pub origin_uri: &'a str,
     pub body: &'a str,
     pub doc_type: &'a str,
-    pub home: ContextId,
+    pub home: AnchorRef,
     pub owner: ProfileId,
     pub originator: ProfileId,
     pub emitter: EntityId,
@@ -135,7 +135,7 @@ pub async fn create_resource_with(
             origin_uri: p.origin_uri,
             // A genuinely new resource created through the live write path — mint a fresh id.
             resource_id: None,
-            home: AnchorRef::context(p.home),
+            home: p.home,
             owner: p.owner,
             originator: Some(p.originator),
             blocks: &blocks,

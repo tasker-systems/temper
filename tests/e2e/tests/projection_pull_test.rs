@@ -35,6 +35,7 @@ async fn seed_resource(
         title: title.to_string(),
         origin_uri: format!("test://{slug}"),
         context_ref: format!("@me/{context}"),
+        home_cogmap_id: None,
         doc_type_name: doc_type.to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
         slug,
@@ -79,7 +80,14 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
         })
         .await
         .expect("list");
-    let context_id = Uuid::from(listed.rows.first().expect("one row").kb_context_id);
+    let context_id = Uuid::from(
+        listed
+            .rows
+            .first()
+            .expect("one row")
+            .kb_context_id
+            .expect("context-homed row has a context id"),
+    );
 
     let latest = app
         .client
@@ -132,7 +140,8 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
     let vault_root = app.vault_dir.path();
     let path = temper_cli::projection::write_resource_file(&app.client, vault_root, row)
         .await
-        .expect("write_resource_file");
+        .expect("write_resource_file")
+        .expect("a context-homed resource projects to a path");
 
     let expected = vault_root
         .join("@me")
@@ -192,7 +201,8 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
 
     let vault_root = app.vault_dir.path();
     let path = temper_cli::projection::write_resource_file_from_parts(vault_root, row, &content)
-        .expect("write_resource_file_from_parts");
+        .expect("write_resource_file_from_parts")
+        .expect("a context-homed resource projects to a path");
 
     let expected = vault_root
         .join("@me")

@@ -8,6 +8,7 @@ use uuid::Uuid;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::services::context_service::resolve_context_ref;
@@ -22,8 +23,14 @@ use crate::service::TemperMcpService;
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateResourceInput {
     /// Context ref (UUID or `@owner/slug`), resolved server-side.
-    /// Bare names (no `@` prefix, not a UUID) are rejected.
-    pub context_ref: String,
+    /// Bare names (no `@` prefix, not a UUID) are rejected. Mutually exclusive
+    /// with `cogmap`; supply exactly one home.
+    #[serde(default)]
+    pub context_ref: Option<String>,
+    /// Cognitive-map ref (UUID or decorated `slug-<uuid>`) to home the resource
+    /// in. Mutually exclusive with `context_ref`; supply exactly one home.
+    #[serde(default)]
+    pub cogmap: Option<String>,
     /// Human-readable doc type name (e.g. "task", "session", "research").
     pub doc_type_name: String,
     /// Resource title.
@@ -229,7 +236,10 @@ fn build_enriched(
         id: row.id.into(),
         title: row.title.clone(),
         slug: None,
-        context_name: row.context_name.clone(),
+        context_name: row
+            .home_display()
+            .map(str::to_owned)
+            .unwrap_or_else(|| "—".to_string()),
         doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
         origin_uri: row.origin_uri.clone(),
@@ -311,12 +321,60 @@ pub async fn create_resource(
         }
     }
 
-    // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
-    let cref = parse_context_ref(&input.context_ref)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None))?;
-    let context = resolve_context_ref(pool, profile_id, &cref)
-        .await
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+    // Resolve the home anchor — exactly one of a cognitive map or a context.
+    // Symmetric with the HTTP ingest handler: the cogmap branch runs the
+    // producer write gate (auth before writes) before homing in the map.
+    let home = match (input.cogmap.as_deref(), input.context_ref.as_deref()) {
+        (Some(_), Some(_)) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "context_ref and cogmap are mutually exclusive; supply exactly one home"
+                    .to_string(),
+                None,
+            ));
+        }
+        (None, None) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "no home specified — supply exactly one of context_ref or cogmap".to_string(),
+                None,
+            ));
+        }
+        (Some(cogmap_ref), None) => {
+            // Trailing-UUID-only resolution (no server lookup).
+            let map = temper_workflow::operations::parse_ref(cogmap_ref)
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
+                })?
+                .0;
+            let cogmap = temper_core::types::ids::CogmapId::from(map);
+            // Auth before writes: producer gate (service seam → team-cogmap membership).
+            // Shares the one `cogmap_service::authorable_by_profile` seam with the HTTP handler;
+            // no inline SQL on the surface.
+            let ok = temper_services::services::cogmap_service::authorable_by_profile(
+                pool, profile_id, cogmap,
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+            if !ok {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "not authorized to author in this cognitive map".to_string(),
+                    None,
+                ));
+            }
+            HomeAnchor::Cogmap(cogmap)
+        }
+        (None, Some(context_ref)) => {
+            // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
+            let cref = parse_context_ref(context_ref).map_err(|e| {
+                rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None)
+            })?;
+            let context = resolve_context_ref(pool, profile_id, &cref)
+                .await
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None)
+                })?;
+            HomeAnchor::Context(context)
+        }
+    };
 
     // Build slug from title if not provided
     let slug = input.slug.unwrap_or_else(|| {
@@ -372,7 +430,7 @@ pub async fn create_resource(
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
-        context,
+        home,
         title: input.title,
         body,
         managed_meta,
@@ -907,7 +965,7 @@ mod build_enriched_tests {
         let nil = uuid::Uuid::nil();
         ResourceRow {
             id: ResourceId::from(uuid::Uuid::now_v7()),
-            kb_context_id: ContextId::from(nil),
+            kb_context_id: Some(ContextId::from(nil)),
             origin_uri: "temper://fixture/task-doc".to_string(),
             title: "Wire the widget".to_string(),
             originator_profile_id: ProfileId::from(nil),
@@ -915,11 +973,13 @@ mod build_enriched_tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: Some("in-progress".to_string()),
             seq: None,
             mode: None,

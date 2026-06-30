@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::{ActContext, AgentAuthorship, ConfidenceBand};
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, InvocationId, ProfileId};
 use temper_core::types::invocation::Disposition;
 use temper_services::backend::DbBackend;
@@ -56,7 +57,7 @@ fn create_cmd(context: ContextId, slug: &str, act: ActContext) -> CreateResource
     CreateResource {
         slug: slug.to_string(),
         doctype: "research".to_string(),
-        context,
+        home: HomeAnchor::Context(context),
         title: format!("Act test {slug}"),
         body: None,
         managed_meta: ManagedMeta::default(),

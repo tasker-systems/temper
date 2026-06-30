@@ -21,6 +21,7 @@ pub mod context;
 pub mod device;
 pub mod event;
 pub mod graph;
+pub mod home;
 pub mod ids;
 pub mod ingest;
 pub mod invitation;

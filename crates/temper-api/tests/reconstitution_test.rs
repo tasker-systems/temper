@@ -71,6 +71,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
         title: "Reconstitution Test Doc".to_string(),
         origin_uri,
         context_ref: "@me/default".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         slug: "reconstitution-test".to_string(),
         content: "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here.".to_string(),

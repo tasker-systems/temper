@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EdgeId, ResourceId};
 
 use super::{
@@ -26,9 +27,10 @@ use super::{
 pub struct CreateResource {
     pub slug: String,
     pub doctype: String,
-    /// Resolved context ID. Surfaces must parse+resolve the context ref before
-    /// building this command — bare names are not accepted here.
-    pub context: ContextId,
+    /// Resolved home anchor — exactly one of a context or a cognitive map.
+    /// Surfaces must parse+resolve the ref and select the correct variant before
+    /// building this command.
+    pub home: HomeAnchor,
     pub title: String,
     pub body: Option<BodyUpdate>,
     /// Caller-supplied managed_meta. Backends will apply doctype defaults
@@ -282,7 +284,9 @@ mod tests {
         let cmd = CreateResource {
             slug: "new-task".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "New task".to_string(),
             body: None,
             managed_meta: ManagedMeta::default(),

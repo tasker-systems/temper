@@ -26,6 +26,7 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         title: "Show Meta Test".to_string(),
         origin_uri: "test://e2e/show-meta".to_string(),
         context_ref: "@me/meta-cli".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: Some(
             "showmeta0000000000000000000000000000000000000000000000000000000".to_string(),
@@ -94,6 +95,7 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         title: "Fields Filter Test".to_string(),
         origin_uri: "test://e2e/fields-filter".to_string(),
         context_ref: "@me/meta-cli".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: Some(
             "fieldsfilt0000000000000000000000000000000000000000000000000000000".to_string(),
@@ -162,6 +164,7 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
         title: "Dotted Path Test".to_string(),
         origin_uri: "test://e2e/dotted-path".to_string(),
         context_ref: "@me/meta-cli".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: Some(
             "dottedpath000000000000000000000000000000000000000000000000000000".to_string(),
@@ -225,6 +228,7 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             title: format!("List Meta {slug}"),
             origin_uri: format!("test://e2e/{slug}"),
             context_ref: "@me/meta-cli".to_string(),
+            home_cogmap_id: None,
             doc_type_name: "task".to_string(),
             content_hash: Some(hash.to_string()),
             slug: slug.to_string(),
@@ -304,6 +308,7 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
         title: "List Fields Test".to_string(),
         origin_uri: "test://e2e/list-fields-test".to_string(),
         context_ref: "@me/meta-cli".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: Some(
             "listfields00000000000000000000000000000000000000000000000000000".to_string(),

@@ -5,6 +5,8 @@
 
 mod common;
 
+use temper_substrate::ids::CogmapId;
+use temper_substrate::payloads::AnchorRef;
 use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes;
@@ -70,7 +72,7 @@ async fn create_populates_index_with_title_and_body(pool: sqlx::PgPool) {
             origin_uri: "temper://idx/r",
             body: "the quenching pipeline tempers steel",
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -107,7 +109,7 @@ async fn body_edit_updates_index(pool: sqlx::PgPool) {
             origin_uri: "temper://idx/r",
             body: "original lexeme here",
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -160,7 +162,7 @@ async fn title_only_update_updates_index(pool: sqlx::PgPool) {
             origin_uri: "temper://idx/r",
             body: "stable body",
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -217,7 +219,7 @@ async fn backfill_covers_preexisting_rows(pool: sqlx::PgPool) {
             origin_uri: "temper://idx/r",
             body: "corpus content word",
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -258,7 +260,7 @@ async fn soft_deleted_resource_excluded_from_fts_search(pool: sqlx::PgPool) {
             origin_uri: "temper://del/r",
             body: "phlogiston theory explains combustion",
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -331,7 +333,7 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
                 origin_uri: u,
                 body: b,
                 doc_type: "concept",
-                home,
+                home: AnchorRef::context(home),
                 owner,
                 originator: owner,
                 emitter,
@@ -386,4 +388,41 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
             "stored-index fts_search set parity for query {q:?}"
         );
     }
+}
+
+/// A resource can be homed directly to a cogmap (not a context). The L0 reserved cogmap
+/// (born by migration 20260625000001_l0_kernel_cogmap.sql) is used as the anchor.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn create_resource_homes_in_cogmap(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    // The L0 kernel cogmap is born by the MIGRATOR; use its reserved id.
+    let cogmap_id =
+        CogmapId::from(uuid::Uuid::parse_str("00000000-0000-0000-0005-000000000001").unwrap());
+    let id = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            title: "concept",
+            origin_uri: "",
+            body: "body text",
+            doc_type: "note",
+            home: AnchorRef::cogmap(cogmap_id),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap();
+    let (table, anchor): (String, Uuid) = sqlx::query_as(
+        "SELECT anchor_table, anchor_id FROM kb_resource_homes WHERE resource_id = $1",
+    )
+    .bind(id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(table, "kb_cogmaps");
+    assert_eq!(anchor, cogmap_id.uuid());
 }

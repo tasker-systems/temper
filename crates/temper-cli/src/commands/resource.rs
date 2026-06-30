@@ -109,19 +109,6 @@ pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
     }
 }
 
-/// Require a context, returning an error if none specified.
-///
-/// temper is cloud-only: there are no context directories on disk to
-/// check, so a supplied name is trusted directly.
-fn require_context(context: Option<&str>) -> Result<String> {
-    match context {
-        Some(ctx) => Ok(ctx.to_string()),
-        None => Err(TemperError::Project(
-            "no context specified — use --context <ref> (e.g. @me/temper, +team/general, or a UUID)".into(),
-        )),
-    }
-}
-
 /// Resolve `--from <path|url>` into a body string via kreuzberg extraction.
 ///
 /// Returns `Some(body)` if `from` is set; `None` if `from` is `None`. Errors
@@ -174,6 +161,9 @@ pub struct CreateResourceArgs<'a> {
     pub doc_type: &'a str,
     pub title: &'a str,
     pub context: Option<&'a str>,
+    /// Cognitive-map ref to home the resource in. Mutually exclusive with
+    /// `context`; the surface enforces exactly-one.
+    pub cogmap: Option<&'a str>,
     pub goal: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
@@ -194,6 +184,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         doc_type,
         title,
         context,
+        cogmap,
         goal,
         mode,
         effort,
@@ -218,7 +209,38 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         )));
     }
 
-    let ctx = require_context(context)?;
+    // Home resolution — exactly one of --context / --cogmap. The home choice is
+    // a `HomeAnchor` enum (never a placeholder id plus a flag): a context home
+    // carries a placeholder id (the real ref is threaded via the cloud backend's
+    // `context_ref`), a cogmap home carries the resolved `CogmapId`.
+    let (home, ctx) = match (context, cogmap) {
+        (Some(_), Some(_)) => {
+            return Err(TemperError::BadRequest(
+                "--context and --cogmap are mutually exclusive; specify exactly one home".into(),
+            ));
+        }
+        (None, None) => {
+            return Err(TemperError::Project(
+                "no home specified — use --context <ref> (e.g. @me/temper) or --cogmap <ref>"
+                    .into(),
+            ));
+        }
+        (Some(context), None) => (
+            temper_core::types::home::HomeAnchor::Context(temper_core::types::ids::ContextId::new()),
+            context.to_string(),
+        ),
+        (None, Some(cogmap)) => {
+            // Trailing-UUID-only resolution (no server lookup); the slug half is
+            // parsed off and ignored.
+            let id = temper_workflow::operations::parse_ref(cogmap)?.0;
+            (
+                temper_core::types::home::HomeAnchor::Cogmap(
+                    temper_core::types::ids::CogmapId::from(id),
+                ),
+                cogmap.to_string(),
+            )
+        }
+    };
 
     let stdin_is_tty = std::io::stdin().is_terminal();
 
@@ -231,13 +253,15 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
-    // `context` is a placeholder ContextId — the actual context ref (`ctx`) is
-    // threaded through `CloudBackend.context_ref` to `cmd_to_ingest_payload`
-    // and sent as `IngestPayload.context_ref` for server-side resolution.
+    // For a context home, `home` carries a placeholder id and the actual context
+    // ref (`ctx`) is threaded through `CloudBackend.context_ref` to
+    // `cmd_to_ingest_payload`; for a cogmap home, `home` carries the resolved
+    // `CogmapId` and the translator sends `home_cogmap_id` with an empty
+    // `context_ref`.
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
-        context: temper_core::types::ids::ContextId::new(),
+        home,
         title: title.to_string(),
         body: body_opt.filter(|b| !b.is_empty()).map(|content| {
             temper_workflow::operations::BodyUpdate {
@@ -634,8 +658,10 @@ pub fn delete(
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, _client) =
-        crate::backend_select::build_backend(config, &row.context_name)?;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(
+        config,
+        row.context_name.as_deref().unwrap_or_default(),
+    )?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
     // Projection refresh: remove the resource's projection file. Best-effort
@@ -1023,8 +1049,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     };
 
     // 5. Acquire the cloud backend + client and dispatch the update.
-    let (runtime, backend, client) =
-        crate::backend_select::build_backend(config, &row.context_name)?;
+    let (runtime, backend, client) = crate::backend_select::build_backend(
+        config,
+        row.context_name.as_deref().unwrap_or_default(),
+    )?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
     // 6. Projection refresh: rewrite the affected projection file from
@@ -1229,7 +1257,7 @@ mod action_result_tests {
     ) -> ResourceRow {
         ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
             origin_uri: "test://origin".to_string(),
             title: title.to_string(),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
@@ -1237,11 +1265,13 @@ mod action_result_tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: context.to_string(),
+            context_name: Some(context.to_string()),
             doc_type_name: doc_type.to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: context.to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some(context.to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: None,
             seq: None,
             mode: None,
@@ -1423,7 +1453,7 @@ mod resource_list_render_tests {
     fn render_resource_list_json_passes_wire_type_with_internals() {
         let rows: Vec<ResourceRow> = vec![ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
             origin_uri: "test://origin".to_string(),
             title: "Test Resource".to_string(),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
@@ -1431,11 +1461,13 @@ mod resource_list_render_tests {
             is_active: true,
             created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             updated: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "research".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: None,
             seq: None,
             mode: None,

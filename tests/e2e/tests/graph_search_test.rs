@@ -35,6 +35,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://e2e/{slug}"),
         context_ref: format!("@me/{context}"),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             format!("{slug}-body-hash-{pad}", pad = "0".repeat(64))[..64].to_string(),

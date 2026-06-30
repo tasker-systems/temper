@@ -37,6 +37,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         title: "Content Retrieval Doc".to_string(),
         origin_uri: "test://e2e/content-test".to_string(),
         context_ref: "@me/content-test".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "cont0test0000000000000000000000000000000000000000000000000000000".to_string(),

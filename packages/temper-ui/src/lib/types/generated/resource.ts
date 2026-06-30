@@ -55,16 +55,33 @@ export type ResourceListResponse = { rows: Array<ResourceRow>, total: bigint, fa
  * Row type for resource listings — includes joined display fields
  * and managed_meta projections from `vault_resources_browse` view.
  */
-export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, origin_uri: string, title: string, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string, doc_type_name: string, owner_handle: string, 
+export type ResourceRow = { id: ResourceId, 
+/**
+ * Home context — `Some` for a context-homed resource, `None` when the
+ * resource is homed in a cognitive map (Surface B). Mutually exclusive
+ * with the `cogmap_*` fields below.
+ */
+kb_context_id: ContextId | null, origin_uri: string, title: string, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string | null, doc_type_name: string, owner_handle: string, 
 /**
  * Slug of the home context (the natural-key half of `@owner/slug`).
+ * `None` for a cogmap-homed resource.
  */
-context_slug: string, 
+context_slug: string | null, 
 /**
  * Already-sigil'd owner: `@<handle>` for profiles, `+<team-slug>` for teams.
  * Together with `context_slug`, forms the full decorated context ref `{context_owner_ref}/{context_slug}`.
+ * `None` for a cogmap-homed resource.
  */
-context_owner_ref: string, stage: string | null, seq: number | null, mode: string | null, effort: string | null, 
+context_owner_ref: string | null, 
+/**
+ * Set when the resource is homed in a cognitive map (Surface B).
+ * Mutually exclusive with the `context_*` fields.
+ */
+cogmap_id: string | null, 
+/**
+ * Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.
+ */
+cogmap_name: string | null, stage: string | null, seq: number | null, mode: string | null, effort: string | null, 
 /**
  * SHA-256 hash of the resource body content, from `kb_resource_manifests`.
  * `None` when no manifest row exists (resource created via POST without a

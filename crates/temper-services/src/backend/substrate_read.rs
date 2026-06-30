@@ -120,7 +120,7 @@ async fn filtered_visible_page(
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
            JOIN kb_resource_homes h ON h.resource_id = r.id
-           JOIN kb_contexts c
+           LEFT JOIN kb_contexts c
              ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
            JOIN kb_profiles p ON p.id = h.owner_profile_id
            JOIN kb_properties dt
@@ -344,6 +344,29 @@ pub async fn search_select(
         None => None,
     };
 
+    // Resolve cogmap_id → scope ids (the set of visible homed-resource ids for this map).
+    // Mutually exclusive with context_ref. An empty result set means deny (zero rows), which
+    // correctly yields zero search results via `c.id = ANY('{}')` in the SQL function.
+    let scope_ids: Option<Vec<Uuid>> = match params.cogmap_id {
+        Some(map) => {
+            if context_id.is_some() {
+                return Err(ApiError::BadRequest(
+                    "context_ref and cogmap_id are mutually exclusive".into(),
+                ));
+            }
+            Some(
+                sqlx::query_scalar!("SELECT cogmap_scope_ids($1, $2)", profile_id.uuid(), map)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(api_err)?
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            )
+        }
+        None => None,
+    };
+
     // The wire `seed_ids` arrive as bare uuids; lift to the typed `&[ResourceId]` the query takes.
     let seed_ids: Vec<ResourceId> = params
         .seed_ids
@@ -367,6 +390,7 @@ pub async fn search_select(
             graph_expand: params.graph_expand,
             limit: clamped.limit,
             offset: params.offset.unwrap_or(0),
+            scope_ids: scope_ids.as_deref(),
         },
     )
     .await
@@ -374,23 +398,27 @@ pub async fn search_select(
 
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
-        // Per-row display enrichment (unchanged from the pre-Beat-2 path; the candidate set is ≤ limit).
+        // Enrich every hit through the cogmap-aware `native_resource_row` (Task F:
+        // `readback::resource_row` LEFT-JOINs kb_contexts AND kb_cogmaps and is visibility-gated).
+        // Context-homed hits carry `context_*`; cogmap-homed hits carry `cogmap_*`. `home_display`
+        // surfaces whichever home is set, so a `--cogmap` hit renders the map name rather than null.
         let row = native_resource_row(pool, profile_id, h.resource_id).await?;
+        let context = row.home_display().map(str::to_owned);
         out.push(UnifiedSearchResultRow {
             resource_id: h.resource_id.uuid(),
             title: row.title,
             slug: String::new(),
             kb_uri: row.origin_uri.clone(),
             origin_uri: row.origin_uri,
-            context: Some(row.context_name),
+            context,
             doc_type: row.doc_type_name,
             fts_score: h.fts_score,
             vector_score: h.vector_score,
             graph_score: h.graph_score,
             combined_score: h.combined_score,
             origin: "unified".to_string(),
-            context_slug: Some(row.context_slug),
-            context_owner_ref: Some(row.context_owner_ref),
+            context_slug: row.context_slug,
+            context_owner_ref: row.context_owner_ref,
         });
     }
     Ok(out)
