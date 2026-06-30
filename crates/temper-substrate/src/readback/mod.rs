@@ -1071,9 +1071,10 @@ pub struct ScoredHit {
     pub combined_score: f32,
 }
 
-/// Request parameters for [`unified_search`] (params struct — 11 domain fields). Borrowed views; the
+/// Request parameters for [`unified_search`] (params struct — 12 domain fields). Borrowed views; the
 /// caller owns the underlying `SearchParams`. Empty `seed_ids`/`edge_types` ⇒ no explicit seeds / all
 /// edge kinds. `None` `query`/`embedding` ⇒ that signal's term is zeroed in the blend.
+/// `scope_ids`: when `Some`, restricts the corpus to the supplied resource ids; `None` ⇒ unrestricted.
 #[derive(Debug, Clone)]
 pub struct UnifiedSearchQuery<'a> {
     pub principal: ProfileId,
@@ -1087,6 +1088,7 @@ pub struct UnifiedSearchQuery<'a> {
     pub graph_expand: bool,
     pub limit: i64,
     pub offset: i64,
+    pub scope_ids: Option<&'a [Uuid]>,
 }
 
 /// Surface A general search (Beat 2): one composed SQL statement (`unified_search`) blending FTS +
@@ -1097,7 +1099,7 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     let edge_types: Vec<String> = q.edge_types.to_vec();
     let hits = sqlx::query_as::<_, ScoredHit>(
         "SELECT resource_id, fts_score, vector_score, graph_score, combined_score
-           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int)",
+           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[])",
     )
     .bind(q.principal)
     .bind(q.query)
@@ -1110,6 +1112,7 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     .bind(q.graph_expand)
     .bind(q.limit)
     .bind(q.offset)
+    .bind(q.scope_ids)     // $12 — Option<&[Uuid]> binds to uuid[] / NULL
     .fetch_all(pool)
     .await?;
     Ok(hits)

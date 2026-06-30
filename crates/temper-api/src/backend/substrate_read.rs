@@ -367,6 +367,7 @@ pub async fn search_select(
             graph_expand: params.graph_expand,
             limit: clamped.limit,
             offset: params.offset.unwrap_or(0),
+            scope_ids: None,
         },
     )
     .await
