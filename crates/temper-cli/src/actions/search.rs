@@ -29,6 +29,13 @@ pub struct CliSearchArgs<'a> {
     pub context: Option<&'a str>,
     /// Cogmap ref (UUID or decorated) for single-map scope. Mutually exclusive with `context`.
     pub cogmap: Option<&'a str>,
+    /// Wayfind region-salience scope across the principal's visible maps. Mutually exclusive
+    /// with `context` and `cogmap`.
+    pub wayfind: bool,
+    /// Lens ref (UUID or decorated) overriding wayfind region selection. Requires `wayfind`.
+    pub lens: Option<&'a str>,
+    /// Top-N regions to scope into for wayfind (default/ceiling are server-side). Requires `wayfind`.
+    pub regions: Option<i64>,
     pub doc_type: Option<&'a str>,
     pub limit: Option<i64>,
     pub seed_ids: Vec<uuid::Uuid>,
@@ -39,12 +46,23 @@ pub struct CliSearchArgs<'a> {
 
 /// Build a SearchParams from CLI arguments.
 pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
-    // Mirror the `resource create` client-side guard: `--context` and `--cogmap` are mutually
-    // exclusive scopes. Reject here rather than relying solely on the server's BadRequest, so the
-    // error is symmetric with create and surfaces before any network round-trip.
-    if args.context.is_some() && args.cogmap.is_some() {
+    // Mirror the server's guard (§6): `--context`, `--cogmap`, and `--wayfind` are three mutually
+    // exclusive scope-resolution paths. Reject here rather than relying solely on the server's
+    // BadRequest, so the error surfaces before any network round-trip and is symmetric with create.
+    let scope_count = [args.context.is_some(), args.cogmap.is_some(), args.wayfind]
+        .into_iter()
+        .filter(|&set| set)
+        .count();
+    if scope_count > 1 {
         return Err(TemperError::BadRequest(
-            "--context and --cogmap are mutually exclusive; specify exactly one scope".into(),
+            "--context, --cogmap, and --wayfind are mutually exclusive; specify exactly one scope"
+                .into(),
+        ));
+    }
+    // `--lens` / `--regions` only modify the wayfind funnel; they are meaningless without it.
+    if !args.wayfind && (args.lens.is_some() || args.regions.is_some()) {
+        return Err(TemperError::BadRequest(
+            "--lens and --regions require --wayfind".into(),
         ));
     }
     let cogmap_id = args
@@ -55,11 +73,22 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
                 .map_err(|e| TemperError::Config(format!("invalid cogmap ref: {e}")))
         })
         .transpose()?;
+    let lens_id = args
+        .lens
+        .map(|r| {
+            temper_workflow::operations::parse_ref(r)
+                .map(|id| id.0)
+                .map_err(|e| TemperError::Config(format!("invalid lens ref: {e}")))
+        })
+        .transpose()?;
     Ok(SearchParams {
         query: Some(args.query.to_string()),
         embedding: args.embedding,
         context_ref: args.context.map(String::from),
         cogmap_id,
+        wayfind: args.wayfind,
+        lens_id,
+        regions: args.regions,
         doc_type: args.doc_type.map(String::from),
         limit: args.limit,
         seed_ids: if args.seed_ids.is_empty() {
@@ -136,6 +165,9 @@ mod tests {
             embedding: None,
             context: Some("temper"),
             cogmap: None,
+            wayfind: false,
+            lens: None,
+            regions: None,
             doc_type: None,
             limit: Some(5),
             seed_ids: vec![],
@@ -162,6 +194,9 @@ mod tests {
             embedding: None,
             context: None,
             cogmap: None,
+            wayfind: false,
+            lens: None,
+            regions: None,
             doc_type: None,
             limit: None,
             seed_ids: vec![],
@@ -181,6 +216,9 @@ mod tests {
             embedding: None,
             context: None,
             cogmap: Some(&id.to_string()),
+            wayfind: false,
+            lens: None,
+            regions: None,
             doc_type: None,
             limit: None,
             seed_ids: vec![],
@@ -202,6 +240,9 @@ mod tests {
             embedding: None,
             context: Some("temper"),
             cogmap: Some(&id_str),
+            wayfind: false,
+            lens: None,
+            regions: None,
             doc_type: None,
             limit: None,
             seed_ids: vec![],
@@ -213,6 +254,83 @@ mod tests {
         assert!(
             err.to_string().contains("mutually exclusive"),
             "error should name the mutual-exclusion guard; got {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_search_params_wayfind() {
+        let lens = uuid::Uuid::now_v7();
+        let lens_str = lens.to_string();
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: None,
+            cogmap: None,
+            wayfind: true,
+            lens: Some(&lens_str),
+            regions: Some(5),
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+        };
+        let params = build_search_params(args).expect("build_search_params");
+        assert!(params.wayfind);
+        assert_eq!(params.lens_id, Some(lens));
+        assert_eq!(params.regions, Some(5));
+        assert!(params.context_ref.is_none());
+        assert!(params.cogmap_id.is_none());
+    }
+
+    #[test]
+    fn test_build_search_params_wayfind_context_mutually_exclusive() {
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: Some("temper"),
+            cogmap: None,
+            wayfind: true,
+            lens: None,
+            regions: None,
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+        };
+        let err = build_search_params(args).expect_err("context + wayfind must be rejected");
+        assert!(
+            err.to_string().contains("mutually exclusive"),
+            "error should name the mutual-exclusion guard; got {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_search_params_lens_requires_wayfind() {
+        let lens = uuid::Uuid::now_v7();
+        let lens_str = lens.to_string();
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: None,
+            cogmap: None,
+            wayfind: false,
+            lens: Some(&lens_str),
+            regions: None,
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+        };
+        let err = build_search_params(args).expect_err("--lens without --wayfind must be rejected");
+        assert!(
+            err.to_string().contains("require --wayfind"),
+            "error should name the wayfind requirement; got {err}"
         );
     }
 
