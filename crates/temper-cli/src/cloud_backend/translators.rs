@@ -234,7 +234,9 @@ mod tests {
         CreateResource {
             slug: "2026-05-18-test".to_string(),
             doctype: "task".to_string(),
-            context: temper_core::types::ids::ContextId::new(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
             title: "Test task".to_string(),
             body: Some(BodyUpdate {
                 content: "# Test\n\nBody.\n".to_string(),

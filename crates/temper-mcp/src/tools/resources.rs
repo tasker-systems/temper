@@ -10,6 +10,7 @@ use temper_api::services::context_service::resolve_context_ref;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
@@ -372,7 +373,7 @@ pub async fn create_resource(
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
-        context,
+        home: HomeAnchor::Context(context),
         title: input.title,
         body,
         managed_meta,

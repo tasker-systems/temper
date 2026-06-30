@@ -13,6 +13,7 @@ use crate::services::resource_service::{
 use crate::state::AppState;
 
 use temper_core::context_ref::ContextRef;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
@@ -165,7 +166,7 @@ pub async fn create(
     let act = req.act.into_act_context().map_err(ApiError::from)?;
 
     let cmd = CreateResource {
-        context,
+        home: HomeAnchor::Context(context),
         doctype: req.doc_type,
         slug,
         title: req.title,

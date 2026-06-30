@@ -512,7 +512,9 @@ mod non_embed_impl {
             let cmd = CreateResource {
                 slug: "test".to_string(),
                 doctype: "task".to_string(),
-                context: "temper".to_string(),
+                home: temper_core::types::home::HomeAnchor::Context(
+                    temper_core::types::ids::ContextId::new(),
+                ),
                 title: "Test".to_string(),
                 body: None,
                 managed_meta: ManagedMeta::default(),

@@ -8,6 +8,7 @@ use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
 use temper_core::context_ref::parse_context_ref;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
@@ -60,7 +61,7 @@ pub async fn create(
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
 
     let cmd = CreateResource {
-        context,
+        home: HomeAnchor::Context(context),
         doctype: payload.doc_type_name,
         slug: payload.slug,
         title: payload.title,

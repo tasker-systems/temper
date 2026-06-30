@@ -231,13 +231,15 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
-    // `context` is a placeholder ContextId — the actual context ref (`ctx`) is
-    // threaded through `CloudBackend.context_ref` to `cmd_to_ingest_payload`
-    // and sent as `IngestPayload.context_ref` for server-side resolution.
+    // `home` is a placeholder — the actual context ref (`ctx`) is threaded
+    // through `CloudBackend.context_ref` to `cmd_to_ingest_payload` and sent
+    // as `IngestPayload.context_ref` for server-side resolution.
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
-        context: temper_core::types::ids::ContextId::new(),
+        home: temper_core::types::home::HomeAnchor::Context(
+            temper_core::types::ids::ContextId::new(),
+        ),
         title: title.to_string(),
         body: body_opt.filter(|b| !b.is_empty()).map(|content| {
             temper_workflow::operations::BodyUpdate {
