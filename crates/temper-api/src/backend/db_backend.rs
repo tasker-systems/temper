@@ -824,6 +824,9 @@ impl Backend for DbBackend {
             title: &cmd.title,
             identity_slug: injected_slug,
             validator_slug: &cmd.slug,
+            // Validation-only placeholder. For a cogmap home this is the raw cogmap UUID, not a
+            // context name — `context_name` is display-only in the validation document (§7-dissolving),
+            // so the mislabel is intentional and never persisted as a name.
             context_name: &home.id.to_string(),
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
@@ -1104,12 +1107,13 @@ impl Backend for DbBackend {
         let mut hits = Vec::with_capacity(ids.len());
         for new_id in ids {
             let row = native_resource_row(&self.pool, self.profile_id, new_id).await?;
+            let context = row.home_display().unwrap_or_default().to_owned();
             hits.push(SearchHit {
                 summary: ResourceSummary {
                     // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
                     slug: row.origin_uri,
                     doctype: row.doc_type_name,
-                    context: row.context_name.or(row.cogmap_name).unwrap_or_default(),
+                    context,
                     title: row.title,
                 },
                 // §9 floor asserts the matching SET, not the score.

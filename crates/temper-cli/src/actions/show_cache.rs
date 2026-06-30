@@ -159,12 +159,7 @@ pub(super) fn reconstruct_full_file_content(
     fm.set_managed_field("temper-id", serde_json::Value::String(meta.id.to_string()));
     fm.set_managed_field(
         "temper-context",
-        serde_json::Value::String(
-            meta.context_name
-                .clone()
-                .or_else(|| meta.cogmap_name.clone())
-                .unwrap_or_default(),
-        ),
+        serde_json::Value::String(meta.home_display().unwrap_or_default().to_owned()),
     );
     fm.set_managed_field(
         "temper-created",

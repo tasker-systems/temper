@@ -39,6 +39,14 @@ pub struct CliSearchArgs<'a> {
 
 /// Build a SearchParams from CLI arguments.
 pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
+    // Mirror the `resource create` client-side guard: `--context` and `--cogmap` are mutually
+    // exclusive scopes. Reject here rather than relying solely on the server's BadRequest, so the
+    // error is symmetric with create and surfaces before any network round-trip.
+    if args.context.is_some() && args.cogmap.is_some() {
+        return Err(TemperError::BadRequest(
+            "--context and --cogmap are mutually exclusive; specify exactly one scope".into(),
+        ));
+    }
     let cogmap_id = args
         .cogmap
         .map(|r| {
@@ -183,6 +191,29 @@ mod tests {
         let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.cogmap_id, Some(id));
         assert!(params.context_ref.is_none());
+    }
+
+    #[test]
+    fn test_build_search_params_context_and_cogmap_mutually_exclusive() {
+        let id = uuid::Uuid::now_v7();
+        let id_str = id.to_string();
+        let args = CliSearchArgs {
+            query: "q",
+            embedding: None,
+            context: Some("temper"),
+            cogmap: Some(&id_str),
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: true,
+        };
+        let err = build_search_params(args).expect_err("both scopes must be rejected client-side");
+        assert!(
+            err.to_string().contains("mutually exclusive"),
+            "error should name the mutual-exclusion guard; got {err}"
+        );
     }
 
     #[test]

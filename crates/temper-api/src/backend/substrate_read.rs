@@ -398,74 +398,28 @@ pub async fn search_select(
 
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
-        if scope_ids.is_some() {
-            // Cogmap-scoped search: resources may be cogmap-homed (no kb_contexts row).
-            // Use a direct enrichment that LEFT-JOINs kb_contexts so cogmap-homed rows
-            // succeed (context fields are None for them).
-            let enriched = sqlx::query(
-                "SELECT r.title, r.origin_uri,
-                        dt.property_value #>> '{}' AS doc_type_name,
-                        c.name        AS context_name,
-                        c.slug        AS context_slug,
-                        CASE c.owner_table
-                          WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
-                          ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
-                        END           AS context_owner_ref
-                   FROM kb_resources r
-                   JOIN kb_resource_homes h ON h.resource_id = r.id
-                   LEFT JOIN kb_contexts c
-                     ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
-                   JOIN kb_properties dt
-                     ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-                    AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-                  WHERE r.id = $1",
-            )
-            .bind(h.resource_id)
-            .fetch_one(pool)
-            .await
-            .map_err(api_err)?;
-            let title: String = enriched.get("title");
-            let origin_uri: String = enriched.get("origin_uri");
-            let doc_type: String = enriched.get("doc_type_name");
-            let context_name: Option<String> = enriched.get("context_name");
-            let context_slug: Option<String> = enriched.get("context_slug");
-            let context_owner_ref: Option<String> = enriched.get("context_owner_ref");
-            out.push(UnifiedSearchResultRow {
-                resource_id: h.resource_id.uuid(),
-                title,
-                slug: String::new(),
-                kb_uri: origin_uri.clone(),
-                origin_uri,
-                context: context_name,
-                doc_type,
-                fts_score: h.fts_score,
-                vector_score: h.vector_score,
-                graph_score: h.graph_score,
-                combined_score: h.combined_score,
-                origin: "unified".to_string(),
-                context_slug,
-                context_owner_ref,
-            });
-        } else {
-            // Standard path: context-homed resources require the full enrichment.
-            let row = native_resource_row(pool, profile_id, h.resource_id).await?;
-            out.push(UnifiedSearchResultRow {
-                resource_id: h.resource_id.uuid(),
-                title: row.title,
-                slug: String::new(),
-                kb_uri: row.origin_uri.clone(),
-                origin_uri: row.origin_uri,
-                context: row.context_name,
-                doc_type: row.doc_type_name,
-                fts_score: h.fts_score,
-                vector_score: h.vector_score,
-                graph_score: h.graph_score,
-                combined_score: h.combined_score,
-                origin: "unified".to_string(),
-                context_slug: row.context_slug,
-                context_owner_ref: row.context_owner_ref,
-            });
-        }
+        // Enrich every hit through the cogmap-aware `native_resource_row` (Task F:
+        // `readback::resource_row` LEFT-JOINs kb_contexts AND kb_cogmaps and is visibility-gated).
+        // Context-homed hits carry `context_*`; cogmap-homed hits carry `cogmap_*`. `home_display`
+        // surfaces whichever home is set, so a `--cogmap` hit renders the map name rather than null.
+        let row = native_resource_row(pool, profile_id, h.resource_id).await?;
+        let context = row.home_display().map(str::to_owned);
+        out.push(UnifiedSearchResultRow {
+            resource_id: h.resource_id.uuid(),
+            title: row.title,
+            slug: String::new(),
+            kb_uri: row.origin_uri.clone(),
+            origin_uri: row.origin_uri,
+            context,
+            doc_type: row.doc_type_name,
+            fts_score: h.fts_score,
+            vector_score: h.vector_score,
+            graph_score: h.graph_score,
+            combined_score: h.combined_score,
+            origin: "unified".to_string(),
+            context_slug: row.context_slug,
+            context_owner_ref: row.context_owner_ref,
+        });
     }
     Ok(out)
 }

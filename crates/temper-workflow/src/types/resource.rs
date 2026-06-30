@@ -57,6 +57,16 @@ pub struct ResourceRow {
     pub body_hash: Option<String>,
 }
 
+impl ResourceRow {
+    /// The display name of this resource's home — its context name, or its cognitive-map
+    /// name when cogmap-homed. `None` only if neither is set (should not occur). The single
+    /// accessor for the `context_* | cogmap_*` mutual exclusion: surfaces apply their own
+    /// placeholder for the `None` case rather than re-deriving the fallback chain.
+    pub fn home_display(&self) -> Option<&str> {
+        self.context_name.as_deref().or(self.cogmap_name.as_deref())
+    }
+}
+
 /// Sort field for resource listing.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]

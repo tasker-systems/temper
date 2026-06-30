@@ -237,9 +237,8 @@ fn build_enriched(
         title: row.title.clone(),
         slug: None,
         context_name: row
-            .context_name
-            .clone()
-            .or_else(|| row.cogmap_name.clone())
+            .home_display()
+            .map(str::to_owned)
             .unwrap_or_else(|| "—".to_string()),
         doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
@@ -346,23 +345,22 @@ pub async fn create_resource(
                     rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
                 })?
                 .0;
-            // Auth before writes: producer gate (seam → team-cogmap membership).
-            let ok: bool = sqlx::query_scalar!(
-                "SELECT cogmap_authorable_by_profile($1, $2)",
-                *profile_id,
-                map
+            let cogmap = temper_core::types::ids::CogmapId::from(map);
+            // Auth before writes: producer gate (service seam → team-cogmap membership).
+            // Shares the one `cogmap_service::authorable_by_profile` seam with the HTTP handler;
+            // no inline SQL on the surface.
+            let ok = temper_api::services::cogmap_service::authorable_by_profile(
+                pool, profile_id, cogmap,
             )
-            .fetch_one(pool)
             .await
-            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
-            .unwrap_or(false);
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
             if !ok {
                 return Err(rmcp::ErrorData::invalid_params(
                     "not authorized to author in this cognitive map".to_string(),
                     None,
                 ));
             }
-            HomeAnchor::Cogmap(temper_core::types::ids::CogmapId::from(map))
+            HomeAnchor::Cogmap(cogmap)
         }
         (None, Some(context_ref)) => {
             // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.

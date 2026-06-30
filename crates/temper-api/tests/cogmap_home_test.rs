@@ -504,6 +504,31 @@ async fn cogmap_search_scopes_to_map(pool: PgPool) {
     .await
     .expect("cogmap-homed resource must have committed its home row");
 
+    // A context-homed sibling owned by the SAME searcher, sharing the SAME FTS term ("zmapword").
+    // Under a `--cogmap` (cogmap_id) scope it must NOT appear — without this sibling the positive
+    // assertion alone cannot tell a scoped result from an unscoped one (the searcher owns both and
+    // there is no context filter). Its exclusion proves the API surface genuinely narrows to the
+    // map's homed set.
+    let ctx_resp = post_context_ingest(
+        &app,
+        &token,
+        "@me/temper",
+        "zmapword context sibling",
+        "zmapword-context-sibling",
+        "zmapword body homed in the searcher's own context, not the map.",
+    )
+    .await;
+    assert!(
+        ctx_resp.status().is_success(),
+        "context sibling create must succeed, got {}",
+        ctx_resp.status()
+    );
+    let ctx_sibling: serde_json::Value = ctx_resp.json().await.expect("ctx sibling JSON");
+    let ctx_sibling_id = ctx_sibling["id"]
+        .as_str()
+        .expect("ctx sibling id")
+        .to_string();
+
     // Member searches with cogmap_id scope — must find the resource.
     let resp = app
         .client
@@ -529,6 +554,11 @@ async fn cogmap_search_scopes_to_map(pool: PgPool) {
     assert!(
         ids.contains(&resource_id.to_string()),
         "the cogmap-homed resource must appear in a cogmap-scoped search; got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&ctx_sibling_id),
+        "a context-homed resource sharing the FTS term must NOT appear under a --cogmap scope \
+         (proves the scope narrows, not just includes); got {ids:?}"
     );
 }
 
@@ -603,5 +633,205 @@ async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
     assert!(
         rows.is_empty(),
         "non-member cogmap search must return zero results; got {rows:?}"
+    );
+}
+
+// ── (6) ex-member who STILL OWNS a homed resource gets zero — readability gate is load-bearing ──
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
+    // Unlike test (5)'s outsider — who never owned the resource, so `resources_visible_to` alone
+    // empties the set — this searcher AUTHORS (owns) a cogmap-homed resource and is only THEN
+    // removed from the map's team. Ownership keeps the row in `resources_visible_to`, so the empty
+    // result here is carried solely by the `cogmap_readable_by_profile` clause inside
+    // `cogmap_scope_ids`. Deleting that clause would surface the owned row and FAIL this test —
+    // which test (5) would not catch. This is the ex-member-still-owns regression the gate guards.
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("cogmap-search-6-{}@example.com", Uuid::new_v4());
+    let (profile, _ctx) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile}"), &email);
+
+    let cogmap = birth_cogmap(&app.pool, profile, "search-6-map").await;
+    let team = create_team(
+        &app.pool,
+        &format!("search-6-team-{}", &profile.simple().to_string()[..8]),
+    )
+    .await;
+    join_cogmap_to_team(&app.pool, cogmap, team).await;
+    add_member(&app.pool, team, profile).await;
+
+    // As a member, the author homes a resource in the map (so they OWN it).
+    post_cogmap_ingest(
+        &app,
+        &token,
+        cogmap,
+        "zmapword6 ex-member owned resource",
+        "zmapword6-exmember",
+        "zmapword6 unique term authored while a member.",
+    )
+    .await;
+    let resource_id: Uuid = sqlx::query_scalar(
+        "SELECT h.resource_id FROM kb_resource_homes h \
+           JOIN kb_resources r ON r.id = h.resource_id \
+          WHERE h.anchor_table = 'kb_cogmaps' AND h.anchor_id = $1 \
+            AND r.title = 'zmapword6 ex-member owned resource'",
+    )
+    .bind(cogmap)
+    .fetch_one(&app.pool)
+    .await
+    .expect("authored resource must have committed its home row");
+
+    // Now REMOVE the author from the map's team. They still OWN the resource, but can no longer
+    // READ the map.
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(team)
+        .bind(profile)
+        .execute(&app.pool)
+        .await
+        .expect("remove member");
+
+    // Sanity: the map is genuinely no longer readable by the ex-member (a real deny, not absence).
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(profile)
+        .bind(cogmap)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        !readable,
+        "ex-member must no longer be able to read the map"
+    );
+
+    // A `--cogmap` search by the ex-member returns ZERO rows — the readability clause empties the
+    // scope set even though the searcher still owns a resource homed in the map.
+    let resp = app
+        .client
+        .post(app.url("/api/search"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "query": "zmapword6",
+            "cogmap_id": cogmap,
+            "graph_expand": false,
+            "limit": 50,
+        }))
+        .send()
+        .await
+        .expect("search request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "ex-member cogmap search must return 200 (deny-as-empty)"
+    );
+
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    let ids: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r["resource_id"].as_str().map(String::from))
+        .collect();
+    assert!(
+        !ids.contains(&resource_id.to_string()),
+        "an ex-member who still owns the resource must get zero cogmap-scoped hits; got {ids:?}"
+    );
+    assert!(
+        rows.is_empty(),
+        "ex-member cogmap search must be empty; got {rows:?}"
+    );
+}
+
+// ── (7) co-member does NOT see a peer's homed resource — pins the deferred multi-author boundary ──
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_search_excludes_unowned_peer_resource_pending_rbac(pool: PgPool) {
+    // DEFERRED-BOUNDARY PIN: `resources_visible_to` has NO cogmap-membership clause, so a
+    // `--cogmap` search returns only the searcher's OWN cogmap-homed resources — a co-member who
+    // can READ the map still does NOT see a peer's resource homed in it. This is fail-closed and
+    // spec-compliant by letter, deferred to the cogmap-arc RBAC. When that arc adds a cogmap clause
+    // to `resources_visible_to`, this assertion FLIPS (the peer resource becomes visible) — revisit
+    // this test then.
+    let app = common::setup_test_app(pool).await;
+
+    // Author/owner births the map, joins it to a team, and homes a resource in it.
+    let author_email = format!("cogmap-search-7-author-{}@example.com", Uuid::new_v4());
+    let (author, _ac) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &author_email).await;
+    let author_token = common::generate_test_jwt(&format!("test|{author}"), &author_email);
+
+    let cogmap = birth_cogmap(&app.pool, author, "search-7-map").await;
+    let team = create_team(
+        &app.pool,
+        &format!("search-7-team-{}", &author.simple().to_string()[..8]),
+    )
+    .await;
+    join_cogmap_to_team(&app.pool, cogmap, team).await;
+    add_member(&app.pool, team, author).await;
+
+    post_cogmap_ingest(
+        &app,
+        &author_token,
+        cogmap,
+        "zmapword7 peer-owned cogmap resource",
+        "zmapword7-peer",
+        "zmapword7 unique term authored by a peer, not the searcher.",
+    )
+    .await;
+    let peer_resource_id: Uuid = sqlx::query_scalar(
+        "SELECT h.resource_id FROM kb_resource_homes h \
+           JOIN kb_resources r ON r.id = h.resource_id \
+          WHERE h.anchor_table = 'kb_cogmaps' AND h.anchor_id = $1 \
+            AND r.title = 'zmapword7 peer-owned cogmap resource'",
+    )
+    .bind(cogmap)
+    .fetch_one(&app.pool)
+    .await
+    .expect("peer resource must have committed its home row");
+
+    // A co-member of the SAME team/map — can READ the map, but does NOT own the peer's resource.
+    let comember_email = format!("cogmap-search-7-comember-{}@example.com", Uuid::new_v4());
+    let (comember, _cc) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &comember_email).await;
+    let comember_token = common::generate_test_jwt(&format!("test|{comember}"), &comember_email);
+    add_member(&app.pool, team, comember).await;
+
+    // Sanity: the co-member genuinely CAN read the map (so a zero result is the ownership-scoped
+    // visibility boundary, not a readability deny).
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(comember)
+        .bind(cogmap)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(readable, "co-member must be able to read the map");
+
+    let resp = app
+        .client
+        .post(app.url("/api/search"))
+        .header("Authorization", format!("Bearer {comember_token}"))
+        .json(&json!({
+            "query": "zmapword7",
+            "cogmap_id": cogmap,
+            "graph_expand": false,
+            "limit": 50,
+        }))
+        .send()
+        .await
+        .expect("search request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "co-member cogmap search must return 200"
+    );
+
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    let ids: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r["resource_id"].as_str().map(String::from))
+        .collect();
+    // CURRENT deferred boundary: the peer's resource is NOT visible to the co-member (no cogmap
+    // clause in `resources_visible_to`). This assertion FLIPS when the RBAC arc lands.
+    assert!(
+        !ids.contains(&peer_resource_id.to_string()),
+        "pending RBAC: a co-member must NOT see a peer's cogmap-homed resource; got {ids:?}"
     );
 }

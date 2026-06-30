@@ -39,20 +39,19 @@ pub async fn create(
     // is that map and `context_ref` is ignored.
     let home = match payload.home_cogmap_id {
         Some(map) => {
-            // Auth before writes: the producer gate (a named seam delegating to
+            // Auth before writes: the producer gate (a named service seam delegating to
             // team-cogmap membership) runs and denies BEFORE any home-row write.
-            let ok: bool = sqlx::query_scalar!(
-                "SELECT cogmap_authorable_by_profile($1, $2)",
-                *profile_id,
-                map
+            let cogmap = CogmapId::from(map);
+            if !crate::services::cogmap_service::authorable_by_profile(
+                &state.pool,
+                profile_id,
+                cogmap,
             )
-            .fetch_one(&state.pool)
             .await?
-            .unwrap_or(false);
-            if !ok {
+            {
                 return Err(ApiError::Forbidden);
             }
-            HomeAnchor::Cogmap(CogmapId::from(map))
+            HomeAnchor::Cogmap(cogmap)
         }
         None => {
             // Parse the context ref string (UUID or @owner/slug). Bare names are rejected with 400.
