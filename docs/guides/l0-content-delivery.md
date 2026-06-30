@@ -62,7 +62,7 @@ First delivery reads `"created": 22, … "charter": "created"`.
   install bundles it via `embed-download`, so no `ORT_DYLIB_PATH` is needed). If
   you changed `temper-cli`, reinstall first:
   ```bash
-  cargo install --path crates/temper-cli --force
+  cargo install --path crates/temper-cli --locked --force
   ```
   A non-`embed` build returns a clear `requires the 'embed' feature` error
   rather than running.

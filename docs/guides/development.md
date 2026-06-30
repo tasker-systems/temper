@@ -36,7 +36,7 @@ installing — the cargo + docker steps are identical; only the system-package s
 | 3 | Git hooks → `core.hooksPath = githooks/` | [`scripts/install-hooks.sh`](../../scripts/install-hooks.sh) |
 | 4 | Docker Postgres on port **5437**, waited until healthy | `docker compose up -d` |
 | 5 | Migrations applied to the dev database | `sqlx migrate run` |
-| 6 | *(opt-in `--with-cli`)* install `temper` from this checkout | `cargo install --path crates/temper-cli` |
+| 6 | *(opt-in `--with-cli`)* install `temper` from this checkout | `cargo install --path crates/temper-cli --locked` |
 
 ### The `psql` (libpq) PATH note
 
