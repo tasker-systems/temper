@@ -48,7 +48,7 @@ your-org-on-temper.
   `is_system_admin` is false for everyone until the root step below.
 - **An `embed`-capable `temper` binary.** `cogmap create` / `cogmap reconcile` embed
   the charter client-side (ONNX). The default install bundles it; if you rebuilt the
-  CLI, reinstall: `cargo install --path crates/temper-cli --force`. A non-`embed`
+  CLI, reinstall: `cargo install --path crates/temper-cli --locked --force`. A non-`embed`
   build returns a clear `requires the 'embed' feature` error rather than running.
 - **Authentication.** The operator running the surfaced commands must be logged in
   (`temper auth login`, or `TEMPER_TOKEN` exported) **as the profile promoted in the

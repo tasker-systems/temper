@@ -52,7 +52,7 @@ build from source:
 
   git clone https://github.com/${REPO}
   cd temper
-  cargo install --path crates/temper-cli
+  cargo install --path crates/temper-cli --locked
 
 If you are on Apple Silicon and seeing this message, you may be running
 under Rosetta. Run the installer in a native arm64 terminal.
@@ -70,7 +70,7 @@ Temper v1 only ships Linux x86_64 binaries. Build from source:
 
   git clone https://github.com/${REPO}
   cd temper
-  cargo install --path crates/temper-cli --features embed,extract
+  cargo install --path crates/temper-cli --locked --features embed,extract
 EOF
             exit 1
         fi

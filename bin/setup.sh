@@ -12,7 +12,7 @@
 # Usage:
 #   bin/setup.sh [--with-cli] [--dry-run]
 #
-#   --with-cli   also `cargo install --path crates/temper-cli` so `temper` is on your PATH
+#   --with-cli   also `cargo install --path crates/temper-cli --locked` so `temper` is on your PATH
 #                (built from this checkout — the latest local CLI, incl. the bootstrap applier).
 #   --dry-run    print what each step would do without executing.
 #
@@ -134,7 +134,10 @@ run sqlx migrate run --source "$REPO_ROOT/migrations"
 # ── 6. (optional) Install the temper CLI from this checkout ───────────────────────────────────────
 if [ "$WITH_CLI" -eq 1 ]; then
   info "Install temper CLI from checkout (--with-cli)"
-  run cargo install --path "$REPO_ROOT/crates/temper-cli" --force
+  # --locked: install against the committed Cargo.lock. Without it, `cargo install`
+  # re-resolves dependencies and can pull a semver-compatible-but-broken upstream combo
+  # (e.g. time 0.3.52 breaks cookie 0.18.1), failing the build. The lock is the tested set.
+  run cargo install --path "$REPO_ROOT/crates/temper-cli" --locked --force
 fi
 
 info "Setup complete. Verify with:  cargo make check  &&  cargo make test-db"

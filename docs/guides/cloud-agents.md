@@ -31,7 +31,7 @@ Cloud and ephemeral sessions can bootstrap temper without running the browser OA
 | `TEMPER_DEVICE_ID` | Stable device id for this session | When unset, a fresh UUIDv7 is generated per session. Set explicitly if you want a stable device id across session restarts. |
 | `TEMPER_API_URL` | API base URL override | Existing variable; takes precedence over config. |
 
-For a SessionStart hook (`.claude/settings.local.json`), export `TEMPER_TOKEN` alongside `cargo install --path crates/temper-cli`, and the temper CLI will authenticate without any interactive step or disk state.
+For a SessionStart hook (`.claude/settings.local.json`), export `TEMPER_TOKEN` alongside `cargo install --path crates/temper-cli --locked`, and the temper CLI will authenticate without any interactive step or disk state.
 
 ## Environment Setup Scripts
 

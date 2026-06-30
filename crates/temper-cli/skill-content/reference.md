@@ -32,7 +32,7 @@ installed CLI to manage our own workflow while evolving the crate.
 
 Before running any temper command, verify the binary exists with `which
 temper`. If it is not on PATH, install it with `cargo install --path
-crates/temper-cli` or ensure `~/.cargo/bin` is in your PATH.
+crates/temper-cli --locked` or ensure `~/.cargo/bin` is in your PATH.
 
 ## Skill-only commands
 

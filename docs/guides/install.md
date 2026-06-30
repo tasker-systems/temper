@@ -100,7 +100,7 @@ Windows arm64) or you want a custom build, clone the repo and `cargo install`:
 ```sh
 git clone https://github.com/tasker-systems/temper
 cd temper
-cargo install --path crates/temper-cli --features embed,extract
+cargo install --path crates/temper-cli --locked --features embed,extract
 ```
 
 You'll need:
