@@ -1,12 +1,13 @@
 /**
- * GET /auth/callback — Auth0 redirects here after the user completes login.
+ * GET /auth/callback — the OIDC provider redirects here after the user
+ * completes login.
  *
  * Validates the CSRF `state` parameter against the value stashed in the PKCE
  * cookie, exchanges the authorization code for tokens, and writes an
  * encrypted session cookie before redirecting to the user's original
  * destination (or /vault/all).
  *
- * On any error in the exchange (state mismatch, expired code, Auth0 down),
+ * On any error in the exchange (state mismatch, expired code, provider down),
  * we send the user to /?error=auth_failed rather than throwing — the user
  * shouldn't see a stack trace just because they took too long on the login
  * page.
@@ -14,7 +15,7 @@
 
 import type { RequestHandler } from './$types';
 import { redirect } from '@sveltejs/kit';
-import { exchangeCode, decodeIdToken } from '$lib/server/auth0';
+import { exchangeCode, decodeIdToken } from '$lib/server/oidc';
 import { readPkce, clearPkce, writeSession } from '$lib/server/session';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
@@ -23,7 +24,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	const error = url.searchParams.get('error');
 
 	if (error) {
-		console.warn('Auth0 callback returned error', { error, description: url.searchParams.get('error_description') });
+		console.warn('OIDC callback returned error', { error, description: url.searchParams.get('error_description') });
 		clearPkce(cookies);
 		throw redirect(303, '/?error=auth_failed');
 	}
@@ -39,7 +40,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	}
 
 	if (pkce.state !== state) {
-		console.warn('Auth0 callback state mismatch — possible CSRF', {
+		console.warn('OIDC callback state mismatch — possible CSRF', {
 			expected: pkce.state,
 			received: state
 		});
@@ -51,7 +52,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	try {
 		tokens = await exchangeCode(code, pkce.verifier);
 	} catch (err) {
-		console.error('Auth0 token exchange failed', err);
+		console.error('OIDC token exchange failed', err);
 		clearPkce(cookies);
 		throw redirect(303, '/?error=auth_exchange_failed');
 	}

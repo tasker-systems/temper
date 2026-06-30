@@ -6,18 +6,18 @@
  * SHA-256, so the secret must be at least 32 random bytes' worth of entropy
  * (typically a 64-character hex string or a 44-character base64 string).
  *
- * The session payload holds the Auth0 access_token, refresh_token (if
- * granted), id_token claims, and the expiry. We do NOT store the temper
- * Profile in the cookie — it's fetched fresh on every request via
- * `hooks.server.ts` to keep entitlements current. The cookie's job is just
- * to remember "who is this person" between requests.
+ * The session payload holds the access_token, refresh_token (if granted),
+ * id_token claims, and the expiry. We do NOT store the temper Profile in the
+ * cookie — it's fetched fresh on every request via `hooks.server.ts` to keep
+ * entitlements current. The cookie's job is just to remember "who is this
+ * person" between requests.
  */
 
 import type { Cookies } from '@sveltejs/kit';
 import { CompactEncrypt, compactDecrypt } from 'jose';
 import { createHash } from 'node:crypto';
 import { SESSION_SECRET } from '$env/static/private';
-import type { Auth0IdTokenClaims } from './auth0';
+import type { OidcIdTokenClaims } from './oidc';
 
 const COOKIE_NAME = 'temper_session';
 const PKCE_COOKIE_NAME = 'temper_pkce';
@@ -30,7 +30,7 @@ const PKCE_COOKIE_MAX_AGE_SECONDS = 60 * 10; // 10 minutes — login flow window
 export interface SessionData {
 	accessToken: string;
 	refreshToken: string | null;
-	idTokenClaims: Auth0IdTokenClaims;
+	idTokenClaims: OidcIdTokenClaims;
 	/** Unix seconds when the access_token expires. */
 	expiresAt: number;
 }

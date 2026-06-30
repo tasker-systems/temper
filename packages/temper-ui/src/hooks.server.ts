@@ -5,7 +5,7 @@
  *   1. Read the encrypted session cookie. No cookie → unauthenticated locals
  *      and return.
  *   2. If the access_token is within REFRESH_THRESHOLD_SECONDS of expiring,
- *      refresh it via Auth0 and persist the rotated tokens.
+ *      refresh it via the OIDC provider and persist the rotated tokens.
  *   3. Populate `locals.user` from the cached id_token claims and
  *      `locals.accessToken` from the (possibly refreshed) access_token.
  *   4. Fetch the temper profile via `/api/profile`. This is the source of
@@ -21,7 +21,7 @@
 
 import type { Handle } from '@sveltejs/kit';
 import { readSession, writeSession, clearSession } from '$lib/server/session';
-import { refreshAccessToken, REFRESH_THRESHOLD_SECONDS } from '$lib/server/auth0';
+import { refreshAccessToken, REFRESH_THRESHOLD_SECONDS } from '$lib/server/oidc';
 import { apiGet, ApiError } from '$lib/server/api';
 import type { ProfileWithEntitlements } from '$lib/types';
 
@@ -57,7 +57,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				expiresAt
 			});
 		} catch (err) {
-			console.error('Auth0 token refresh failed; clearing session', err);
+			console.error('OIDC token refresh failed; clearing session', err);
 			clearSession(event.cookies);
 			return resolve(event);
 		}
