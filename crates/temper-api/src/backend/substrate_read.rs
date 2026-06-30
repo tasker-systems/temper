@@ -120,7 +120,7 @@ async fn filtered_visible_page(
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
            JOIN kb_resource_homes h ON h.resource_id = r.id
-           JOIN kb_contexts c
+           LEFT JOIN kb_contexts c
              ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
            JOIN kb_profiles p ON p.id = h.owner_profile_id
            JOIN kb_properties dt
@@ -455,15 +455,15 @@ pub async fn search_select(
                 slug: String::new(),
                 kb_uri: row.origin_uri.clone(),
                 origin_uri: row.origin_uri,
-                context: Some(row.context_name),
+                context: row.context_name,
                 doc_type: row.doc_type_name,
                 fts_score: h.fts_score,
                 vector_score: h.vector_score,
                 graph_score: h.graph_score,
                 combined_score: h.combined_score,
                 origin: "unified".to_string(),
-                context_slug: Some(row.context_slug),
-                context_owner_ref: Some(row.context_owner_ref),
+                context_slug: row.context_slug,
+                context_owner_ref: row.context_owner_ref,
             });
         }
     }

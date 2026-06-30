@@ -299,7 +299,8 @@ pub struct ResourceRowParity {
     /// The synthesized resource id (re-minted; not a parity invariant).
     pub re_minted_id: ResourceId,
     /// The synthesized home-anchor context id (re-minted; not a parity invariant).
-    pub re_minted_context_id: ContextId,
+    /// `None` when the resource is homed in a cognitive map (no `kb_contexts` row).
+    pub re_minted_context_id: Option<ContextId>,
     /// The synthesized owner profile id (re-minted; not a parity invariant).
     pub owner_profile_id: ProfileId,
     /// The synthesized originator profile id (re-minted; not a parity invariant).
@@ -314,16 +315,22 @@ pub struct ResourceRowParity {
     pub created: DateTime<Utc>,
     /// Real last-mutation timestamp — `kb_resources.updated` (event `occurred_at` at last write).
     pub updated: DateTime<Utc>,
-    /// Home context display name (invariant).
-    pub context_name: String,
+    /// Home context display name (invariant). `None` for a cogmap-homed resource.
+    pub context_name: Option<String>,
     /// Authoritative doctype name (invariant) — the `doc_type` property.
     pub doc_type_name: String,
     /// Owner profile handle (invariant).
     pub owner_handle: String,
     /// Slug of the home context (the natural-key half of `@owner/slug`). Invariant.
-    pub context_slug: String,
+    /// `None` for a cogmap-homed resource.
+    pub context_slug: Option<String>,
     /// Already-sigil'd owner of the home context (`@<handle>` or `+<team-slug>`). Invariant.
-    pub context_owner_ref: String,
+    /// `None` for a cogmap-homed resource.
+    pub context_owner_ref: Option<String>,
+    /// Home cognitive map id — `Some` when the resource is cogmap-homed (Surface B).
+    pub cogmap_id: Option<Uuid>,
+    /// Home cognitive map display name — `Some` iff `cogmap_id` is `Some`.
+    pub cogmap_name: Option<String>,
     /// `temper-stage`, if present (invariant).
     pub stage: Option<String>,
     /// `temper-mode`, if present (invariant).
@@ -365,6 +372,8 @@ pub async fn resource_row(
                   WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
                   ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                 END               AS context_owner_ref,
+                cm.id             AS cogmap_id,
+                cm.name           AS cogmap_name,
                 h.owner_profile_id,
                 h.originator_profile_id,
                 p.handle          AS owner_handle,
@@ -375,8 +384,10 @@ pub async fn resource_row(
                 sq.property_value #>> '{}' AS seq
            FROM kb_resources r
            JOIN kb_resource_homes h ON h.resource_id = r.id
-           JOIN kb_contexts c
+           LEFT JOIN kb_contexts c
              ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+           LEFT JOIN kb_cogmaps cm
+             ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'
            JOIN kb_profiles p ON p.id = h.owner_profile_id
            JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
@@ -420,6 +431,8 @@ pub async fn resource_row(
         context_name: row.get("context_name"),
         context_slug: row.get("context_slug"),
         context_owner_ref: row.get("context_owner_ref"),
+        cogmap_id: row.get("cogmap_id"),
+        cogmap_name: row.get("cogmap_name"),
         doc_type_name: row.get("doc_type_name"),
         owner_handle: row.get("owner_handle"),
         stage: row.get("stage"),

@@ -11,11 +11,10 @@
 //!   3. A principal who cannot read the map gets 403 on a `--cogmap` create — AND no home row is
 //!      written (auth before writes: the gate denies BEFORE any mutation).
 //!
-//! NOTE on the happy path (cases 1 & 2): reading a cogmap-homed resource back as a context-shaped
-//! `ResourceRow` is a later (deferred) wayfinding beat — the shared `readback::resource_row` inner-joins
-//! `kb_contexts`, so the create response readback errors for a cogmap home even though the substrate
-//! write (resource + home + chunks) commits in its own transaction first. These tests therefore assert
-//! the committed DB state (the feature: cogmap homing + FTS scoping), exactly as the L0 kernel tests do.
+//! NOTE on the happy path: as of Task F the shared `readback::resource_row` LEFT-JOINs both
+//! `kb_contexts` AND `kb_cogmaps`, so a cogmap-homed resource reads back cleanly — the create
+//! response and `show` both return 200 with the `cogmap_*` fields populated and `context_*` null.
+//! Case 1 asserts that readback directly; case 2 still asserts the committed FTS-scoping invariant.
 
 mod common;
 
@@ -199,13 +198,31 @@ async fn create_cogmap_homed_resource_writes_cogmap_home(pool: PgPool) {
         "Body homed in a cognitive map.",
     )
     .await;
-    // The gate passed (not 403/400) — the write committed even though the cogmap read-back is a
-    // later beat. Reject only the authz/validation failure statuses here.
+    // Task F: the create response now reads the cogmap-homed resource back cleanly (200) — the
+    // readback LEFT-JOINs kb_contexts AND kb_cogmaps, so a cogmap home no longer errors.
     let status = resp.status().as_u16();
-    assert!(
-        status != 403 && status != 400,
-        "an authorable cogmap create must pass the gate, got {status}"
+    assert_eq!(
+        status, 200,
+        "an authorable cogmap create must return a clean 200, got {status}"
     );
+
+    // The returned ResourceRow carries the cogmap home (cogmap_* populated, context_* null).
+    let created: serde_json::Value = resp.json().await.expect("create response JSON");
+    assert_eq!(
+        created["cogmap_id"].as_str(),
+        Some(cogmap.to_string().as_str()),
+        "the create response must carry the home cogmap id; got {created}"
+    );
+    assert_eq!(
+        created["cogmap_name"].as_str(),
+        Some("home-1-map"),
+        "the create response must carry the home cogmap name; got {created}"
+    );
+    assert!(
+        created["context_name"].is_null(),
+        "a cogmap-homed resource has no context_name; got {created}"
+    );
+    let created_id = created["id"].as_str().expect("created id").to_string();
 
     // The feature: exactly one NEW cogmap-homed resource row, table = 'kb_cogmaps'.
     let after = homes_in_cogmap(&app.pool, cogmap).await;
@@ -213,6 +230,35 @@ async fn create_cogmap_homed_resource_writes_cogmap_home(pool: PgPool) {
         after - before,
         1,
         "the create must write exactly one new kb_resource_homes row anchored on the cogmap"
+    );
+
+    // `show` of the cogmap-homed resource returns it with the same cogmap_* populated.
+    let show = app
+        .client
+        .get(app.url(&format!("/api/resources/{created_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("show request failed");
+    assert_eq!(
+        show.status().as_u16(),
+        200,
+        "show of a cogmap-homed resource must be 200"
+    );
+    let shown: serde_json::Value = show.json().await.expect("show response JSON");
+    assert_eq!(
+        shown["cogmap_id"].as_str(),
+        Some(cogmap.to_string().as_str()),
+        "show must carry the home cogmap id; got {shown}"
+    );
+    assert_eq!(
+        shown["cogmap_name"].as_str(),
+        Some("home-1-map"),
+        "show must carry the home cogmap name; got {shown}"
+    );
+    assert!(
+        shown["context_name"].is_null(),
+        "a cogmap-homed resource shown back has no context_name; got {shown}"
     );
 
     // The created resource (isolated by its unique title — the map's telos shares the anchor) is

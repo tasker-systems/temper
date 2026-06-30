@@ -42,7 +42,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
 
     assert_eq!(created.title, "E2E Create & Get Test");
     assert_eq!(created.origin_uri, "test://e2e/resource-create-get");
-    assert_eq!(created.kb_context_id, context.id);
+    assert_eq!(created.kb_context_id, Some(context.id));
     assert_eq!(created.doc_type_name, "research");
     assert!(created.is_active);
 

@@ -476,7 +476,7 @@ mod tests {
         let nil = Uuid::nil();
         ResourceRow {
             id: ResourceId(nil),
-            kb_context_id: ContextId(nil),
+            kb_context_id: Some(ContextId(nil)),
             origin_uri: "kb://@me/temper/task/test-task".to_string(),
             title: "Test Task".to_string(),
             originator_profile_id: ProfileId(nil),
@@ -484,11 +484,13 @@ mod tests {
             is_active: true,
             created: chrono::DateTime::UNIX_EPOCH,
             updated: chrono::DateTime::UNIX_EPOCH,
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: Some("active".to_string()),
             seq: None,
             mode: None,
@@ -503,7 +505,7 @@ mod tests {
         let row = wire_resource_to_resource_row(&wire);
         assert_eq!(row.title, "Test Task");
         assert_eq!(row.id, ResourceId(Uuid::nil()));
-        assert_eq!(row.context_name, "temper");
+        assert_eq!(row.context_name.as_deref(), Some("temper"));
         assert_eq!(row.doc_type_name, "task");
         assert_eq!(row.body_hash, Some("abc123".to_string()));
         assert_eq!(row.owner_handle, "@me");

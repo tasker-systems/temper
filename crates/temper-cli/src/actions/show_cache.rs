@@ -159,7 +159,12 @@ pub(super) fn reconstruct_full_file_content(
     fm.set_managed_field("temper-id", serde_json::Value::String(meta.id.to_string()));
     fm.set_managed_field(
         "temper-context",
-        serde_json::Value::String(meta.context_name.clone()),
+        serde_json::Value::String(
+            meta.context_name
+                .clone()
+                .or_else(|| meta.cogmap_name.clone())
+                .unwrap_or_default(),
+        ),
     );
     fm.set_managed_field(
         "temper-created",
@@ -257,7 +262,7 @@ mod tests {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
             origin_uri: "test://origin".to_string(),
             title: "Test Title".to_string(),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
@@ -265,11 +270,13 @@ mod tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: None,
             seq: None,
             mode: None,

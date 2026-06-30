@@ -270,6 +270,8 @@ pub(crate) async fn native_resource_row(
         owner_handle: p.owner_handle,
         context_slug: p.context_slug,
         context_owner_ref: p.context_owner_ref,
+        cogmap_id: p.cogmap_id,
+        cogmap_name: p.cogmap_name,
         stage: p.stage,
         seq: p.seq,
         mode: p.mode,
@@ -959,7 +961,8 @@ impl Backend for DbBackend {
                 .move_to
                 .as_ref()
                 .and_then(|m| m.context_to.map(|id| id.to_string()))
-                .unwrap_or_else(|| current.context_name.clone());
+                .or_else(|| current.context_name.clone())
+                .unwrap_or_default();
             // temper-title updates the kb_resources.title column when supplied; otherwise the
             // current title carries (and seeds validation). temper-slug is §7-Die (not stored,
             // so `current.slug` is None) — derive the canonical slug from the title so the
@@ -1106,7 +1109,7 @@ impl Backend for DbBackend {
                     // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
                     slug: row.origin_uri,
                     doctype: row.doc_type_name,
-                    context: row.context_name,
+                    context: row.context_name.or(row.cogmap_name).unwrap_or_default(),
                     title: row.title,
                 },
                 // §9 floor asserts the matching SET, not the score.

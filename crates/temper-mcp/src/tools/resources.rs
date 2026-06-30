@@ -236,7 +236,11 @@ fn build_enriched(
         id: row.id.into(),
         title: row.title.clone(),
         slug: None,
-        context_name: row.context_name.clone(),
+        context_name: row
+            .context_name
+            .clone()
+            .or_else(|| row.cogmap_name.clone())
+            .unwrap_or_else(|| "—".to_string()),
         doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
         origin_uri: row.origin_uri.clone(),
@@ -963,7 +967,7 @@ mod build_enriched_tests {
         let nil = uuid::Uuid::nil();
         ResourceRow {
             id: ResourceId::from(uuid::Uuid::now_v7()),
-            kb_context_id: ContextId::from(nil),
+            kb_context_id: Some(ContextId::from(nil)),
             origin_uri: "temper://fixture/task-doc".to_string(),
             title: "Wire the widget".to_string(),
             originator_profile_id: ProfileId::from(nil),
@@ -971,11 +975,13 @@ mod build_enriched_tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: Some("in-progress".to_string()),
             seq: None,
             mode: None,

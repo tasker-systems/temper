@@ -658,8 +658,10 @@ pub fn delete(
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, _client) =
-        crate::backend_select::build_backend(config, &row.context_name)?;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(
+        config,
+        row.context_name.as_deref().unwrap_or_default(),
+    )?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
     // Projection refresh: remove the resource's projection file. Best-effort
@@ -1047,8 +1049,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     };
 
     // 5. Acquire the cloud backend + client and dispatch the update.
-    let (runtime, backend, client) =
-        crate::backend_select::build_backend(config, &row.context_name)?;
+    let (runtime, backend, client) = crate::backend_select::build_backend(
+        config,
+        row.context_name.as_deref().unwrap_or_default(),
+    )?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
     // 6. Projection refresh: rewrite the affected projection file from
@@ -1253,7 +1257,7 @@ mod action_result_tests {
     ) -> ResourceRow {
         ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
             origin_uri: "test://origin".to_string(),
             title: title.to_string(),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
@@ -1261,11 +1265,13 @@ mod action_result_tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            context_name: context.to_string(),
+            context_name: Some(context.to_string()),
             doc_type_name: doc_type.to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: context.to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some(context.to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: None,
             seq: None,
             mode: None,
@@ -1447,7 +1453,7 @@ mod resource_list_render_tests {
     fn render_resource_list_json_passes_wire_type_with_internals() {
         let rows: Vec<ResourceRow> = vec![ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
-            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_context_id: Some(ContextId(uuid::Uuid::nil())),
             origin_uri: "test://origin".to_string(),
             title: "Test Resource".to_string(),
             originator_profile_id: ProfileId(uuid::Uuid::nil()),
@@ -1455,11 +1461,13 @@ mod resource_list_render_tests {
             is_active: true,
             created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             updated: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            context_name: "temper".to_string(),
+            context_name: Some("temper".to_string()),
             doc_type_name: "research".to_string(),
             owner_handle: "@me".to_string(),
-            context_slug: "temper".to_string(),
-            context_owner_ref: "@me".to_string(),
+            context_slug: Some("temper".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
             stage: None,
             seq: None,
             mode: None,
