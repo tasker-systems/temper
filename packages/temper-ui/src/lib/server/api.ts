@@ -1,4 +1,10 @@
-import { API_BASE_URL } from '$env/static/private';
+import { env } from '$env/dynamic/private';
+
+// Read at runtime (not build-inlined) so the upstream API origin is configured
+// purely through env, consistent with the reverse proxy in `proxy.ts`. Both read
+// the same `API_BASE_URL`; binding them the same way avoids one taking effect at
+// runtime while the other needs a rebuild.
+const API_BASE_URL = env.API_BASE_URL ?? '';
 
 export class ApiError extends Error {
 	status: number;

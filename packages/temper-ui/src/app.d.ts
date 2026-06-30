@@ -4,7 +4,7 @@ declare global {
 	namespace App {
 		interface Locals {
 			/**
-			 * Auth0 OIDC user identity from the id_token claims.
+			 * OIDC user identity from the id_token claims.
 			 * Null when the request has no valid session cookie.
 			 */
 			user: {

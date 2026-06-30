@@ -1,16 +1,16 @@
 /**
- * GET /auth/login — start the Auth0 OIDC PKCE flow.
+ * GET /auth/login — start the OIDC Authorization Code + PKCE flow.
  *
  * Generates a fresh CSRF state token and PKCE code verifier, stashes both
  * (plus the post-login `returnTo` destination) in a short-lived encrypted
- * cookie, then 302s to Auth0's /authorize endpoint. /auth/callback consumes
- * the cookie to verify state and exchange the code for tokens.
+ * cookie, then 302s to the provider's /authorize endpoint. /auth/callback
+ * consumes the cookie to verify state and exchange the code for tokens.
  */
 
 import type { RequestHandler } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { randomBytes, createHash } from 'node:crypto';
-import { authorizeUrl } from '$lib/server/auth0';
+import { authorizeUrl } from '$lib/server/oidc';
 import { writePkce } from '$lib/server/session';
 
 function base64url(buf: Buffer): string {
@@ -30,5 +30,5 @@ export const GET: RequestHandler = async ({ url, cookies, locals }) => {
 
 	await writePkce(cookies, { state, verifier, returnTo });
 
-	throw redirect(302, authorizeUrl(state, challenge));
+	throw redirect(302, await authorizeUrl(state, challenge));
 };

@@ -2,7 +2,7 @@
 
 This guide is for operators standing up their own Temper instance — on their own Vercel project, Neon database, and Auth0 tenant — rather than using the hosted service at `temperkb.io`.
 
-**Scope:** This runbook covers the API + MCP surfaces only. The `temper-ui` web application (SvelteKit) requires its own Auth0 Regular-Web-App and a separate Vercel project; that deployment is deferred and not documented here.
+**Scope:** This runbook covers the API + MCP surfaces, plus an optional [web UI](#deploy-the-ui-optional). The `temper-ui` web application (SvelteKit) deploys as its own Vercel project with its own confidential OIDC client; it is fully config-driven (no per-org fork) and is documented in the UI section below.
 
 ## Topology
 
@@ -90,7 +90,7 @@ If you connect your Neon project to Vercel via the Neon integration, Neon automa
 > Okta-specific environment and CLI configuration. The rest of this guide (Neon, Vercel, verify)
 > applies unchanged.
 
-The contract is **one API resource server and two native applications** (the web app is out of scope):
+The contract is **one API resource server and two native applications** (plus an optional confidential web-app client if you deploy the [web UI](#deploy-the-ui-optional)):
 
 ### 1. API resource server
 
@@ -151,14 +151,14 @@ Import the repository into a new Vercel project. Set `framework` override to **O
 | `MCP_AUDIENCE` | mcp | Yes | Auth0 API identifier for MCP token validation |
 | `MCP_CLIENT_ID` | mcp | Yes | MCP native application client_id |
 | `MCP_BASE_URL` | mcp | Yes | `https://<instance>` — used in OAuth discovery responses |
-| `API_BASE_URL` | ui | No | Consumed only by the `temper-ui` web app (out of scope); not required for API + MCP + CLI |
+| `API_BASE_URL` | ui | No | Only for the optional [web UI](#deploy-the-ui-optional) (a separate Vercel project); not required for API + MCP + CLI |
 | `BLOB_READ_WRITE_TOKEN` | api | Yes | Vercel Blob token — used by the upload/extract/embed pipeline |
 | `ENABLE_SWAGGER` | api | No | Set `true` to expose `/swagger-ui` in non-production deployments |
 | `PORT` | api | No | Platform-injected by Vercel; defaults to `3000`. Only relevant for local or non-Vercel runs |
 | `SQLX_OFFLINE` | build | Yes | Must be `true` — compile-time SQL checks run against the committed `.sqlx/` cache |
 | `CORS_ORIGINS` | api | Situational | See note below |
 
-**`CORS_ORIGINS` caveat:** This variable is required for any cross-origin client (browser-based UI, browser-based MCP client). When `CORS_ORIGINS` is unset, the API returns no CORS headers and cross-origin requests fail. The live `temperkb.io` deployment sets this on Preview and Dev environments but not Production (which serves requests only from the CLI and MCP clients, not a browser UI). Operators hosting a web UI — even the deferred `temper-ui` — must set this explicitly. A permissive development value is `*`; production should list only the specific origins that need access.
+**`CORS_ORIGINS` caveat:** This variable is required for any client that calls the API **cross-origin** from a browser. When `CORS_ORIGINS` is unset, the API returns no CORS headers and cross-origin requests fail. Note the bundled `temper-ui` does **not** need it — it reverse-proxies API/MCP traffic same-origin through its own server (see [Deploy the UI](#deploy-the-ui-optional)), so the browser never makes a cross-origin call. Set `CORS_ORIGINS` only if you run a *separate* browser-based client against the API directly. A permissive development value is `*`; production should list only the specific origins that need access.
 
 ### vercel.json summary
 
@@ -266,6 +266,37 @@ For manual configuration (e.g. Claude Desktop's `claude_desktop_config.json`):
 
 The MCP server validates JWTs against `JWKS_URL` and checks `MCP_AUDIENCE`. Ensure `MCP_CLIENT_ID` matches the Auth0 native application registered for your MCP clients and that the client's callback URLs are allowlisted in that Auth0 application.
 
+## Deploy the UI (optional)
+
+The `temper-ui` SvelteKit app is an **optional** browser front-end. It deploys as a **second Vercel project** from the same monorepo (root directory `packages/temper-ui`) and talks to the API instance you stood up above. It is single-repo and config-driven: an operator points it at their own API origin and their own OIDC issuer entirely through environment variables — no source edits, no fork.
+
+### Two couplings, both env-driven
+
+- **Browser-facing API/MCP/OAuth traffic** is reverse-proxied by the UI's server (`hooks.server.ts`) to `API_BASE_URL`, rather than via a hardcoded `vercel.json` rewrite. Requests to `/api/*`, `/mcp`, `/oauth/*`, and `/.well-known/*` on the UI origin are forwarded server-side to your API host. Because this is a same-origin proxy (the browser only ever talks to the UI origin), **the UI does not require `CORS_ORIGINS` on the API** for its own traffic.
+- **Login** is generic OIDC Authorization Code + PKCE. Endpoints are resolved from `OIDC_ISSUER`'s discovery document (`/.well-known/openid-configuration`), so any OIDC provider works. Logout uses the standard RP-initiated `end_session_endpoint`.
+
+### Register a confidential OIDC client
+
+In your identity provider, register a **Regular Web Application** (confidential client) for the UI, distinct from the CLI/MCP native apps:
+
+- **Allowed callback / redirect URI:** `https://<ui-host>/auth/callback`
+- **Allowed logout / post-logout redirect URI:** `https://<ui-host>`
+- **Grant types:** Authorization Code + Refresh Token (the UI requests the `offline_access` scope)
+
+### Environment variable contract (UI project)
+
+| Variable | Required | Notes |
+| -------- | -------- | ----- |
+| `API_BASE_URL` | Yes | Your API origin, e.g. `https://<instance>` — used by server loaders **and** the browser-facing reverse proxy |
+| `OIDC_ISSUER` | Yes¹ | Issuer base URL, e.g. `https://<tenant>.auth0.com` or `https://<org>.okta.com/oauth2/<asId>`. Discovery resolved from `<issuer>/.well-known/openid-configuration` |
+| `OIDC_CLIENT_ID` | Yes¹ | The UI confidential web-app client_id |
+| `OIDC_CLIENT_SECRET` | Yes¹ | The UI confidential web-app client secret |
+| `OIDC_AUDIENCE` | Situational | Required for Auth0 (the API identifier); omit for Okta custom auth servers, which carry it implicitly |
+| `APP_URL` | Yes | The UI's own public origin, e.g. `https://<ui-host>` — used to build the redirect and post-logout URIs |
+| `SESSION_SECRET` | Yes | ≥32 bytes of entropy (64-char hex or 44-char base64) — derives the JWE session-cookie key |
+
+¹ **Back-compat fallback:** if `OIDC_*` are unset, the UI falls back to the canonical deployment's `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` / `AUTH0_AUDIENCE` (with `OIDC_ISSUER` derived as `https://<AUTH0_DOMAIN>`). Self-hosters should set the `OIDC_*` variables directly; the fallback exists so the hosted `temperkb.io` project keeps working unchanged. A non-Auth0 provider is exercised end to end in [self-hosting-okta.md](self-hosting-okta.md).
+
 ## Verify
 
 Run these checks after the first deployment and migration.
@@ -305,7 +336,6 @@ A successful round-trip confirms that the API, database writes, and read-back pa
 
 The following are outside the scope of this runbook:
 
-- **temper-ui web application** — The SvelteKit app (`packages/temper-ui`) requires a separate Vercel project and an Auth0 Regular-Web-App (distinct from the native apps above). This deployment path is deferred; no runbook exists for it yet.
 - **Multi-region or HA Neon** — This guide targets a single Neon project in one region. Neon's branching and read-replica features are not covered.
 - **Alternative messaging backends** — The deployment described here uses the default messaging configuration. RabbitMQ and other transports are not covered.
 
