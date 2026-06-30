@@ -56,6 +56,7 @@ async fn seed_resource(
             title: slug.to_string(),
             origin_uri: format!("mcp://test/{slug}"),
             context_ref: format!("@me/{context_name}"),
+            home_cogmap_id: None,
             doc_type_name: "research".to_string(),
             content_hash: Some(format!("sha256:{}", sha2_hex(slug))),
             slug: slug.to_string(),

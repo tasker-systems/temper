@@ -64,6 +64,7 @@ async fn seed_task(
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
         context_ref: format!("@me/{context}"),
+        home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: None,
         slug: slug.to_string(),

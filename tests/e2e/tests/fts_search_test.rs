@@ -24,6 +24,7 @@ async fn ingest_with_chunks(
         title: title.to_string(),
         origin_uri: format!("test://fts/{slug}"),
         context_ref: format!("@me/{context_name}"),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64x}", title.len())),
         slug: slug.to_string(),

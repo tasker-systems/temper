@@ -35,6 +35,7 @@ async fn ingest_create_with_at_me_slug_succeeds(pool: sqlx::PgPool) {
         title: "Context Ref Test — @me/slug form".to_string(),
         origin_uri: "test://e2e/context-ref-at-me-slug".to_string(),
         context_ref,
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "c0010001000100010001000100010001000100010001000100010001000100010001".to_string(),
@@ -74,6 +75,7 @@ async fn ingest_create_with_bare_name_returns_400(pool: sqlx::PgPool) {
         title: "Should Be Rejected".to_string(),
         origin_uri: "test://e2e/context-ref-bare-name".to_string(),
         context_ref: "temper".to_string(), // bare name — no @ or + prefix
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: None,
         slug: "should-be-rejected".to_string(),
@@ -128,6 +130,7 @@ async fn ingest_create_with_uuid_context_ref_succeeds(pool: sqlx::PgPool) {
         title: "Context Ref Test — UUID form".to_string(),
         origin_uri: "test://e2e/context-ref-uuid".to_string(),
         context_ref,
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "d0010001000100010001000100010001000100010001000100010001000100010001".to_string(),

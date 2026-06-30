@@ -281,9 +281,14 @@ pub enum ResourceAction {
         /// Resource title
         #[arg(long)]
         title: Option<String>,
-        /// Context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
+        /// Context ref (UUID or @owner/slug, e.g. @me/temper or +team/general).
+        /// Mutually exclusive with --cogmap; specify exactly one home.
         #[arg(long)]
         context: Option<String>,
+        /// Cognitive-map ref (UUID or decorated `slug-<uuid>`) to home the
+        /// resource in. Mutually exclusive with --context; specify exactly one.
+        #[arg(long)]
+        cogmap: Option<String>,
         /// Parent goal slug (task only)
         #[arg(long)]
         goal: Option<String>,

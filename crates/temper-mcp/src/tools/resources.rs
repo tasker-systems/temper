@@ -23,8 +23,14 @@ use crate::service::TemperMcpService;
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateResourceInput {
     /// Context ref (UUID or `@owner/slug`), resolved server-side.
-    /// Bare names (no `@` prefix, not a UUID) are rejected.
-    pub context_ref: String,
+    /// Bare names (no `@` prefix, not a UUID) are rejected. Mutually exclusive
+    /// with `cogmap`; supply exactly one home.
+    #[serde(default)]
+    pub context_ref: Option<String>,
+    /// Cognitive-map ref (UUID or decorated `slug-<uuid>`) to home the resource
+    /// in. Mutually exclusive with `context_ref`; supply exactly one home.
+    #[serde(default)]
+    pub cogmap: Option<String>,
     /// Human-readable doc type name (e.g. "task", "session", "research").
     pub doc_type_name: String,
     /// Resource title.
@@ -312,12 +318,61 @@ pub async fn create_resource(
         }
     }
 
-    // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
-    let cref = parse_context_ref(&input.context_ref)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None))?;
-    let context = resolve_context_ref(pool, profile_id, &cref)
-        .await
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+    // Resolve the home anchor — exactly one of a cognitive map or a context.
+    // Symmetric with the HTTP ingest handler: the cogmap branch runs the
+    // producer write gate (auth before writes) before homing in the map.
+    let home = match (input.cogmap.as_deref(), input.context_ref.as_deref()) {
+        (Some(_), Some(_)) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "context_ref and cogmap are mutually exclusive; supply exactly one home"
+                    .to_string(),
+                None,
+            ));
+        }
+        (None, None) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "no home specified — supply exactly one of context_ref or cogmap".to_string(),
+                None,
+            ));
+        }
+        (Some(cogmap_ref), None) => {
+            // Trailing-UUID-only resolution (no server lookup).
+            let map = temper_workflow::operations::parse_ref(cogmap_ref)
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
+                })?
+                .0;
+            // Auth before writes: producer gate (seam → team-cogmap membership).
+            let ok: bool = sqlx::query_scalar!(
+                "SELECT cogmap_authorable_by_profile($1, $2)",
+                *profile_id,
+                map
+            )
+            .fetch_one(pool)
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+            .unwrap_or(false);
+            if !ok {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "not authorized to author in this cognitive map".to_string(),
+                    None,
+                ));
+            }
+            HomeAnchor::Cogmap(temper_core::types::ids::CogmapId::from(map))
+        }
+        (None, Some(context_ref)) => {
+            // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
+            let cref = parse_context_ref(context_ref).map_err(|e| {
+                rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None)
+            })?;
+            let context = resolve_context_ref(pool, profile_id, &cref)
+                .await
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None)
+                })?;
+            HomeAnchor::Context(context)
+        }
+    };
 
     // Build slug from title if not provided
     let slug = input.slug.unwrap_or_else(|| {
@@ -373,7 +428,7 @@ pub async fn create_resource(
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
-        home: HomeAnchor::Context(context),
+        home,
         title: input.title,
         body,
         managed_meta,

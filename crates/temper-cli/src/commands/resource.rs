@@ -109,19 +109,6 @@ pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
     }
 }
 
-/// Require a context, returning an error if none specified.
-///
-/// temper is cloud-only: there are no context directories on disk to
-/// check, so a supplied name is trusted directly.
-fn require_context(context: Option<&str>) -> Result<String> {
-    match context {
-        Some(ctx) => Ok(ctx.to_string()),
-        None => Err(TemperError::Project(
-            "no context specified — use --context <ref> (e.g. @me/temper, +team/general, or a UUID)".into(),
-        )),
-    }
-}
-
 /// Resolve `--from <path|url>` into a body string via kreuzberg extraction.
 ///
 /// Returns `Some(body)` if `from` is set; `None` if `from` is `None`. Errors
@@ -174,6 +161,9 @@ pub struct CreateResourceArgs<'a> {
     pub doc_type: &'a str,
     pub title: &'a str,
     pub context: Option<&'a str>,
+    /// Cognitive-map ref to home the resource in. Mutually exclusive with
+    /// `context`; the surface enforces exactly-one.
+    pub cogmap: Option<&'a str>,
     pub goal: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
@@ -194,6 +184,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         doc_type,
         title,
         context,
+        cogmap,
         goal,
         mode,
         effort,
@@ -218,7 +209,38 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         )));
     }
 
-    let ctx = require_context(context)?;
+    // Home resolution — exactly one of --context / --cogmap. The home choice is
+    // a `HomeAnchor` enum (never a placeholder id plus a flag): a context home
+    // carries a placeholder id (the real ref is threaded via the cloud backend's
+    // `context_ref`), a cogmap home carries the resolved `CogmapId`.
+    let (home, ctx) = match (context, cogmap) {
+        (Some(_), Some(_)) => {
+            return Err(TemperError::BadRequest(
+                "--context and --cogmap are mutually exclusive; specify exactly one home".into(),
+            ));
+        }
+        (None, None) => {
+            return Err(TemperError::Project(
+                "no home specified — use --context <ref> (e.g. @me/temper) or --cogmap <ref>"
+                    .into(),
+            ));
+        }
+        (Some(context), None) => (
+            temper_core::types::home::HomeAnchor::Context(temper_core::types::ids::ContextId::new()),
+            context.to_string(),
+        ),
+        (None, Some(cogmap)) => {
+            // Trailing-UUID-only resolution (no server lookup); the slug half is
+            // parsed off and ignored.
+            let id = temper_workflow::operations::parse_ref(cogmap)?.0;
+            (
+                temper_core::types::home::HomeAnchor::Cogmap(
+                    temper_core::types::ids::CogmapId::from(id),
+                ),
+                cogmap.to_string(),
+            )
+        }
+    };
 
     let stdin_is_tty = std::io::stdin().is_terminal();
 
@@ -231,15 +253,15 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
-    // `home` is a placeholder — the actual context ref (`ctx`) is threaded
-    // through `CloudBackend.context_ref` to `cmd_to_ingest_payload` and sent
-    // as `IngestPayload.context_ref` for server-side resolution.
+    // For a context home, `home` carries a placeholder id and the actual context
+    // ref (`ctx`) is threaded through `CloudBackend.context_ref` to
+    // `cmd_to_ingest_payload`; for a cogmap home, `home` carries the resolved
+    // `CogmapId` and the translator sends `home_cogmap_id` with an empty
+    // `context_ref`.
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
-        home: temper_core::types::home::HomeAnchor::Context(
-            temper_core::types::ids::ContextId::new(),
-        ),
+        home,
         title: title.to_string(),
         body: body_opt.filter(|b| !b.is_empty()).map(|content| {
             temper_workflow::operations::BodyUpdate {

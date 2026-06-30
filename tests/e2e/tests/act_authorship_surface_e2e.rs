@@ -48,6 +48,7 @@ fn empty_payload(title: &str, ctx: &str, act: ActInput) -> IngestPayload {
         title: title.to_string(),
         origin_uri: format!("test://act/{title}"),
         context_ref: format!("@me/{ctx}"),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: None,
         slug: title.to_lowercase().replace(' ', "-"),

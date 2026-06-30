@@ -93,10 +93,23 @@ pub(crate) fn cmd_to_ingest_payload(
         .transpose()
         .map_err(|e| TemperError::Project(format!("serialize open_meta: {e}")))?;
 
+    // A cogmap home is the single source of truth: when present, the server
+    // branches on `home_cogmap_id` first and ignores `context_ref` (sent empty).
+    let home_cogmap_id = match &cmd.home {
+        temper_core::types::home::HomeAnchor::Cogmap(m) => Some(m.uuid()),
+        temper_core::types::home::HomeAnchor::Context(_) => None,
+    };
+    let context_ref = if home_cogmap_id.is_some() {
+        String::new()
+    } else {
+        context_ref.to_owned()
+    };
+
     Ok(IngestPayload {
         title: cmd.title.clone(),
         origin_uri: String::new(),
-        context_ref: context_ref.to_owned(),
+        context_ref,
+        home_cogmap_id,
         doc_type_name: cmd.doctype.clone(),
         content_hash,
         slug: cmd.slug.clone(),

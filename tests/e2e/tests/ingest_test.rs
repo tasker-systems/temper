@@ -29,6 +29,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         title: "E2E Test Document".to_string(),
         origin_uri: "test://e2e/ingest-test".to_string(),
         context_ref: "@me/e2e-test".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(
             "e2e0test00000000000000000000000000000000000000000000000000000000".to_string(),

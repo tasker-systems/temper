@@ -61,6 +61,7 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: 
         title: title.to_string(),
         origin_uri: format!("test://hash-invariant-{}", Uuid::new_v4()),
         context_ref: "@me/default".to_string(),
+        home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         slug: slug.to_string(),
         content: "body content".to_string(),
