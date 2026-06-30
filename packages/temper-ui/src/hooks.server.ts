@@ -1,7 +1,13 @@
 /**
- * Request middleware that hydrates `event.locals` for every SvelteKit request.
+ * Request middleware for every SvelteKit request.
  *
- * Pipeline:
+ * Before anything else, browser-facing API/MCP/OAuth/discovery paths are
+ * reverse-proxied to the operator-configurable upstream (see `proxy.ts`) — this
+ * replaces the old hardcoded `vercel.json` rewrites so self-hosted installs can
+ * point those paths at their own API host purely through env. All other requests
+ * fall through to session hydration below.
+ *
+ * Session hydration pipeline:
  *   1. Read the encrypted session cookie. No cookie → unauthenticated locals
  *      and return.
  *   2. If the access_token is within REFRESH_THRESHOLD_SECONDS of expiring,
@@ -22,10 +28,17 @@
 import type { Handle } from '@sveltejs/kit';
 import { readSession, writeSession, clearSession } from '$lib/server/session';
 import { refreshAccessToken, REFRESH_THRESHOLD_SECONDS } from '$lib/server/oidc';
+import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
 import { apiGet, ApiError } from '$lib/server/api';
 import type { ProfileWithEntitlements } from '$lib/types';
 
 export const handle: Handle = async ({ event, resolve }) => {
+	// Reverse-proxy the API/MCP/OAuth/discovery surface to the upstream host
+	// before any SvelteKit handling. These paths are not UI routes.
+	if (isProxiedPath(event.url.pathname)) {
+		return proxyRequest(event);
+	}
+
 	event.locals.user = null;
 	event.locals.accessToken = null;
 	event.locals.profile = null;
