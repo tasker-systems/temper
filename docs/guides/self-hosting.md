@@ -273,6 +273,8 @@ The `temper-ui` SvelteKit app is an **optional** browser front-end. It deploys a
 ### Two couplings, both env-driven
 
 - **Browser-facing API/MCP/OAuth traffic** is reverse-proxied by the UI's server (`hooks.server.ts`) to `API_BASE_URL`, rather than via a hardcoded `vercel.json` rewrite. Requests to `/api/*`, `/mcp`, `/oauth/*`, and `/.well-known/*` on the UI origin are forwarded server-side to your API host. Because this is a same-origin proxy (the browser only ever talks to the UI origin), **the UI does not require `CORS_ORIGINS` on the API** for its own traffic.
+
+  > ⚠️ **`API_BASE_URL` must be the API backend's *own* origin, not the UI's public origin.** If the UI and API share a public domain (e.g. the UI serves both `temperkb.io` and proxies `temperkb.io/api`), pointing `API_BASE_URL` at that shared domain makes the proxy forward to *itself* — an infinite loop the platform terminates with `508 Loop Detected`. Set it to the distinct origin where the API actually runs (its own `*.vercel.app` URL, or a dedicated `api.` subdomain). The UI guards against this and returns a clear 500 rather than looping, but the value still needs to be correct for the proxy to work.
 - **Login** is generic OIDC Authorization Code + PKCE. Endpoints are resolved from `OIDC_ISSUER`'s discovery document (`/.well-known/openid-configuration`), so any OIDC provider works. Logout uses the standard RP-initiated `end_session_endpoint`.
 
 ### Register a confidential OIDC client
@@ -287,7 +289,7 @@ In your identity provider, register a **Regular Web Application** (confidential 
 
 | Variable | Required | Notes |
 | -------- | -------- | ----- |
-| `API_BASE_URL` | Yes | Your API origin, e.g. `https://<instance>` — used by server loaders **and** the browser-facing reverse proxy |
+| `API_BASE_URL` | Yes | The API backend's **own** origin (not the UI's public origin — see the loop warning above), e.g. `https://<api-host>` — used by server loaders **and** the browser-facing reverse proxy |
 | `OIDC_ISSUER` | Yes¹ | Issuer base URL, e.g. `https://<tenant>.auth0.com` or `https://<org>.okta.com/oauth2/<asId>`. Discovery resolved from `<issuer>/.well-known/openid-configuration` |
 | `OIDC_CLIENT_ID` | Yes¹ | The UI confidential web-app client_id |
 | `OIDC_CLIENT_SECRET` | Yes¹ | The UI confidential web-app client secret |
