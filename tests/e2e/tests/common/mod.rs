@@ -16,13 +16,13 @@ use sqlx::PgPool;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use temper_api::{
-    config::ApiConfig,
-    create_app,
-    state::{AppState, JwksKeyStore},
-};
+use temper_api::create_app;
 use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
 use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
+use temper_services::{
+    config::ApiConfig,
+    state::{AppState, JwksKeyStore},
+};
 
 /// A running e2e test environment with in-process API server and injected client.
 pub struct E2eTestApp {

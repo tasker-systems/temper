@@ -2,8 +2,8 @@
 
 mod common;
 
-use temper_api::backend::{substrate_read, DbBackend};
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_services::backend::{substrate_read, DbBackend};
 use temper_workflow::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
@@ -843,8 +843,8 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 /// second body part under `include_content`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
-    use temper_api::config::ApiConfig;
-    use temper_api::state::{AppState, JwksKeyStore};
+    use temper_services::config::ApiConfig;
+    use temper_services::state::{AppState, JwksKeyStore};
 
     let app = common::setup(pool.clone()).await;
     // Provision the e2e-test-user profile (auto-created on first profile read).
@@ -976,8 +976,8 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
 /// + a non-empty context_name.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
-    use temper_api::config::ApiConfig;
-    use temper_api::state::{AppState, JwksKeyStore};
+    use temper_services::config::ApiConfig;
+    use temper_services::state::{AppState, JwksKeyStore};
 
     let app = common::setup(pool.clone()).await;
     app.client

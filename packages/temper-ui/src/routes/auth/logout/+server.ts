@@ -1,17 +1,18 @@
 /**
- * GET /auth/logout — clear the local session cookie and redirect to Auth0's
- * /v2/logout so the user is signed out at the IdP as well as in temper.
+ * GET /auth/logout — clear the local session cookie and redirect to the OIDC
+ * provider's RP-initiated logout (`end_session_endpoint`) so the user is signed
+ * out at the IdP as well as in temper.
  *
- * Auth0 will redirect back to APP_URL after logout (must be in the Allowed
- * Logout URLs list in the temper-web application config).
+ * The provider redirects back to APP_URL after logout, so APP_URL must be a
+ * registered post-logout redirect URI (e.g. Auth0's Allowed Logout URLs).
  */
 
 import type { RequestHandler } from './$types';
 import { redirect } from '@sveltejs/kit';
-import { logoutUrl, APP_BASE_URL } from '$lib/server/auth0';
+import { logoutUrl, APP_BASE_URL } from '$lib/server/oidc';
 import { clearSession } from '$lib/server/session';
 
 export const GET: RequestHandler = async ({ cookies }) => {
 	clearSession(cookies);
-	throw redirect(302, logoutUrl(APP_BASE_URL));
+	throw redirect(302, await logoutUrl(APP_BASE_URL));
 };

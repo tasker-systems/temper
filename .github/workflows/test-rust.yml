@@ -193,7 +193,7 @@ jobs:
         # prebuilt Linux x64 tarball from microsoft/onnxruntime and point
         # ORT_DYLIB_PATH at the .so so the ort crate can find it. Without
         # this, any test that actually initializes ort (e.g. a real
-        # ingest-pipeline embed pass) fails with "ONNX Runtime not found".
+        # server-side embed pass) fails with "ONNX Runtime not found".
         run: |
           set -euo pipefail
           ORT_VERSION=1.18.1
@@ -206,8 +206,11 @@ jobs:
         run: cargo sqlx migrate run
 
       - name: Run ingest pipeline tests
+        # temper-api links ort unconditionally via temper-substrate →
+        # temper-ingest(embed), so the test-db tier already exercises the
+        # server-side embed path — no extra api feature needed.
         run: |
-          cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1 --no-fail-fast
+          cargo nextest run -p temper-api --features "test-db" --locked --test-threads 1 --no-fail-fast
           cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1 --no-fail-fast
 
       - name: Run CLI-side embed pipeline tests
@@ -216,7 +219,7 @@ jobs:
         # runtime, so they live here rather than in the Unit Tests job.
         run: cargo nextest run -p temper-cli --features test-embed --locked --test-threads 1 --no-fail-fast
 
-      - name: Run MCP round-trip + ingest-pipeline e2e tests
+      - name: Run MCP round-trip + cloud body-update e2e tests
         # Combined filter: the mcp_round_trip_test binary (all tests), plus
         # the three cloud_update_* body-bearing tests that exercise
         # build_ingest_payload through the embed pipeline. The pre-cloud-only

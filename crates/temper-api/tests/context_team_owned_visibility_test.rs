@@ -21,8 +21,8 @@
 mod common;
 
 use sqlx::PgPool;
-use temper_api::{error::ApiError, services::context_service};
 use temper_core::{context_ref::parse_context_ref, types::ids::ProfileId};
+use temper_services::{error::ApiError, services::context_service};
 use uuid::Uuid;
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────

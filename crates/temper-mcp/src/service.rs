@@ -21,10 +21,10 @@ use rmcp::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use temper_api::services::profile_service;
-use temper_api::state::AppState;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, Profile};
+use temper_services::services::profile_service;
+use temper_services::state::AppState;
 
 use crate::middleware::McpClaims;
 use crate::tools;
@@ -100,7 +100,7 @@ impl TemperMcpService {
         );
 
         // Check system access before allowing any tool use.
-        let has_access = temper_api::services::access_service::has_system_access(
+        let has_access = temper_services::services::access_service::has_system_access(
             &self.api_state.pool,
             ProfileId::from(profile.id),
         )

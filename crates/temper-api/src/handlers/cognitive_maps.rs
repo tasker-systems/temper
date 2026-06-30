@@ -11,11 +11,11 @@ use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
-use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::AuthUser;
-use crate::services::{access_service, cogmap_service};
-use crate::state::AppState;
+use temper_services::backend::DbBackend;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::services::{access_service, cogmap_service};
+use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
@@ -127,7 +127,7 @@ pub async fn genesis(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Materialized regions (surface tier)", body = Vec<CogmapRegionRow>),
-        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn shape(
@@ -136,7 +136,7 @@ pub async fn shape(
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
-    crate::backend::substrate_read::cogmap_shape_select(
+    temper_services::backend::substrate_read::cogmap_shape_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         cogmap_id,
@@ -157,7 +157,7 @@ pub async fn shape(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Per-region analytics-tier scalar metrics", body = Vec<CogmapRegionMetricsRow>),
-        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn region_metrics(
@@ -166,7 +166,7 @@ pub async fn region_metrics(
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
-    crate::backend::substrate_read::cogmap_region_metrics_select(
+    temper_services::backend::substrate_read::cogmap_region_metrics_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         cogmap_id,
@@ -185,7 +185,7 @@ pub async fn region_metrics(
     responses(
         (status = 200, description = "Map-level analytics (telos, staleness, regulation)", body = CogmapAnalyticsRow),
         (status = 404, description = "Map not found or not readable"),
-        (status = 401, description = "Unauthorized", body = crate::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn analytics(
@@ -193,7 +193,7 @@ pub async fn analytics(
     auth: AuthUser,
     Path(cogmap_id): Path<Uuid>,
 ) -> ApiResult<Json<CogmapAnalyticsRow>> {
-    crate::backend::substrate_read::cogmap_analytics_select(
+    temper_services::backend::substrate_read::cogmap_analytics_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         cogmap_id,

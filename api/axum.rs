@@ -10,8 +10,8 @@ use tower::ServiceBuilder;
 use tracing_subscriber::EnvFilter;
 use vercel_runtime::axum::VercelLayer;
 
-use temper_api::config::ApiConfig;
-use temper_api::state::{AppState, JwksKeyStore};
+use temper_services::config::ApiConfig;
+use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
 async fn main() -> Result<(), vercel_runtime::Error> {

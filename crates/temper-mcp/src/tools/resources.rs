@@ -5,13 +5,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::{substrate_read, DbBackend};
-use temper_api::services::context_service::resolve_context_ref;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_services::backend::{substrate_read, DbBackend};
+use temper_services::services::context_service::resolve_context_ref;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
@@ -349,7 +349,7 @@ pub async fn create_resource(
             // Auth before writes: producer gate (service seam → team-cogmap membership).
             // Shares the one `cogmap_service::authorable_by_profile` seam with the HTTP handler;
             // no inline SQL on the surface.
-            let ok = temper_api::services::cogmap_service::authorable_by_profile(
+            let ok = temper_services::services::cogmap_service::authorable_by_profile(
                 pool, profile_id, cogmap,
             )
             .await
@@ -565,10 +565,10 @@ pub async fn list_resources(
             // A bare context name or invalid ref is rejected with BadRequest (spec Decision 1).
             // An unresolvable ref (not visible / not found) yields NotFound.
             // Both are caller errors → invalid_params (400-class).
-            temper_api::error::ApiError::BadRequest(msg) => {
+            temper_services::error::ApiError::BadRequest(msg) => {
                 rmcp::ErrorData::invalid_params(msg, None)
             }
-            temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
+            temper_services::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
                 format!(
                     "unknown filter: context_ref {:?} not found or not visible",
                     input.context_ref

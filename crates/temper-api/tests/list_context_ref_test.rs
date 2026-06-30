@@ -173,9 +173,9 @@ async fn list_by_context_ref_at_me_slug2_returns_only_that_contexts_resources(po
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn context_row_ref_round_trips_through_parse_and_resolve(pool: PgPool) {
-    use temper_api::services::context_service;
     use temper_core::context_ref::{decorated_context_ref, parse_context_ref};
     use temper_core::types::ids::ProfileId;
+    use temper_services::services::context_service;
 
     let email = format!("list-ref-rt-{}@example.com", uuid::Uuid::new_v4());
     let (profile_id, _context_a_id) =
