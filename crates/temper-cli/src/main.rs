@@ -461,6 +461,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         Commands::Search {
             query,
             context,
+            cogmap,
             doc_type,
             limit,
             text_only,
@@ -482,6 +483,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     query: &query,
                     embedding,
                     context: context.as_deref(),
+                    cogmap: cogmap.as_deref(),
                     doc_type: doc_type.as_deref(),
                     limit,
                     seed_ids,

@@ -225,6 +225,9 @@ pub enum Commands {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
+        /// Scope search to a single cognitive map (UUID or decorated ref). Mutually exclusive with --context.
+        #[arg(long)]
+        cogmap: Option<String>,
         /// Filter by document type
         #[arg(long)]
         doc_type: Option<String>,

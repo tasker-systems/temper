@@ -8,21 +8,21 @@ use crate::format::OutputFormat;
 /// (including the already-resolved query `embedding`); the caller builds it
 /// — see `main.rs`'s `Commands::Search` arm.
 pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result<()> {
+    // Build params before entering with_client so parse errors propagate cleanly
+    // (the closure returns a Future, not a Result, so ? cannot be used inside it).
+    let params = search_actions::build_search_params(search_actions::CliSearchArgs {
+        query: args.query,
+        embedding: args.embedding.clone(),
+        context: args.context,
+        cogmap: args.cogmap,
+        doc_type: args.doc_type,
+        limit: args.limit,
+        seed_ids: args.seed_ids.clone(),
+        edge_types: args.edge_types.clone(),
+        depth: args.depth,
+        no_graph: args.no_graph,
+    })?;
     let results = runtime::with_client(|client| {
-        // The closure may borrow `args` (with_client is FnOnce, but the
-        // owned Vec fields are cloned per the original construction so the
-        // moved-into-future `params` owns its data).
-        let params = search_actions::build_search_params(search_actions::CliSearchArgs {
-            query: args.query,
-            embedding: args.embedding.clone(),
-            context: args.context,
-            doc_type: args.doc_type,
-            limit: args.limit,
-            seed_ids: args.seed_ids.clone(),
-            edge_types: args.edge_types.clone(),
-            depth: args.depth,
-            no_graph: args.no_graph,
-        });
         Box::pin(async move { search_actions::search_api(client, params).await })
     })?;
 

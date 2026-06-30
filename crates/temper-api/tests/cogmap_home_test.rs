@@ -404,3 +404,158 @@ async fn create_into_unreadable_cogmap_is_forbidden(pool: PgPool) {
         "no home row may be owned by the refused intruder"
     );
 }
+
+// ── (4) search --cogmap returns the map's homed resource ────────────────────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_search_scopes_to_map(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("cogmap-search-4-{}@example.com", Uuid::new_v4());
+    let (profile, _ctx) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile}"), &email);
+
+    let cogmap = birth_cogmap(&app.pool, profile, "search-4-map").await;
+    let team = create_team(
+        &app.pool,
+        &format!("search-4-team-{}", &profile.simple().to_string()[..8]),
+    )
+    .await;
+    join_cogmap_to_team(&app.pool, cogmap, team).await;
+    add_member(&app.pool, team, profile).await;
+
+    // Sanity: the membership is real and readable by the member.
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(profile)
+        .bind(cogmap)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(readable, "seeded membership must make the map readable");
+
+    // Create a cogmap-homed resource with a distinctive FTS term. The create-response
+    // readback returns 500 (known issue — deferred beat), so tolerate non-200 but verify
+    // the row committed by reading from kb_resource_homes directly.
+    post_cogmap_ingest(
+        &app,
+        &token,
+        cogmap,
+        "zmapword cogmap search resource",
+        "zmapword-cogmap-search",
+        "zmapword unique term for cogmap scoped search.",
+    )
+    .await;
+    // Recover the committed resource id from its home row.
+    let resource_id: Uuid = sqlx::query_scalar(
+        "SELECT h.resource_id FROM kb_resource_homes h \
+           JOIN kb_resources r ON r.id = h.resource_id \
+          WHERE h.anchor_table = 'kb_cogmaps' AND h.anchor_id = $1 \
+            AND r.title = 'zmapword cogmap search resource'",
+    )
+    .bind(cogmap)
+    .fetch_one(&app.pool)
+    .await
+    .expect("cogmap-homed resource must have committed its home row");
+
+    // Member searches with cogmap_id scope — must find the resource.
+    let resp = app
+        .client
+        .post(app.url("/api/search"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "query": "zmapword",
+            "cogmap_id": cogmap,
+            "graph_expand": false,
+            "limit": 50,
+        }))
+        .send()
+        .await
+        .expect("search request failed");
+    assert_eq!(resp.status().as_u16(), 200, "cogmap search must return 200");
+
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    let ids: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r["resource_id"].as_str().map(String::from))
+        .collect();
+
+    assert!(
+        ids.contains(&resource_id.to_string()),
+        "the cogmap-homed resource must appear in a cogmap-scoped search; got {ids:?}"
+    );
+}
+
+// ── (5) non-member searching the same cogmap gets 200 with zero results ─────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    // Owner/member sets up the cogmap and homes a resource in it.
+    let owner_email = format!("cogmap-search-5-owner-{}@example.com", Uuid::new_v4());
+    let (owner, _oc) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &owner_email).await;
+    let owner_token = common::generate_test_jwt(&format!("test|{owner}"), &owner_email);
+
+    let cogmap = birth_cogmap(&app.pool, owner, "search-5-map").await;
+    let team = create_team(
+        &app.pool,
+        &format!("search-5-team-{}", &owner.simple().to_string()[..8]),
+    )
+    .await;
+    join_cogmap_to_team(&app.pool, cogmap, team).await;
+    add_member(&app.pool, team, owner).await;
+
+    post_cogmap_ingest(
+        &app,
+        &owner_token,
+        cogmap,
+        "zmapword5 non-member cogmap resource",
+        "zmapword5-nonmember",
+        "zmapword5 unique term for non-member denial test.",
+    )
+    .await;
+
+    // A second profile who is NOT a member of the map's team.
+    let outsider_email = format!("cogmap-search-5-outsider-{}@example.com", Uuid::new_v4());
+    let (outsider, _oc2) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &outsider_email).await;
+    let outsider_token = common::generate_test_jwt(&format!("test|{outsider}"), &outsider_email);
+
+    // Sanity: the map is genuinely NOT readable by the outsider.
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(outsider)
+        .bind(cogmap)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(!readable, "outsider must NOT be able to read the map");
+
+    // Non-member searches the same cogmap — must get 200 with empty results (deny-as-empty,
+    // not an error: cogmap_scope_ids returns zero rows for non-members).
+    let resp = app
+        .client
+        .post(app.url("/api/search"))
+        .header("Authorization", format!("Bearer {outsider_token}"))
+        .json(&json!({
+            "query": "zmapword5",
+            "cogmap_id": cogmap,
+            "graph_expand": false,
+            "limit": 50,
+        }))
+        .send()
+        .await
+        .expect("search request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "non-member cogmap search must return 200 (deny-as-empty)"
+    );
+
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    assert!(
+        rows.is_empty(),
+        "non-member cogmap search must return zero results; got {rows:?}"
+    );
+}

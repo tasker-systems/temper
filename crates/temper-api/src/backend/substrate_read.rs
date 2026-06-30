@@ -344,6 +344,29 @@ pub async fn search_select(
         None => None,
     };
 
+    // Resolve cogmap_id → scope ids (the set of visible homed-resource ids for this map).
+    // Mutually exclusive with context_ref. An empty result set means deny (zero rows), which
+    // correctly yields zero search results via `c.id = ANY('{}')` in the SQL function.
+    let scope_ids: Option<Vec<Uuid>> = match params.cogmap_id {
+        Some(map) => {
+            if context_id.is_some() {
+                return Err(ApiError::BadRequest(
+                    "context_ref and cogmap_id are mutually exclusive".into(),
+                ));
+            }
+            Some(
+                sqlx::query_scalar!("SELECT cogmap_scope_ids($1, $2)", profile_id.uuid(), map)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(api_err)?
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            )
+        }
+        None => None,
+    };
+
     // The wire `seed_ids` arrive as bare uuids; lift to the typed `&[ResourceId]` the query takes.
     let seed_ids: Vec<ResourceId> = params
         .seed_ids
@@ -367,7 +390,7 @@ pub async fn search_select(
             graph_expand: params.graph_expand,
             limit: clamped.limit,
             offset: params.offset.unwrap_or(0),
-            scope_ids: None,
+            scope_ids: scope_ids.as_deref(),
         },
     )
     .await
@@ -375,24 +398,74 @@ pub async fn search_select(
 
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
-        // Per-row display enrichment (unchanged from the pre-Beat-2 path; the candidate set is ≤ limit).
-        let row = native_resource_row(pool, profile_id, h.resource_id).await?;
-        out.push(UnifiedSearchResultRow {
-            resource_id: h.resource_id.uuid(),
-            title: row.title,
-            slug: String::new(),
-            kb_uri: row.origin_uri.clone(),
-            origin_uri: row.origin_uri,
-            context: Some(row.context_name),
-            doc_type: row.doc_type_name,
-            fts_score: h.fts_score,
-            vector_score: h.vector_score,
-            graph_score: h.graph_score,
-            combined_score: h.combined_score,
-            origin: "unified".to_string(),
-            context_slug: Some(row.context_slug),
-            context_owner_ref: Some(row.context_owner_ref),
-        });
+        if scope_ids.is_some() {
+            // Cogmap-scoped search: resources may be cogmap-homed (no kb_contexts row).
+            // Use a direct enrichment that LEFT-JOINs kb_contexts so cogmap-homed rows
+            // succeed (context fields are None for them).
+            let enriched = sqlx::query(
+                "SELECT r.title, r.origin_uri,
+                        dt.property_value #>> '{}' AS doc_type_name,
+                        c.name        AS context_name,
+                        c.slug        AS context_slug,
+                        CASE c.owner_table
+                          WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                          ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+                        END           AS context_owner_ref
+                   FROM kb_resources r
+                   JOIN kb_resource_homes h ON h.resource_id = r.id
+                   LEFT JOIN kb_contexts c
+                     ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+                   JOIN kb_properties dt
+                     ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+                    AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+                  WHERE r.id = $1",
+            )
+            .bind(h.resource_id)
+            .fetch_one(pool)
+            .await
+            .map_err(api_err)?;
+            let title: String = enriched.get("title");
+            let origin_uri: String = enriched.get("origin_uri");
+            let doc_type: String = enriched.get("doc_type_name");
+            let context_name: Option<String> = enriched.get("context_name");
+            let context_slug: Option<String> = enriched.get("context_slug");
+            let context_owner_ref: Option<String> = enriched.get("context_owner_ref");
+            out.push(UnifiedSearchResultRow {
+                resource_id: h.resource_id.uuid(),
+                title,
+                slug: String::new(),
+                kb_uri: origin_uri.clone(),
+                origin_uri,
+                context: context_name,
+                doc_type,
+                fts_score: h.fts_score,
+                vector_score: h.vector_score,
+                graph_score: h.graph_score,
+                combined_score: h.combined_score,
+                origin: "unified".to_string(),
+                context_slug,
+                context_owner_ref,
+            });
+        } else {
+            // Standard path: context-homed resources require the full enrichment.
+            let row = native_resource_row(pool, profile_id, h.resource_id).await?;
+            out.push(UnifiedSearchResultRow {
+                resource_id: h.resource_id.uuid(),
+                title: row.title,
+                slug: String::new(),
+                kb_uri: row.origin_uri.clone(),
+                origin_uri: row.origin_uri,
+                context: Some(row.context_name),
+                doc_type: row.doc_type_name,
+                fts_score: h.fts_score,
+                vector_score: h.vector_score,
+                graph_score: h.graph_score,
+                combined_score: h.combined_score,
+                origin: "unified".to_string(),
+                context_slug: Some(row.context_slug),
+                context_owner_ref: Some(row.context_owner_ref),
+            });
+        }
     }
     Ok(out)
 }

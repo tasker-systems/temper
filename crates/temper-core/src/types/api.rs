@@ -71,6 +71,11 @@ pub struct SearchParams {
     /// Whether to expand results via graph edges (default true).
     #[serde(default = "default_graph_expand")]
     pub graph_expand: bool,
+    /// Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
+    /// Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
+    /// participants the principal can see.
+    #[serde(default)]
+    pub cogmap_id: Option<Uuid>,
 }
 
 impl Default for SearchParams {
@@ -87,6 +92,7 @@ impl Default for SearchParams {
             edge_types: None,
             graph_depth: None,
             graph_expand: default_graph_expand(),
+            cogmap_id: None,
         }
     }
 }
