@@ -815,7 +815,7 @@ impl Backend for DbBackend {
         // validate pipeline (see `validate_managed_meta_pipeline`), the same one the legacy
         // `ingest_service::ingest` ran. A fresh canonical id + `now()` seed the validation document
         // (not persisted — the substrate mints the real id in `writes::create_resource`). An empty
-        // slug removes `temper-slug` (mirrors ingest's `injected_slug`). Body-hash dedup follows.
+        // slug removes `temper-slug` (mirrors ingest's `injected_slug`).
         let injected_slug = (!cmd.slug.is_empty()).then_some(cmd.slug.as_str());
         let managed = validate_managed_meta_pipeline(ManagedValidationParams {
             raw_managed: serde_json::to_value(&cmd.managed_meta)
@@ -832,32 +832,13 @@ impl Backend for DbBackend {
             created: Utc::now(),
         })?;
 
-        // 5. Body-hash dedup (non-empty body only, matching legacy `:497-502`): if a visible active
-        //    resource already carries the same substrate body_hash merkle, return IT instead of
-        //    creating a twin — reconstructing the same `CommandOutput<ResourceRow>` the create path
-        //    returns for a fresh row (`:254-255`).
-        if !body.is_empty() {
-            // Key dedup on the SUPPLIED chunk hashes when the caller pre-chunked (so it equals the
-            // body_hash the substrate projector will store from those same hashes); otherwise on the
-            // chunk-the-prose merkle (the fallback).
-            let body_hash = match &incoming_chunks {
-                Some(chunks) => {
-                    let hashes: Vec<String> =
-                        chunks.iter().map(|c| c.content_hash.clone()).collect();
-                    temper_substrate::content::body_hash_from_chunk_hashes(&hashes)
-                }
-                None => temper_substrate::content::body_hash_for_body(&body),
-            };
-            if let Some(existing) =
-                readback::find_by_body_hash(&self.pool, self.profile_id, &body_hash)
-                    .await
-                    .map_err(api_err)?
-            {
-                let row = native_resource_row(&self.pool, self.profile_id, existing).await?;
-                return Ok(CommandOutput::new(row));
-            }
-        }
-
+        // No content-hash dedup on create. A resource's identity is its id + its position in the
+        // relationship graph, NOT its body: empty/template/placeholder concepts legitimately recur
+        // across contexts and cogmaps (an interstitial concept's edges are the point, the body may be
+        // a generic stub), and a co-member who can read a cogmap can see its homed resources — so a
+        // body-hash match against the *visible* set (the retired `find_by_body_hash`) would collapse
+        // distinct resources into one (e.g. the empty-bodied L0 kernel telos). Re-creating identical
+        // content yields a distinct resource by design.
         let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
 
         // Map the surface-supplied ActContext → substrate EventContext (identical re-exported types).

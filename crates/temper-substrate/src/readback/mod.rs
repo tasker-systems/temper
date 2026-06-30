@@ -17,8 +17,9 @@
 //! Most reads are runtime `sqlx::query` (the pgvector `::vector` cast forces runtime; the rest follow
 //! for consistency). The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
 //! (`public`), and the connection's search_path resolves unqualified names and the visibility
-//! function's own unqualified internals correctly with no per-txn `SET LOCAL`. The lone compile-time
-//! macro ([`find_by_body_hash`]) is likewise unqualified and uses the workspace sqlx cache.
+//! function's own unqualified internals correctly with no per-txn `SET LOCAL`. The handful of
+//! compile-time `query!` macros (e.g. [`kernel_slice`]) are likewise unqualified and use the
+//! workspace sqlx cache.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -484,35 +485,6 @@ pub async fn body(
     Ok(crate::content::reconstruct_body(&chunks))
 }
 
-/// Substrate body-hash dedup for the create path (WS6 collapse Task F). Returns the id of an existing
-/// active, visible resource whose `body_hash` matches `body_hash`, or `None`. Mirrors production's
-/// `ingest_service::find_by_body_hash` but keys on the substrate `kb_resources.body_hash` (the
-/// structural sha256 merkle over chunk content-hashes, `_recompute_resource_body_hash`) instead of the
-/// dead `kb_resource_manifests`. Visibility-gated through `resources_visible_to`, like every other read.
-///
-/// Unlike the rest of this module (runtime, schema-qualified `sqlx::query`), this is a **compile-time
-/// macro** — the one in `readback`. The SQL is UNQUALIFIED (`kb_resources` / `resources_visible_to`):
-/// the workspace sqlx cache covers it, and at runtime the connection search_path (`public`) resolves
-/// the unqualified table and `resources_visible_to`'s own unqualified internals correctly.
-pub async fn find_by_body_hash(
-    pool: &PgPool,
-    principal: ProfileId,
-    body_hash: &str,
-) -> Result<Option<ResourceId>> {
-    let dup = sqlx::query_scalar!(
-        r#"SELECT r.id
-             FROM kb_resources r
-             JOIN resources_visible_to($1) v ON v.resource_id = r.id
-            WHERE r.body_hash = $2 AND r.is_active
-            LIMIT 1"#,
-        principal.uuid(),
-        body_hash,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(dup.map(ResourceId::from))
-}
-
 /// The telos resource id + its current body merkle for a cogmap — the charter reconcile diff source.
 /// `body_hash` is `sha256_hex("")` for a fresh genesis telos (empty block set, the SQL's empty-aggregate
 /// coalesce) — never SQL-NULL once the resource exists — or the structural merkle of the current charter.
@@ -523,7 +495,7 @@ pub struct TelosCharterState {
 }
 
 /// Resolve `cogmap` → telos resource, returning its current `body_hash` for the charter diff. Compile-time
-/// macro (like [`find_by_body_hash`]/[`kernel_slice`]; resolves against `public`, workspace `.sqlx` cache).
+/// macro (like [`kernel_slice`]; resolves against `public`, workspace `.sqlx` cache).
 pub async fn telos_charter_state(
     conn: &mut sqlx::PgConnection,
     cogmap: CogmapId,
@@ -574,8 +546,9 @@ pub struct KernelSliceRow {
 /// own (provenance-less) telos — are excluded by construction. `body_hash` is the bare
 /// `kb_resources.body_hash` column, byte-identical to [`resource_row`]'s `r.body_hash`.
 ///
-/// Compile-time macro (like [`find_by_body_hash`], the only other macro here): the SQL resolves against
-/// the single `public` schema, cached in the workspace `.sqlx` (post-`temper_next`-elimination, #178).
+/// Compile-time `query!` macro (like [`telos_charter_state`]; most reads in this module are runtime
+/// `sqlx::query`): the SQL resolves against the single `public` schema, cached in the workspace
+/// `.sqlx` (post-`temper_next`-elimination, #178).
 pub async fn kernel_slice(
     executor: impl sqlx::PgExecutor<'_>,
     cogmap_id: CogmapId,
