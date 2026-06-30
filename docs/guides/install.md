@@ -156,4 +156,5 @@ dir %LOCALAPPDATA%\Programs\temper # Windows
 The steps above install the `temper` CLI and (by default) leave it
 unconfigured. To point it at the hosted service, run `temper init` and choose
 the hosted option. To stand up your **own** Temper instance on Vercel + Neon +
-Auth0 (API + MCP + CLI), see [Self-Hosting](./self-hosting.md).
+Auth0 (API + MCP + CLI — plus an optional [web UI](./self-hosting.md#deploy-the-ui-optional)
+configurable against any OIDC provider), see [Self-Hosting](./self-hosting.md).
