@@ -558,7 +558,7 @@ async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
             origin_uri: "temper://w/r",
             body: "original body text here",
             doc_type: "task",
-            home: ctx,
+            home: AnchorRef::context(ctx),
             owner,
             originator: owner,
             emitter,

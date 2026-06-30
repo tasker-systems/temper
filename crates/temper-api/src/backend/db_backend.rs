@@ -864,7 +864,7 @@ impl Backend for DbBackend {
                 origin_uri: &origin_uri,
                 body: &body,
                 doc_type: &cmd.doctype,
-                home,
+                home: temper_substrate::payloads::AnchorRef::context(home),
                 owner,
                 // A fresh create's originator is its owner (the caller); a distinct originator only
                 // arises via synthesis carrying a production row's history.

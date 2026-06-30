@@ -51,7 +51,7 @@ async fn mk(
             origin_uri: uri,
             body,
             doc_type: "concept",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,

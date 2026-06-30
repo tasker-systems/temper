@@ -12,7 +12,7 @@ use sqlx::{PgPool, Row};
 use temper_substrate::affinity::{affinity, Edge, EdgeKind, Lens};
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
-use temper_substrate::payloads::{AgentAuthorship, ConfidenceBand, EdgePolarity};
+use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, EdgePolarity};
 use temper_substrate::writes::{self, AssertParams, CreateParams};
 use uuid::Uuid;
 
@@ -52,7 +52,7 @@ async fn build_edge_pair(
             origin_uri: &src_title,
             body: "body",
             doc_type: "research",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
@@ -69,7 +69,7 @@ async fn build_edge_pair(
             origin_uri: &tgt_title,
             body: "body",
             doc_type: "research",
-            home,
+            home: AnchorRef::context(home),
             owner,
             originator: owner,
             emitter,
