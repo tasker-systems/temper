@@ -1,3 +1,9 @@
+<script lang="ts">
+  import type { PageData } from './$types';
+
+  let { data }: { data: PageData } = $props();
+</script>
+
 <svelte:head>
   <title>Reference — temper</title>
 </svelte:head>
@@ -252,7 +258,7 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
       <pre><code>{`{
   "mcpServers": {
     "temper": {
-      "url": "https://temperkb.io/mcp"
+      "url": "${data.appUrl}/mcp"
     }
   }
 }`}</code></pre>
