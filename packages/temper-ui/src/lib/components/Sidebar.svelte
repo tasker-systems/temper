@@ -7,9 +7,13 @@
 		contexts: ContextRowWithCounts[];
 		user: { display_name: string; email: string } | null;
 		isAdmin: boolean;
+		/** Operator-configured instance brand ("temper @ acme"); null → default. */
+		instanceName?: string | null;
 	}
 
-	let { contexts, user, isAdmin }: Props = $props();
+	let { contexts, user, isAdmin, instanceName = null }: Props = $props();
+
+	let brand = $derived(instanceName?.trim() || 'temper');
 
 	let myContexts = $derived(contexts.filter((c) => c.kb_owner_table === 'kb_profiles'));
 	let teamContexts = $derived(contexts.filter((c) => c.kb_owner_table === 'kb_teams'));
@@ -19,6 +23,13 @@
 </script>
 
 <aside class="flex flex-col w-52 bg-zinc-900/50 border-r border-zinc-800 overflow-hidden">
+	<a
+		href="/vault/all"
+		class="block px-3 pt-3 pb-2 border-b border-zinc-800 font-mono text-xs tracking-[0.15em] text-zinc-300 hover:text-zinc-100 transition-colors truncate"
+		title={brand}
+	>
+		{brand}
+	</a>
 	<nav class="flex-1 overflow-y-auto py-2">
 		<div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-zinc-500">Vault</div>
 		<a

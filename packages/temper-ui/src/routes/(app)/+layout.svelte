@@ -25,6 +25,7 @@
 			? { display_name: data.profile.display_name, email: data.profile.email ?? '' }
 			: null}
 		isAdmin={data.entitlements?.is_admin ?? false}
+		instanceName={data.instanceName ?? null}
 	/>
 	<!--
 		main is a flex-col so page content can size itself against a resolved

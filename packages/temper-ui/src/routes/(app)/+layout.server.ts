@@ -13,7 +13,7 @@
 import type { LayoutServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { apiGet } from '$lib/server/api';
-import type { ContextRowWithCounts } from '$lib/types';
+import type { ContextRowWithCounts, PublicSystemSettings } from '$lib/types';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user || !locals.accessToken) {
@@ -31,15 +31,21 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, '/request-access');
 	}
 
-	const contexts = await apiGet<ContextRowWithCounts[]>(
-		'/api/contexts',
-		locals.accessToken!
-	).catch(() => [] as ContextRowWithCounts[]);
+	// Instance branding ("temper @ acme") is operator-configured via the
+	// DB-backed system settings; a self-hosted org sets `instance_name`. A null
+	// value (or a failed fetch) falls back to the default wordmark in the shell.
+	const [contexts, settings] = await Promise.all([
+		apiGet<ContextRowWithCounts[]>('/api/contexts', locals.accessToken!).catch(
+			() => [] as ContextRowWithCounts[]
+		),
+		apiGet<PublicSystemSettings>('/api/access/settings', locals.accessToken!).catch(() => null)
+	]);
 
 	return {
 		user: locals.user,
 		profile: locals.profile,
 		entitlements: locals.entitlements,
-		contexts
+		contexts,
+		instanceName: settings?.instance_name ?? null
 	};
 };
