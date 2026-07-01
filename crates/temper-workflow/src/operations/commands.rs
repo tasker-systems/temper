@@ -199,6 +199,21 @@ pub struct FoldRelationship {
     pub origin: Surface,
 }
 
+/// Set (upsert) a facet — a typed property row (`kb_properties`) attached to a
+/// resource. `values` is the facet's JSON payload; `weight` is the facet's
+/// salience/confidence weight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetFacet {
+    pub resource: ResourceId,
+    pub values: serde_json::Value,
+    pub weight: f64,
+    /// Per-act correlation + authorship — stamps the authored `facet_set` act. Empty by
+    /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
+    pub origin: Surface,
+}
+
 /// Open an invocation envelope — the trace primitive. `originating_cogmap` /
 /// `parent_cogmap` are substrate cogmap ids (not resource refs). The
 /// invocation id is minted by the backend and returned.
