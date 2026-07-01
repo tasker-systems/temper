@@ -277,6 +277,12 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: InvocationCmd,
     },
+
+    /// Team-self-cognition steward ingest trigger (delta / advance-watermark)
+    Steward {
+        #[command(subcommand)]
+        cmd: StewardCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -811,6 +817,26 @@ pub enum InvocationCmd {
         /// Optional lifecycle status filter: open | completed | failed | abandoned.
         #[arg(long)]
         status: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum StewardCmd {
+    /// Read a team-self-cognition cogmap's ingest delta since its watermark, and whether it clears
+    /// the threshold (i.e. the steward should run).
+    Delta {
+        /// The team-self-cognition cogmap, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Ingest threshold to gate on; omit for the server default.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
+    /// Advance the ingest watermark to a given event id — the cursor a completed run records.
+    AdvanceWatermark {
+        /// The team-self-cognition cogmap, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// The `kb_events.id` (UUID) to advance the watermark to.
+        event: String,
     },
 }
 

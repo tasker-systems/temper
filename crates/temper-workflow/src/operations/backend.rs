@@ -18,9 +18,10 @@ use temper_core::error::TemperError;
 use temper_core::types::ids::{EdgeId, PropertyId};
 
 use super::commands::{
-    AssertRelationship, CloseInvocation, CreateCognitiveMap, CreateResource, DeleteResource,
-    FoldRelationship, ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
-    ReweightRelationship, SearchResources, SetFacet, ShowResource, UpdateResource,
+    AdvanceStewardWatermark, AssertRelationship, CloseInvocation, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
+    ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources, SetFacet,
+    ShowResource, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -138,6 +139,16 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: CloseInvocation,
     ) -> Result<CommandOutput<()>, TemperError>;
+
+    // ── team-self-cognition steward ingest watermark (T4a) ──
+    // Advance a cogmap's ingest cursor to a given event id. The stub the future steward calls on run
+    // completion so the next `steward_ingest_delta` counts only what landed after this run. Gated on
+    // cogmap-write (auth before write). Returns the watermark now held.
+
+    async fn advance_steward_watermark(
+        &self,
+        cmd: AdvanceStewardWatermark,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
 }
 
 #[cfg(test)]

@@ -130,6 +130,11 @@ pub fn create_app(state: AppState) -> Router {
             "/api/invocations/{id}/close",
             post(handlers::invocations::close),
         )
+        .route("/api/steward/{cogmap}/delta", get(handlers::steward::delta))
+        .route(
+            "/api/steward/{cogmap}/watermark",
+            post(handlers::steward::advance),
+        )
         .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),
