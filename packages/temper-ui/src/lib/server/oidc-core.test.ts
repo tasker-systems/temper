@@ -4,8 +4,21 @@ import {
 	parseDiscovery,
 	buildAuthorizeUrl,
 	buildLogoutUrl,
-	decodeIdToken
+	decodeIdToken,
+	identityClaimsFromTokens,
+	type OidcTokenResponse
 } from './oidc-core';
+
+/** Build a real header.payload.signature JWT string, mirroring decodeIdToken's own tests. */
+const jwt = (claims: object) => {
+	const b64url = (obj: object) =>
+		Buffer.from(JSON.stringify(obj))
+			.toString('base64')
+			.replace(/=/g, '')
+			.replace(/\+/g, '-')
+			.replace(/\//g, '_');
+	return `${b64url({ alg: 'EdDSA' })}.${b64url(claims)}.sig`;
+};
 
 describe('resolveOidcConfig', () => {
 	it('prefers OIDC_* over AUTH0_* when both are present', () => {
@@ -82,10 +95,56 @@ describe('resolveOidcConfig', () => {
 		).toThrow(/client id/i);
 	});
 
-	it('throws when client secret is missing', () => {
+	it('resolves clientSecret as undefined (does not throw) for a public PKCE client', () => {
+		const cfg = resolveOidcConfig({
+			OIDC_ISSUER: 'https://x',
+			OIDC_CLIENT_ID: 'c',
+			OIDC_PUBLIC_CLIENT: 'true'
+		});
+		expect(cfg.clientSecret).toBeUndefined();
+	});
+
+	it('throws when no client secret is configured and OIDC_PUBLIC_CLIENT is unset', () => {
 		expect(() =>
 			resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_ID: 'c' })
 		).toThrow(/client secret/i);
+	});
+
+	it('succeeds with clientSecret undefined when OIDC_PUBLIC_CLIENT=true', () => {
+		const cfg = resolveOidcConfig({
+			OIDC_ISSUER: 'https://x',
+			OIDC_CLIENT_ID: 'c',
+			OIDC_PUBLIC_CLIENT: 'true'
+		});
+		expect(cfg.clientSecret).toBeUndefined();
+	});
+
+	it('still succeeds via the AUTH0_CLIENT_SECRET fallback with OIDC_PUBLIC_CLIENT unset', () => {
+		const cfg = resolveOidcConfig({
+			AUTH0_DOMAIN: 'tenant.us.auth0.com',
+			AUTH0_CLIENT_ID: 'auth0-client',
+			AUTH0_CLIENT_SECRET: 'auth0-secret'
+		});
+		expect(cfg.clientSecret).toBe('auth0-secret');
+	});
+
+	it('resolves discoveryUrl from OIDC_DISCOVERY_URL, trimming a trailing slash', () => {
+		const cfg = resolveOidcConfig({
+			OIDC_ISSUER: 'https://as.example.com',
+			OIDC_CLIENT_ID: 'temper-ui',
+			OIDC_PUBLIC_CLIENT: 'true',
+			OIDC_DISCOVERY_URL: 'https://as.example.com/.well-known/oauth-authorization-server/'
+		});
+		expect(cfg.discoveryUrl).toBe('https://as.example.com/.well-known/oauth-authorization-server');
+	});
+
+	it('leaves discoveryUrl undefined when OIDC_DISCOVERY_URL is unset', () => {
+		const cfg = resolveOidcConfig({
+			OIDC_ISSUER: 'https://org.okta.com/oauth2/abc',
+			OIDC_CLIENT_ID: 'c',
+			OIDC_CLIENT_SECRET: 's'
+		});
+		expect(cfg.discoveryUrl).toBeUndefined();
 	});
 });
 
@@ -202,5 +261,35 @@ describe('decodeIdToken', () => {
 
 	it('throws on a malformed token', () => {
 		expect(() => decodeIdToken('not-a-jwt')).toThrow();
+	});
+});
+
+describe('identityClaimsFromTokens', () => {
+	it('falls back to decoding the access_token when id_token is absent (Temper AS shape)', () => {
+		const claims = { sub: 'temper-as|abc', email: 'a@b.com', email_verified: true, exp: 1, iat: 0 };
+		const tokens: OidcTokenResponse = {
+			access_token: jwt(claims),
+			token_type: 'Bearer',
+			expires_in: 3600,
+			refresh_token: 'refresh-xyz'
+			// no id_token — the Temper AS's /oauth/token response shape
+		};
+		expect(identityClaimsFromTokens(tokens)).toMatchObject({
+			sub: 'temper-as|abc',
+			email: 'a@b.com',
+			email_verified: true
+		});
+	});
+
+	it('decodes the id_token when present (full-OIDC provider shape, e.g. Auth0)', () => {
+		const idTokenClaims = { sub: 'auth0|123', email: 'a@b.com', name: 'A B', exp: 1, iat: 0 };
+		const accessTokenClaims = { sub: 'wrong-if-used', exp: 1, iat: 0 };
+		const tokens: OidcTokenResponse = {
+			access_token: jwt(accessTokenClaims),
+			id_token: jwt(idTokenClaims),
+			token_type: 'Bearer',
+			expires_in: 3600
+		};
+		expect(identityClaimsFromTokens(tokens)).toMatchObject({ sub: 'auth0|123', email: 'a@b.com' });
 	});
 });

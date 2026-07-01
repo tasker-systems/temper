@@ -66,22 +66,22 @@ pub async fn require_auth(
     // 1. Extract "Authorization: Bearer <token>"
     let token = extract_bearer_token(&request)?;
 
-    // 2. Get the current decoding key from the JWKS store (cached).
-    let decoding_key = state.jwks_store.get_decoding_key().await.map_err(|e| {
+    // 2. Get the current decoding key (and its algorithm family) from the JWKS store (cached).
+    let vk = state.jwks_store.get_decoding_key().await.map_err(|e| {
         tracing::error!("JWKS key retrieval failed: {e}");
         ApiError::Unauthorized("Authentication service unavailable".to_string())
     })?;
 
-    // 3. Decode and verify the JWT.
+    // 3. Decode and verify the JWT. The allow-list is scoped to exactly the
+    //    loaded key's algorithm (see `JwksKeyStore::validation`).
     let issuer = &state.config.auth_issuer;
     let audience = state.config.auth_audience.as_deref();
-    let validation = state.jwks_store.validation(issuer, audience);
+    let validation = state.jwks_store.validation(issuer, audience, vk.algorithm);
 
-    let token_data: TokenData<JwtClaims> =
-        decode(&token, &decoding_key, &validation).map_err(|e| {
-            tracing::debug!("JWT verification failed: {e}");
-            ApiError::Unauthorized("Invalid or expired token".to_string())
-        })?;
+    let token_data: TokenData<JwtClaims> = decode(&token, &vk.key, &validation).map_err(|e| {
+        tracing::debug!("JWT verification failed: {e}");
+        ApiError::Unauthorized("Invalid or expired token".to_string())
+    })?;
 
     // 4. Resolve email — present in token claims (custom Auth0 Action),
     //    cached in kb_profile_auth_links from a prior login, or fetched

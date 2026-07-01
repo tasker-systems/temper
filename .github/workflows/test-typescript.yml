@@ -22,6 +22,35 @@ jobs:
       - name: Run tests
         run: cd packages/temper-cloud && bun run test
 
+  ui-tests:
+    name: UI Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # `svelte-kit sync` generates the `$env/static/private` module from the env vars present at
+    # sync time; svelte-check then requires the imported members (DATABASE_URL, SESSION_SECRET) to
+    # exist. Only their presence matters for static analysis + the unit suite — the values are
+    # inert placeholders (no DB connection or session signing happens in these checks).
+    env:
+      DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+      SESSION_SECRET: ci-placeholder-session-secret
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: cd packages/temper-ui && bun install --frozen-lockfile
+
+      - name: Type-check (svelte-check)
+        run: cd packages/temper-ui && bun run check
+
+      - name: Run tests
+        run: cd packages/temper-ui && bun run test
+
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest

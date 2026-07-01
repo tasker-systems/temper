@@ -198,4 +198,6 @@ Visit `https://<ui-host>` and sign in. The UI redirects to Okta's `/v1/authorize
 
 ## Not covered
 
-The exclusions from the [main guide](./self-hosting.md#not-covered--deferred) apply here too (multi-region Neon, alternative messaging backends). In addition, **SAML-based SSO** is not covered: Temper authenticates with bearer JWTs (OIDC), so enterprise SAML SSO is handled upstream by federating your SAML IdP into Okta, which continues to issue the OIDC tokens Temper validates. Temper itself is not a SAML service provider.
+The exclusions from the [main guide](./self-hosting.md#not-covered--deferred) apply here too (multi-region Neon, alternative messaging backends).
+
+If your IdP speaks **SAML 2.0** and you'd rather integrate it natively than bridge through Okta's OIDC endpoints, Temper can also act as a **native SAML service provider** — it fronts your SAML IdP with a built-in OAuth Authorization Server. See [Self-Hosting with a SAML IdP](./self-hosting-saml.md). (This Okta/OIDC guide remains the simplest path when Okta is already your OIDC issuer.)

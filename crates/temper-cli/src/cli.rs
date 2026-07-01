@@ -139,7 +139,10 @@ pub enum Commands {
         #[arg(long)]
         no_interactive: bool,
         /// Self-host: instance base URL (e.g. <https://temper.acme.com>)
-        #[arg(long, requires_all = ["auth_domain", "auth_client_id", "auth_audience"])]
+        ///
+        /// For Auth0/Okta this requires `--auth-domain`, `--auth-client-id`, and
+        /// `--auth-audience` (validated at run time); `--idp temper-as` needs only this flag.
+        #[arg(long)]
         instance_url: Option<String>,
         /// Self-host: OAuth provider domain (e.g. acme.us.auth0.com or acme.okta.com)
         #[arg(long)]

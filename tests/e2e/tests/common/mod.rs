@@ -168,6 +168,29 @@ pub fn generate_second_user_jwt() -> String {
     generate_test_jwt("e2e-second-user", "second@test.example.com")
 }
 
+/// Sign a JWT with the test Ed25519 private key (EdDSA). Valid for 1 hour.
+///
+/// Mirrors `generate_test_jwt` exactly (same claims shape, same issuer) but
+/// signs with `Algorithm::EdDSA` against the `test_ed25519.pkcs8` fixture,
+/// proving the algorithm-aware verification path added in Task 0.1.
+pub fn generate_test_jwt_eddsa(sub: &str, email: &str) -> String {
+    let encoding_key = EncodingKey::from_ed_pem(include_bytes!("../fixtures/test_ed25519.pkcs8"))
+        .expect("Failed to load test Ed25519 private key");
+
+    let now = Utc::now().timestamp();
+    let claims = TestClaims {
+        sub: sub.to_string(),
+        email: email.to_string(),
+        email_verified: true,
+        iss: "test-issuer".to_string(),
+        iat: now,
+        exp: now + 3600,
+    };
+
+    jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key)
+        .expect("Failed to sign test JWT")
+}
+
 /// Enable invite-only mode in tests by making the admin an `owner` of the
 /// `temper-system` gating team and flipping the setting.
 ///
@@ -233,7 +256,7 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
             .expect("Failed to load test RSA public key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
 
     let api_config = ApiConfig {
         database_url: "unused".to_string(),
@@ -262,6 +285,97 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 
     // --- Config + client setup (no disk reads) ---
     let token = generate_test_jwt("e2e-test-user", "e2e@test.example.com");
+
+    let vault_dir = TempDir::new().expect("Failed to create temp vault");
+    std::fs::create_dir_all(vault_dir.path().join(".temper"))
+        .expect("Failed to create .temper dir");
+
+    let temper_config = TemperConfig {
+        vault: CloudVaultConfig {
+            path: vault_dir.path().to_str().unwrap().to_string(),
+        },
+        cloud: CloudSection {
+            api_url: format!("http://{addr}"),
+        },
+        ..TemperConfig::default()
+    };
+
+    let stored_auth = StoredAuth {
+        provider: Provider::Auth0 {
+            domain: "test".to_string(),
+        },
+        access_token: token.clone().into(),
+        refresh_token: None,
+        expires_at: Utc::now() + Duration::hours(1),
+        profile_id: None,
+        device_id: Some("e2e-test-device".to_string()),
+    };
+
+    let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
+        std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
+    let client = temper_client::config::build_client_from(&temper_config, store)
+        .expect("Failed to build test client");
+
+    let cli_config = temper_cli::config::load_from(&temper_config, None);
+
+    E2eTestApp {
+        addr,
+        pool,
+        client,
+        reqwest_client: reqwest::Client::new(),
+        config: temper_config,
+        cli_config,
+        token,
+        vault_dir,
+    }
+}
+
+/// Build an `E2eTestApp` from a pool provided by `#[sqlx::test]`, keyed with
+/// the EdDSA test fixture instead of RSA. Identical to `setup` in every other
+/// respect (same `auth_issuer`/`auth_audience`, same auto-provisioned token
+/// user) so the two harnesses only differ in signing algorithm.
+pub async fn setup_eddsa(pool: PgPool) -> E2eTestApp {
+    setup_eddsa_with_provider(pool, "test-provider").await
+}
+
+/// Like [`setup_eddsa`] but with a caller-chosen `auth_provider_name`, so a test can assert
+/// provider namespacing (e.g. `saml:test-idp`) on the JIT-created `kb_profile_auth_links` row.
+pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestApp {
+    clean_and_seed(&pool).await;
+
+    // --- Server setup ---
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_ed_pem(include_bytes!("../fixtures/test_ed25519.pub.pem"))
+            .expect("Failed to load test Ed25519 public key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::EdDSA);
+
+    let api_config = ApiConfig {
+        database_url: "unused".to_string(),
+        jwks_url: "unused".to_string(),
+        auth_issuer: "test-issuer".to_string(),
+        auth_audience: None,
+        auth_provider_name: provider.to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+    };
+
+    let state = AppState::new(pool.clone(), jwks_store, api_config);
+    let app = create_app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test listener");
+    let addr = listener.local_addr().expect("Failed to get local addr");
+
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("Test server failed");
+    });
+
+    // --- Config + client setup (no disk reads) ---
+    let token = generate_test_jwt_eddsa("e2e-test-user", "e2e@test.example.com");
 
     let vault_dir = TempDir::new().expect("Failed to create temp vault");
     std::fs::create_dir_all(vault_dir.path().join(".temper"))
