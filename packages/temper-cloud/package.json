@@ -20,6 +20,7 @@
     "@huggingface/transformers": "^3.8.1",
     "@kreuzberg/node": "latest",
     "@neondatabase/serverless": "^1",
+    "@node-saml/node-saml": "^5",
     "@vercel/blob": "^1",
     "jose": "^6",
     "onnxruntime-common": "^1.21.0",
