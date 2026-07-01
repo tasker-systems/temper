@@ -670,11 +670,11 @@ mod clamp_tests {
     }
 }
 
-/// T1 Sequence C, Task C1: `cogmap_charter_select`. Genesis-es a cogmap with a real charter (statement
-/// + 2 questions + framing) through the scenario loader — the same load path
-/// `charter_yaml_roundtrip.rs` proves byte-exact — then asserts the composed read returns every block
-/// in seq order, and that a profile with no ownership/grant on the telos resource is denied (empty,
-/// not an error): the access gate is IN the SQL (`resources_readable_by` → `resources_visible_to`).
+// T1 Sequence C, Task C1: `cogmap_charter_select`. Genesis-es a cogmap with a real charter (statement
+// + 2 questions + framing) through the scenario loader — the same load path
+// `charter_yaml_roundtrip.rs` proves byte-exact — then asserts the composed read returns every block
+// in seq order, and that a profile with no ownership/grant on the telos resource is denied (empty,
+// not an error): the access gate is IN the SQL (`resources_readable_by` → `resources_visible_to`).
 #[cfg(all(test, feature = "test-db"))]
 mod charter_tests {
     use super::*;
