@@ -19,7 +19,7 @@ use crate::content::{
 };
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity};
 use crate::text::slugify;
@@ -434,7 +434,7 @@ pub async fn set_facet(
     values: &serde_json::Value,
     weight: f64,
     emitter: EntityId,
-) -> Result<()> {
+) -> Result<PropertyId> {
     set_facet_with(
         pool,
         resource,
@@ -447,7 +447,8 @@ pub async fn set_facet(
 }
 
 /// [`set_facet`] under an explicit [`EventContext`] — the `facet_set` act is correlated to the
-/// caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`.
+/// caller's invocation + stamped with its authorship. Mirrors `fire`/`fire_with`. Returns the
+/// `kb_properties.id` the fire produced (surfaced from `Fired::Facet`).
 pub async fn set_facet_with(
     pool: &PgPool,
     resource: ResourceId,
@@ -455,15 +456,16 @@ pub async fn set_facet_with(
     weight: f64,
     emitter: EntityId,
     ctx: EventContext,
-) -> Result<()> {
+) -> Result<PropertyId> {
     let mut tx = begin_scoped(pool).await?;
-    set_facet_in_tx(&mut tx, resource, values, weight, emitter, ctx).await?;
+    let property_id = set_facet_in_tx(&mut tx, resource, values, weight, emitter, ctx).await?;
     tx.commit().await?;
-    Ok(())
+    Ok(property_id)
 }
 
 /// In-transaction variant of [`set_facet`] — fires on a caller-supplied connection (no begin/commit).
-/// `ctx` correlates the `facet_set` act (`EventContext::default()` for an un-attributed facet).
+/// `ctx` correlates the `facet_set` act (`EventContext::default()` for an un-attributed facet). Returns
+/// the `kb_properties.id` the fire produced.
 pub async fn set_facet_in_tx(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
@@ -471,7 +473,7 @@ pub async fn set_facet_in_tx(
     weight: f64,
     emitter: EntityId,
     ctx: EventContext,
-) -> Result<()> {
+) -> Result<PropertyId> {
     fire_with(
         conn,
         SeedAction::FacetSet {
@@ -482,8 +484,8 @@ pub async fn set_facet_in_tx(
         },
         ctx,
     )
-    .await?;
-    Ok(())
+    .await?
+    .facet()
 }
 
 /// Set a single-valued **per-key** property — folds prior active `(owner, key)` rows then asserts the

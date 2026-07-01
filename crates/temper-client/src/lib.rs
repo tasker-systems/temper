@@ -12,6 +12,7 @@ pub mod config;
 pub mod contexts;
 pub mod error;
 pub mod events;
+pub mod facets;
 pub mod http;
 pub mod ingest;
 pub mod invocations;
@@ -121,6 +122,11 @@ impl TemperClient {
     /// Relationship write sub-client (assert / retype / reweight / fold).
     pub fn relationships(&self) -> relationships::RelationshipClient<'_> {
         relationships::RelationshipClient::new(&self.http)
+    }
+
+    /// Facet write sub-client (set).
+    pub fn facets(&self) -> facets::FacetClient<'_> {
+        facets::FacetClient::new(&self.http)
     }
 
     /// Search sub-client.

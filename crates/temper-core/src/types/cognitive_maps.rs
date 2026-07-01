@@ -134,6 +134,25 @@ pub struct CogmapAnalyticsRow {
     pub regulation: Vec<CogmapRegulationRow>,
 }
 
+/// One block of a cognitive map's telos charter, as returned by the `resource_blocks(cogmap_telos(…),
+/// …)` composition (T1 Sequence C). Mirrors the charter-read tuple field-for-field (`seq`, `role`,
+/// `body_text AS body`) so the service-direct read can `query_as!` straight into it. `role` is one of
+/// `statement` / `question` / `framing` (`temper-core/src/charter.rs`); a charter block always has both
+/// a role and body, so neither is `Option` (see `cogmap_charter_select`'s forced-non-null SQL).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct CharterBlock {
+    /// Position within the charter (statement is 0, then questions, then framing).
+    pub seq: i32,
+    /// One of `statement` / `question` / `framing`.
+    pub role: String,
+    /// Assembled block body text (a question-with-context block is `question + "\n\n" + context`).
+    pub body: String,
+}
+
 // ---------------------------------------------------------------------------
 // Cogmap ↔ team binding wire types (org-provisioning Chunk 5).
 //

@@ -20,6 +20,7 @@ pub mod conflict;
 pub mod context;
 pub mod device;
 pub mod event;
+pub mod facet_requests;
 pub mod graph;
 pub mod home;
 pub mod ids;

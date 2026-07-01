@@ -33,7 +33,18 @@ pub fn apply_managed_defaults(doc_type: &str, meta: &mut serde_json::Value) {
             obj.entry("temper-status")
                 .or_insert_with(|| json!("active"));
         }
-        DocType::Session | DocType::Research | DocType::Decision | DocType::Concept => {}
+        DocType::Session
+        | DocType::Research
+        | DocType::Decision
+        | DocType::Concept
+        | DocType::Fact
+        | DocType::Memory
+        | DocType::Question
+        | DocType::Theme
+        | DocType::Concern
+        | DocType::Principle
+        | DocType::Commitment
+        | DocType::Domain => {}
     }
 }
 

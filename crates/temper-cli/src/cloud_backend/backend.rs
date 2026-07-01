@@ -209,6 +209,15 @@ mod embed_impl {
             ))
         }
 
+        async fn set_facet(
+            &self,
+            _cmd: temper_workflow::operations::SetFacet,
+        ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::set_facet not wired until cutover".to_string(),
+            ))
+        }
+
         // L0 reconcile is an admin/operator path that PUTs directly via the client (Task 7); the
         // CLI does not dispatch it through CloudBackend.
         async fn reconcile_cognitive_map(
@@ -428,6 +437,15 @@ mod non_embed_impl {
             &self,
             _cmd: FoldRelationship,
         ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn set_facet(
+            &self,
+            _cmd: temper_workflow::operations::SetFacet,
+        ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

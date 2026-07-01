@@ -256,6 +256,16 @@ impl TemperMcpService {
         tools::relationships::fold_relationship(self, input).await
     }
 
+    #[tool(description = "Set a facet (typed property) on a resource — the steward's facet act")]
+    async fn facet_set(
+        &self,
+        Parameters(input): Parameters<tools::facets::FacetSetInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::facet_set(self, input).await
+    }
+
     #[tool(
         description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required."
     )]
@@ -338,6 +348,18 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_analytics(self, input).await
+    }
+
+    #[tool(
+        description = "Read a cognitive map's telos/charter blocks (statement / questions / framing) — the steward orients on this before acting. Pass the map by ref."
+    )]
+    async fn cogmap_read_charter(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapReadCharterInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_read_charter(self, input).await
     }
 
     #[tool(

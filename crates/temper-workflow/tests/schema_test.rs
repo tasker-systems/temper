@@ -146,6 +146,27 @@ another-user-field: 42
     );
 }
 
+#[test]
+fn test_validate_frontmatter_unknown_doctype_open_tail() {
+    // Open tail (Task A2): a genuinely-unknown doctype has no embedded schema
+    // to enforce, so validate_frontmatter short-circuits to no issues rather
+    // than erroring — even with frontmatter that would fail a real schema.
+    let fm = yaml(
+        r#"
+temper-id: "01930000-0000-7000-8000-000000000099"
+temper-type: anecdote
+temper-context: my-project
+temper-created: "2024-01-01T00:00:00Z"
+"#,
+    );
+    let issues = validate_frontmatter("anecdote", &fm).expect("open-tail doctype should not error");
+    assert!(
+        issues.is_empty(),
+        "unrecognized doctype should carry no schema to enforce, got: {:?}",
+        issues
+    );
+}
+
 // ---------------------------------------------------------------------------
 // check_unknown_temper_fields tests
 // ---------------------------------------------------------------------------

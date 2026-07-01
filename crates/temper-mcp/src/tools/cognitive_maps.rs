@@ -121,6 +121,43 @@ pub async fn cogmap_analytics(
     }
 }
 
+/// MCP input for `cogmap_read_charter`. `cogmap` is a ref (UUID or decorated `slug-<uuid>`).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapReadCharterInput {
+    /// The cognitive map whose telos/charter to read, by ref (UUID or `slug-<uuid>`).
+    pub cogmap: String,
+}
+
+/// Read a cognitive map's telos/charter blocks (statement / questions / framing) in seq order — the
+/// steward orients on this before acting. Service-direct (reads bypass the Backend trait); the access
+/// gate lives in the SQL (`cogmap_charter_select`) — a principal who cannot read the charter resource
+/// gets an empty vec, never an error.
+pub async fn cogmap_read_charter(
+    svc: &TemperMcpService,
+    input: CogmapReadCharterInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let rows = temper_services::backend::substrate_read::cogmap_charter_select(
+        &svc.api_state.pool,
+        ProfileId::from(profile.id),
+        cogmap_id,
+    )
+    .await
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("cogmap_read_charter failed: {e}"), None)
+    })?;
+
+    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
 // ── cogmap_create (genesis) ──────────────────────────────────────────────────
 
 /// MCP input for cogmap_create (genesis). The MCP surface creates the map with an EMPTY charter — the
@@ -280,6 +317,13 @@ pub async fn cogmap_unbind(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cogmap_read_charter_input_deserializes() {
+        let raw = serde_json::json!({ "cogmap": "m" });
+        let input: CogmapReadCharterInput = serde_json::from_value(raw).expect("charter input");
+        assert_eq!(input.cogmap, "m");
+    }
 
     #[test]
     fn cogmap_bind_input_deserializes() {
