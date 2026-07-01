@@ -3,6 +3,7 @@ pub mod cognitive_maps;
 pub mod contexts;
 pub mod edges;
 pub mod events;
+pub mod facets;
 pub mod graph;
 pub mod health;
 pub mod ingest;
