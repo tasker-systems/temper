@@ -9,6 +9,7 @@ pub mod reconcile;
 pub mod runtime;
 pub mod search;
 pub mod show_cache;
+pub mod steward;
 pub mod task;
 pub mod types;
 pub mod vault;

@@ -1,7 +1,7 @@
 use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminRequestsAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
-    ContextAction, InvocationCmd, ResourceAction, SkillAction, TeamAction,
+    ContextAction, InvocationCmd, ResourceAction, SkillAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -574,6 +574,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             }
             InvocationCmd::List { cogmap, status } => {
                 commands::invocation::list(cogmap.as_deref(), status.as_deref(), output_format)
+            }
+        },
+        Commands::Steward { cmd } => match cmd {
+            StewardCmd::Delta { cogmap, threshold } => {
+                commands::steward::delta(&cogmap, threshold, output_format)
+            }
+            StewardCmd::AdvanceWatermark { cogmap, event } => {
+                commands::steward::advance_watermark(&cogmap, &event, output_format)
             }
         },
     }

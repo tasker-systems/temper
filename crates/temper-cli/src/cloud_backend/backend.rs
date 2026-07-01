@@ -58,10 +58,10 @@ impl CloudBackend {
 mod embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateCognitiveMap,
-        CreateResource, DeleteResource, DomainEvent, FoldRelationship, ListResources,
-        OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
-        SearchResources, ShowResource, UpdateResource,
+        AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
+        CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
+        ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
+        ReweightRelationship, SearchResources, ShowResource, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::ResourceRow;
@@ -262,6 +262,15 @@ mod embed_impl {
                 "CloudBackend::close_invocation not wired until cutover".to_string(),
             ))
         }
+
+        async fn advance_steward_watermark(
+            &self,
+            _cmd: AdvanceStewardWatermark,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::advance_steward_watermark not wired until cutover".to_string(),
+            ))
+        }
     }
 
     #[cfg(test)]
@@ -336,10 +345,10 @@ mod embed_impl {
 mod non_embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateCognitiveMap,
-        CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
-        ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship,
-        SearchHit, SearchResources, ShowResource, UpdateResource,
+        AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
+        CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
+        OpenInvocation, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
+        ReweightRelationship, SearchHit, SearchResources, ShowResource, UpdateResource,
     };
     use temper_workflow::types::resource::ResourceRow;
 
@@ -484,6 +493,15 @@ mod non_embed_impl {
             &self,
             _cmd: CloseInvocation,
         ) -> Result<CommandOutput<()>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn advance_steward_watermark(
+            &self,
+            _cmd: AdvanceStewardWatermark,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

@@ -234,6 +234,16 @@ pub struct CloseInvocation {
     pub origin: Surface,
 }
 
+/// Advance a team-self-cognition cogmap's steward ingest watermark to a given event id (T4a). The
+/// stub write the future steward calls on run completion so the next delta counts only what landed
+/// after this run. Gated on cogmap-write (`cogmap_authorable_by_profile`), auth before write.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdvanceStewardWatermark {
+    pub cogmap: CogmapId,
+    pub event_id: uuid::Uuid,
+    pub origin: Surface,
+}
+
 /// Reconcile the L0-style kernel slice of a cognitive map to a pre-embedded
 /// desired-state manifest. Idempotent + additive-only + provenance-scoped: the
 /// `request` is the contract, the fired events are its consequence. `cogmap_id`

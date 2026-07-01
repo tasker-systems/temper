@@ -115,9 +115,9 @@ async fn grant_team_resource(pool: &sqlx::PgPool, team_id: Uuid, granted_by: Uui
         .await
         .expect("insert resource");
     sqlx::query(
-        "INSERT INTO kb_resource_access \
-            (resource_id, anchor_table, anchor_id, can_read, granted_by_profile_id) \
-         VALUES ($1, 'kb_teams', $2, true, $3)",
+        "INSERT INTO kb_access_grants \
+            (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_resources', $1, 'kb_teams', $2, true, $3)",
     )
     .bind(resource_id)
     .bind(team_id)

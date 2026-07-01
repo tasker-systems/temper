@@ -13,6 +13,7 @@ pub mod resource;
 pub mod search_cmd;
 pub mod skill;
 pub mod status;
+pub mod steward;
 pub mod task;
 pub mod team;
 pub mod warmup;

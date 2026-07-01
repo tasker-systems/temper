@@ -51,6 +51,8 @@ use temper_workflow::types::resource::{
         crate::handlers::invocations::close,
         crate::handlers::invocations::show,
         crate::handlers::invocations::list,
+        crate::handlers::steward::delta,
+        crate::handlers::steward::advance,
     ),
     components(schemas(
         HealthResponse,
@@ -117,6 +119,9 @@ use temper_workflow::types::resource::{
         temper_core::types::invocation::InvocationSummary,
         temper_core::types::invocation::InvocationActRow,
         temper_core::types::invocation::Disposition,
+        temper_core::types::steward::IngestDelta,
+        temper_core::types::steward::AdvanceWatermarkRequest,
+        temper_core::types::steward::AdvanceWatermarkAck,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -131,6 +136,7 @@ use temper_workflow::types::resource::{
         (name = "Facets", description = "Typed facet property writes (facet_set)"),
         (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
         (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
+        (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
     ),
     info(
         title = "Temper Cloud API",

@@ -267,6 +267,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
+    )]
+    async fn steward_ingest_delta(
+        &self,
+        Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_ingest_delta(self, input).await
+    }
+
+    #[tool(
+        description = "Advance a team-self-cognition cogmap's ingest watermark to a given event id — the cursor a completed steward run records so the next delta counts only newer material. Requires cogmap-write."
+    )]
+    async fn steward_advance_watermark(
+        &self,
+        Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_advance_watermark(self, input).await
+    }
+
+    #[tool(
         description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required."
     )]
     async fn search(
