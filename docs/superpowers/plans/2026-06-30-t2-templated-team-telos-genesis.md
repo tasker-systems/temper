@@ -1,333 +1,262 @@
-# T2 — Templated Team-Telos Genesis Implementation Plan
+# T2 — Templated Team-Telos Genesis Implementation Plan (REVISED)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a team-parameterized genesis that births a cognitive map 1:1 with a team (joined via `kb_team_cogmaps`) from a *templated* team-telos-charter ("understand how this team works"), idempotently — the foundation for the team-self-cognition steward MVP.
+> **Revision note (2026-07-01):** This plan replaces an earlier draft that built a *pure-Rust*
+> `team_telos_charter()` function + a bespoke `cogmap genesis-team` command with a deterministic
+> uuidv5 id. A code survey (background investigation, session note) established that the durable,
+> reusable home is the **existing `schema-artifact/manifests/*.yaml` genesis mechanism**, and that
+> **every CRUD primitive already exists**: `temper team create`, `temper context create`,
+> `temper cogmap create --manifest --name`, `temper cogmap bind`. A telos charter is **id-free**
+> (blocks keyed by role+seq, fold-and-reprojected wholesale), and genesis ids are optional /
+> CLI-minted, so a **telos-only genesis manifest is already reusable across teams as-is**. The
+> revised T2 is therefore **near-zero Rust**: author one durable YAML artifact + one SoP that
+> composes the existing idempotent primitives — mirroring the org-bootstrap precedent
+> (`schema-artifact/install-profile.yaml` + `scripts/bootstrap/system-bootstrap.sh` +
+> `docs/guides/org-bootstrap.md`). Decisions confirmed with the user: (1) YAML template + compose
+> existing CRUD commands (lean into CRUD, SoP can start as an echo-only script); (2) **team-agnostic
+> telos prose** (zero interpolation — the team's identity rides on the map's `--name`).
 
-**Architecture:** Compose the two existing idempotent operations the L0 kernel migration already composes inline — `cogmap_genesis` (birth an unbound cogmap from a telos charter) + `bind_team` (`INSERT kb_team_cogmaps … ON CONFLICT DO NOTHING`) — behind one new CLI command, with a deterministic per-team cogmap id so re-runs are idempotent (1:1). The charter prose comes from a new pure `team_telos_charter(team_name)` template producing a `ManifestTelos`, embedded client-side (the existing embed-gated genesis path).
+**Goal:** Deliver a **reusable, durable** team-self-cognition telos-charter template — a cognitive
+map born 1:1 with a team, from the "understand how this team works" charter — plus the SoP that
+composes the existing idempotent CRUD primitives to birth and bind it for any team. This is the
+foundation the Eve steward (T5) tends.
 
-**Tech Stack:** Rust, clap (CLI), temper-client (HTTP), temper-core charter types, ONNX embed (existing `embed` feature gate), sqlx/Postgres (server, unchanged), cargo-make + cargo-nextest.
+**Architecture:** One new static artifact + one SoP. The artifact is a **telos-only genesis
+manifest** (`schema-artifact/manifests/team-self-cognition.yaml`) mirroring
+`schema-artifact/manifests/org-identity.yaml`'s shape (`name` / `telos_title` / `telos:` with
+`statement` + questions-with-context + `framing`) but with **team-agnostic** prose. The SoP composes
+three existing commands — `temper team create <slug>` → `temper cogmap create --manifest <file>
+--name "<Team> — self-cognition"` → `temper cogmap bind <cogmap-ref> <team>` — capturing the minted
+cogmap id between steps (the exact pattern `install-profile.yaml` documents). Idempotency is
+**inherited from the primitives** (team create ON CONFLICT; cogmap create is a no-op at a pinned id;
+bind is idempotent on the join PK).
+
+**Tech Stack:** YAML (genesis manifest) + Markdown (SoP runbook); optional POSIX shell (applier
+script). The genesis embed path is the existing `#[cfg(feature = "embed")]` `cogmap create` — **no
+Rust changes in this plan**.
 
 ## Global Constraints
 
-- Quality gate: `cargo make check` (fmt + clippy `-D warnings` + docs + machete + TS). Run before every commit; the pre-commit hook also runs it.
-- Always build/clippy with `--all-features`.
-- The genesis embed path is gated `#[cfg(feature = "embed")]`; the new command mirrors that gate (non-embed build returns the same "requires embed" error as `cogmap create` at `commands/cogmap.rs:181`).
-- No new SQL: this task reuses `cogmap_genesis` and `bind_team`; **no migration**, so no sqlx cache regen needed for new queries unless you add a `sqlx::query!` (you won't).
-- UUIDs: repo convention is uuidv7 for minted ids; this task introduces **one** deterministic uuidv5 derivation for the per-team self-cogmap id (reserved-derived id, same spirit as L0's literal reserved ids).
-- After any temper-cli change that the e2e suite spawns, rebuild the bin: `cargo build -p temper-cli --bin temper` (nextest rebuilds the lib, not the spawned bin).
+- **No Rust code changes** are expected. If execution discovers a genuinely-missing primitive,
+  STOP and escalate — do not silently add a bespoke command; the whole point of this revision is to
+  compose existing CRUD.
+- The genesis manifest must parse via the existing `genesis::parse_manifest`
+  (`crates/temper-cli/src/actions/genesis.rs`) with **no parser change** — match `org-identity.yaml`'s
+  keys exactly. Verify by running `temper cogmap create --manifest <the new file> --name …` against
+  the dev DB (Task 3), not by adding a unit test to a crate this plan otherwise doesn't touch.
+- Telos prose is **team-agnostic** ("this team", never a hardcoded team name) — this is what makes
+  the artifact reusable with zero interpolation.
+- The charter is embedded **client-side** (ONNX) by `cogmap create`, so Task 3 requires the `embed`
+  feature: `cargo build -p temper-cli --bin temper --features embed`.
+- Keep the artifact **telos-only** — do NOT add a `reconcile`-style `entries:` section. Reconcile
+  entries carry a *required static uuidv7 primary key* and would collide across teams (not reusable).
+  Per-team landmark delivery, if ever wanted, mints ids per team — out of scope here.
 
 ---
 
 ## File Structure
 
-- **Create:** `crates/temper-cli/src/actions/team_telos.rs` — the pure charter template + deterministic id derivation. One responsibility: "given a team, produce its self-cognition telos charter + stable ids."
-- **Modify:** `crates/temper-cli/src/actions/mod.rs` — declare `pub mod team_telos;`.
-- **Modify:** `crates/temper-cli/src/cli.rs` — add a `GenesisTeam` variant to the cogmap subcommand enum.
-- **Modify:** `crates/temper-cli/src/commands/cogmap.rs` — the `genesis_team()` handler (orchestrates template → genesis → bind), embed-gated.
-- **Test:** unit tests inline in `team_telos.rs`; a clap parse test inline in `cli.rs`'s existing cogmap test module (or `commands/cogmap.rs`).
+- **Create:** `schema-artifact/manifests/team-self-cognition.yaml` — the durable, reusable telos-only
+  genesis manifest (the template). One responsibility: "the authored 'understand how this team works'
+  charter, team-agnostic, ready for `cogmap create --manifest`."
+- **Create:** `docs/guides/team-self-cognition-bootstrap.md` — the SoP runbook: the exact command
+  sequence to birth + bind any team's self-cognition map, with the id-capture step called out.
+- **(Optional) Create:** `scripts/bootstrap/team-self-cognition.sh` — a thin applier that either
+  echoes the workflow (dry-run default) or runs it (`--apply`), mirroring
+  `scripts/bootstrap/system-bootstrap.sh`'s idiom. May be deferred to a follow-up; the runbook is the
+  MVP deliverable.
 
-**Consumes (exact, from the codebase as mapped):**
-- `crate::actions::reconcile::ManifestTelos { statement: String, questions: Vec<CharterQuestion>, framing: Vec<String> }` (`crates/temper-cli/src/actions/reconcile.rs:29-34`).
-- `temper_core::charter::CharterQuestion { question: String, context: String }` (`crates/temper-core/src/charter.rs:9-14`).
-- `crate::actions::genesis::{manifest_to_request}` and `GenesisManifestDoc { cogmap_id: Option<Uuid>, telos_resource_id: Option<Uuid>, name: String, telos_title: String, telos: Option<ManifestTelos> }` (`crates/temper-cli/src/actions/genesis.rs:14-30, 43-`).
-- `crate::actions::cogmap::resolve_team_id(client, team) -> Result<Uuid>` (`crates/temper-cli/src/actions/cogmap.rs:62-84`).
-- Client calls: `client.cognitive_maps().create_cognitive_map(&CreateCogmapRequest) -> CreateCogmapOutcome { cogmap_id, telos_resource_id, created }` and the bind call used by `bind_api` (`crates/temper-cli/src/actions/cogmap.rs:87-98`, `BindTeamRequest { team_id }`).
-- `client.teams().list()` for team name lookup (used inside `resolve_team_id`).
+**Consumes (existing, verified in the codebase):**
+- `temper team create <slug> [--name <n>] [--parent <ref>]` (`crates/temper-cli/src/cli.rs:552`,
+  `commands/team.rs`) — creates a team; caller becomes owner. Idempotent by slug.
+- `temper context create <name> [--team <ref>]` (`crates/temper-cli/src/cli.rs:481` `ContextAction`)
+  — the team's working context (the ingest source; e.g. `building`).
+- `temper cogmap create --manifest <file> [--name <n>] [--id <ref>]`
+  (`crates/temper-cli/src/cli.rs:655`, `commands/cogmap.rs`, `actions/genesis.rs`) — genesis from a
+  manifest; admin-gated; idempotent at a pinned id (`created:false` on re-run).
+- `temper cogmap bind <cogmap-ref> <team>` (`crates/temper-cli/src/cli.rs:689`,
+  `actions::cogmap::bind_api`) — the 1:1 team↔cogmap join; admin-gated; idempotent on the join PK.
+- Genesis manifest shape: `GenesisManifestDoc { cogmap_id?, telos_resource_id?, name, telos_title,
+  telos? }` with `ManifestTelos { statement, questions: Vec<CharterQuestion{question, context}>,
+  framing: Vec<String> }` (`crates/temper-cli/src/actions/{genesis,reconcile}.rs`,
+  `crates/temper-core/src/charter.rs`).
 
 ---
 
-## Task 1: The team-telos charter template (pure)
+## Task 1: The durable team-self-cognition telos manifest (the template)
 
 **Files:**
-- Create: `crates/temper-cli/src/actions/team_telos.rs`
-- Modify: `crates/temper-cli/src/actions/mod.rs` (add `pub mod team_telos;`)
+- Create: `schema-artifact/manifests/team-self-cognition.yaml`
 
-**Interfaces:**
-- Produces: `pub fn team_telos_charter(team_name: &str) -> ManifestTelos`; `pub fn self_cogmap_id(team_id: Uuid) -> Uuid`; `pub fn self_telos_resource_id(team_id: Uuid) -> Uuid`; `pub const TEAM_SELF_COGMAP_NAMESPACE: Uuid`.
+**Interface:**
+- Produces a telos-only genesis manifest that `temper cogmap create --manifest` parses and births a
+  cogmap from — reusable for **any** team (team identity supplied at apply time via `--name`).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Author the manifest** — mirror `schema-artifact/manifests/org-identity.yaml`'s exact
+  key shape (`name` / `telos_title` / `telos:` → `statement` + `questions[].{question,context}` +
+  `framing[]`). Omit `cogmap_id` / `telos_resource_id` (the SoP pins or captures them). Use the
+  content below verbatim (team-agnostic prose; the goal statement, the determinism reframe, and the
+  D3 label vocabulary are the load-bearing lines):
 
-In a new file `crates/temper-cli/src/actions/team_telos.rs`, add at the bottom:
+```yaml
+# Team self-cognition cognitive map — GENESIS manifest (REUSABLE TEMPLATE).
+#
+# Consumed by:  temper cogmap create --manifest schema-artifact/manifests/team-self-cognition.yaml \
+#                 --name "<Team> — self-cognition"
+# Then bound 1:1 to the team:  temper cogmap bind <minted-cogmap-ref> <team>
+#
+# This is the reusable template for a TEAM SELF-COGNITION map: a cognitive map born 1:1 with a team,
+# whose ingest source is the team's OWN temper resources. The prose is deliberately TEAM-AGNOSTIC
+# ("this team") so the single artifact serves every team without interpolation — the team's identity
+# rides on the map's `--name` at apply time. Tended by the Eve steward (create / assert / facet /
+# fold); regions emerge from `materialize` — the steward never clusters. See the T3 spec:
+# docs/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md
+#
+# IDENTITY: omit `cogmap_id` / `telos_resource_id` and the CLI mints stable uuidv7s and prints them.
+# Pin them in the SoP (per team) once you want a reproducible, re-runnable genesis — a re-run at the
+# same id is an idempotent no-op (`created: false`).
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn charter_is_team_named_and_nonempty() {
-        let t = team_telos_charter("Temper");
-        assert!(t.statement.contains("Temper"));
-        assert!(!t.questions.is_empty(), "must seed orienting questions");
-        assert!(!t.framing.is_empty(), "must seed framing");
-        // every question carries context (the questions-with-context topology)
-        assert!(t.questions.iter().all(|q| !q.question.is_empty() && !q.context.is_empty()));
-    }
-
-    #[test]
-    fn ids_are_deterministic_per_team() {
-        let team = Uuid::parse_str("019f1ac7-ed17-78c1-8003-7fe3af72609d").unwrap();
-        assert_eq!(self_cogmap_id(team), self_cogmap_id(team), "stable across calls");
-        // cogmap id and telos id are distinct
-        assert_ne!(self_cogmap_id(team), self_telos_resource_id(team));
-    }
-}
+name: "Team — self-cognition"
+telos_title: "How this team works"
+telos:
+  statement: >-
+    Understand how this team works — what it is actively working on, the problems it solves and for
+    whom, the domains it owns, the decisions it has settled and the commitments it holds, and the
+    concerns and open questions it carries. This map is the team's self-cognition, dogfed from the
+    team's own temper resources: its nodes are distilled from those resources and situated by this
+    telos. Salience is judged under this purpose — never universally.
+  questions:
+    - question: "What is this team actively working on?"
+      context: "Surfaces the live themes and the most active threads — the team's current front."
+    - question: "What problems does this team solve, and for whom?"
+      context: "The team's reason-for-being, distilled from its work rather than declared abstractly."
+    - question: "What does this team know — its domains of expertise and responsibility?"
+      context: "The areas the team owns; where its judgment is authoritative."
+    - question: "What has this team decided, and what has it committed to?"
+      context: "Settled decisions and outstanding commitments — the load-bearing choices to honor."
+    - question: "What concerns or open questions is the team holding?"
+      context: "Live tensions and unresolved questions worth tracking before they are settled."
+  framing:
+    - "Nodes are distilled from the team's own resources and carry a `derived_from` edge to their source(s)."
+    - "The steward tends declared structure (create / assert / facet / fold); regions emerge from `materialize` — the steward never clusters."
+    - "Node labels are expressive: concept, fact, memory, question, theme, concern, principle, commitment, domain."
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Validate it parses + births** — this is verified end-to-end in Task 3 (there is no
+  crate unit test to add; the manifest is data consumed by the existing embed-gated CLI path). Do a
+  quick local YAML sanity check if desired (`python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" schema-artifact/manifests/team-self-cognition.yaml`).
 
-Run: `cargo nextest run -p temper-cli team_telos -v`
-Expected: FAIL — `team_telos.rs` doesn't define `team_telos_charter` / `self_cogmap_id` yet (compile error).
-
-- [ ] **Step 3: Write the implementation**
-
-At the top of `crates/temper-cli/src/actions/team_telos.rs`:
-
-```rust
-//! Templated team self-cognition telos charter.
-//!
-//! Produces the "understand how this team works" telos for a team's 1:1 self-cognition
-//! cognitive map, plus deterministic (reserved-derived) ids so re-running genesis for the
-//! same team is idempotent. The steward (Workflow A) tends this map; regions emerge from
-//! `materialize`. See docs/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md.
-
-use uuid::Uuid;
-
-use crate::actions::reconcile::ManifestTelos;
-use temper_core::charter::CharterQuestion;
-
-/// Namespace for deriving stable per-team self-cogmap ids (uuidv5). Fixed constant — do not change
-/// once any team's self-cogmap has been born, or ids would drift and re-genesis would duplicate.
-pub const TEAM_SELF_COGMAP_NAMESPACE: Uuid =
-    Uuid::from_u128(0x05a1_face_0000_0000_0000_5e1f_c061_7a00);
-
-/// Deterministic cogmap id for a team's self-cognition map.
-pub fn self_cogmap_id(team_id: Uuid) -> Uuid {
-    Uuid::new_v5(&TEAM_SELF_COGMAP_NAMESPACE, format!("cogmap:{team_id}").as_bytes())
-}
-
-/// Deterministic telos-resource id for a team's self-cognition map.
-pub fn self_telos_resource_id(team_id: Uuid) -> Uuid {
-    Uuid::new_v5(&TEAM_SELF_COGMAP_NAMESPACE, format!("telos:{team_id}").as_bytes())
-}
-
-fn q(question: &str, context: &str) -> CharterQuestion {
-    CharterQuestion { question: question.to_string(), context: context.to_string() }
-}
-
-/// The "understand how this team works" telos charter, parameterized by team name.
-pub fn team_telos_charter(team_name: &str) -> ManifestTelos {
-    ManifestTelos {
-        statement: format!(
-            "Understand how the {team_name} team works — what they are working on, the problems \
-             they solve, the decisions and commitments they hold, the domains they own, and how \
-             they operate. This map is the team's self-cognition, dogfed from the team's own \
-             temper resources."
-        ),
-        questions: vec![
-            q("What is this team actively working on?",
-              "surfaces live themes and the most active threads"),
-            q("What problems does this team solve, and for whom?",
-              "the team's reason-for-being, distilled from its work"),
-            q("What does this team know — its domains of expertise and responsibility?",
-              "the areas the team owns"),
-            q("What has this team decided, and what has it committed to?",
-              "settled decisions and outstanding commitments"),
-            q("What concerns or open questions is the team holding?",
-              "live tensions and unresolved questions worth tracking"),
-        ],
-        framing: vec![
-            "Nodes are distilled from the team's resources and carry a `derived_from` edge to \
-             their source(s).".to_string(),
-            "The steward tends declared structure (create / assert / facet / fold); regions emerge \
-             from `materialize` — the steward never clusters.".to_string(),
-            "Node labels are expressive: concept, fact, memory, question, theme, concern, \
-             principle, commitment, domain.".to_string(),
-        ],
-    }
-}
-```
-
-Then add to `crates/temper-cli/src/actions/mod.rs` (alongside the other `pub mod` lines):
-
-```rust
-pub mod team_telos;
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `cargo nextest run -p temper-cli team_telos -v`
-Expected: PASS (both tests).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add crates/temper-cli/src/actions/team_telos.rs crates/temper-cli/src/actions/mod.rs
-git commit -m "feat(cli): team-telos charter template + deterministic self-cogmap ids"
+git add schema-artifact/manifests/team-self-cognition.yaml
+git commit -m "feat(schema-artifact): reusable team-self-cognition telos genesis manifest"
 ```
 
 ---
 
-## Task 2: The `cogmap genesis-team` command (orchestrates birth + bind)
+## Task 2: The SoP runbook (compose the CRUD primitives)
 
 **Files:**
-- Modify: `crates/temper-cli/src/cli.rs` (cogmap subcommand enum — find the enum the `Create`/`Reconcile`/`Shape` variants at `cli.rs:650-667` belong to; add a sibling `GenesisTeam` variant)
-- Modify: `crates/temper-cli/src/commands/cogmap.rs` (handler + dispatch arm; mirror `create()` at `commands/cogmap.rs:144-181`)
+- Create: `docs/guides/team-self-cognition-bootstrap.md`
 
-**Interfaces:**
-- Consumes: Task 1's `team_telos_charter`, `self_cogmap_id`, `self_telos_resource_id`; `genesis::manifest_to_request`; `cogmap::resolve_team_id`; the client's create + bind calls.
-- Produces: `temper cogmap genesis-team --team <slug-or-uuid>` — births (idempotent) and binds the team's self-cognition cogmap; prints the `CreateCogmapOutcome` + bind result.
+**Interface:**
+- A step-by-step runbook an operator (or the steward's deploy step, T6) follows to birth + bind a
+  team's self-cognition map from the Task-1 template. Team-agnostic; `<team-slug>` / `<Team>` are
+  placeholders.
 
-- [ ] **Step 1: Add the clap variant**
+- [ ] **Step 1: Write the runbook** — mirror the structure of `docs/guides/org-bootstrap.md` (the
+  org analogue). Cover, in order, with the exact commands:
+  1. `temper team create <team-slug> --name "<Team>"` — create the team (you become owner). Idempotent by slug.
+  2. `temper context create <ctx> --team <team-slug>` — the team's working context (the ingest source, e.g. `building`). *(Confirm the exact `context create` flags against `cli.rs:481` while writing; adjust the command to match.)*
+  3. `temper cogmap create --manifest schema-artifact/manifests/team-self-cognition.yaml --name "<Team> — self-cognition"` — births the map; **capture the printed `cogmap_id`** (or pin it in the manifest for a reproducible re-run, per the manifest's IDENTITY note).
+  4. `temper cogmap bind <captured-cogmap-ref> <team-slug>` — the 1:1 team↔cogmap join.
+  - Call out that **idempotency is inherited from the primitives** (re-running converges, does not
+    duplicate) and that admin (system-admin) is required for `cogmap create` / `cogmap bind`
+    (reference `reference_l0_content_delivery_admin_gate` behavior).
+  - Note the id-capture-vs-pin choice explicitly (same tradeoff `install-profile.yaml` documents).
 
-In `crates/temper-cli/src/cli.rs`, add to the cogmap subcommand enum (next to `Create`):
+- [ ] **Step 2 (optional, may defer):** add `scripts/bootstrap/team-self-cognition.sh` — a thin
+  applier taking `--team <slug> --name <Team> [--context <ctx>] [--apply]`; **default is a dry-run
+  that echoes the exact command sequence** (the "no-op script that echoes the workflow" the user
+  asked for), `--apply` runs them and captures the minted cogmap id between steps. Mirror
+  `scripts/bootstrap/system-bootstrap.sh`'s option-parsing + `temper`-invocation idiom. If deferred,
+  say so in the runbook and leave a `TODO(T6)` pointer.
 
-```rust
-/// Genesis a team's 1:1 self-cognition cognitive map from the team-telos template.
-///
-/// Idempotent: the cogmap id is derived deterministically from the team id, so re-running
-/// is a no-op birth + idempotent team bind. Admin-gated (system admin) like `create`.
-GenesisTeam {
-    /// Team ref — a slug (optional `+` sigil) or a team UUID.
-    #[arg(long)]
-    team: String,
-},
-```
-
-- [ ] **Step 2: Write the failing parse test**
-
-In the cogmap command/cli test module (mirror the existing clap `try_parse_from` tests, e.g. those near `commands/edge.rs:142-313`), add:
-
-```rust
-#[test]
-fn genesis_team_parses_team_flag() {
-    use clap::Parser;
-    let cli = crate::cli::Cli::try_parse_from(
-        ["temper", "cogmap", "genesis-team", "--team", "temper-system"],
-    ).expect("parses");
-    // navigate to the GenesisTeam variant and assert team == "temper-system"
-    // (match the exact enum path used by sibling tests in this module)
-}
-```
-
-- [ ] **Step 3: Run it to verify it fails**
-
-Run: `cargo nextest run -p temper-cli genesis_team_parses -v`
-Expected: FAIL — `GenesisTeam` arm not yet handled / variant just added but no dispatch (compile error in `commands/cogmap.rs` match).
-
-- [ ] **Step 4: Write the handler**
-
-In `crates/temper-cli/src/commands/cogmap.rs`, add the dispatch arm (next to the `Create` arm in the command match) and the handler. Mirror `create()` (cogmap.rs:144-181), but build the request from the template instead of a manifest file:
-
-```rust
-#[cfg(feature = "embed")]
-pub fn genesis_team(team: &str) -> Result<()> {
-    runtime::with_client(|client| {
-        Box::pin(async move {
-            // 1. Resolve the team (slug or uuid) and its display name.
-            let team_id = crate::actions::cogmap::resolve_team_id(&client, team).await?;
-            let teams = client.teams().list().await?;
-            let team_name = teams.iter()
-                .find(|t| t.id == team_id)
-                .map(|t| t.name.clone())
-                .unwrap_or_else(|| team.to_string());
-
-            // 2. Build a templated genesis manifest with deterministic ids (idempotent re-genesis).
-            let doc = crate::actions::genesis::GenesisManifestDoc {
-                cogmap_id: Some(crate::actions::team_telos::self_cogmap_id(team_id)),
-                telos_resource_id: Some(crate::actions::team_telos::self_telos_resource_id(team_id)),
-                name: format!("{team_name} — self-cognition"),
-                telos_title: format!("{team_name}: how this team works"),
-                telos: Some(crate::actions::team_telos::team_telos_charter(&team_name)),
-            };
-            let req = crate::actions::genesis::manifest_to_request(doc)?;
-
-            // 3. Birth (idempotent on cogmap_id) then bind 1:1 to the team (idempotent ON CONFLICT).
-            let outcome = client.cognitive_maps().create_cognitive_map(&req).await?;
-            crate::actions::cogmap::bind_api(client, outcome.cogmap_id, team).await?;
-
-            crate::output::print_json(&outcome)?; // match the surrounding output convention
-            Ok(())
-        })
-    })
-}
-
-#[cfg(not(feature = "embed"))]
-pub fn genesis_team(_team: &str) -> Result<()> {
-    // Mirror the non-embed error returned by `create()` at commands/cogmap.rs:181.
-    anyhow::bail!("`cogmap genesis-team` requires the `embed` feature (client-side charter embedding)")
-}
-```
-
-> Verify against the codebase as you write: the exact `runtime::with_client` signature and the
-> output helper (`create()` shows both); `bind_api`'s parameters (`actions/cogmap.rs:87-98`); and
-> whether `manifest_to_request` is `#[cfg(feature = "embed")]` (it is — keep the handler under the
-> same gate). `client.teams().list()` item field names (`id`, `name`) — confirm from `resolve_team_id`.
-
-- [ ] **Step 5: Run the parse test + full crate tests**
-
-Run: `cargo nextest run -p temper-cli` and `cargo build -p temper-cli --all-features`
-Expected: PASS / clean build (both embed and non-embed arms compile).
-
-- [ ] **Step 6: `cargo make check`**
-
-Run: `cargo make check`
-Expected: green (fmt, clippy `-D warnings`, docs, machete, TS).
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add crates/temper-cli/src/cli.rs crates/temper-cli/src/commands/cogmap.rs
-git commit -m "feat(cli): cogmap genesis-team — templated team self-cognition genesis + bind"
+git add docs/guides/team-self-cognition-bootstrap.md
+# (+ scripts/bootstrap/team-self-cognition.sh if authored)
+git commit -m "docs(bootstrap): SoP to birth + bind a team's self-cognition cogmap"
 ```
 
 ---
 
-## Task 3: End-to-end idempotency verification (manual + optional e2e)
+## Task 3: End-to-end verification (real run against the dev DB)
 
-The genesis path is admin-gated and embed+DB-bound, so the durable check is a real run, not a unit test.
+The genesis path is admin-gated + embed + DB-bound, so the durable check is a real run.
 
-- [ ] **Step 1: Bring up the dev DB and rebuild the bin**
+- [ ] **Step 1: Bring up the dev DB and build the embed CLI**
 
 ```bash
 cargo make docker-up
 cargo build -p temper-cli --bin temper --features embed
 ```
 
-- [ ] **Step 2: Run genesis-team for the temper-system team twice (idempotency)**
+- [ ] **Step 2: Run the SoP once for a scratch team** (e.g. `--team t2-selfcog-smoke`), following
+  Task 2's runbook exactly: `team create` → `context create` → `cogmap create --manifest … --name` →
+  `cogmap bind`. Confirm genesis prints `created: true` and a `cogmap_id`; the bind succeeds.
 
-```bash
-temper cogmap genesis-team --team temper-system
-temper cogmap genesis-team --team temper-system   # second run
-```
+- [ ] **Step 3: Re-run genesis at the SAME id** (pin the printed `cogmap_id` via `--id` or the
+  manifest) and confirm `created: false` (idempotent no-op), and that the team bind stays a single
+  `kb_team_cogmaps` row.
 
-Expected: first run `created: true`; second run `created: false` (existence pre-check on the deterministic `kb_cogmaps.id`), and the team bind stays a single row (`ON CONFLICT DO NOTHING`).
+- [ ] **Step 4: Confirm the 1:1 join + the templated charter** — `temper cogmap shape <cogmap-ref>`
+  shows the map; its telos carries the templated statement / five questions / three framing lines.
+  (Once T1's `cogmap_read_charter` tool lands it reads the prose directly; until then inspect via the
+  existing analytics/shape surface.)
 
-- [ ] **Step 3: Confirm the 1:1 join and the charter**
-
-```bash
-temper cogmap shape <printed-cogmap-ref>            # map exists
-```
-
-Expected: the cogmap is bound to `temper-system` in `kb_team_cogmaps` (one row), and its telos carries the templated `statement`/`question`/`framing` blocks (verifiable once Task in T1's charter-read tool lands; until then, inspect via the existing reconcile/analytics surface).
-
-- [ ] **Step 4 (optional): add an e2e test**
-
-If the e2e harness (`tests/e2e/`) has an admin-minting fixture and the embed feature is enabled (`cargo make test-e2e-embed`), add a test that calls `genesis-team` twice through the real CLI→API→DB path and asserts `created: true` then `created: false` plus exactly one `kb_team_cogmaps` row. Place it under `tests/e2e/tests/`. (Gate behind `test-embed`; the genesis path needs client-side embedding.)
-
-- [ ] **Step 5: Commit (if an e2e test was added)**
-
-```bash
-git add tests/e2e/tests/<file>.rs
-git commit -m "test(e2e): genesis-team births + binds team self-cogmap idempotently"
-```
+- [ ] **Step 5: (optional) e2e test** — only if the `tests/e2e/` harness already has an
+  admin-minting fixture + `test-embed`: a test that runs the sequence through the real CLI→API→DB
+  path and asserts `created:true` then `created:false` + exactly one `kb_team_cogmaps` row
+  (`cargo make test-e2e-embed`). Otherwise the manual run above is the acceptance evidence — note it
+  in the report.
 
 ---
 
+## Out of scope (Rejected vs Deferred)
+
+**Rejected (load-bearing decisions — resist scope creep):**
+- A bespoke `cogmap genesis-team` command or a pure-Rust `team_telos_charter()` function. The
+  primitives already compose; a wrapper duplicates them and re-introduces a deterministic-id concern
+  the SoP handles by id-capture-or-pin.
+- `{{team_name}}` interpolation into the telos prose. Team-agnostic prose is reusable with zero code;
+  the team identity rides on `--name`.
+- A `reconcile`-style `entries:` section in the template (static uuidv7 primary keys → cross-team
+  collision → not reusable).
+
+**Deferred (in scope elsewhere or later):**
+- The specific operational step of creating the **`temper` team + `building` context** and
+  **re-homing** the current `@j-cole-taylor/temper` corpus to `+temper/building`. This is J's own
+  install's one-time migration, **not needed in most installs**, and is a separate operational task
+  (neonctl / the SoP applied to J's cloud) — decide-later, tracked outside this durable deliverable.
+- Hardening the SoP script from echo-only into a full idempotent applier (folds into T6 deploy).
+- Auto-birth-of-self-cogmap-per-team (MVP uses the on-demand SoP).
+
 ## Self-Review
 
-- **Spec coverage:** Implements goal-task T2 ("templated team-telos genesis: parameterize the L0-style birth for any team, joined 1:1 via `kb_team_cogmaps`, idempotent, works for the temper team"). The 1:1 + idempotency come from the deterministic id + existing existence pre-check; the template is the parameterization.
-- **Open decision surfaced for the executor:** the MVP's *first target team* — `temper-system` is the only canonical team today. The plan targets it; if a dedicated `temper` team is wanted instead, create it first (`temper team create` / seed) and pass its slug — no code change (the command is team-agnostic).
-- **Placeholder scan:** the only "verify against the codebase as you write" note is on faithful-copy glue (`with_client`/output helper/`bind_api` arity) where the exact local idiom must match its neighbors — the agent mapped the copy-source line ranges; this is a copy-match instruction, not a TODO.
-- **Type consistency:** `ManifestTelos`/`CharterQuestion`/`GenesisManifestDoc`/`CreateCogmapOutcome` field names match the mapped definitions; `self_cogmap_id`/`self_telos_resource_id` names are consistent across Tasks 1–2.
+- **Spec coverage (T2 acceptance):** a reusable templated team-telos charter (Task 1) applied 1:1 to
+  a team via idempotent genesis + bind (Tasks 2–3), grounded on the real `schema-artifact` YAML
+  mechanism per the user's steer. The 1:1 + idempotency come from the existing primitives; the
+  template is the parameterization (via `--name`, team-agnostic prose).
+- **Near-zero-code, by design:** the revision's whole point is that the CRUD primitives already
+  exist. If an executor finds themselves writing Rust, that is the escalation signal in Global
+  Constraints.
+- **Reusability proof:** telos blocks are id-free and genesis ids are CLI-minted/optional, so the one
+  static artifact serves every team — verified by Task 3's scratch-team run being independent of any
+  specific team.
+- **Precedent alignment:** mirrors `org-identity.yaml` (manifest) + `install-profile.yaml` /
+  `system-bootstrap.sh` / `org-bootstrap.md` (SoP) — the same split the org-bootstrap surface already
+  ships.
