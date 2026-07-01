@@ -390,12 +390,14 @@ pub async fn cogmap_revoke(
         principal_table,
         principal_id,
     };
-    access_service::revoke_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
-        .await
-        .map_err(|e| map_api_error("cogmap_revoke", e))?;
+    let outcome =
+        access_service::revoke_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
+            .await
+            .map_err(|e| map_api_error("cogmap_revoke", e))?;
 
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        "{\"revoked\":true}".to_string(),
+        text,
     )]))
 }
 

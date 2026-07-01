@@ -523,6 +523,27 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             CogmapCmd::Unbind { r#ref, team } => {
                 commands::cogmap::unbind(&r#ref, &team, output_format)
             }
+            CogmapCmd::Grant {
+                r#ref,
+                to_profile,
+                to_team,
+                read,
+                write,
+                grant,
+            } => commands::cogmap::grant(
+                &r#ref,
+                to_profile,
+                to_team,
+                read,
+                write,
+                grant,
+                output_format,
+            ),
+            CogmapCmd::Revoke {
+                r#ref,
+                from_profile,
+                from_team,
+            } => commands::cogmap::revoke(&r#ref, from_profile, from_team, output_format),
         },
         Commands::Invocation { cmd } => match cmd {
             InvocationCmd::Open {

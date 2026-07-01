@@ -261,6 +261,16 @@ pub struct GrantOutcome {
     pub granted: bool,
 }
 
+/// The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokeOutcome {
+    pub revoked: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -20,7 +20,7 @@ use temper_services::state::AppState;
 use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
     CogmapRegionRow, CogmapRevokeBody, GrantCapabilityRequest, GrantOutcome,
-    RevokeCapabilityRequest, UnbindTeamOutcome,
+    RevokeCapabilityRequest, RevokeOutcome, UnbindTeamOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::reconcile::{
@@ -307,7 +307,7 @@ pub async fn grant(
     security(("bearer_auth" = [])),
     request_body = CogmapRevokeBody,
     responses(
-        (status = 204, description = "Grant revoked (or no-op)"),
+        (status = 200, description = "Grant revoked (or no-op)", body = RevokeOutcome),
         (status = 403, description = "Caller may not administer grants on this map"),
     )
 )]
@@ -316,14 +316,15 @@ pub async fn revoke(
     auth: AuthUser,
     Path(cogmap_id): Path<Uuid>,
     Json(body): Json<CogmapRevokeBody>,
-) -> ApiResult<axum::http::StatusCode> {
+) -> ApiResult<Json<RevokeOutcome>> {
     let req = RevokeCapabilityRequest {
         subject_table: "kb_cogmaps".to_string(),
         subject_id: cogmap_id,
         principal_table: body.principal_table,
         principal_id: body.principal_id,
     };
-    access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
-        .await?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    let outcome =
+        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+            .await?;
+    Ok(Json(outcome))
 }

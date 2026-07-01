@@ -105,6 +105,7 @@ use temper_workflow::types::resource::{
         temper_core::types::cognitive_maps::CogmapGrantBody,
         temper_core::types::cognitive_maps::CogmapRevokeBody,
         temper_core::types::cognitive_maps::GrantOutcome,
+        temper_core::types::cognitive_maps::RevokeOutcome,
         temper_core::types::invocation_requests::OpenInvocationRequest,
         temper_core::types::invocation_requests::CloseInvocationRequest,
         temper_core::types::invocation_requests::InvocationAck,

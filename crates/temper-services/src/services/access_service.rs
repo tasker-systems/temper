@@ -17,7 +17,7 @@ use temper_core::types::access_gate::{
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
-    GrantCapabilityRequest, GrantOutcome, RevokeCapabilityRequest,
+    GrantCapabilityRequest, GrantOutcome, RevokeCapabilityRequest, RevokeOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::team::{TeamMemberRow, TeamRole};
@@ -124,11 +124,11 @@ pub async fn revoke_capability(
     pool: &PgPool,
     caller: ProfileId,
     req: &RevokeCapabilityRequest,
-) -> ApiResult<()> {
+) -> ApiResult<RevokeOutcome> {
     if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
         return Err(ApiError::Forbidden);
     }
-    sqlx::query!(
+    let deleted = sqlx::query!(
         r#"DELETE FROM kb_access_grants
             WHERE subject_table = $1 AND subject_id = $2
               AND principal_table = $3 AND principal_id = $4"#,
@@ -138,8 +138,11 @@ pub async fn revoke_capability(
         req.principal_id,
     )
     .execute(pool)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(RevokeOutcome {
+        revoked: deleted > 0,
+    })
 }
 
 /// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is

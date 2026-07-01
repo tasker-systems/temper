@@ -1,11 +1,40 @@
 //! `temper cogmap shape` business logic — thin wrapper over the cognitive-maps client. Cloud-only.
 
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
-    UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
+    CogmapRegionRow, CogmapRevokeBody, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
 };
 
 use crate::error::{Result, TemperError};
+
+/// A principal for a grant/revoke: exactly one of a profile or a team, both raw UUIDs.
+pub struct Principal {
+    pub table: String,
+    pub id: uuid::Uuid,
+}
+
+/// Resolve exactly one of (profile, team) into a `(principal_table, principal_id)` pair.
+pub fn resolve_principal(
+    profile: Option<uuid::Uuid>,
+    team: Option<uuid::Uuid>,
+) -> Result<Principal> {
+    match (profile, team) {
+        (Some(id), None) => Ok(Principal {
+            table: "kb_profiles".to_string(),
+            id,
+        }),
+        (None, Some(id)) => Ok(Principal {
+            table: "kb_teams".to_string(),
+            id,
+        }),
+        (Some(_), Some(_)) => Err(TemperError::Api(
+            "supply exactly one principal, not both a profile and a team".to_string(),
+        )),
+        (None, None) => Err(TemperError::Api(
+            "no principal — supply exactly one of --to-profile/--to-team (or --from-*)".to_string(),
+        )),
+    }
+}
 
 /// Call the shape API for the given cogmap (and optional lens), both already resolved to UUIDs.
 pub async fn shape_api(
@@ -107,6 +136,47 @@ pub async fn unbind_api(
     client
         .cognitive_maps()
         .unbind_team(cogmap_id, team_id)
+        .await
+        .map_err(crate::commands::client_err)
+}
+
+/// Grant a capability on the cogmap. `read` is forced on when `write`/`grant` is set (coherence).
+pub async fn grant_api(
+    client: &temper_client::TemperClient,
+    cogmap_id: uuid::Uuid,
+    principal: &Principal,
+    read: bool,
+    write: bool,
+    grant: bool,
+) -> Result<GrantOutcome> {
+    let body = CogmapGrantBody {
+        principal_table: principal.table.clone(),
+        principal_id: principal.id,
+        can_read: read || write || grant,
+        can_write: write,
+        can_delete: false,
+        can_grant: grant,
+    };
+    client
+        .cognitive_maps()
+        .grant(cogmap_id, &body)
+        .await
+        .map_err(crate::commands::client_err)
+}
+
+/// Revoke a capability grant on the cogmap.
+pub async fn revoke_api(
+    client: &temper_client::TemperClient,
+    cogmap_id: uuid::Uuid,
+    principal: &Principal,
+) -> Result<RevokeOutcome> {
+    let body = CogmapRevokeBody {
+        principal_table: principal.table.clone(),
+        principal_id: principal.id,
+    };
+    client
+        .cognitive_maps()
+        .revoke(cogmap_id, &body)
         .await
         .map_err(crate::commands::client_err)
 }

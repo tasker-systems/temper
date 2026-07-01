@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
-    UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
+    CogmapRegionRow, CogmapRevokeBody, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
 };
 use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
@@ -129,6 +129,28 @@ impl<'a> CognitiveMapClient<'a> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/cognitive-maps/{cogmap_id}/teams/{team_id}");
         let req = self.http.delete(&path);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/cognitive-maps/{id}/grants — mint/update a capability grant on the map
+    /// (admin or a can_grant holder). `granted: false` ⇒ an existing grant was updated in place.
+    pub async fn grant(&self, cogmap_id: Uuid, body: &CogmapGrantBody) -> Result<GrantOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/cognitive-maps/{cogmap_id}/grants");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/cognitive-maps/{id}/grants — revoke a capability grant (no-op safe).
+    /// `revoked: false` ⇒ no matching grant existed.
+    pub async fn revoke(&self, cogmap_id: Uuid, body: &CogmapRevokeBody) -> Result<RevokeOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/cognitive-maps/{cogmap_id}/grants");
+        let req = self.http.delete(&path).json(body);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
             .await

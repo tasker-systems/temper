@@ -149,6 +149,11 @@ granted: boolean, };
 export type RevokeCapabilityRequest = { subject_table: string, subject_id: string, principal_table: string, principal_id: string, };
 
 /**
+ * The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op).
+ */
+export type RevokeOutcome = { revoked: boolean, };
+
+/**
  * The result of unbinding a cognitive map from a team. `unbound` is `false` when
  * no binding existed (no-op safe).
  */
