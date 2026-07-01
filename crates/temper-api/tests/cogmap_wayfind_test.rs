@@ -91,6 +91,22 @@ async fn add_member(pool: &PgPool, team: Uuid, profile: Uuid) {
     .expect("add team member");
 }
 
+/// Grant a profile explicit `can_write` on a cogmap. Post-Q-A (D3b), authoring into a map requires
+/// this explicit `kb_access_grants` row, not team membership.
+async fn grant_cogmap_write(pool: &PgPool, cogmap: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, $2) \
+         ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING",
+    )
+    .bind(cogmap)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("grant cogmap write");
+}
+
 /// POST a resource to `/api/ingest` homed in a cognitive map. Returns the raw response.
 async fn post_cogmap_ingest(
     app: &common::TestApp,
@@ -232,6 +248,7 @@ async fn wayfind_scopes_into_regions(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, profile).await;
+    grant_cogmap_write(&app.pool, cogmap, profile).await; // Q-A: authorship needs an explicit grant
 
     // A cogmap-homed resource with a distinctive FTS term.
     post_cogmap_ingest(
@@ -302,6 +319,7 @@ async fn wayfind_cold_start_returns_whole_map(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, profile).await;
+    grant_cogmap_write(&app.pool, cogmap, profile).await; // Q-A: authorship needs an explicit grant
 
     post_cogmap_ingest(
         &app,
@@ -365,6 +383,7 @@ async fn wayfind_excludes_private_peer_map_content(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, a).await;
+    grant_cogmap_write(&app.pool, cogmap, a).await; // Q-A: authorship needs an explicit grant
 
     post_cogmap_ingest(
         &app,
@@ -501,6 +520,7 @@ async fn wayfind_includes_peer_resource_on_shared_map(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, author).await;
+    grant_cogmap_write(&app.pool, cogmap, author).await; // Q-A: authorship needs an explicit grant
 
     post_cogmap_ingest(
         &app,

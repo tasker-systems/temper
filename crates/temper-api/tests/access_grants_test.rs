@@ -86,6 +86,57 @@ async fn can_write_cogmap(pool: &PgPool, profile: Uuid, cogmap: Uuid) -> bool {
     .unwrap_or(false)
 }
 
+/// A fresh non-auto-join team (slug-unique). `auto_join_role` defaults NULL.
+async fn mint_team(pool: &PgPool, slug: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query("INSERT INTO kb_teams (id, slug, name) VALUES ($1, $2, $2)")
+        .bind(id)
+        .bind(slug)
+        .execute(pool)
+        .await
+        .expect("mint team");
+    id
+}
+
+async fn add_member(pool: &PgPool, team: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(team)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("add member");
+}
+
+async fn bind_cogmap(pool: &PgPool, cogmap: Uuid, team: Uuid) {
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(cogmap)
+        .bind(team)
+        .execute(pool)
+        .await
+        .expect("bind cogmap to team");
+}
+
+/// The migration's backfill SELECT (20260701000001 step 1), verbatim — run against a hand-built
+/// fixture so the query logic is tested even though the migration itself ran at DB init.
+async fn run_backfill(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, granted_by_profile_id) \
+         SELECT DISTINCT 'kb_cogmaps', tc.cogmap_id, 'kb_profiles', tm.profile_id, true, true, \
+                (SELECT id FROM kb_profiles WHERE handle = 'system') \
+         FROM kb_team_cogmaps tc \
+         JOIN kb_teams t ON t.id = tc.team_id \
+         JOIN kb_team_members tm ON tm.team_id = tc.team_id \
+         WHERE t.auto_join_role IS NULL \
+         ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .expect("run backfill");
+}
+
 fn write_grant(cogmap: Uuid, grantee: Uuid) -> GrantCapabilityRequest {
     GrantCapabilityRequest {
         subject_table: "kb_cogmaps".into(),
@@ -197,4 +248,46 @@ async fn can_grant_holder_can_delegate(pool: PgPool) {
     .await
     .expect("delegate grants write via can_grant");
     assert!(can_write_cogmap(&pool, grantee, cogmap).await);
+}
+
+// ── (d) backfill snapshots real-team members, not auto-join members ──────────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn backfill_snapshots_real_members(pool: PgPool) {
+    // A member of a NON-auto-join team joined to a map. Membership alone would NOT authorize
+    // post-Q-A; the backfill snapshot grant restores authoring.
+    let member = mint_profile(&pool, "backfill-member").await;
+    let team = mint_team(&pool, "backfill-real-team").await; // auto_join_role NULL
+    add_member(&pool, team, member).await;
+    let owner = mint_profile(&pool, "backfill-owner").await;
+    let cogmap = mint_unbound_cogmap(&pool, owner, "backfill-target").await;
+    bind_cogmap(&pool, cogmap, team).await;
+
+    assert!(
+        !can_write_cogmap(&pool, member, cogmap).await,
+        "before backfill, a member has no write (Q-A)"
+    );
+    run_backfill(&pool).await;
+    assert!(
+        can_write_cogmap(&pool, member, cogmap).await,
+        "a backfilled real-team member authors"
+    );
+}
+
+// ── (e) the L0 kernel gets NO backfilled human write grant (auto-join exclusion) ─────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn l0_kernel_has_no_backfilled_write_grant(pool: PgPool) {
+    // L0 (`system-default`) is joined only to auto-join `temper-system`, so the migration's backfill
+    // (which already ran) excluded it — no human holds write to the operator-governed kernel.
+    let l0 = uuid::uuid!("00000000-0000-0000-0005-000000000001");
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_access_grants \
+          WHERE subject_table = 'kb_cogmaps' AND subject_id = $1 AND can_write",
+    )
+    .bind(l0)
+    .fetch_one(&pool)
+    .await
+    .expect("count L0 write grants");
+    assert_eq!(n, 0, "no human gets write to the kernel via backfill");
 }
