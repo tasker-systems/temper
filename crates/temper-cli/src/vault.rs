@@ -110,6 +110,23 @@ pub fn get_template(doc_type: DocType) -> Result<String> {
             slug: placeholder,
         }
         .render(),
+        // Cognitive-map node labels (spec D3) are born via cogmap ingest
+        // (facet_set / reconcile), not via `temper resource create` — they
+        // have no CLI file-template. Kept as an explicit arm so a new
+        // resource doctype still forces a template decision here.
+        DocType::Fact
+        | DocType::Memory
+        | DocType::Question
+        | DocType::Theme
+        | DocType::Concern
+        | DocType::Principle
+        | DocType::Commitment
+        | DocType::Domain => {
+            return Err(TemperError::Vault(format!(
+                "no CLI template for cognitive-map label '{}'; these are created via cogmap ingest, not `temper resource create`",
+                doc_type.as_str()
+            )));
+        }
     }
     .map_err(|e| TemperError::Vault(format!("Failed to render template: {e}")))
 }

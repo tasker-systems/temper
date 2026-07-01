@@ -375,7 +375,15 @@ pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
         | crate::frontmatter::DocType::Session
         | crate::frontmatter::DocType::Research
         | crate::frontmatter::DocType::Concept
-        | crate::frontmatter::DocType::Decision => {
+        | crate::frontmatter::DocType::Decision
+        | crate::frontmatter::DocType::Fact
+        | crate::frontmatter::DocType::Memory
+        | crate::frontmatter::DocType::Question
+        | crate::frontmatter::DocType::Theme
+        | crate::frontmatter::DocType::Concern
+        | crate::frontmatter::DocType::Principle
+        | crate::frontmatter::DocType::Commitment
+        | crate::frontmatter::DocType::Domain => {
             // No additional per-doctype pure invariants beyond the generic checks above.
         }
     }
@@ -604,11 +612,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_doctype_rejects_memory_not_a_real_doctype() {
-        // "memory" is a temper memory-system concept (auto-memory), not a
-        // resource doctype. Guard against accidental re-introduction.
-        let err = validate_doctype("memory").unwrap_err();
-        assert!(matches!(err, ActionError::InvalidDoctype(_)));
+    fn validate_doctype_accepts_memory_as_cogmap_label() {
+        // "memory" was previously reserved to avoid confusion with the
+        // unrelated Claude-Code auto-memory feature (a file outside the
+        // vault, not a resource doctype). Spec D3 (cognitive-map node
+        // labels) now recognizes "memory" as a legitimate resource doctype
+        // — the collision is name-only, and this test now asserts the
+        // updated, intentional behavior.
+        assert!(validate_doctype("memory").is_ok());
     }
 
     #[test]

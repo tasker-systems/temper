@@ -238,7 +238,18 @@ pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
             "temper-goal",
         ],
         DocType::Goal => &["temper-status", "temper-seq"],
-        DocType::Session | DocType::Research | DocType::Concept | DocType::Decision => &[],
+        DocType::Session
+        | DocType::Research
+        | DocType::Concept
+        | DocType::Decision
+        | DocType::Fact
+        | DocType::Memory
+        | DocType::Question
+        | DocType::Theme
+        | DocType::Concern
+        | DocType::Principle
+        | DocType::Commitment
+        | DocType::Domain => &[],
     };
 
     Ok(UNIVERSAL
@@ -289,8 +300,22 @@ pub fn validate_field_value(
 // ---------------------------------------------------------------------------
 
 /// Known doc type names (the set of schemas we embed).
-pub static DOC_TYPE_NAMES: &[&str] =
-    &["concept", "decision", "goal", "research", "session", "task"];
+pub static DOC_TYPE_NAMES: &[&str] = &[
+    "commitment",
+    "concept",
+    "concern",
+    "decision",
+    "domain",
+    "fact",
+    "goal",
+    "memory",
+    "principle",
+    "question",
+    "research",
+    "session",
+    "task",
+    "theme",
+];
 
 /// Return the raw JSON schema for a named doc type.
 ///
