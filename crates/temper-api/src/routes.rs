@@ -118,6 +118,10 @@ pub fn create_app(state: AppState) -> Router {
             delete(handlers::cognitive_maps::unbind_team),
         )
         .route(
+            "/api/cognitive-maps/{id}/grants",
+            post(handlers::cognitive_maps::grant).delete(handlers::cognitive_maps::revoke),
+        )
+        .route(
             "/api/invocations",
             post(handlers::invocations::open).get(handlers::invocations::list),
         )

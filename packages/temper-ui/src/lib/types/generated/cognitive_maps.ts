@@ -36,6 +36,13 @@ export type CogmapAnalyticsRow = {
 telos_resource_id: ResourceId, staleness: CogmapStaleness, regulation: Array<CogmapRegulationRow>, };
 
 /**
+ * HTTP body for `POST /api/cognitive-maps/{id}/grants` — the subject is the path `{id}` (a cogmap),
+ * so the body carries only the principal + capabilities. The handler widens this into a
+ * `GrantCapabilityRequest` with `subject_table='kb_cogmaps'`, `subject_id={id}`.
+ */
+export type CogmapGrantBody = { principal_table: string, principal_id: string, can_read: boolean, can_write: boolean, can_delete: boolean, can_grant: boolean, };
+
+/**
  * The per-region analytics tier (the five materialized scalar readouts) as returned by
  * `cogmap_region_metrics`. Sibling to `CogmapRegionRow`'s surface tier; member identities are still
  * never carried. Each metric is `Option<f64>` (the columns are nullable until materialization computes
@@ -107,11 +114,44 @@ member_count: number, };
 export type CogmapRegulationRow = { resource_id: ResourceId, title: string, body_text: string | null, edge_label: string, };
 
 /**
+ * HTTP body for `DELETE /api/cognitive-maps/{id}/grants` — the principal whose grant on the path
+ * cogmap to revoke.
+ */
+export type CogmapRevokeBody = { principal_table: string, principal_id: string, };
+
+/**
  * Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
  * touch to the map's regions/edges, and whether the read is stale. Staleness is LEGIBLE — reported,
  * never blocking. `materialized_at` is `None` when the map has never been materialized.
  */
 export type CogmapStaleness = { materialized_at: string | null, latest_touch: string | null, is_stale: boolean, };
+
+/**
+ * Mint/update one `kb_access_grants` row. Subject `{kb_resources,kb_contexts,kb_cogmaps}`,
+ * principal `{kb_teams,kb_profiles}`. The DB coherence CHECK enforces `write|delete|grant ⇒ read`;
+ * callers should pass a coherent capability set (a write grant implies read).
+ */
+export type GrantCapabilityRequest = { subject_table: string, subject_id: string, principal_table: string, principal_id: string, can_read: boolean, can_write: boolean, can_delete: boolean, can_grant: boolean, };
+
+/**
+ * The result of a grant. `granted` is `false` when the row already existed and was updated in place
+ * (idempotent upsert), mirroring bind's `bound` flag.
+ */
+export type GrantOutcome = { 
+/**
+ * `true` when this call inserted a fresh grant; `false` when it updated an existing one.
+ */
+granted: boolean, };
+
+/**
+ * Delete one `kb_access_grants` row (the `(subject, principal)` pair). Absent row ⇒ no-op success.
+ */
+export type RevokeCapabilityRequest = { subject_table: string, subject_id: string, principal_table: string, principal_id: string, };
+
+/**
+ * The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op).
+ */
+export type RevokeOutcome = { revoked: boolean, };
 
 /**
  * The result of unbinding a cognitive map from a team. `unbound` is `false` when

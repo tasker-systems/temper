@@ -16,6 +16,9 @@ use temper_core::types::access_gate::{
     PublicSystemSettings, SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
+use temper_core::types::cognitive_maps::{
+    GrantCapabilityRequest, GrantOutcome, RevokeCapabilityRequest, RevokeOutcome,
+};
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::team::{TeamMemberRow, TeamRole};
 
@@ -43,6 +46,103 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
         .await?;
 
     Ok(result.unwrap_or(false))
+}
+
+// ---------------------------------------------------------------------------
+// Access-capability grants (D3b §3.C) — the surface-facing writers of
+// `kb_access_grants`. Admin events (firewalled from cognition, memory
+// project_admin_eventsourcing_and_operating_shape): called DIRECTLY from
+// surfaces, like `cogmap_service::bind_team`, NOT via the DbBackend trait.
+// ---------------------------------------------------------------------------
+
+/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
+/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
+/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
+/// `can_grant` holder) and repair stay operable.
+async fn can_administer_grant(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<bool> {
+    if is_system_admin(pool, caller).await? {
+        return Ok(true);
+    }
+    let ok = sqlx::query_scalar!(
+        "SELECT can('kb_profiles', $1, 'grant', $2, $3)",
+        *caller,
+        subject_table,
+        subject_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
+/// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
+/// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
+/// the row already existed and was updated in place.
+pub async fn grant_capability(
+    pool: &PgPool,
+    caller: ProfileId,
+    req: &GrantCapabilityRequest,
+) -> ApiResult<GrantOutcome> {
+    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    // `xmax = 0` distinguishes a fresh INSERT from an ON CONFLICT UPDATE (xmax is the deleting/locking
+    // txid — zero only on a row this txn just inserted).
+    let inserted = sqlx::query_scalar!(
+        r#"INSERT INTO kb_access_grants
+               (subject_table, subject_id, principal_table, principal_id,
+                can_read, can_write, can_delete, can_grant, granted_by_profile_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (subject_table, subject_id, principal_table, principal_id)
+           DO UPDATE SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write,
+                         can_delete = EXCLUDED.can_delete, can_grant = EXCLUDED.can_grant,
+                         granted_by_profile_id = EXCLUDED.granted_by_profile_id, granted_at = now()
+           RETURNING (xmax = 0) AS "inserted!""#,
+        req.subject_table,
+        req.subject_id,
+        req.principal_table,
+        req.principal_id,
+        req.can_read,
+        req.can_write,
+        req.can_delete,
+        req.can_grant,
+        *caller,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(GrantOutcome { granted: inserted })
+}
+
+/// Delete one access grant. Auth before write: `can_administer_grant`. Absent row ⇒ no-op success
+/// (idempotent, mirrors `bind_team`/`unbind_team`).
+pub async fn revoke_capability(
+    pool: &PgPool,
+    caller: ProfileId,
+    req: &RevokeCapabilityRequest,
+) -> ApiResult<RevokeOutcome> {
+    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let deleted = sqlx::query!(
+        r#"DELETE FROM kb_access_grants
+            WHERE subject_table = $1 AND subject_id = $2
+              AND principal_table = $3 AND principal_id = $4"#,
+        req.subject_table,
+        req.subject_id,
+        req.principal_table,
+        req.principal_id,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(RevokeOutcome {
+        revoked: deleted > 0,
+    })
 }
 
 /// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is

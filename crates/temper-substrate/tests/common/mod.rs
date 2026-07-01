@@ -31,6 +31,12 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
     // is covered directly by `auto_join_team.rs` (full `MIGRATOR`, fresh DB). Skipping it on this baseline
     // keeps both worlds testable. (Applied via the filesystem rather than `MIGRATOR.run` so the one
     // migration can be excluded; ordering is by version-prefixed filename.)
+    //
+    // `cogmap_write_tightening` is skipped TOO: it belongs to the post-auto-join world (its backfill
+    // references `kb_teams.auto_join_role`, the column the excluded migration adds), so it cannot apply
+    // on this pre-auto-join baseline. It changes only `cogmap_authorable_by_profile` (cogmap WRITE) — an
+    // axis this scenario never probes (its write checks are `can_modify_resource` on resources, S6) — and
+    // is exercised on the full `MIGRATOR` by the temper-api + e2e tiers.
     pool.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("drop/recreate public schema");
@@ -39,7 +45,11 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
         .expect("read migrations dir")
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".sql") && !n.contains("auto_join_team_generalization"))
+        .filter(|n| {
+            n.ends_with(".sql")
+                && !n.contains("auto_join_team_generalization")
+                && !n.contains("cogmap_write_tightening")
+        })
         .collect();
     migrations.sort();
     for f in &migrations {

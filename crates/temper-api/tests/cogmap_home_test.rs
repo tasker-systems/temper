@@ -1,6 +1,8 @@
 #![cfg(feature = "test-db")]
 //! Surface B Beat 1D — `--cogmap` create homes a resource in a cognitive map, gated by a
-//! producer write seam (`cogmap_authorable_by_profile` → team-cogmap membership).
+//! producer write seam (`cogmap_authorable_by_profile`). As of D3b (Q-A) authorship is an explicit
+//! `can_write` grant, NOT team-cogmap membership: membership still confers READ (`cogmap_readable_by_profile`),
+//! but writing into a map requires a `kb_access_grants` row (seeded here via `grant_cogmap_write`).
 //!
 //! Three invariants, all asserted against real DB state (membership is seeded directly via
 //! `kb_team_cogmaps` + `kb_team_members`, the reconcile-test pattern, so `cogmap_readable_by_profile`
@@ -95,6 +97,24 @@ async fn add_member(pool: &PgPool, team: Uuid, profile: Uuid) {
     .expect("add team member");
 }
 
+/// Grant a profile explicit `can_write` on a cogmap. Post-Q-A (D3b) authorship requires this — a
+/// self-anchored `kb_access_grants` row — not team membership. `granted_by` is the grantee itself
+/// (a fixture bootstrap, standing in for the creator-seed / backfill / delegated grant a real
+/// authorship path would carry).
+async fn grant_cogmap_write(pool: &PgPool, cogmap: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, $2) \
+         ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING",
+    )
+    .bind(cogmap)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("grant cogmap write");
+}
+
 /// POST a resource to `/api/ingest` homed in a cognitive map. Returns the raw response.
 async fn post_cogmap_ingest(
     app: &common::TestApp,
@@ -177,14 +197,30 @@ async fn create_cogmap_homed_resource_writes_cogmap_home(pool: PgPool) {
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, profile).await;
 
-    // Sanity: the membership is REAL — the gate predicate genuinely passes for this principal.
+    // Q-A (D3b): membership alone NO LONGER confers authoring — the gate is explicit-grant only.
+    let member_only: bool = sqlx::query_scalar("SELECT cogmap_authorable_by_profile($1, $2)")
+        .bind(profile)
+        .bind(cogmap)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        !member_only,
+        "post-Q-A, team membership alone must NOT make the map authorable"
+    );
+
+    // An explicit can_write grant DOES confer authoring — the seam the ingest gate now checks.
+    grant_cogmap_write(&app.pool, cogmap, profile).await;
     let authorable: bool = sqlx::query_scalar("SELECT cogmap_authorable_by_profile($1, $2)")
         .bind(profile)
         .bind(cogmap)
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    assert!(authorable, "seeded membership must make the map authorable");
+    assert!(
+        authorable,
+        "an explicit can_write grant makes the map authorable"
+    );
 
     // The genesis already homed the map's telos here; capture the baseline so we assert the DELTA.
     let before = homes_in_cogmap(&app.pool, cogmap).await;
@@ -295,6 +331,7 @@ async fn cogmap_homed_resource_invisible_to_context_search(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, profile).await;
+    grant_cogmap_write(&app.pool, cogmap, profile).await; // Q-A: authorship needs an explicit grant
 
     // Two resources sharing one distinctive FTS term — one homed in the owner's context, one in the
     // cogmap. The context filter must isolate the context-homed one.
@@ -470,6 +507,7 @@ async fn cogmap_search_scopes_to_map(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, profile).await;
+    grant_cogmap_write(&app.pool, cogmap, profile).await; // Q-A: authorship needs an explicit grant
 
     // Sanity: the membership is real and readable by the member.
     let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
@@ -582,6 +620,7 @@ async fn cogmap_search_denied_for_non_member_returns_zero(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, owner).await;
+    grant_cogmap_write(&app.pool, cogmap, owner).await; // Q-A: authorship needs an explicit grant
 
     post_cogmap_ingest(
         &app,
@@ -661,6 +700,7 @@ async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, profile).await;
+    grant_cogmap_write(&app.pool, cogmap, profile).await; // Q-A: authorship needs an explicit grant
 
     // As a member, the author homes a resource in the map (so they OWN it).
     post_cogmap_ingest(
@@ -683,14 +723,24 @@ async fn cogmap_search_ex_member_who_owns_resource_gets_zero(pool: PgPool) {
     .await
     .expect("authored resource must have committed its home row");
 
-    // Now REMOVE the author from the map's team. They still OWN the resource, but can no longer
-    // READ the map.
+    // Now REMOVE the author from the map's team AND revoke their authoring grant. They still OWN the
+    // resource, but can no longer READ the map (the write grant carried read by coherence, so both the
+    // membership and the grant must go for the ex-member to lose read).
     sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
         .bind(team)
         .bind(profile)
         .execute(&app.pool)
         .await
         .expect("remove member");
+    sqlx::query(
+        "DELETE FROM kb_access_grants WHERE subject_table = 'kb_cogmaps' AND subject_id = $1 \
+           AND principal_table = 'kb_profiles' AND principal_id = $2",
+    )
+    .bind(cogmap)
+    .bind(profile)
+    .execute(&app.pool)
+    .await
+    .expect("revoke authoring grant");
 
     // Sanity: the map is genuinely no longer readable by the ex-member (a real deny, not absence).
     let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
@@ -766,6 +816,7 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
     .await;
     join_cogmap_to_team(&app.pool, cogmap, team).await;
     add_member(&app.pool, team, author).await;
+    grant_cogmap_write(&app.pool, cogmap, author).await; // Q-A: authorship needs an explicit grant
 
     post_cogmap_ingest(
         &app,

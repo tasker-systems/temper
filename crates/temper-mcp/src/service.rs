@@ -315,6 +315,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Grant a capability on a cognitive map (system-admin OR a holder of can_grant on the map). Post-Q-A, authoring a map requires an explicit write grant, not team membership. Pass the map by ref, exactly one principal (to_profile or to_team by UUID), and capability flags (read/write/grant; read is implied by write/grant)."
+    )]
+    async fn cogmap_grant(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapGrantInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_grant(self, input).await
+    }
+
+    #[tool(
+        description = "Revoke a capability grant on a cognitive map (system-admin OR a holder of can_grant on the map). No-op safe. Pass the map by ref and exactly one principal (from_profile or from_team by UUID)."
+    )]
+    async fn cogmap_revoke(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapRevokeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_revoke(self, input).await
+    }
+
+    #[tool(
         description = "Read a cognitive map's surface tier: its materialized regions (salience, cohesion, label, member count) under an optional lens. Pass the map by ref."
     )]
     async fn cogmap_shape(

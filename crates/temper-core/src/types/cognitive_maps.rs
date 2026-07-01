@@ -202,6 +202,94 @@ pub struct UnbindTeamOutcome {
     pub unbound: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Access-capability grants (D3b §3.C). Subject-polymorphic at the service
+// layer (`kb_access_grants`); the 3b surface verbs are cogmap-scoped.
+// ---------------------------------------------------------------------------
+
+/// Mint/update one `kb_access_grants` row. Subject `{kb_resources,kb_contexts,kb_cogmaps}`,
+/// principal `{kb_teams,kb_profiles}`. The DB coherence CHECK enforces `write|delete|grant ⇒ read`;
+/// callers should pass a coherent capability set (a write grant implies read).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrantCapabilityRequest {
+    pub subject_table: String,
+    pub subject_id: Uuid,
+    pub principal_table: String,
+    pub principal_id: Uuid,
+    pub can_read: bool,
+    pub can_write: bool,
+    pub can_delete: bool,
+    pub can_grant: bool,
+}
+
+/// Delete one `kb_access_grants` row (the `(subject, principal)` pair). Absent row ⇒ no-op success.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevokeCapabilityRequest {
+    pub subject_table: String,
+    pub subject_id: Uuid,
+    pub principal_table: String,
+    pub principal_id: Uuid,
+}
+
+/// HTTP body for `POST /api/cognitive-maps/{id}/grants` — the subject is the path `{id}` (a cogmap),
+/// so the body carries only the principal + capabilities. The handler widens this into a
+/// `GrantCapabilityRequest` with `subject_table='kb_cogmaps'`, `subject_id={id}`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CogmapGrantBody {
+    pub principal_table: String,
+    pub principal_id: Uuid,
+    pub can_read: bool,
+    pub can_write: bool,
+    pub can_delete: bool,
+    pub can_grant: bool,
+}
+
+/// HTTP body for `DELETE /api/cognitive-maps/{id}/grants` — the principal whose grant on the path
+/// cogmap to revoke.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CogmapRevokeBody {
+    pub principal_table: String,
+    pub principal_id: Uuid,
+}
+
+/// The result of a grant. `granted` is `false` when the row already existed and was updated in place
+/// (idempotent upsert), mirroring bind's `bound` flag.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantOutcome {
+    /// `true` when this call inserted a fresh grant; `false` when it updated an existing one.
+    pub granted: bool,
+}
+
+/// The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokeOutcome {
+    pub revoked: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

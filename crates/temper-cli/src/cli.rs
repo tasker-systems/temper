@@ -715,6 +715,38 @@ pub enum CogmapCmd {
         /// Team to unbind: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
+    /// Grant a capability on a cognitive map (admin or a can_grant holder). Post-Q-A, authoring a
+    /// map requires an explicit write grant, not team membership.
+    Grant {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Grant to this profile (UUID). Mutually exclusive with `--to-team`.
+        #[arg(long = "to-profile")]
+        to_profile: Option<uuid::Uuid>,
+        /// Grant to this team (UUID). Mutually exclusive with `--to-profile`.
+        #[arg(long = "to-team")]
+        to_team: Option<uuid::Uuid>,
+        /// Grant read.
+        #[arg(long)]
+        read: bool,
+        /// Grant write (implies read).
+        #[arg(long)]
+        write: bool,
+        /// Grant delegated-grant authority (implies read).
+        #[arg(long)]
+        grant: bool,
+    },
+    /// Revoke a capability grant on a cognitive map (admin or a can_grant holder).
+    Revoke {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Revoke this profile's grant (UUID). Mutually exclusive with `--from-team`.
+        #[arg(long = "from-profile")]
+        from_profile: Option<uuid::Uuid>,
+        /// Revoke this team's grant (UUID). Mutually exclusive with `--from-profile`.
+        #[arg(long = "from-team")]
+        from_team: Option<uuid::Uuid>,
+    },
 }
 
 /// CLI-local enum mirroring `Disposition` for clap `value_enum` parsing.
@@ -927,6 +959,69 @@ mod meta_only_flag_tests {
             Cli::try_parse_from(["temper", "resource", "show", "some-ref", "--type", "task",])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn cogmap_grant_parses_profile_write() {
+        use clap::Parser;
+        let id = uuid::Uuid::now_v7();
+        let cli = Cli::try_parse_from([
+            "temper",
+            "cogmap",
+            "grant",
+            "map-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "--to-profile",
+            &id.to_string(),
+            "--write",
+        ])
+        .expect("cogmap grant --to-profile --write must parse");
+        match cli.command {
+            Commands::Cogmap {
+                cmd:
+                    CogmapCmd::Grant {
+                        to_profile,
+                        to_team,
+                        write,
+                        grant,
+                        ..
+                    },
+            } => {
+                assert_eq!(to_profile, Some(id));
+                assert_eq!(to_team, None);
+                assert!(write);
+                assert!(!grant);
+            }
+            _ => panic!("expected Cogmap::Grant"),
+        }
+    }
+
+    #[test]
+    fn cogmap_revoke_parses_from_team() {
+        use clap::Parser;
+        let id = uuid::Uuid::now_v7();
+        let cli = Cli::try_parse_from([
+            "temper",
+            "cogmap",
+            "revoke",
+            "map-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "--from-team",
+            &id.to_string(),
+        ])
+        .expect("cogmap revoke --from-team must parse");
+        match cli.command {
+            Commands::Cogmap {
+                cmd:
+                    CogmapCmd::Revoke {
+                        from_profile,
+                        from_team,
+                        ..
+                    },
+            } => {
+                assert_eq!(from_team, Some(id));
+                assert_eq!(from_profile, None);
+            }
+            _ => panic!("expected Cogmap::Revoke"),
+        }
     }
 
     #[test]

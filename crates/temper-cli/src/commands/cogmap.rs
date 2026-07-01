@@ -91,6 +91,53 @@ pub fn unbind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+/// `temper cogmap grant <cogmap_ref> --to-profile|--to-team <uuid> [--read] [--write] [--grant]`.
+#[allow(clippy::too_many_arguments)]
+pub fn grant(
+    cogmap_ref: &str,
+    to_profile: Option<uuid::Uuid>,
+    to_team: Option<uuid::Uuid>,
+    read: bool,
+    write: bool,
+    grant_cap: bool,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+    let principal = crate::actions::cogmap::resolve_principal(to_profile, to_team)?;
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            crate::actions::cogmap::grant_api(client, cogmap_id, &principal, read, write, grant_cap)
+                .await
+        })
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// `temper cogmap revoke <cogmap_ref> --from-profile|--from-team <uuid>`.
+pub fn revoke(
+    cogmap_ref: &str,
+    from_profile: Option<uuid::Uuid>,
+    from_team: Option<uuid::Uuid>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+    let principal = crate::actions::cogmap::resolve_principal(from_profile, from_team)?;
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(
+            async move { crate::actions::cogmap::revoke_api(client, cogmap_id, &principal).await },
+        )
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// Reconcile the cognitive map addressed by `cogmap_ref` to the manifest at `manifest_path`.
 #[cfg(feature = "embed")]
 pub fn reconcile(

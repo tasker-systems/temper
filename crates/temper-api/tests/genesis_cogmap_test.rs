@@ -101,6 +101,17 @@ async fn system_profile(pool: &PgPool) -> Uuid {
         .expect("system profile must exist")
 }
 
+/// Mint a fresh profile (handle-unique). Returns the new profile id.
+async fn mint_profile(pool: &PgPool, handle: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+    )
+    .bind(handle)
+    .fetch_one(pool)
+    .await
+    .expect("mint profile")
+}
+
 /// A backend for the genesis/reconcile commands. Both resolve the system actor themselves and ignore
 /// `self.profile_id`, but we seed it with the system profile for principled construction.
 async fn backend(pool: &PgPool) -> DbBackend {
@@ -277,6 +288,42 @@ async fn genesis_without_telos_creates_empty_charter_map(pool: PgPool) {
             .await
             .expect("count blocks");
     assert_eq!(block_count, 0, "empty-charter genesis writes no blocks");
+}
+
+// ── (e) creator seeding: the INVOKING profile gets a read+write+grant bootstrap grant ─
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn genesis_seeds_creator_grant(pool: PgPool) {
+    // A distinct creator profile — NOT the system actor genesis fires under. The backend's
+    // `self.profile_id` is the invoking caller; creator seeding (§3.B) keys on it.
+    let creator = mint_profile(&pool, "creator-admin").await;
+    let be = DbBackend::new(pool.clone(), ProfileId::from(creator));
+
+    let cogmap_id = Uuid::now_v7();
+    let telos_id = Uuid::now_v7();
+    let out = be
+        .create_cognitive_map(genesis_cmd(genesis_request(cogmap_id, telos_id, None)))
+        .await
+        .expect("genesis")
+        .value;
+    assert!(out.created);
+
+    // The creator holds an explicit read+write+grant bootstrap grant on the new map (delete NOT set).
+    let (can_read, can_write, can_grant, can_delete): (bool, bool, bool, bool) = sqlx::query_as(
+        "SELECT can_read, can_write, can_grant, can_delete FROM kb_access_grants \
+           WHERE subject_table = 'kb_cogmaps' AND subject_id = $1 \
+             AND principal_table = 'kb_profiles' AND principal_id = $2",
+    )
+    .bind(cogmap_id)
+    .bind(creator)
+    .fetch_one(&pool)
+    .await
+    .expect("creator grant row must exist");
+    assert!(
+        can_read && can_write && can_grant,
+        "creator gets read+write+grant"
+    );
+    assert!(!can_delete, "creator seed does not confer delete");
 }
 
 // ── (d) backend-minted id when the request omits ids ─────────────────────────────────

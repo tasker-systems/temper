@@ -1499,6 +1499,26 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
+        // Creator bootstrap grant (access-capability arc, D3b §3.B): the INVOKING admin
+        // (`self.profile_id`) — NOT the system actor genesis fires under — gets read+write+grant on
+        // the map they just created, a self-grant admin event. Cogmaps have no ownership floor, so
+        // without this the creator could never author or add a co-author to their own (still-unbound)
+        // map once the Q-A tightening lands. Only the create path reaches here (the re-genesis no-op
+        // returned earlier); `ON CONFLICT DO NOTHING` guards a retried create.
+        let creator = uuid::Uuid::from(self.profile_id);
+        sqlx::query!(
+            r#"INSERT INTO kb_access_grants
+                   (subject_table, subject_id, principal_table, principal_id,
+                    can_read, can_write, can_grant, granted_by_profile_id)
+               VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, true, $2)
+               ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING"#,
+            uuid::Uuid::from(born_cogmap),
+            creator,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(api_err)?;
+
         // COMMIT — serialization failure (40001) → `Conflict` (a genesis race), any other DB error → 500.
         match tx.commit().await {
             Ok(()) => Ok(CommandOutput::new(outcome)),
