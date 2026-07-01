@@ -21,6 +21,7 @@ pub mod profile;
 pub mod relationships;
 pub mod resources;
 pub mod search;
+pub mod steward;
 pub mod teams;
 pub mod upload;
 
@@ -177,6 +178,11 @@ impl TemperClient {
     /// Invocation-envelope sub-client (open / close / show / list).
     pub fn invocations(&self) -> invocations::InvocationsClient<'_> {
         invocations::InvocationsClient::new(&self.http)
+    }
+
+    /// Steward ingest-trigger sub-client (delta / advance-watermark).
+    pub fn steward(&self) -> steward::StewardClient<'_> {
+        steward::StewardClient::new(&self.http)
     }
 
     // ----- Auth lifecycle -----

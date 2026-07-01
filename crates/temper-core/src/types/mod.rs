@@ -35,6 +35,7 @@ pub mod reconcile;
 pub mod relationship_events;
 pub mod relationship_requests;
 pub mod search;
+pub mod steward;
 pub mod team;
 pub mod transfer;
 pub mod upload;
@@ -66,6 +67,10 @@ pub use invitation::{InvitationStatus, TeamInvitation};
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
+pub use steward::{
+    AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta, StewardAdvanceWatermarkInput,
+    StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,
+};
 pub use team::{
     AddMemberRequest, Team, TeamCreateRequest, TeamMember, TeamMemberRow, TeamRole, TeamRow,
 };

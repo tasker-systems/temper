@@ -24,10 +24,11 @@ use temper_core::types::reconcile::{
 };
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
-    ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
-    SearchResources, SetFacet, ShowResource, Surface, UpdateResource,
+    AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
+    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
+    OpenInvocation, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
+    ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource, Surface,
+    UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
@@ -1616,6 +1617,63 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
         Ok(CommandOutput::new(()))
+    }
+
+    /// Advance a cogmap's steward ingest watermark (T4a). AUTH BEFORE WRITE: one gated lookup does
+    /// existence + read-visibility (absent/unreadable → uniform 404, no existence oracle) and rides
+    /// the cogmap-write capability along; a readable-but-not-writable cogmap → 403. The target event
+    /// must exist (the FK enforces it; a clean 404 beats a raw FK violation). The advance is a direct
+    /// UPDATE of operational cursor state — NOT an authored cognitive act — so it fires no event; when
+    /// T5 wires steward-run-completion it will advance the watermark as part of the invocation-close
+    /// event instead of calling this bare setter.
+    async fn advance_steward_watermark(
+        &self,
+        cmd: AdvanceStewardWatermark,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        let can_write: bool = sqlx::query_scalar!(
+            r#"
+            SELECT cogmap_authorable_by_profile($2, $1) AS "can_write!"
+              FROM kb_cogmaps
+             WHERE id = $1
+               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
+            "#,
+            *cmd.cogmap,
+            *self.profile_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| {
+            TemperError::NotFound(format!("cognitive map {} not found", cmd.cogmap.uuid()))
+        })?;
+        if !can_write {
+            return Err(TemperError::Forbidden);
+        }
+
+        let event_exists: bool = sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM kb_events WHERE id = $1) AS "exists!""#,
+            cmd.event_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if !event_exists {
+            return Err(TemperError::NotFound(format!(
+                "event {} not found",
+                cmd.event_id
+            )));
+        }
+
+        sqlx::query!(
+            "UPDATE kb_cogmaps SET steward_watermark_event_id = $2 WHERE id = $1",
+            *cmd.cogmap,
+            cmd.event_id,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(api_err)?;
+
+        Ok(CommandOutput::new(cmd.event_id))
     }
 }
 
