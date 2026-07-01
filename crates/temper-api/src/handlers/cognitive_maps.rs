@@ -18,8 +18,9 @@ use temper_services::services::{access_service, cogmap_service};
 use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
-    UnbindTeamOutcome,
+    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
+    CogmapRegionRow, CogmapRevokeBody, GrantCapabilityRequest, GrantOutcome,
+    RevokeCapabilityRequest, UnbindTeamOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::reconcile::{
@@ -260,4 +261,69 @@ pub async fn unbind_team(
     )
     .await?;
     Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/cognitive-maps/{id}/grants",
+    tag = "Cognitive Maps",
+    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    security(("bearer_auth" = [])),
+    request_body = CogmapGrantBody,
+    responses(
+        (status = 200, description = "Grant minted (or updated)", body = GrantOutcome),
+        (status = 403, description = "Caller may not administer grants on this map"),
+    )
+)]
+pub async fn grant(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Json(body): Json<CogmapGrantBody>,
+) -> ApiResult<Json<GrantOutcome>> {
+    // Auth before writes lives in the service (`is_system_admin OR can(...,'grant',...)`), shared with
+    // the MCP surface. The subject is the path cogmap; widen the body into the polymorphic request.
+    let req = GrantCapabilityRequest {
+        subject_table: "kb_cogmaps".to_string(),
+        subject_id: cogmap_id,
+        principal_table: body.principal_table,
+        principal_id: body.principal_id,
+        can_read: body.can_read,
+        can_write: body.can_write,
+        can_delete: body.can_delete,
+        can_grant: body.can_grant,
+    };
+    let outcome =
+        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+            .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/cognitive-maps/{id}/grants",
+    tag = "Cognitive Maps",
+    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    security(("bearer_auth" = [])),
+    request_body = CogmapRevokeBody,
+    responses(
+        (status = 204, description = "Grant revoked (or no-op)"),
+        (status = 403, description = "Caller may not administer grants on this map"),
+    )
+)]
+pub async fn revoke(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Json(body): Json<CogmapRevokeBody>,
+) -> ApiResult<axum::http::StatusCode> {
+    let req = RevokeCapabilityRequest {
+        subject_table: "kb_cogmaps".to_string(),
+        subject_id: cogmap_id,
+        principal_table: body.principal_table,
+        principal_id: body.principal_id,
+    };
+    access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }

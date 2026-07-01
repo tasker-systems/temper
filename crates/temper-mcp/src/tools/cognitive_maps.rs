@@ -9,6 +9,7 @@ use uuid::Uuid;
 use temper_core::error::TemperError;
 use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
+    GrantCapabilityRequest, RevokeCapabilityRequest,
 };
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reconcile::CreateCogmapRequest;
@@ -277,9 +278,140 @@ pub async fn cogmap_unbind(
     )]))
 }
 
+// ── cogmap_grant / cogmap_revoke (service-direct) ────────────────────────────
+
+/// MCP input for cogmap_grant. `cogmap` is a ref; exactly one of `to_profile`/`to_team` names the
+/// principal (raw UUID). Capability flags select which rights to grant (`read` is implied by
+/// `write`/`grant` — coherence). At least one capability must be set.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapGrantInput {
+    /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+    pub cogmap: String,
+    /// Grant to this profile (UUID). Mutually exclusive with `to_team`.
+    #[serde(default)]
+    pub to_profile: Option<Uuid>,
+    /// Grant to this team (UUID). Mutually exclusive with `to_profile`.
+    #[serde(default)]
+    pub to_team: Option<Uuid>,
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default)]
+    pub write: bool,
+    #[serde(default)]
+    pub grant: bool,
+}
+
+/// MCP input for cogmap_revoke. `cogmap` is a ref; exactly one of `from_profile`/`from_team` names
+/// the principal whose grant to delete.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapRevokeInput {
+    pub cogmap: String,
+    #[serde(default)]
+    pub from_profile: Option<Uuid>,
+    #[serde(default)]
+    pub from_team: Option<Uuid>,
+}
+
+/// Resolve exactly one of (profile, team) into a `(principal_table, principal_id)` pair.
+fn resolve_principal(
+    profile: Option<Uuid>,
+    team: Option<Uuid>,
+) -> Result<(String, Uuid), rmcp::ErrorData> {
+    match (profile, team) {
+        (Some(p), None) => Ok(("kb_profiles".to_string(), p)),
+        (None, Some(t)) => Ok(("kb_teams".to_string(), t)),
+        (Some(_), Some(_)) => Err(rmcp::ErrorData::invalid_params(
+            "supply exactly one principal, not both a profile and a team".to_string(),
+            None,
+        )),
+        (None, None) => Err(rmcp::ErrorData::invalid_params(
+            "no principal — supply exactly one of a profile or a team".to_string(),
+            None,
+        )),
+    }
+}
+
+/// Grant a capability on a cognitive map. SERVICE-DIRECT, gated by `is_system_admin OR can_grant`
+/// (see `access_service::grant_capability`). `read` is forced on when `write`/`grant` is set
+/// (coherence: you cannot write/grant what you cannot read).
+pub async fn cogmap_grant(
+    svc: &TemperMcpService,
+    input: CogmapGrantInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+    let (principal_table, principal_id) = resolve_principal(input.to_profile, input.to_team)?;
+
+    if !(input.read || input.write || input.grant) {
+        return Err(rmcp::ErrorData::invalid_params(
+            "no capability selected — set at least one of read/write/grant".to_string(),
+            None,
+        ));
+    }
+    let req = GrantCapabilityRequest {
+        subject_table: "kb_cogmaps".to_string(),
+        subject_id: cogmap_id,
+        principal_table,
+        principal_id,
+        can_read: input.read || input.write || input.grant, // coherence: write|grant ⇒ read
+        can_write: input.write,
+        can_delete: false,
+        can_grant: input.grant,
+    };
+
+    let outcome =
+        access_service::grant_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
+            .await
+            .map_err(|e| map_api_error("cogmap_grant", e))?;
+
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// Revoke a capability grant on a cognitive map. SERVICE-DIRECT, admin/can_grant-gated (see
+/// [`cogmap_grant`]). Absent grant ⇒ no-op success.
+pub async fn cogmap_revoke(
+    svc: &TemperMcpService,
+    input: CogmapRevokeInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+    let (principal_table, principal_id) = resolve_principal(input.from_profile, input.from_team)?;
+
+    let req = RevokeCapabilityRequest {
+        subject_table: "kb_cogmaps".to_string(),
+        subject_id: cogmap_id,
+        principal_table,
+        principal_id,
+    };
+    access_service::revoke_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
+        .await
+        .map_err(|e| map_api_error("cogmap_revoke", e))?;
+
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        "{\"revoked\":true}".to_string(),
+    )]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cogmap_grant_input_deserializes() {
+        let id = Uuid::now_v7();
+        let raw = serde_json::json!({ "cogmap": "m", "to_profile": id.to_string(), "write": true });
+        let input: CogmapGrantInput = serde_json::from_value(raw).unwrap();
+        assert_eq!(input.to_profile, Some(id));
+        assert!(input.write);
+        assert!(!input.grant);
+    }
 
     #[test]
     fn cogmap_bind_input_deserializes() {

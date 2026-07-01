@@ -36,6 +36,13 @@ export type CogmapAnalyticsRow = {
 telos_resource_id: ResourceId, staleness: CogmapStaleness, regulation: Array<CogmapRegulationRow>, };
 
 /**
+ * HTTP body for `POST /api/cognitive-maps/{id}/grants` — the subject is the path `{id}` (a cogmap),
+ * so the body carries only the principal + capabilities. The handler widens this into a
+ * `GrantCapabilityRequest` with `subject_table='kb_cogmaps'`, `subject_id={id}`.
+ */
+export type CogmapGrantBody = { principal_table: string, principal_id: string, can_read: boolean, can_write: boolean, can_delete: boolean, can_grant: boolean, };
+
+/**
  * The per-region analytics tier (the five materialized scalar readouts) as returned by
  * `cogmap_region_metrics`. Sibling to `CogmapRegionRow`'s surface tier; member identities are still
  * never carried. Each metric is `Option<f64>` (the columns are nullable until materialization computes
@@ -105,6 +112,12 @@ member_count: number, };
  * (label e.g. `operationalized_by`), filtered to those the principal can read.
  */
 export type CogmapRegulationRow = { resource_id: ResourceId, title: string, body_text: string | null, edge_label: string, };
+
+/**
+ * HTTP body for `DELETE /api/cognitive-maps/{id}/grants` — the principal whose grant on the path
+ * cogmap to revoke.
+ */
+export type CogmapRevokeBody = { principal_table: string, principal_id: string, };
 
 /**
  * Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
