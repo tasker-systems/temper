@@ -275,6 +275,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         output_format,
                     )
                 }
+                ResourceAction::Facet {
+                    r#ref,
+                    values,
+                    weight,
+                    act,
+                } => temper_cli::commands::facet::run(r#ref, values, weight, act),
             }
         }
         Commands::Context { action } => match action {

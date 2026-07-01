@@ -15,12 +15,12 @@ use async_trait::async_trait;
 
 use crate::types::resource::ResourceRow;
 use temper_core::error::TemperError;
-use temper_core::types::ids::EdgeId;
+use temper_core::types::ids::{EdgeId, PropertyId};
 
 use super::commands::{
     AssertRelationship, CloseInvocation, CreateCognitiveMap, CreateResource, DeleteResource,
     FoldRelationship, ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
-    ReweightRelationship, SearchResources, ShowResource, UpdateResource,
+    ReweightRelationship, SearchResources, SetFacet, ShowResource, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -98,6 +98,11 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<EdgeId>, TemperError>;
+
+    // ── facet writes (T1 Sequence B — facet_set vertical slice) ──
+    // Upserts a typed property row (`kb_properties`) on a resource. Returns the property id.
+
+    async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError>;
 
     // ── L0 cognitive-map content reconcile (L0 delivery & lifecycle, Task 4) ──
     // Idempotent, additive-only, provenance-scoped desired-state reconcile of a cognitive map's

@@ -5,6 +5,11 @@ use temper_core::error::{Result, TemperError};
 
 /// Typed vault doctype. All valid values are enumerated exhaustively —
 /// unknown doctypes fail at parse, not at validation.
+///
+/// Includes the 8 cognitive-map node labels (spec D3: fact, memory,
+/// question, theme, concern, principle, commitment, domain) alongside the
+/// original resource doctypes. The set is still closed here — Task A2 loosens
+/// the parse gate to an open tail; this variant list is the recognized core.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "doc_type.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -18,6 +23,16 @@ pub enum DocType {
     Research,
     Decision,
     Concept,
+    // Cognitive-map node labels (spec D3). Open tail handled at the
+    // validation gates (Task A2).
+    Fact,
+    Memory,
+    Question,
+    Theme,
+    Concern,
+    Principle,
+    Commitment,
+    Domain,
 }
 
 #[expect(
@@ -36,6 +51,14 @@ impl DocType {
         DocType::Research,
         DocType::Decision,
         DocType::Concept,
+        DocType::Fact,
+        DocType::Memory,
+        DocType::Question,
+        DocType::Theme,
+        DocType::Concern,
+        DocType::Principle,
+        DocType::Commitment,
+        DocType::Domain,
     ];
 
     /// Canonical string form as used in YAML frontmatter and vault paths.
@@ -47,6 +70,14 @@ impl DocType {
             DocType::Research => "research",
             DocType::Decision => "decision",
             DocType::Concept => "concept",
+            DocType::Fact => "fact",
+            DocType::Memory => "memory",
+            DocType::Question => "question",
+            DocType::Theme => "theme",
+            DocType::Concern => "concern",
+            DocType::Principle => "principle",
+            DocType::Commitment => "commitment",
+            DocType::Domain => "domain",
         }
     }
 
@@ -59,8 +90,16 @@ impl DocType {
             "research" => Ok(DocType::Research),
             "decision" => Ok(DocType::Decision),
             "concept" => Ok(DocType::Concept),
+            "fact" => Ok(DocType::Fact),
+            "memory" => Ok(DocType::Memory),
+            "question" => Ok(DocType::Question),
+            "theme" => Ok(DocType::Theme),
+            "concern" => Ok(DocType::Concern),
+            "principle" => Ok(DocType::Principle),
+            "commitment" => Ok(DocType::Commitment),
+            "domain" => Ok(DocType::Domain),
             other => Err(TemperError::Config(format!(
-                "unknown doctype '{other}'; expected one of: task, goal, session, research, decision, concept"
+                "unknown doctype '{other}'; expected one of: task, goal, session, research, decision, concept, fact, memory, question, theme, concern, principle, commitment, domain"
             ))),
         }
     }
@@ -80,6 +119,14 @@ impl DocType {
             DocType::Research => include_str!("../../schemas/research.schema.json"),
             DocType::Decision => include_str!("../../schemas/decision.schema.json"),
             DocType::Concept => include_str!("../../schemas/concept.schema.json"),
+            DocType::Fact => include_str!("../../schemas/fact.schema.json"),
+            DocType::Memory => include_str!("../../schemas/memory.schema.json"),
+            DocType::Question => include_str!("../../schemas/question.schema.json"),
+            DocType::Theme => include_str!("../../schemas/theme.schema.json"),
+            DocType::Concern => include_str!("../../schemas/concern.schema.json"),
+            DocType::Principle => include_str!("../../schemas/principle.schema.json"),
+            DocType::Commitment => include_str!("../../schemas/commitment.schema.json"),
+            DocType::Domain => include_str!("../../schemas/domain.schema.json"),
         }
     }
 }
@@ -91,6 +138,8 @@ impl DocType {
 /// - `value` is alias-normalized (hyphen-form keys rewritten to canonical
 ///   underscore form) at construction time.
 /// - `doc_type` is a typed enum — unknown doctypes are rejected at parse.
+///   The recognized set includes the 8 cognitive-map node labels (spec D3)
+///   alongside the original resource doctypes; Task A2 will open the tail.
 /// - `body` is preserved byte-for-byte; writes re-emit it unchanged.
 #[derive(Debug, Clone)]
 pub struct Frontmatter {
@@ -423,10 +472,26 @@ body content here
 "#;
 
     #[test]
-    fn doc_type_round_trip_all_six() {
-        for name in ["task", "goal", "session", "research", "decision", "concept"] {
-            let dt = DocType::from_str(name).expect("valid doctype");
+    fn doc_type_round_trip_all() {
+        for name in [
+            "task",
+            "goal",
+            "session",
+            "research",
+            "decision",
+            "concept",
+            "fact",
+            "memory",
+            "question",
+            "theme",
+            "concern",
+            "principle",
+            "commitment",
+            "domain",
+        ] {
+            let dt = DocType::from_str(name).expect("known");
             assert_eq!(dt.as_str(), name);
+            let _ = dt.schema_json(); // include_str! must resolve
         }
     }
 

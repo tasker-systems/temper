@@ -36,6 +36,7 @@ use temper_workflow::types::resource::{
         crate::handlers::edges::retype,
         crate::handlers::edges::reweight,
         crate::handlers::edges::fold,
+        crate::handlers::facets::set_facet,
         crate::handlers::graph::get_subgraph,
         crate::handlers::cognitive_maps::genesis,
         crate::handlers::cognitive_maps::reconcile,
@@ -84,6 +85,8 @@ use temper_workflow::types::resource::{
         temper_core::types::relationship_requests::ReweightRelationshipRequest,
         temper_core::types::relationship_requests::FoldRelationshipRequest,
         temper_core::types::relationship_requests::RelationshipAck,
+        temper_core::types::facet_requests::FacetSetRequest,
+        temper_core::types::facet_requests::FacetAck,
         temper_core::types::reconcile::ReconcileCogmapRequest,
         temper_core::types::reconcile::ReconcileEntry,
         temper_core::types::reconcile::ReconcileEdge,
@@ -125,6 +128,7 @@ use temper_workflow::types::resource::{
         (name = "Meta", description = "Resource frontmatter metadata management"),
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
+        (name = "Facets", description = "Typed facet property writes (facet_set)"),
         (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
         (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
     ),
@@ -179,6 +183,7 @@ mod tests {
         assert!(json.contains("/api/resources/{id}/meta"));
         assert!(json.contains("/api/resources/{id}/edges"));
         assert!(json.contains("/api/relationships"));
+        assert!(json.contains("/api/facets"));
         assert!(json.contains("/api/graph/subgraph"));
         assert!(json.contains("/api/cognitive-maps/{id}/shape"));
         assert!(json.contains("/api/cognitive-maps/{id}/region-metrics"));
@@ -199,5 +204,6 @@ mod tests {
         assert!(json.contains("\"name\": \"Search\""));
         assert!(json.contains("\"name\": \"Health\""));
         assert!(json.contains("\"name\": \"Relationships\""));
+        assert!(json.contains("\"name\": \"Facets\""));
     }
 }

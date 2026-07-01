@@ -374,6 +374,14 @@ impl Fired {
         }
     }
 
+    /// Extract the property id a `FacetSet` fire produced.
+    pub fn facet(self) -> Result<PropertyId> {
+        match self {
+            Fired::Facet(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Facet, got {other:?}"),
+        }
+    }
+
     /// Extract the telos resource id a `CharterSet` fire produced.
     pub fn charter(self) -> Result<ResourceId> {
         match self {

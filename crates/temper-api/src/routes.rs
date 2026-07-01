@@ -71,6 +71,7 @@ pub fn create_app(state: AppState) -> Router {
             "/api/relationships/{edge_handle}/fold",
             post(handlers::edges::fold),
         )
+        .route("/api/facets", post(handlers::facets::set_facet))
         .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
             "/api/resources/{id}/meta",

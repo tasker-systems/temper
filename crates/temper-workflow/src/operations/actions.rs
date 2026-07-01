@@ -231,19 +231,20 @@ pub fn validate_slug(slug: &str) -> Result<(), ActionError> {
     Ok(())
 }
 
-/// Validate that a doctype is recognized.
+/// Validate a doctype's shape: non-empty.
 ///
-/// Delegates to the canonical `crate::schema::DOC_TYPE_NAMES` slice — the
-/// same set of doctypes that have embedded JSON schemas. Updates to the
-/// recognized doctype set go in `schema.rs`, not here.
+/// Spec D3 ("closed-set-with-open-tail"): recognized labels (see
+/// `crate::schema::DOC_TYPE_NAMES`) get frontmatter-schema enforcement via
+/// `crate::schema::validate_frontmatter`; an unrecognized non-empty label is
+/// still accepted here and stored verbatim as a free string — this gate only
+/// rejects the shape-invalid case (empty/whitespace-only).
 pub fn validate_doctype(doctype: &str) -> Result<(), ActionError> {
-    if crate::schema::DOC_TYPE_NAMES.contains(&doctype) {
-        Ok(())
+    if doctype.trim().is_empty() {
+        Err(ActionError::InvalidDoctype(
+            "doc_type must be non-empty".to_string(),
+        ))
     } else {
-        Err(ActionError::InvalidDoctype(format!(
-            "unknown doctype '{doctype}', expected one of: {}",
-            crate::schema::DOC_TYPE_NAMES.join(", ")
-        )))
+        Ok(()) // recognized OR open-tail: the label is a free string at the kernel
     }
 }
 
@@ -338,8 +339,9 @@ pub fn merge_open_meta(existing: &mut Value, patch: Value) {
 /// Pre-flight validation for a `CreateResource` command.
 ///
 /// Checks slug, doctype, context, and title shape, then applies per-doctype
-/// pure invariants (mode/effort whitelists for `DocType::Task`). Does not
-/// check uniqueness or authorization — those are backend concerns.
+/// pure invariants (mode/effort whitelists for `DocType::Task`) when the
+/// doctype is recognized. Does not check uniqueness or authorization — those
+/// are backend concerns.
 pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
     validate_slug(&cmd.slug)?;
     validate_doctype(&cmd.doctype)?;
@@ -349,34 +351,44 @@ pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
         return Err(ActionError::MissingRequiredField("title".to_string()));
     }
 
-    let doctype = crate::frontmatter::DocType::from_str(&cmd.doctype)
-        .map_err(|e| ActionError::InvalidValue(format!("doctype: {e}")))?;
-
-    match doctype {
-        crate::frontmatter::DocType::Task => {
-            if let Some(mode) = cmd.managed_meta.mode.as_deref() {
-                let valid = crate::schema::task_enum_values("temper-mode");
-                if !valid.iter().any(|v| v == mode) {
-                    return Err(ActionError::InvalidValue(format!(
-                        "mode '{mode}' not in {valid:?}"
-                    )));
+    // Open tail (spec D3 / Task A2): an unrecognized doctype has no
+    // per-doctype invariants to enforce — `validate_doctype` above already
+    // accepted it as a free string, so no additional rules apply here.
+    if let Ok(doctype) = crate::frontmatter::DocType::from_str(&cmd.doctype) {
+        match doctype {
+            crate::frontmatter::DocType::Task => {
+                if let Some(mode) = cmd.managed_meta.mode.as_deref() {
+                    let valid = crate::schema::task_enum_values("temper-mode");
+                    if !valid.iter().any(|v| v == mode) {
+                        return Err(ActionError::InvalidValue(format!(
+                            "mode '{mode}' not in {valid:?}"
+                        )));
+                    }
+                }
+                if let Some(effort) = cmd.managed_meta.effort.as_deref() {
+                    let valid = crate::schema::task_enum_values("temper-effort");
+                    if !valid.iter().any(|v| v == effort) {
+                        return Err(ActionError::InvalidValue(format!(
+                            "effort '{effort}' not in {valid:?}"
+                        )));
+                    }
                 }
             }
-            if let Some(effort) = cmd.managed_meta.effort.as_deref() {
-                let valid = crate::schema::task_enum_values("temper-effort");
-                if !valid.iter().any(|v| v == effort) {
-                    return Err(ActionError::InvalidValue(format!(
-                        "effort '{effort}' not in {valid:?}"
-                    )));
-                }
+            crate::frontmatter::DocType::Goal
+            | crate::frontmatter::DocType::Session
+            | crate::frontmatter::DocType::Research
+            | crate::frontmatter::DocType::Concept
+            | crate::frontmatter::DocType::Decision
+            | crate::frontmatter::DocType::Fact
+            | crate::frontmatter::DocType::Memory
+            | crate::frontmatter::DocType::Question
+            | crate::frontmatter::DocType::Theme
+            | crate::frontmatter::DocType::Concern
+            | crate::frontmatter::DocType::Principle
+            | crate::frontmatter::DocType::Commitment
+            | crate::frontmatter::DocType::Domain => {
+                // No additional per-doctype pure invariants beyond the generic checks above.
             }
-        }
-        crate::frontmatter::DocType::Goal
-        | crate::frontmatter::DocType::Session
-        | crate::frontmatter::DocType::Research
-        | crate::frontmatter::DocType::Concept
-        | crate::frontmatter::DocType::Decision => {
-            // No additional per-doctype pure invariants beyond the generic checks above.
         }
     }
 
@@ -598,17 +610,24 @@ mod tests {
     }
 
     #[test]
-    fn validate_doctype_rejects_unknown() {
-        let err = validate_doctype("widget").unwrap_err();
-        assert!(matches!(err, ActionError::InvalidDoctype(_)));
+    fn validate_doctype_accepts_unknown_label_passthrough() {
+        // memory is now recognized (A1); use a genuinely-unknown label for the tail.
+        assert!(
+            validate_doctype("anecdote").is_ok(),
+            "unknown labels pass through (open tail)"
+        );
+        assert!(validate_doctype("").is_err(), "empty is still rejected");
     }
 
     #[test]
-    fn validate_doctype_rejects_memory_not_a_real_doctype() {
-        // "memory" is a temper memory-system concept (auto-memory), not a
-        // resource doctype. Guard against accidental re-introduction.
-        let err = validate_doctype("memory").unwrap_err();
-        assert!(matches!(err, ActionError::InvalidDoctype(_)));
+    fn validate_doctype_accepts_memory_as_cogmap_label() {
+        // "memory" was previously reserved to avoid confusion with the
+        // unrelated Claude-Code auto-memory feature (a file outside the
+        // vault, not a resource doctype). Spec D3 (cognitive-map node
+        // labels) now recognizes "memory" as a legitimate resource doctype
+        // — the collision is name-only, and this test now asserts the
+        // updated, intentional behavior.
+        assert!(validate_doctype("memory").is_ok());
     }
 
     #[test]
@@ -771,10 +790,36 @@ mod tests {
     }
 
     #[test]
-    fn validate_create_rejects_unknown_doctype() {
+    fn validate_create_accepts_unknown_doctype_passthrough() {
+        // Open tail (Task A2): a genuinely-unknown doctype has no per-doctype
+        // invariants to enforce and passes validate_create.
         let cmd = CreateResource {
             slug: "valid-slug".to_string(),
-            doctype: "widget".to_string(),
+            doctype: "anecdote".to_string(),
+            home: temper_core::types::home::HomeAnchor::Context(
+                temper_core::types::ids::ContextId::new(),
+            ),
+            title: "X".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            act: Default::default(),
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(
+            validate_create(&cmd).is_ok(),
+            "unknown doctype should pass through as an open-tail label"
+        );
+    }
+
+    #[test]
+    fn validate_create_rejects_empty_doctype() {
+        let cmd = CreateResource {
+            slug: "valid-slug".to_string(),
+            doctype: String::new(),
             home: temper_core::types::home::HomeAnchor::Context(
                 temper_core::types::ids::ContextId::new(),
             ),

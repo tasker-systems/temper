@@ -475,6 +475,22 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Set a facet property on a resource (cloud-mode-only API write).
+    ///
+    /// Sends a `POST /api/facets` request via `temper-client`.
+    Facet {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// The facet's typed value payload, as a JSON string.
+        #[arg(long)]
+        values: String,
+        /// Facet weight (default: 1.0)
+        #[arg(long)]
+        weight: Option<f64>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
 }
 
 #[derive(Subcommand)]

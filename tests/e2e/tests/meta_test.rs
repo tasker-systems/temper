@@ -288,7 +288,8 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
 // the test is removed rather than rewritten.
 
 /// Meta PATCH authorization + error mapping: second-user is forbidden,
-/// unknown resource id is 404, and unknown doc_type is 400.
+/// unknown resource id is 404, and an unrecognized non-empty doc_type is
+/// accepted and stored verbatim (open tail, spec D3).
 ///
 /// Locks in the ApiError → StatusCode mapping for the meta endpoint so a
 /// future refactor of error types surfaces loudly here rather than silently
@@ -393,30 +394,36 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
          missing-resource distinct from unauthorized"
     );
 
-    // --- (3) Unknown doc_type → 400 ---
-    let bad_doctype_payload = MetaUpdatePayload {
+    // --- (3) Unknown (non-empty) doc_type → accepted (open tail, spec D3) ---
+    // Pre-T1 this was a 400: unrecognized doc_types were rejected at the closed
+    // set. T1 Sequence A2 made `doc_type` a closed-set-WITH-open-tail — a
+    // recognized label still carries its frontmatter schema, but an unrecognized
+    // non-empty label passes through and is stored verbatim (schema validation
+    // is skipped for it). So this update now succeeds; the steward can home
+    // cogmap nodes under expressive labels beyond the recognized set.
+    let unknown_doctype_payload = MetaUpdatePayload {
         resource_id: resource.id,
         managed_meta: ManagedMeta {
             doc_type: Some("definitely-not-a-real-type".to_string()),
             ..Default::default()
         },
         open_meta: serde_json::json!({}),
-        managed_hash: "sha256:bad_doctype".to_string(),
-        open_hash: "sha256:bad_doctype".to_string(),
+        managed_hash: "sha256:unknown_doctype".to_string(),
+        open_hash: "sha256:unknown_doctype".to_string(),
         act: Default::default(),
     };
     let resp = app
         .reqwest_client
         .put(app.url(&format!("/api/resources/{}/meta", resource.id)))
         .header("Authorization", format!("Bearer {}", app.token))
-        .json(&bad_doctype_payload)
+        .json(&unknown_doctype_payload)
         .send()
         .await
-        .expect("bad doctype meta update request failed");
+        .expect("unknown doctype meta update request failed");
     assert_eq!(
         resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "unknown doc_type must map to 400"
+        reqwest::StatusCode::OK,
+        "an unrecognized non-empty doc_type must be accepted (open tail, D3), not rejected"
     );
 }
 

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temperkb.io/schemas/memory.schema.json",
+  "allOf": [
+    { "$ref": "base.schema.json" }
+  ],
+  "properties": {
+    "temper-type": { "const": "memory" },
+    "temper-slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "URL-safe identifier"
+    }
+  },
+  "required": ["temper-slug"],
+  "additionalProperties": true
+}

@@ -1,0 +1,41 @@
+# Team self-cognition cognitive map — GENESIS manifest (REUSABLE TEMPLATE).
+#
+# Consumed by:  temper cogmap create --manifest schema-artifact/manifests/team-self-cognition.yaml \
+#                 --name "<Team> — self-cognition"
+# Then bound 1:1 to the team:  temper cogmap bind <minted-cogmap-ref> <team>
+#
+# This is the reusable template for a TEAM SELF-COGNITION map: a cognitive map born 1:1 with a team,
+# whose ingest source is the team's OWN temper resources. The prose is deliberately TEAM-AGNOSTIC
+# ("this team") so the single artifact serves every team without interpolation — the team's identity
+# rides on the map's `--name` at apply time. Tended by the Eve steward (create / assert / facet /
+# fold); regions emerge from `materialize` — the steward never clusters. See the T3 spec:
+# docs/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md
+#
+# IDENTITY: omit `cogmap_id` / `telos_resource_id` and the CLI mints stable uuidv7s and prints them.
+# Pin them in the SoP (per team) once you want a reproducible, re-runnable genesis — a re-run at the
+# same id is an idempotent no-op (`created: false`).
+
+name: "Team — self-cognition"
+telos_title: "How this team works"
+telos:
+  statement: >-
+    Understand how this team works — what it is actively working on, the problems it solves and for
+    whom, the domains it owns, the decisions it has settled and the commitments it holds, and the
+    concerns and open questions it carries. This map is the team's self-cognition, dogfed from the
+    team's own temper resources: its nodes are distilled from those resources and situated by this
+    telos. Salience is judged under this purpose — never universally.
+  questions:
+    - question: "What is this team actively working on?"
+      context: "Surfaces the live themes and the most active threads — the team's current front."
+    - question: "What problems does this team solve, and for whom?"
+      context: "The team's reason-for-being, distilled from its work rather than declared abstractly."
+    - question: "What does this team know — its domains of expertise and responsibility?"
+      context: "The areas the team owns; where its judgment is authoritative."
+    - question: "What has this team decided, and what has it committed to?"
+      context: "Settled decisions and outstanding commitments — the load-bearing choices to honor."
+    - question: "What concerns or open questions is the team holding?"
+      context: "Live tensions and unresolved questions worth tracking before they are settled."
+  framing:
+    - "Nodes are distilled from the team's own resources and carry a `derived_from` edge to their source(s)."
+    - "The steward tends declared structure (create / assert / facet / fold); regions emerge from `materialize` — the steward never clusters."
+    - "Node labels are expressive: concept, fact, memory, question, theme, concern, principle, commitment, domain."
