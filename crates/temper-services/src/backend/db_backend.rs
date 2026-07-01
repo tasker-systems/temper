@@ -1290,7 +1290,7 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await
-        .map_err(api_err)?;
+        .map_err(map_facet_write_err)?;
         Ok(CommandOutput::new(property_id))
     }
 
@@ -1658,6 +1658,26 @@ fn map_commit_err(e: sqlx::Error) -> TemperError {
             return TemperError::Conflict(
                 "reconcile conflicted with a concurrent run; retry".to_string(),
             );
+        }
+    }
+    api_err(e)
+}
+
+/// Map a `set_facet_with` write error: a unique-violation (SQLSTATE `23505`, the
+/// `uq_kb_properties_active` guard) means an active facet with this key is already set on the
+/// resource → [`TemperError::Conflict`] (409), not a 500 — the caller must fold the prior facet
+/// before re-setting (the steward's fold-then-set loop, D8). Any other error stays a 500
+/// ([`api_err`]). The substrate write returns `anyhow::Error`, so the sqlx error is found by
+/// walking the source chain rather than a single downcast.
+fn map_facet_write_err(e: anyhow::Error) -> TemperError {
+    for cause in e.chain() {
+        if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
+            if db.code().as_deref() == Some("23505") {
+                return TemperError::Conflict(
+                    "a facet with this key is already set on the resource; fold it before re-setting"
+                        .to_string(),
+                );
+            }
         }
     }
     api_err(e)

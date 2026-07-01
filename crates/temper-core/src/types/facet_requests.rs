@@ -11,6 +11,11 @@ use uuid::Uuid;
 
 use crate::types::authorship::ActInput;
 
+/// Default facet weight when a request omits it (matches the MCP/CLI default).
+fn default_facet_weight() -> f64 {
+    1.0
+}
+
 /// Request body for `POST /api/facets`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -19,6 +24,9 @@ pub struct FacetSetRequest {
     pub resource: Uuid,
     /// The facet's typed value payload.
     pub values: serde_json::Value,
+    /// Relative weight of the facet; defaults to `1.0` when omitted, matching the MCP tool and CLI
+    /// (both default it) so a raw API caller need not supply it.
+    #[serde(default = "default_facet_weight")]
     pub weight: f64,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the facet_set act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
@@ -79,6 +87,17 @@ mod tests {
         assert!(v.get("act").is_none());
         let back: FacetSetRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back.act, req.act);
+    }
+
+    #[test]
+    fn facet_set_request_defaults_weight_when_omitted() {
+        // A raw API caller may omit `weight`; it defaults to 1.0 (matching MCP/CLI).
+        let wire = serde_json::json!({
+            "resource": Uuid::nil(),
+            "values": {"summary": "example"},
+        });
+        let req: FacetSetRequest = serde_json::from_value(wire).unwrap();
+        assert_eq!(req.weight, 1.0);
     }
 
     #[test]

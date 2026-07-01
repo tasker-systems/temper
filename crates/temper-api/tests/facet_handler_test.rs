@@ -108,6 +108,55 @@ async fn set_facet_returns_ack(pool: PgPool) {
     );
 }
 
+// ─── Test 1b: setting the same facet key twice → 409 Conflict (not 500) ──────
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn set_facet_duplicate_key_returns_409(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email = format!("fh-dup-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+
+    let resource = insert_resource(&pool, profile_id, context_id, "Doc Dup", "fh-dup-a").await;
+
+    let body = json!({
+        "resource": resource.to_string(),
+        "values": {"summary": "first"},
+    });
+
+    // First set succeeds.
+    let first = app
+        .client
+        .post(app.url("/api/facets"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        first.status().as_u16(),
+        200,
+        "first facet set should succeed"
+    );
+
+    // Second set of the same active facet key hits uq_kb_properties_active → 409, not 500.
+    let second = app
+        .client
+        .post(app.url("/api/facets"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        second.status().as_u16(),
+        409,
+        "re-setting an active facet key must be a 409 Conflict, not a 500"
+    );
+}
+
 // ─── Test 2: POST /api/facets without auth → 401 ─────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
