@@ -233,7 +233,7 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
             .expect("Failed to load test RSA public key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
 
     let api_config = ApiConfig {
         database_url: "unused".to_string(),

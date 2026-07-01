@@ -39,7 +39,7 @@ pub async fn require_mcp_auth(
         None => return unauthorized(&state),
     };
 
-    let decoding_key = match state.api_state.jwks_store.get_decoding_key().await {
+    let vk = match state.api_state.jwks_store.get_decoding_key().await {
         Ok(k) => k,
         Err(e) => {
             tracing::error!("JWKS retrieval failed: {e}");
@@ -52,9 +52,9 @@ pub async fn require_mcp_auth(
     let validation = state
         .api_state
         .jwks_store
-        .validation(issuer, Some(audience));
+        .validation(issuer, Some(audience), vk.algorithm);
 
-    match decode::<McpClaims>(&token, &decoding_key, &validation) {
+    match decode::<McpClaims>(&token, &vk.key, &validation) {
         Ok(data) => {
             request.extensions_mut().insert(data.claims);
             next.run(request).await

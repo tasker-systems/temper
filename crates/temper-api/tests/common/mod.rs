@@ -101,7 +101,7 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
     // Build AppState with a static test key.
     let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("test_rsa.pub"))
         .expect("Failed to load test RSA public key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
 
     let config = ApiConfig {
         database_url: "unused".to_string(),

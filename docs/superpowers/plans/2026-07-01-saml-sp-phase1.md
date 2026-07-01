@@ -59,69 +59,75 @@
 
 ## Milestone M0 — `temper-api` accepts EdDSA (independently shippable)
 
-### Task 0.1: Add EdDSA to the JWT validation allow-list
+### Task 0.1: Make JWT validation algorithm-aware (accept EdDSA without breaking RS256)
+
+> **Correction (discovered in implementation):** `jsonwebtoken` 9's `verify_signature` runs `for alg in &validation.algorithms { if key.family != alg.family() { return InvalidAlgorithm } }`. So a mixed `vec![RS256, EdDSA]` allow-list against the single cached key **fails for every token** (one of the two families never matches the key) — it would break the live RS256 path, not just fail to add EdDSA. The correct fix: the allow-list must contain **only the algorithm matching the loaded key's family**. Thread the key's algorithm from key-load through `validation()`.
 
 **Files:**
-- Modify: `crates/temper-services/src/state.rs:99-108` (`validation()`)
-- Test: `crates/temper-services/src/state.rs` (unit test module, alongside the existing Ed25519 tests near `:187-276`)
+- Modify: `crates/temper-services/src/state.rs` — `CachedKeys`, `refresh()`, `with_static_key()`, `get_decoding_key()`, `validation()`; add unit test.
+- Modify: `crates/temper-api/src/middleware/auth.rs:70-83` (`require_auth` call site).
+- Modify: `crates/temper-mcp/src/middleware.rs:42-57` (MCP call site).
+- Modify: `tests/e2e/tests/common/mod.rs` (the `with_static_key(...)` call in `setup`, ~`:236`).
 
 **Interfaces:**
-- Consumes: existing `JwksKeyStore::validation(&self, issuer, audience) -> Validation`; existing test helpers `TEST_PRIVATE_PEM`, `try_make_keys()` (Ed25519 EncodingKey/DecodingKey) near `state.rs:187`.
-- Produces: `validation()` returns a `Validation` whose `algorithms` accepts both RS256 and EdDSA.
+- Produces:
+  - `pub struct VerificationKey { pub key: DecodingKey, pub algorithm: Algorithm }` (in `state.rs`).
+  - `get_decoding_key(&self) -> Result<VerificationKey, String>` (return type changed from `DecodingKey`).
+  - `validation(&self, issuer: &str, audience: Option<&str>, algorithm: Algorithm) -> Validation` (added `algorithm` param; `algorithms = vec![algorithm]`).
+  - `with_static_key(key: DecodingKey, algorithm: Algorithm) -> Self` (added `algorithm` param).
+- Consumes: existing Ed25519 test helpers in the `state.rs` `#[cfg(test)]` module (the keypair scaffold near `:187-276` that builds an Ed25519 `EncodingKey`/`DecodingKey` and encodes with `Header::new(Algorithm::EdDSA)`). Read the module and reuse its actual helper names.
 
-- [ ] **Step 1: Write the failing test**
-
-Add to the `#[cfg(test)]` module in `state.rs` (reuse the existing Ed25519 keypair helpers):
+- [ ] **Step 1: Write the failing test** (exercises the PRODUCTION `validation()` with the key's algorithm)
 
 ```rust
 #[test]
-fn validation_accepts_eddsa_signed_token() {
+fn validation_accepts_eddsa_token_for_eddsa_key() {
     use jsonwebtoken::{encode, decode, Header, Algorithm};
-    let (encoding_key, decoding_key) = try_make_keys().expect("ed25519 keys");
-    let store = JwksKeyStore::with_static_key(decoding_key.clone());
+    // reuse the existing module helper that yields an Ed25519 (EncodingKey, DecodingKey)
+    let (encoding_key, decoding_key) = /* existing ed25519 helper */;
+    let store = JwksKeyStore::with_static_key(decoding_key.clone(), Algorithm::EdDSA);
 
-    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
     struct Claims { sub: String, iss: String, aud: String, exp: usize, iat: usize }
     let now = 1_900_000_000usize;
-    let claims = Claims {
-        sub: "user-1".into(), iss: "https://as.example".into(),
-        aud: "https://api.example".into(), exp: now + 3600, iat: now,
-    };
+    let claims = Claims { sub: "u1".into(), iss: "https://as.example".into(),
+        aud: "https://api.example".into(), exp: now + 3600, iat: now };
     let token = encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key).unwrap();
 
-    let validation = store.validation("https://as.example", Some("https://api.example"));
-    let decoded = decode::<Claims>(&token, &decoding_key, &validation);
-    assert!(decoded.is_ok(), "EdDSA token must validate: {decoded:?}");
+    let vk = /* block_on */ store.get_decoding_key(); // returns VerificationKey; algorithm == EdDSA
+    let validation = store.validation("https://as.example", Some("https://api.example"), Algorithm::EdDSA);
+    assert!(decode::<Claims>(&token, &decoding_key, &validation).is_ok());
 }
 ```
 
+(`get_decoding_key` is async; in the sync test either assert `store.validation(..., Algorithm::EdDSA)` directly, or wrap the async call. Keep the test focused on: EdDSA key + EdDSA-scoped validation ⇒ decode Ok.)
+
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo nextest run -p temper-services validation_accepts_eddsa_signed_token`
-Expected: FAIL — `InvalidAlgorithm` (validation pins RS256).
+Run: `cargo nextest run -p temper-services validation_accepts_eddsa_token_for_eddsa_key`
+Expected: FAIL to compile first (signatures changed), then FAIL `InvalidAlgorithm` until the fix lands.
 
-- [ ] **Step 3: Extend the allow-list**
+- [ ] **Step 3: Implement the algorithm-aware store**
 
-In `validation()` (`state.rs:100-101`):
+- Add `algorithm: Algorithm` to `CachedKeys`.
+- `refresh()`: derive the algorithm from the chosen JWK (`AlgorithmParameters::RSA(_) => Algorithm::RS256`, `OctetKeyPair(Ed25519) => Algorithm::EdDSA`) and store it alongside the key.
+- `with_static_key(key, algorithm)`: store both.
+- `get_decoding_key()`: return `VerificationKey { key, algorithm }`.
+- `validation(issuer, audience, algorithm)`: `let mut v = Validation::new(algorithm); v.algorithms = vec![algorithm];` then issuer/audience unchanged.
+- Update the two call sites to `let vk = ...get_decoding_key().await?; let validation = ...validation(issuer, audience, vk.algorithm); decode(&token, &vk.key, &validation)`.
+- Update `tests/e2e/tests/common/mod.rs`'s `with_static_key(rsa_key)` → `with_static_key(rsa_key, Algorithm::RS256)`.
+- `grep -rn "with_static_key\|get_decoding_key\|\.validation(" crates/ tests/` and fix every caller.
 
-```rust
-let mut v = Validation::new(Algorithm::EdDSA);
-v.algorithms = vec![Algorithm::RS256, Algorithm::EdDSA];
-```
+- [ ] **Step 4: Run tests to verify they pass**
 
-(Keep the rest of `validation()` unchanged — `set_issuer`, audience handling.)
+Run: `cargo nextest run -p temper-services -E 'test(validation)'` (new test + existing validation tests). Expected: PASS. The existing e2e RS256 path is the regression guard for RS256 (its harness now passes `Algorithm::RS256`).
 
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cargo nextest run -p temper-services validation_accepts_eddsa_signed_token`
-Expected: PASS. Also run the existing RS256 path test to confirm no regression: `cargo nextest run -p temper-services -E 'test(validation)'`.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Controller gate + commit** (split-labor: the implementer stops after Step 4 and reports; the controller runs `cargo fmt` + `cargo make check` + commits, to avoid the pre-commit-hook auto-background stall)
 
 ```bash
-cargo fmt -p temper-services && cargo make check
-git add crates/temper-services/src/state.rs
-git commit -m "fix(services): accept EdDSA-signed JWTs in validation allow-list"
+cargo fmt && cargo make check
+git add crates/temper-services/src/state.rs crates/temper-api/src/middleware/auth.rs crates/temper-mcp/src/middleware.rs tests/e2e/tests/common/mod.rs
+git commit -m "fix(services): make JWT validation allow-list track the loaded key's algorithm (accept EdDSA)"
 ```
 
 ### Task 0.2: E2E — an EdDSA token authenticates and resolves a profile
@@ -165,7 +171,7 @@ async fn eddsa_token_authenticates_and_resolves_profile(pool: sqlx::PgPool) {
 
 - [ ] **Step 3: Add the EdDSA helpers to `common/mod.rs`**
 
-Mirror `generate_test_jwt` (`:129`) and `setup` (`:229`) but with `Algorithm::EdDSA`, `EncodingKey::from_ed_pem(include_bytes!("../fixtures/test_ed25519.pkcs8"))`, and `DecodingKey::from_ed_pem(include_bytes!("../fixtures/test_ed25519.pub.pem"))` injected via `JwksKeyStore::with_static_key`. Set `ApiConfig { auth_issuer: "test-issuer", auth_audience: None, .. }` exactly as `setup` does so the token's `iss` matches.
+Mirror `generate_test_jwt` (`:129`) and `setup` (`:229`) but with `Algorithm::EdDSA`, `EncodingKey::from_ed_pem(include_bytes!("../fixtures/test_ed25519.pkcs8"))`, and `DecodingKey::from_ed_pem(include_bytes!("../fixtures/test_ed25519.pub.pem"))` injected via `JwksKeyStore::with_static_key(decoding_key, Algorithm::EdDSA)` (the algorithm param added in Task 0.1). Set `ApiConfig { auth_issuer: "test-issuer", auth_audience: None, .. }` exactly as `setup` does so the token's `iss` matches.
 
 - [ ] **Step 4: Run the e2e**
 
