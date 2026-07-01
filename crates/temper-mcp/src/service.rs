@@ -256,6 +256,16 @@ impl TemperMcpService {
         tools::relationships::fold_relationship(self, input).await
     }
 
+    #[tool(description = "Set a facet (typed property) on a resource — the steward's facet act")]
+    async fn facet_set(
+        &self,
+        Parameters(input): Parameters<tools::facets::FacetSetInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::facet_set(self, input).await
+    }
+
     #[tool(
         description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required."
     )]
