@@ -351,6 +351,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Read a cognitive map's telos/charter blocks (statement / questions / framing) — the steward orients on this before acting. Pass the map by ref."
+    )]
+    async fn cogmap_read_charter(
+        &self,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapReadCharterInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_read_charter(self, input).await
+    }
+
+    #[tool(
         description = "Open an agent-invocation envelope — an append-only accountability record for one agent run against a cognitive map. Returns the server-minted invocation_id; feed it into invocation_close when the run terminates. Pass the originating map by ref."
     )]
     async fn invocation_open(
