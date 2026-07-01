@@ -1,6 +1,7 @@
 import { createPublicKey } from "node:crypto";
 import type { JWK } from "jose";
 import { exportJWK, importPKCS8 } from "jose";
+import { requireEnv } from "./env.js";
 
 /** An imported Ed25519 signing key paired with its published key id. */
 export interface SigningKey {
@@ -15,14 +16,6 @@ export interface PublicJwks {
 
 let cachedSigningKey: SigningKey | undefined;
 let cachedPublicJwks: PublicJwks | undefined;
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
 
 /**
  * Loads and caches the Ed25519 signing key from AS_SIGNING_KEY_PKCS8 /

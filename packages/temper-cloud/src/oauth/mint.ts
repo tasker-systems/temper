@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
+import { requireEnv } from "./env.js";
 import { getSigningKey } from "./keys.js";
 
 const DEFAULT_ACCESS_TTL_SECONDS = 900;
@@ -9,14 +10,6 @@ export interface MintedClaims {
   sub: string;
   email: string;
   email_verified: boolean;
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
 }
 
 function accessTtlSeconds(): number {
