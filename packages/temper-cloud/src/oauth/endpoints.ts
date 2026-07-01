@@ -11,8 +11,14 @@ import {
   mapProfileToClaims,
   validateAssertion,
 } from "../saml/sp.js";
-import { bindCodeToFlow, createPendingFlow } from "./flow.js";
-import { newOpaqueToken } from "./mint.js";
+import {
+  bindCodeToFlow,
+  consumeCode,
+  createPendingFlow,
+  rotateRefreshToken,
+  storeRefreshToken,
+} from "./flow.js";
+import { mintAccessToken, newOpaqueToken } from "./mint.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
 const PENDING_FLOW_TTL_SECONDS = 600;
@@ -20,6 +26,8 @@ const PENDING_FLOW_TTL_SECONDS = 600;
 const CODE_TTL_SECONDS = 300;
 /** How long a consumed SAML assertion ID is retained in the replay guard. */
 const REPLAY_TTL_SECONDS = 600;
+/** How long a freshly-issued refresh token stays valid before it must be rotated. */
+const REFRESH_TTL_SECONDS = 2592000;
 
 function badRequest(reason: string): Response {
   return new Response(reason, { status: 400 });
@@ -142,6 +150,116 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
     logger.error({ err }, "SAML ACS: assertion rejected");
     return badRequest("SAML assertion rejected");
   }
+}
+
+/** The `/oauth/token` success response body (RFC 6749 §5.1). */
+interface TokenResponse {
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  refresh_token: string;
+}
+
+/** An RFC 6749 §5.2 OAuth error response body. */
+interface OAuthErrorBody {
+  error: string;
+  error_description?: string;
+}
+
+function oauthJson(body: TokenResponse | OAuthErrorBody, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+function oauthError(error: string, status = 400): Response {
+  return oauthJson({ error }, status);
+}
+
+function accessTtlSeconds(): number {
+  return Number(process.env.AS_ACCESS_TTL_SECONDS ?? 900);
+}
+
+/**
+ * `POST /oauth/token` — exchanges an authorization code (grant_type=authorization_code) or an
+ * existing refresh token (grant_type=refresh_token) for a fresh access token + refresh token pair.
+ * Both grants mint the access token via `mintAccessToken` and issue a new opaque refresh token,
+ * storing it via `storeRefreshToken`; the refresh grant rotates (single-use) via `rotateRefreshToken`.
+ */
+export async function handleToken(req: Request, db: NeonClient): Promise<Response> {
+  const form = await req.formData();
+  const grantType = String(form.get("grant_type") ?? "");
+
+  if (grantType === "authorization_code") {
+    const code = form.get("code");
+    const codeVerifier = form.get("code_verifier");
+    const clientId = String(form.get("client_id") ?? "");
+    if (!code || !codeVerifier) {
+      return oauthError("invalid_request");
+    }
+
+    let claims: Awaited<ReturnType<typeof consumeCode>>;
+    try {
+      claims = await consumeCode(db, String(code), String(codeVerifier));
+    } catch {
+      return oauthError("invalid_grant");
+    }
+
+    const accessToken = await mintAccessToken(claims);
+    const refreshToken = newOpaqueToken();
+    await storeRefreshToken(db, {
+      token: refreshToken,
+      clientId,
+      claims,
+      expiresAt: new Date(Date.now() + REFRESH_TTL_SECONDS * 1000),
+    });
+
+    return oauthJson(
+      {
+        access_token: accessToken,
+        token_type: "Bearer",
+        expires_in: accessTtlSeconds(),
+        refresh_token: refreshToken,
+      },
+      200,
+    );
+  }
+
+  if (grantType === "refresh_token") {
+    const refreshToken = form.get("refresh_token");
+    if (!refreshToken) {
+      return oauthError("invalid_request");
+    }
+
+    let rotated: Awaited<ReturnType<typeof rotateRefreshToken>>;
+    try {
+      rotated = await rotateRefreshToken(db, String(refreshToken));
+    } catch {
+      return oauthError("invalid_grant");
+    }
+
+    const accessToken = await mintAccessToken(rotated.claims);
+    const newRefresh = newOpaqueToken();
+    await storeRefreshToken(db, {
+      token: newRefresh,
+      clientId: rotated.clientId,
+      claims: rotated.claims,
+      expiresAt: new Date(Date.now() + REFRESH_TTL_SECONDS * 1000),
+    });
+
+    return oauthJson(
+      {
+        access_token: accessToken,
+        token_type: "Bearer",
+        expires_in: accessTtlSeconds(),
+        refresh_token: newRefresh,
+      },
+      200,
+    );
+  }
+
+  return oauthError("unsupported_grant_type");
 }
 
 /** `GET /oauth/saml/metadata` — serves this instance's SP metadata XML for IdP-side configuration. */

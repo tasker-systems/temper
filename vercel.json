@@ -17,6 +17,7 @@
     { "src": "/oauth/saml/login", "dest": "/api/oauth/saml/login" },
     { "src": "/oauth/saml/acs", "dest": "/api/oauth/saml/acs" },
     { "src": "/oauth/saml/metadata", "dest": "/api/oauth/saml/metadata" },
+    { "src": "/oauth/token", "dest": "/api/oauth/token" },
     { "src": "/oauth/(.*)", "dest": "/api/mcp" },
     { "src": "/.well-known/(.*)", "dest": "/api/mcp" },
     { "src": "/(.*)", "dest": "/api/axum" }
