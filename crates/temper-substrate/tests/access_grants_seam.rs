@@ -6,8 +6,9 @@
 //!
 //!   1. the coherence CHECK (`write|delete|grant ⇒ read`) fires on the new dual-polymorphic table;
 //!   2. `can('kb_profiles', …, 'read', 'kb_resources', …)` is at **parity** with `resources_visible_to`
-//!      for a resource with no explicit grant, and an explicit `kb_access_grants` row **flips it true**
-//!      via `profile_explicit_grant` — while `resources_visible_to` itself is **unchanged** (D4 wires it);
+//!      for a resource with no explicit grant, and an explicit `kb_access_grants` row **flips both true**
+//!      (via `profile_explicit_grant` for `can()`, and — since the D5 store swap — via
+//!      `resources_visible_to` reading `kb_access_grants` directly);
 //!   3. the **Cogmap** arm of `can()` takes **no** explicit grants (Q-B): a profile-axis grant never leaks
 //!      into the producer intersection.
 //!
@@ -136,10 +137,12 @@ async fn can_seam_parity_then_explicit_grant_flips_read(pool: sqlx::PgPool) {
         can(&pool, "kb_profiles", alice, "read", "kb_resources", r).await,
         "explicit kb_access_grants row must flip can(read) true"
     );
-    // NO BEHAVIOR CHANGE: resources_visible_to does NOT yet read kb_access_grants (that is D4).
+    // D5 STORE SWAP: resources_visible_to now reads kb_access_grants (subject_table='kb_resources')
+    // directly — a profile-anchored read grant confers visibility, restoring parity with can(read) at
+    // the true level (both true after the grant).
     assert!(
-        !visible_to(&pool, alice, r).await,
-        "resources_visible_to must be UNCHANGED by the new table in D2"
+        visible_to(&pool, alice, r).await,
+        "resources_visible_to must now honor the kb_access_grants resource read grant (D5)"
     );
     // And write was not granted — can(write) stays false (the grant set only can_read).
     assert!(

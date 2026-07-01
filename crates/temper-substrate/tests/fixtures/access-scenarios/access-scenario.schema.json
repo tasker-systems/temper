@@ -392,7 +392,7 @@
       ]
     },
     "GrantDef": {
-      "description": "A capability grant (`kb_resource_access`). `to` is a team or profile anchor. Caps default false; the\nDB CHECK enforces `write|delete|grant ⇒ read`.",
+      "description": "A capability grant (`kb_access_grants`, subject `kb_resources`). `to` is a team or profile principal.\nCaps default false; the DB CHECK enforces `write|delete|grant ⇒ read`.",
       "type": "object",
       "properties": {
         "to": {
