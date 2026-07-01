@@ -156,8 +156,8 @@ pub enum HomeDef {
     },
 }
 
-/// A capability grant (`kb_resource_access`). `to` is a team or profile anchor. Caps default false; the
-/// DB CHECK enforces `write|delete|grant ⇒ read`.
+/// A capability grant (`kb_access_grants`, subject `kb_resources`). `to` is a team or profile principal.
+/// Caps default false; the DB CHECK enforces `write|delete|grant ⇒ read`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct GrantDef {

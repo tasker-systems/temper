@@ -105,9 +105,9 @@ async fn s8_capability_check_rejects_write_without_read(pool: sqlx::PgPool) {
 
     // can_write=true with can_read=false must be rejected by the coherence CHECK.
     let res = sqlx::query(
-        "INSERT INTO kb_resource_access \
-         (resource_id, anchor_table, anchor_id, can_read, can_write, granted_by_profile_id) \
-         VALUES ($1,'kb_profiles',$2,false,true,$2)",
+        "INSERT INTO kb_access_grants \
+         (subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_resources',$1,'kb_profiles',$2,false,true,$2)",
     )
     .bind(rid)
     .bind(pid)

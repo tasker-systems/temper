@@ -441,9 +441,9 @@ async fn insert_resources(
                 ),
             };
             sqlx::query!(
-                "INSERT INTO kb_resource_access \
-                 (resource_id, anchor_table, anchor_id, can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                "INSERT INTO kb_access_grants \
+                 (subject_table, subject_id, principal_table, principal_id, can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+                 VALUES ('kb_resources',$1,$2,$3,$4,$5,$6,$7,$8)",
                 rid,
                 ga_table,
                 ga_id,

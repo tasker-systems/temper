@@ -76,7 +76,7 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("profile id parse")
 }
 
-/// Create a team with a single resource visible to it (`kb_resource_access` team grant, the first branch
+/// Create a team with a single resource visible to it (`kb_access_grants` team grant, the first branch
 /// of `vis_team`). Returns `(team_id, resource_id)`. `granted_by` must be a real profile.
 async fn team_with_visible_resource(pool: &sqlx::PgPool, granted_by: Uuid) -> (Uuid, Uuid) {
     let team_id = Uuid::now_v7();
@@ -97,9 +97,9 @@ async fn team_with_visible_resource(pool: &sqlx::PgPool, granted_by: Uuid) -> (U
         .expect("insert resource");
 
     sqlx::query(
-        "INSERT INTO kb_resource_access \
-            (resource_id, anchor_table, anchor_id, can_read, granted_by_profile_id) \
-         VALUES ($1, 'kb_teams', $2, true, $3)",
+        "INSERT INTO kb_access_grants \
+            (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_resources', $1, 'kb_teams', $2, true, $3)",
     )
     .bind(resource_id)
     .bind(team_id)
