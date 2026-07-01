@@ -64,6 +64,7 @@ describe("handleToken", () => {
     process.env.AS_ISSUER = "https://issuer.test";
     process.env.AS_AUDIENCE = "https://audience.test";
     process.env.AS_ACCESS_TTL_SECONDS = "900";
+    process.env.AS_CLIENTS = JSON.stringify({ cli: ["http://localhost/cb"] });
     ({ sql, db } = makeTestDb());
   });
 
@@ -164,6 +165,29 @@ describe("handleToken", () => {
     );
     expect(missingVerifier.status).toBe(400);
     expect((await missingVerifier.json()) as TokenErrorBody).toEqual({ error: "invalid_request" });
+
+    const missingClientId = await handleToken(
+      tokenRequest({ grant_type: "authorization_code", code: "c", code_verifier: "v" }),
+      db,
+    );
+    expect(missingClientId.status).toBe(400);
+    expect((await missingClientId.json()) as TokenErrorBody).toEqual({ error: "invalid_request" });
+  });
+
+  it("rejects a code redeemed with the wrong client_id (M5: client_id binding)", async () => {
+    const { code, verifier } = await seedCode(db);
+
+    const res = await handleToken(
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        client_id: "not-cli",
+      }),
+      db,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()) as TokenErrorBody).toEqual({ error: "invalid_grant" });
   });
 
   it("rejects a refresh_token request missing refresh_token", async () => {

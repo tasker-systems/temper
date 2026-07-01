@@ -99,6 +99,30 @@ describe("oauth flow store", () => {
         }),
       ).rejects.toThrow();
     });
+
+    it("throws when the pending flow has already expired (M1)", async () => {
+      await createPendingFlow(db, {
+        relayState: "relay-expired",
+        clientId: "client-1",
+        redirectUri: "https://client.example.com/callback",
+        codeChallenge: CODE_CHALLENGE,
+        codeChallengeMethod: "S256",
+        oauthState: "opaque-oauth-state",
+        audience: "https://api.example.com",
+        expiresAt: pastDate(),
+      });
+
+      await expect(
+        bindCodeToFlow(db, "relay-expired", {
+          code: "auth-code-expired",
+          claims: CLAIMS,
+          expiresAt: futureDate(),
+        }),
+      ).rejects.toThrow();
+
+      const rows = await sql`SELECT status FROM kb_oauth_flow WHERE relay_state = 'relay-expired'`;
+      expect(rows[0]?.status).toBe("pending_saml");
+    });
   });
 
   describe("consumeCode", () => {
@@ -110,7 +134,7 @@ describe("oauth flow store", () => {
         expiresAt: futureDate(),
       });
 
-      const claims = await consumeCode(db, "auth-code-3", CODE_VERIFIER);
+      const claims = await consumeCode(db, "auth-code-3", CODE_VERIFIER, "client-1");
 
       expect(claims.sub).toBe(CLAIMS.sub);
       expect(claims.email).toBe(CLAIMS.email);
@@ -125,9 +149,9 @@ describe("oauth flow store", () => {
         expiresAt: futureDate(),
       });
 
-      await consumeCode(db, "auth-code-4", CODE_VERIFIER);
+      await consumeCode(db, "auth-code-4", CODE_VERIFIER, "client-1");
 
-      await expect(consumeCode(db, "auth-code-4", CODE_VERIFIER)).rejects.toThrow();
+      await expect(consumeCode(db, "auth-code-4", CODE_VERIFIER, "client-1")).rejects.toThrow();
     });
 
     it("throws on a wrong verifier without burning the code", async () => {
@@ -138,10 +162,10 @@ describe("oauth flow store", () => {
         expiresAt: futureDate(),
       });
 
-      await expect(consumeCode(db, "auth-code-5", "wrong-verifier")).rejects.toThrow();
+      await expect(consumeCode(db, "auth-code-5", "wrong-verifier", "client-1")).rejects.toThrow();
 
       // Still consumable afterward with the right verifier.
-      const claims = await consumeCode(db, "auth-code-5", CODE_VERIFIER);
+      const claims = await consumeCode(db, "auth-code-5", CODE_VERIFIER, "client-1");
       expect(claims.sub).toBe(CLAIMS.sub);
     });
 
@@ -153,7 +177,24 @@ describe("oauth flow store", () => {
         expiresAt: pastDate(),
       });
 
-      await expect(consumeCode(db, "auth-code-6", CODE_VERIFIER)).rejects.toThrow();
+      await expect(consumeCode(db, "auth-code-6", CODE_VERIFIER, "client-1")).rejects.toThrow();
+    });
+
+    it("throws when the code is redeemed with the wrong client_id (M5)", async () => {
+      await seedPendingFlow("relay-7");
+      await bindCodeToFlow(db, "relay-7", {
+        code: "auth-code-7",
+        claims: CLAIMS,
+        expiresAt: futureDate(),
+      });
+
+      await expect(
+        consumeCode(db, "auth-code-7", CODE_VERIFIER, "some-other-client"),
+      ).rejects.toThrow();
+
+      // Still consumable afterward by the client it was actually issued to.
+      const claims = await consumeCode(db, "auth-code-7", CODE_VERIFIER, "client-1");
+      expect(claims.sub).toBe(CLAIMS.sub);
     });
   });
 

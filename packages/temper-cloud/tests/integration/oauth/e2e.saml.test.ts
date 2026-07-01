@@ -37,6 +37,7 @@ describe("e2e: full mock-IdP SAML login", () => {
     process.env.AS_ISSUER = "https://issuer.test";
     process.env.AS_AUDIENCE = "https://audience.test";
     process.env.AS_ACCESS_TTL_SECONDS = "900";
+    process.env.AS_CLIENTS = JSON.stringify({ cli: [REDIRECT_URI] });
 
     ({ sql, db } = makeTestDb());
 

@@ -12,7 +12,13 @@ export interface MintedClaims {
   email_verified: boolean;
 }
 
-function accessTtlSeconds(): number {
+/**
+ * Validated access-token TTL, read from AS_ACCESS_TTL_SECONDS. Exported so callers advertising
+ * `expires_in` (e.g. the /oauth/token response) use the exact same TTL the token was minted with,
+ * rather than re-deriving it (and potentially disagreeing, e.g. producing `expires_in: NaN` when
+ * the env var is unset).
+ */
+export function accessTtlSeconds(): number {
   const raw = process.env.AS_ACCESS_TTL_SECONDS;
   if (!raw) {
     return DEFAULT_ACCESS_TTL_SECONDS;

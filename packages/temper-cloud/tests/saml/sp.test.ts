@@ -125,6 +125,63 @@ describe("validateAssertion", () => {
 
     await expect(validateAssertion(idp, tamperedB64)).rejects.toThrow();
   });
+
+  it("rejects a Response whose outer <samlp:Response> is unsigned (assertion-only signature)", async () => {
+    const idp = fakeSignedIdp();
+    const { samlResponseB64 } = makeSignedSamlResponse({
+      spEntityId: idp.sp_entity_id,
+      acsUrl: idp.acs_url,
+      nameId: "the-persistent-id",
+      nameIdFormat: idp.nameid_format,
+      attributes: {
+        [idp.email_attr]: "jane@example.com",
+        [idp.stable_id_attr]: "stable-123",
+      },
+      idpKeyPem,
+      idpCertPem,
+      signResponse: false,
+    });
+
+    await expect(validateAssertion(idp, samlResponseB64)).rejects.toThrow();
+  });
+
+  it("rejects an assertion whose audience doesn't match the SP's entity id", async () => {
+    const idp = fakeSignedIdp();
+    const { samlResponseB64 } = makeSignedSamlResponse({
+      spEntityId: "https://WRONG.example/meta",
+      acsUrl: idp.acs_url,
+      nameId: "the-persistent-id",
+      nameIdFormat: idp.nameid_format,
+      attributes: {
+        [idp.email_attr]: "jane@example.com",
+        [idp.stable_id_attr]: "stable-123",
+      },
+      idpKeyPem,
+      idpCertPem,
+    });
+
+    await expect(validateAssertion(idp, samlResponseB64)).rejects.toThrow();
+  });
+
+  it("rejects an expired assertion", async () => {
+    const idp = fakeSignedIdp();
+    const { samlResponseB64 } = makeSignedSamlResponse({
+      spEntityId: idp.sp_entity_id,
+      acsUrl: idp.acs_url,
+      nameId: "the-persistent-id",
+      nameIdFormat: idp.nameid_format,
+      attributes: {
+        [idp.email_attr]: "jane@example.com",
+        [idp.stable_id_attr]: "stable-123",
+      },
+      idpKeyPem,
+      idpCertPem,
+      notBeforeOffsetMs: -600_000,
+      notOnOrAfterOffsetMs: -300_000,
+    });
+
+    await expect(validateAssertion(idp, samlResponseB64)).rejects.toThrow();
+  });
 });
 
 describe("buildSpMetadata", () => {

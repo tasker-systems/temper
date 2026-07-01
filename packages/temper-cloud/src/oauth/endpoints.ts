@@ -11,6 +11,7 @@ import {
   mapProfileToClaims,
   validateAssertion,
 } from "../saml/sp.js";
+import { isRedirectUriAllowed, loadClientRegistry } from "./clients.js";
 import {
   bindCodeToFlow,
   consumeCode,
@@ -18,7 +19,7 @@ import {
   rotateRefreshToken,
   storeRefreshToken,
 } from "./flow.js";
-import { mintAccessToken, newOpaqueToken } from "./mint.js";
+import { accessTtlSeconds, type MintedClaims, mintAccessToken, newOpaqueToken } from "./mint.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
 const PENDING_FLOW_TTL_SECONDS = 600;
@@ -26,8 +27,18 @@ const PENDING_FLOW_TTL_SECONDS = 600;
 const CODE_TTL_SECONDS = 300;
 /** How long a consumed SAML assertion ID is retained in the replay guard. */
 const REPLAY_TTL_SECONDS = 600;
-/** How long a freshly-issued refresh token stays valid before it must be rotated. */
-const REFRESH_TTL_SECONDS = 2592000;
+/** Default TTL for a freshly-issued refresh token, when AS_REFRESH_TTL_SECONDS is unset/invalid. */
+const DEFAULT_REFRESH_TTL_SECONDS = 2592000;
+
+/** Validated refresh-token TTL, read from AS_REFRESH_TTL_SECONDS (mirrors mint.ts's accessTtlSeconds). */
+function refreshTtlSeconds(): number {
+  const raw = process.env.AS_REFRESH_TTL_SECONDS;
+  if (!raw) {
+    return DEFAULT_REFRESH_TTL_SECONDS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFRESH_TTL_SECONDS;
+}
 
 function badRequest(reason: string): Response {
   return new Response(reason, { status: 400 });
@@ -80,6 +91,11 @@ export async function handleAuthorize(req: Request, db: NeonClient): Promise<Res
   }
   if (!state) {
     return badRequest("state is required");
+  }
+
+  const registry = loadClientRegistry();
+  if (!isRedirectUriAllowed(registry, clientId, redirectUri)) {
+    return badRequest("unregistered client_id or redirect_uri");
   }
 
   const relayState = newOpaqueToken();
@@ -147,7 +163,12 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
     u.searchParams.set("state", oauthState);
     return redirect(u.toString());
   } catch (err) {
-    logger.error({ err }, "SAML ACS: assertion rejected");
+    // node-saml errors can embed assertion XML (NameID, email, other PII) in their message/stack --
+    // log only the message, never the full error object.
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      "SAML ACS: assertion rejected",
+    );
     return badRequest("SAML assertion rejected");
   }
 }
@@ -177,15 +198,38 @@ function oauthError(error: string, status = 400): Response {
   return oauthJson({ error }, status);
 }
 
-function accessTtlSeconds(): number {
-  return Number(process.env.AS_ACCESS_TTL_SECONDS ?? 900);
+/**
+ * Mints an access token + a fresh opaque refresh token for `claims`, persists the refresh token
+ * (scoped to `clientId`), and returns the RFC 6749 §5.1 success body. Shared by both the
+ * authorization_code and refresh_token grants in `handleToken`.
+ */
+async function issueTokenPair(
+  db: NeonClient,
+  claims: MintedClaims,
+  clientId: string,
+): Promise<TokenResponse> {
+  const accessToken = await mintAccessToken(claims);
+  const refreshToken = newOpaqueToken();
+  await storeRefreshToken(db, {
+    token: refreshToken,
+    clientId,
+    claims,
+    expiresAt: new Date(Date.now() + refreshTtlSeconds() * 1000),
+  });
+
+  return {
+    access_token: accessToken,
+    token_type: "Bearer",
+    expires_in: accessTtlSeconds(),
+    refresh_token: refreshToken,
+  };
 }
 
 /**
  * `POST /oauth/token` — exchanges an authorization code (grant_type=authorization_code) or an
  * existing refresh token (grant_type=refresh_token) for a fresh access token + refresh token pair.
- * Both grants mint the access token via `mintAccessToken` and issue a new opaque refresh token,
- * storing it via `storeRefreshToken`; the refresh grant rotates (single-use) via `rotateRefreshToken`.
+ * Both grants issue the pair via `issueTokenPair`; the refresh grant rotates (single-use) via
+ * `rotateRefreshToken`.
  */
 export async function handleToken(req: Request, db: NeonClient): Promise<Response> {
   const form = await req.formData();
@@ -195,35 +239,18 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     const code = form.get("code");
     const codeVerifier = form.get("code_verifier");
     const clientId = String(form.get("client_id") ?? "");
-    if (!code || !codeVerifier) {
+    if (!code || !codeVerifier || !clientId) {
       return oauthError("invalid_request");
     }
 
-    let claims: Awaited<ReturnType<typeof consumeCode>>;
+    let claims: MintedClaims;
     try {
-      claims = await consumeCode(db, String(code), String(codeVerifier));
+      claims = await consumeCode(db, String(code), String(codeVerifier), clientId);
     } catch {
       return oauthError("invalid_grant");
     }
 
-    const accessToken = await mintAccessToken(claims);
-    const refreshToken = newOpaqueToken();
-    await storeRefreshToken(db, {
-      token: refreshToken,
-      clientId,
-      claims,
-      expiresAt: new Date(Date.now() + REFRESH_TTL_SECONDS * 1000),
-    });
-
-    return oauthJson(
-      {
-        access_token: accessToken,
-        token_type: "Bearer",
-        expires_in: accessTtlSeconds(),
-        refresh_token: refreshToken,
-      },
-      200,
-    );
+    return oauthJson(await issueTokenPair(db, claims, clientId), 200);
   }
 
   if (grantType === "refresh_token") {
@@ -239,24 +266,7 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       return oauthError("invalid_grant");
     }
 
-    const accessToken = await mintAccessToken(rotated.claims);
-    const newRefresh = newOpaqueToken();
-    await storeRefreshToken(db, {
-      token: newRefresh,
-      clientId: rotated.clientId,
-      claims: rotated.claims,
-      expiresAt: new Date(Date.now() + REFRESH_TTL_SECONDS * 1000),
-    });
-
-    return oauthJson(
-      {
-        access_token: accessToken,
-        token_type: "Bearer",
-        expires_in: accessTtlSeconds(),
-        refresh_token: newRefresh,
-      },
-      200,
-    );
+    return oauthJson(await issueTokenPair(db, rotated.claims, rotated.clientId), 200);
   }
 
   return oauthError("unsupported_grant_type");

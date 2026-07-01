@@ -60,6 +60,13 @@ export interface MakeSignedSamlResponseParams {
   notBeforeOffsetMs?: number;
   notOnOrAfterOffsetMs?: number;
   issueInstant?: string;
+  /**
+   * Whether to also sign the outer `<samlp:Response>` element (in addition to the
+   * `<saml:Assertion>`, which is always signed). Defaults to `true` (a real IdP signs both, and
+   * node-saml's `wantAuthnResponseSigned` requires it). Set to `false` to build a fixture that
+   * proves an assertion-only-signed response is rejected.
+   */
+  signResponse?: boolean;
 }
 
 export interface MakeSignedSamlResponseResult {
@@ -94,6 +101,7 @@ export function makeSignedSamlResponse({
   notBeforeOffsetMs = -60_000,
   notOnOrAfterOffsetMs = 5 * 60_000,
   issueInstant = isoNow(),
+  signResponse = true,
 }: MakeSignedSamlResponseParams): MakeSignedSamlResponseResult {
   const notBefore = isoNow(notBeforeOffsetMs);
   const notOnOrAfter = isoNow(notOnOrAfterOffsetMs);
@@ -143,13 +151,15 @@ export function makeSignedSamlResponse({
     signedAssertionXml +
     `</samlp:Response>`;
 
-  const signedResponseXml = signEnveloped({
-    xml: responseXml,
-    refXPath: "//*[local-name(.)='Response']",
-    afterXPath: "//*[local-name(.)='Response']/*[local-name(.)='Issuer']",
-    privateKeyPem: idpKeyPem,
-    publicCertPem: idpCertPem,
-  });
+  const signedResponseXml = signResponse
+    ? signEnveloped({
+        xml: responseXml,
+        refXPath: "//*[local-name(.)='Response']",
+        afterXPath: "//*[local-name(.)='Response']/*[local-name(.)='Issuer']",
+        privateKeyPem: idpKeyPem,
+        publicCertPem: idpCertPem,
+      })
+    : responseXml;
 
   return {
     samlResponseB64: Buffer.from(signedResponseXml, "utf8").toString("base64"),

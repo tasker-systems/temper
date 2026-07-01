@@ -53,7 +53,8 @@ export interface BindCodeToFlowResult {
  * Atomically binds a freshly-minted one-time authorization code to a pending
  * flow (found by `relayState`), moving it from `pending_saml` to
  * `code_issued`. Throws if there is no matching pending flow (unknown
- * relay_state, or the flow was already bound).
+ * relay_state, the flow was already bound, or the pending flow's
+ * `expires_at` has already passed).
  */
 export async function bindCodeToFlow(
   db: NeonClient,
@@ -66,7 +67,7 @@ export async function bindCodeToFlow(
         claims = ${JSON.stringify(args.claims)}::jsonb,
         status = 'code_issued',
         expires_at = ${args.expiresAt.toISOString()}
-    WHERE relay_state = ${relayState} AND status = 'pending_saml'
+    WHERE relay_state = ${relayState} AND status = 'pending_saml' AND expires_at > now()
     RETURNING redirect_uri, oauth_state
   `;
   const row = rows[0] as { redirect_uri: string; oauth_state: string } | undefined;
@@ -77,29 +78,30 @@ export async function bindCodeToFlow(
 }
 
 /**
- * Consumes a one-time authorization code, validating its PKCE verifier.
- * Order matters: PKCE is checked BEFORE the code is atomically claimed, so a
- * wrong verifier never burns the code (the caller can retry with the right
- * one). The claim itself is a single, atomic, status-guarded UPDATE so a
- * race between two concurrent redemptions can only succeed once.
+ * Consumes a one-time authorization code, validating its PKCE verifier and binding it to the
+ * client that is redeeming it. Order matters: PKCE is checked BEFORE the code is atomically
+ * claimed, so a wrong verifier never burns the code (the caller can retry with the right one). The
+ * claim itself is a single, atomic, status-guarded UPDATE so a race between two concurrent
+ * redemptions can only succeed once. Both the lookup and the claim are additionally scoped to
+ * `clientId` so a code issued for one client can never be redeemed by another.
  */
 export async function consumeCode(
   db: NeonClient,
   code: string,
   codeVerifier: string,
+  clientId: string,
 ): Promise<MintedClaims> {
   const codeHash = hashToken(code);
 
   const rows = await db`
-    SELECT code_challenge, claims, expires_at
+    SELECT code_challenge, expires_at
     FROM kb_oauth_flow
     WHERE code_hash = ${codeHash} AND status = 'code_issued' AND expires_at > now()
+      AND client_id = ${clientId}
   `;
-  const row = rows[0] as
-    | { code_challenge: string; claims: unknown; expires_at: string }
-    | undefined;
+  const row = rows[0] as { code_challenge: string; expires_at: string } | undefined;
   if (!row) {
-    throw new Error("unknown, expired, or already-consumed authorization code");
+    throw new Error("unknown, expired, already-consumed, or wrong-client authorization code");
   }
 
   if (!verifyPkceS256(codeVerifier, row.code_challenge)) {
@@ -109,7 +111,7 @@ export async function consumeCode(
   const claimed = await db`
     UPDATE kb_oauth_flow
     SET status = 'consumed'
-    WHERE code_hash = ${codeHash} AND status = 'code_issued'
+    WHERE code_hash = ${codeHash} AND status = 'code_issued' AND client_id = ${clientId}
     RETURNING claims
   `;
   const claimedRow = claimed[0] as { claims: unknown } | undefined;

@@ -69,6 +69,7 @@ describe("oauth endpoints", () => {
     process.env.AS_SIGNING_KID = "test-kid-1";
     process.env.AS_ISSUER = "https://issuer.test";
     process.env.AS_AUDIENCE = "https://audience.test";
+    process.env.AS_CLIENTS = JSON.stringify({ cli: [REDIRECT_URI] });
     ({ sql, db } = makeTestDb());
   });
 
@@ -133,6 +134,30 @@ describe("oauth endpoints", () => {
         db,
       );
       expect(res.status).toBe(400);
+    });
+
+    it("rejects an unregistered redirect_uri with a 400 and never 302s to it (C1)", async () => {
+      const { challenge } = pkcePair();
+      const unregistered = "https://attacker.example.com/cb";
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: "cli",
+        redirect_uri: unregistered,
+        code_challenge: challenge,
+        code_challenge_method: "S256",
+        state: "st-123",
+      });
+
+      const res = await handleAuthorize(
+        new Request(`https://as/oauth/authorize?${params.toString()}`),
+        db,
+      );
+
+      expect(res.status).toBe(400);
+      expect(res.headers.get("location")).toBeNull();
+
+      const rows = await sql`SELECT * FROM kb_oauth_flow`;
+      expect(rows).toHaveLength(0);
     });
   });
 

@@ -27,6 +27,10 @@ export function toSamlConfig(row: SamlIdpRow): SamlConfig {
     audience: row.sp_entity_id,
     identifierFormat: row.nameid_format,
     wantAssertionsSigned: true,
+    // node-saml defaults this to true already, but pin it explicitly so the "both the Response and
+    // the Assertion must be signed" guarantee is a local, reviewable invariant rather than an
+    // inherited library default that could silently change.
+    wantAuthnResponseSigned: true,
     // We mint our own opaque relay_state per flow (kb_oauth_flow.relay_state) rather than relying
     // on node-saml's InResponseTo bookkeeping, so InResponseTo validation is not applicable here.
     validateInResponseTo: ValidateInResponseTo.never,
