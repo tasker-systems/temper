@@ -320,19 +320,16 @@ it("mints an EdDSA access token verifiable via the public JWKS", async () => {
 - [ ] **Step 4:** Run → PASS.
 - [ ] **Step 5:** Commit: `feat(oauth): mint EdDSA access tokens + opaque token helpers`.
 
-### Task 1.4: Cross-language proof — mint in TS, validate in Rust
+### Task 1.4: Cross-language wire-contract proof (mint in TS ⇄ Rust JwtClaims)
+
+> **Approach (revised for CI-friendliness):** a Rust-shells-to-node e2e would couple the Rust e2e job to node + deps. Instead, a **Vitest wire-contract test** mints via `mint.ts` using the SAME Ed25519 fixture keypair the Rust e2e verifies against (`tests/e2e/tests/fixtures/test_ed25519.{pkcs8,pub.pem}`), verifies it with jose against the fixture PUBLIC key, and asserts the exact Rust `JwtClaims` shape (`sub: String, email: Option<String>, email_verified: Option<bool>, exp/iat: i64` + validated `iss`/`aud`). Combined with the M0 e2e (Rust `require_auth` accepts a fixture-key EdDSA token of this shape), this transitively locks the mint→validate contract across runtimes — Ed25519 verification is standard across `jsonwebtoken` and `jose` over the same keypair.
 
 **Files:**
-- Create: `tests/e2e/tests/fixtures/gen_temper_token.mjs` (a tiny node script that imports mint with a fixed fixture key) OR reuse the shared fixture key.
-- Test: extend `tests/e2e/tests/eddsa_auth_test.rs` with a case that loads a token minted by the TS path.
+- Create: `packages/temper-cloud/tests/oauth/wire-contract.test.ts`
 
-> This locks the wire contract: a token minted by `mint.ts` (using the shared fixture Ed25519 key) must pass `require_auth`. Use the SAME `test_ed25519.pkcs8` fixture in both `keys.ts` (via env in the script) and the Rust `with_static_key` decoding key.
-
-- [ ] **Step 1:** Write a test that shells out to the mjs mint script (with `AS_SIGNING_KEY_PKCS8` = the fixture PEM, `AS_ISSUER=test-issuer`, `AS_AUDIENCE` matching the Rust config), captures the JWT, and asserts `/api/profile` returns 200 under `setup_eddsa`.
-- [ ] **Step 2:** Run → FAIL (script/flow absent).
-- [ ] **Step 3:** Implement the mjs script (imports `mintAccessToken`, prints the JWT).
-- [ ] **Step 4:** Run → PASS. This proves TS-minted EdDSA ⇄ Rust `require_auth`.
-- [ ] **Step 5:** Commit: `test(e2e): TS-minted EdDSA token validated by require_auth`.
+- [ ] **Step 1:** Write the test: set env from the fixture private key (`AS_SIGNING_KEY_PKCS8`), `AS_ISSUER=test-issuer` (matches `setup_eddsa`), `AS_AUDIENCE`; dynamic-import `mint.ts`; mint a token; `jwtVerify` against `importSPKI(test_ed25519.pub.pem, "EdDSA")` with issuer/audience; assert `alg==="EdDSA"` and the `JwtClaims` field types/values.
+- [ ] **Step 2:** Run `bun run test tests/oauth/wire-contract.test.ts` → PASS. typecheck + biome clean.
+- [ ] **Step 3:** Commit: `test(oauth): wire-contract proof — TS-minted EdDSA token matches Rust JwtClaims`.
 
 ---
 
