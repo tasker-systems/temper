@@ -37,10 +37,6 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
             "/.well-known/oauth-protected-resource",
             get(discovery::oauth_protected_resource),
         )
-        .route(
-            "/.well-known/oauth-authorization-server",
-            get(discovery::oauth_authorization_server),
-        )
         .with_state(shared.clone());
 
     // ── Public OAuth registration (thin DCR proxy) ─────────────────────
