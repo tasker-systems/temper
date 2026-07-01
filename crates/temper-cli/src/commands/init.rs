@@ -29,14 +29,21 @@ const HOSTED_AUTH_DOMAIN: &str = "temperkb.us.auth0.com";
 const HOSTED_CLIENT_ID: &str = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF";
 const HOSTED_AUDIENCE: &str = "https://temperkb.io/api";
 
-/// Which IdP's OAuth endpoint shapes `temper init` should emit. The written
-/// provider *label* stays "auth0" regardless — this only selects URL templating.
+/// Which IdP's OAuth endpoint shapes `temper init` should emit. For `Auth0`/`Okta`
+/// the written provider *label* stays "auth0" (only URL templating differs); `TemperAs`
+/// is a distinct provider ("temper-as") pointing at the instance's own Authorization
+/// Server (native-SAML instances).
 #[derive(Debug, Clone)]
 pub enum Idp {
     /// Auth0 tenant: `https://{domain}/authorize`, `/oauth/token`.
     Auth0,
     /// Okta custom authorization server: `https://{domain}/oauth2/{id}/v1/*`.
     Okta { auth_server_id: String },
+    /// Temper Authorization Server on a native-SAML instance. The authorize and token endpoints
+    /// live on the instance itself (`{instance}/oauth/authorize`, `{instance}/oauth/token`);
+    /// provider label `temper-as`, public client `temper-cli`. All values derive from the
+    /// instance base URL (no separate auth domain / client_id / audience).
+    TemperAs,
 }
 
 /// Per-instance OAuth inputs for a self-hosted deployment.
@@ -165,6 +172,22 @@ pub fn self_host_from_flags(
     idp: Option<String>,
     auth_server_id: Option<String>,
 ) -> Result<Option<SelfHostConfig>> {
+    // Temper AS preset: only --instance-url is required — client_id/audience default and there
+    // is no separate auth domain. Handled before the four-value gate so the others can be omitted.
+    if idp.as_deref() == Some("temper-as") {
+        let Some(instance_url) = instance_url else {
+            return Ok(None);
+        };
+        let instance_url = instance_url.trim_end_matches('/').to_string();
+        return Ok(Some(SelfHostConfig {
+            audience: audience.unwrap_or_else(|| format!("{instance_url}/api")),
+            client_id: client_id.unwrap_or_else(|| "temper-cli".to_string()),
+            auth_domain: String::new(),
+            idp: Idp::TemperAs,
+            instance_url,
+        }));
+    }
+
     let (instance_url, auth_domain, client_id, audience) =
         match (instance_url, auth_domain, client_id, audience) {
             (Some(i), Some(d), Some(c), Some(a)) => (i, d, c, a),
@@ -180,7 +203,7 @@ pub fn self_host_from_flags(
         }
         Some(other) => {
             return Err(TemperError::Config(format!(
-                "unknown --idp '{other}' (expected 'auth0' or 'okta')"
+                "unknown --idp '{other}' (expected 'auth0', 'okta', or 'temper-as')"
             )))
         }
     };
@@ -247,6 +270,7 @@ pub fn run_non_interactive(
         AuthChoice::SelfHosted(sh) => match sh.idp {
             Idp::Auth0 => "auth0 (self-hosted)".to_string(),
             Idp::Okta { .. } => "okta (self-hosted)".to_string(),
+            Idp::TemperAs => "temper-as (self-hosted)".to_string(),
         },
         AuthChoice::None => "none".to_string(),
     };
@@ -323,9 +347,22 @@ fn gather_self_host_config(theme: &ColorfulTheme) -> Result<SelfHostConfig> {
     let idp_idx = Select::with_theme(theme)
         .with_prompt("Identity provider")
         .default(0)
-        .items(["Auth0", "Okta"])
+        .items(["Auth0", "Okta", "Temper AS (native SAML)"])
         .interact()
         .map_err(prompt_err)?;
+    if idp_idx == 2 {
+        // Temper AS: every value derives from the instance base URL — no separate auth
+        // domain, and the client_id/audience follow the fixed instance conventions.
+        let instance_url = instance_url.trim().trim_end_matches('/').to_string();
+        let audience = format!("{instance_url}/api");
+        return Ok(SelfHostConfig {
+            audience,
+            client_id: "temper-cli".to_string(),
+            auth_domain: String::new(),
+            idp: Idp::TemperAs,
+            instance_url,
+        });
+    }
     let auth_domain: String = Input::with_theme(theme)
         .with_prompt(if idp_idx == 1 {
             "Okta org domain (e.g. acme.okta.com)"
@@ -381,6 +418,7 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
         AuthChoice::SelfHosted(sh) => match &sh.idp {
             Idp::Auth0 => "auth0 (self-hosted)",
             Idp::Okta { .. } => "okta (self-hosted)",
+            Idp::TemperAs => "temper-as (self-hosted)",
         },
         AuthChoice::None => "none",
     };
@@ -510,6 +548,12 @@ fn provider_urls(idp: &Idp, domain: &str) -> (String, String) {
             format!("https://{domain}/oauth2/{auth_server_id}/v1/authorize"),
             format!("https://{domain}/oauth2/{auth_server_id}/v1/token"),
         ),
+        // `domain` is the instance base URL (already scheme-qualified) for the Temper AS —
+        // the endpoints live on the instance itself, not a separate auth host.
+        Idp::TemperAs => (
+            format!("{domain}/oauth/authorize"),
+            format!("{domain}/oauth/token"),
+        ),
     }
 }
 
@@ -526,7 +570,21 @@ fn provider_and_cloud_sections(
     // escaping the vault path gets) so any character requiring escaping
     // round-trips, rather than relying on these always being metacharacter-free.
     let tv = |s: String| toml::Value::String(s).to_string();
-    let (authorize, token) = provider_urls(idp, auth_domain);
+    // The Temper AS lives on the instance itself (api_url); Auth0/Okta use a separate auth domain.
+    let url_base = match idp {
+        Idp::TemperAs => api_url,
+        _ => auth_domain,
+    };
+    let (authorize, token) = provider_urls(idp, url_base);
+    // The Temper AS is its own provider ("temper-as") and requests only the scopes it honors;
+    // Auth0/Okta keep the "auth0" label and the fuller OIDC scope set.
+    let (provider_name, scopes) = match idp {
+        Idp::TemperAs => ("temper-as", r#"["openid", "offline_access"]"#),
+        _ => (
+            "auth0",
+            r#"["openid", "profile", "email", "offline_access"]"#,
+        ),
+    };
     let authorize_url = tv(authorize);
     let token_url = tv(token);
     let callback_url = tv(format!("{api_url}/api/auth/cli-callback"));
@@ -535,16 +593,16 @@ fn provider_and_cloud_sections(
 
     let auth = format!(
         r#"[auth]
-provider = "auth0"
+provider = "{provider_name}"
 
 [[auth.providers]]
-name = "auth0"
+name = "{provider_name}"
 authorize_url = {authorize_url}
 token_url = {token_url}
 client_id = {client_id_toml}
 audience = {audience_toml}
 callback_url = {callback_url}
-scopes = ["openid", "profile", "email", "offline_access"]
+scopes = {scopes}
 "#
     );
     let cloud = format!("[cloud]\napi_url = {}\n", tv(api_url.to_string()));
@@ -691,6 +749,55 @@ mod tests {
             p.scopes,
             vec!["openid", "profile", "email", "offline_access"]
         );
+    }
+
+    #[test]
+    fn temper_as_preset_emits_instance_oauth_endpoints() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::SelfHosted(SelfHostConfig {
+                instance_url: "https://temper.acme.com".into(),
+                auth_domain: String::new(),
+                client_id: "temper-cli".into(),
+                audience: "https://temper.acme.com/api".into(),
+                idp: Idp::TemperAs,
+            }),
+        };
+        let toml = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&toml).expect("temper-as toml parses");
+        cfg.validate().expect("temper-as config validates");
+        // The provider is the AS itself, not Auth0 — endpoints live on the instance.
+        assert_eq!(cfg.auth.provider, "temper-as");
+        let p = &cfg.auth.providers[0];
+        assert_eq!(p.name, "temper-as");
+        assert_eq!(p.authorize_url, "https://temper.acme.com/oauth/authorize");
+        assert_eq!(p.token_url, "https://temper.acme.com/oauth/token");
+        assert_eq!(p.client_id, "temper-cli");
+        assert_eq!(p.audience, "https://temper.acme.com/api");
+        assert_eq!(
+            p.callback_url,
+            "https://temper.acme.com/api/auth/cli-callback"
+        );
+        assert_eq!(p.scopes, vec!["openid", "offline_access"]);
+    }
+
+    #[test]
+    fn flags_temper_as_derives_everything_from_instance() {
+        let sh = self_host_from_flags(
+            Some("https://temper.acme.com/".into()),
+            None,
+            None,
+            None,
+            Some("temper-as".into()),
+            None,
+        )
+        .expect("temper-as flags parse")
+        .expect("temper-as needs only --instance-url");
+        assert!(matches!(sh.idp, Idp::TemperAs));
+        assert_eq!(sh.instance_url, "https://temper.acme.com");
+        assert_eq!(sh.client_id, "temper-cli");
+        assert_eq!(sh.audience, "https://temper.acme.com/api");
     }
 
     #[test]
