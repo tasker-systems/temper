@@ -114,6 +114,28 @@ export type CogmapRegulationRow = { resource_id: ResourceId, title: string, body
 export type CogmapStaleness = { materialized_at: string | null, latest_touch: string | null, is_stale: boolean, };
 
 /**
+ * Mint/update one `kb_access_grants` row. Subject `{kb_resources,kb_contexts,kb_cogmaps}`,
+ * principal `{kb_teams,kb_profiles}`. The DB coherence CHECK enforces `write|delete|grant ⇒ read`;
+ * callers should pass a coherent capability set (a write grant implies read).
+ */
+export type GrantCapabilityRequest = { subject_table: string, subject_id: string, principal_table: string, principal_id: string, can_read: boolean, can_write: boolean, can_delete: boolean, can_grant: boolean, };
+
+/**
+ * The result of a grant. `granted` is `false` when the row already existed and was updated in place
+ * (idempotent upsert), mirroring bind's `bound` flag.
+ */
+export type GrantOutcome = { 
+/**
+ * `true` when this call inserted a fresh grant; `false` when it updated an existing one.
+ */
+granted: boolean, };
+
+/**
+ * Delete one `kb_access_grants` row (the `(subject, principal)` pair). Absent row ⇒ no-op success.
+ */
+export type RevokeCapabilityRequest = { subject_table: string, subject_id: string, principal_table: string, principal_id: string, };
+
+/**
  * The result of unbinding a cognitive map from a team. `unbound` is `false` when
  * no binding existed (no-op safe).
  */
