@@ -27,6 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    # `svelte-kit sync` generates the `$env/static/private` module from the env vars present at
+    # sync time; svelte-check then requires the imported members (DATABASE_URL, SESSION_SECRET) to
+    # exist. Only their presence matters for static analysis + the unit suite — the values are
+    # inert placeholders (no DB connection or session signing happens in these checks).
+    env:
+      DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+      SESSION_SECRET: ci-placeholder-session-secret
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
