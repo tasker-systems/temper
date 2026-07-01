@@ -32,13 +32,14 @@ import {
 	buildAuthorizeUrl,
 	buildLogoutUrl,
 	decodeIdToken,
+	identityClaimsFromTokens,
 	type OidcConfig,
 	type OidcEndpoints,
 	type OidcTokenResponse,
 	type OidcIdTokenClaims
 } from './oidc-core';
 
-export { decodeIdToken };
+export { decodeIdToken, identityClaimsFromTokens };
 export type { OidcTokenResponse, OidcIdTokenClaims };
 
 export const REFRESH_THRESHOLD_SECONDS = 60;

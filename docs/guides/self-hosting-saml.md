@@ -142,12 +142,14 @@ OIDC_ISSUER=https://<instance>
 OIDC_CLIENT_ID=temper-ui
 OIDC_DISCOVERY_URL=https://<instance>/.well-known/oauth-authorization-server
 OIDC_AUDIENCE=https://<instance>/api
+OIDC_PUBLIC_CLIENT=true
 # No OIDC_CLIENT_SECRET — the Temper AS uses public PKCE clients.
 ```
 
 `OIDC_DISCOVERY_URL` points the UI at the AS's RFC 8414 metadata (the AS does not serve
 `/.well-known/openid-configuration`). Ensure `temper-ui`'s `<app-url>/auth/callback` is listed in
-`AS_CLIENTS`.
+`AS_CLIENTS`. `OIDC_PUBLIC_CLIENT=true` is required for this secret-less path — without it, the UI
+fails fast at startup rather than silently running with no client secret.
 
 ## 6. Verify
 

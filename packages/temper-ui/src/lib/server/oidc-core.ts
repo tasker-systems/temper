@@ -44,10 +44,18 @@ export interface OidcEndpoints {
 	jwks_uri?: string;
 }
 
-/** Token endpoint response (authorization_code and refresh_token grants). */
+/**
+ * Token endpoint response (authorization_code and refresh_token grants).
+ *
+ * `id_token` is optional: full-OIDC providers (Auth0) return one, but the
+ * Temper AS is OAuth-only and returns `{ access_token, token_type,
+ * expires_in, refresh_token }` with no `id_token` — see
+ * `identityClaimsFromTokens`, which falls back to the access_token in that
+ * case.
+ */
 export interface OidcTokenResponse {
 	access_token: string;
-	id_token: string;
+	id_token?: string;
 	refresh_token?: string;
 	expires_in: number;
 	token_type: string;
@@ -80,6 +88,7 @@ export function resolveOidcConfig(env: EnvLike): OidcConfig {
 	const clientSecret = env.OIDC_CLIENT_SECRET ?? env.AUTH0_CLIENT_SECRET;
 	const audience = env.OIDC_AUDIENCE ?? env.AUTH0_AUDIENCE;
 	const rawDiscoveryUrl = env.OIDC_DISCOVERY_URL;
+	const isPublicClient = /^(true|1|yes|on)$/i.test((env.OIDC_PUBLIC_CLIENT ?? '').trim());
 
 	if (!rawIssuer) {
 		throw new Error('OIDC issuer not configured: set OIDC_ISSUER (or AUTH0_DOMAIN)');
@@ -87,8 +96,15 @@ export function resolveOidcConfig(env: EnvLike): OidcConfig {
 	if (!clientId) {
 		throw new Error('OIDC client id not configured: set OIDC_CLIENT_ID (or AUTH0_CLIENT_ID)');
 	}
-	// clientSecret is intentionally optional: a public PKCE client (e.g. the
-	// Temper AS) has no secret, and PKCE alone secures the code exchange.
+	// clientSecret is optional only for a declared public PKCE client (e.g. the
+	// Temper AS) — PKCE alone secures the code exchange there. For a
+	// confidential client (Auth0 Regular Web App), a missing secret must fail
+	// fast here rather than surface later as an opaque 401 from the provider.
+	if (!clientSecret && !isPublicClient) {
+		throw new Error(
+			'OIDC client secret not configured: set OIDC_CLIENT_SECRET (or AUTH0_CLIENT_SECRET), or set OIDC_PUBLIC_CLIENT=true for a public PKCE client'
+		);
+	}
 
 	return {
 		issuer: rawIssuer.replace(/\/$/, ''),
@@ -147,6 +163,10 @@ export function buildAuthorizeUrl(
 		response_type: 'code',
 		client_id: params.clientId,
 		redirect_uri: params.redirectUri,
+		// Hardcoded rather than provider-aware: the Temper AS's temper-as preset
+		// declares ["openid","offline_access"] but the AS currently ignores the
+		// `scope` param entirely, so this full set is harmless-for-now on both
+		// providers. Revisit if the AS starts enforcing requested scopes.
 		scope: 'openid profile email offline_access',
 		state,
 		code_challenge: codeChallenge,
@@ -206,4 +226,14 @@ export function decodeIdToken(idToken: string): OidcIdTokenClaims {
 	const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
 	const json = Buffer.from(b64, 'base64').toString('utf-8');
 	return JSON.parse(json) as OidcIdTokenClaims;
+}
+
+/**
+ * Resolve identity claims from a token response. Full-OIDC providers (Auth0) return an id_token;
+ * the Temper AS is OAuth-only and returns no id_token, but its access_token is an EdDSA JWT that
+ * already carries sub/email/email_verified — fall back to decoding that.
+ */
+export function identityClaimsFromTokens(tokens: OidcTokenResponse): OidcIdTokenClaims {
+	const token = tokens.id_token ?? tokens.access_token;
+	return decodeIdToken(token);
 }
