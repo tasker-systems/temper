@@ -16,7 +16,7 @@ use temper_core::error::TemperError;
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
-    CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId,
+    CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
 use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
@@ -27,7 +27,7 @@ use temper_workflow::operations::{
     AssertRelationship, Backend, CloseInvocation, CommandOutput, CreateCognitiveMap,
     CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
     ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
-    SearchResources, ShowResource, Surface, UpdateResource,
+    SearchResources, SetFacet, ShowResource, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
@@ -1259,6 +1259,39 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
+    }
+
+    /// Upserts the clustering `facet` property (`kb_properties`) on a resource — one row holding the
+    /// whole `values` object. Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter
+    /// resolution, gated on the TARGET resource directly (facets have no source/target split).
+    async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError> {
+        let resource_next = uuid::Uuid::from(cmd.resource);
+        // Auth before any write (WS2): gate on the resource the facet is being set on.
+        self.check_can_modify_next(resource_next).await?;
+        // Correlation-integrity gate — additive to the modify authz above, before the write.
+        self.check_act_invocation(cmd.act.invocation).await?;
+
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            authorship: cmd.act.authorship,
+        };
+        let property_id = writes::set_facet_with(
+            &self.pool,
+            cmd.resource,
+            &cmd.values,
+            cmd.weight,
+            emitter,
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(property_id))
     }
 
     /// One idempotent desired-state reconcile run as a SINGLE `SERIALIZABLE` transaction: the

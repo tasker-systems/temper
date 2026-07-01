@@ -101,17 +101,8 @@ pub trait Backend: Send + Sync {
 
     // ── facet writes (T1 Sequence B — facet_set vertical slice) ──
     // Upserts a typed property row (`kb_properties`) on a resource. Returns the property id.
-    //
-    // This method has a panicking provided (default) body as a transitional measure: B1 (this
-    // commit) defines the trait signature only; B2 (temper-services) adds the real `DbBackend`
-    // impl. Without a default body, `DbBackend`'s existing `impl Backend for DbBackend` would
-    // fail to compile until B2 lands, breaking the whole workspace. B2 should remove this
-    // default once `DbBackend::set_facet` exists, restoring `set_facet` to a hard requirement
-    // like its relationship-write siblings above.
 
-    async fn set_facet(&self, _cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError> {
-        unimplemented!("Backend::set_facet — DbBackend impl lands in T1 Sequence B Task B2")
-    }
+    async fn set_facet(&self, cmd: SetFacet) -> Result<CommandOutput<PropertyId>, TemperError>;
 
     // ── L0 cognitive-map content reconcile (L0 delivery & lifecycle, Task 4) ──
     // Idempotent, additive-only, provenance-scoped desired-state reconcile of a cognitive map's
