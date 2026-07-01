@@ -61,15 +61,39 @@ Verified against the code at this checkout (file:line):
   as a `StoredAuth` struct (chmod 0600). Issuer selection is **client-side config**
   (`[[auth.providers]]`: `authorize_url`/`token_url`/`client_id`/`audience`/
   `callback_url`/`scopes`) — nothing Auth0-specific is compiled in.
-- **The UI already mints sessions.** `packages/temper-ui/src/lib/server/oidc.ts`
-  (generic OIDC auth-code + PKCE via discovery), `session.ts` (encrypted JWE session
-  cookie holding the access token; the Profile is *not* in the cookie), `proxy.ts` /
-  `hooks.server.ts` (same-origin reverse proxy of `/api`, `/mcp`, `/oauth`,
-  `/.well-known` to `API_BASE_URL`).
-- **Temper signs nothing today.** No signing key, no published JWKS, no `/jwks` route
-  anywhere. `temper-mcp/src/discovery.rs` publishes RFC 8414/9728 metadata but advertises
-  the **Auth0 tenant** as issuer. Making Temper an issuer is greenfield on the signing
-  side.
+- **The UI and the API are separate Vercel projects.** `packages/temper-ui` (SvelteKit,
+  `@sveltejs/adapter-vercel`) is its own project; the Rust API + TS functions (root
+  `vercel.json`, project `temper-cloud`) are another. They are unified *at the browser*
+  only by `proxy.ts` / `hooks.server.ts`, which reverse-proxy `/api`, `/mcp`, `/oauth`,
+  `/.well-known` from the UI origin to `env.API_BASE_URL`. In the canonical deploy both
+  point at one Neon DB, provisioned per target. The UI's `oidc.ts` runs generic OIDC
+  auth-code + PKCE via discovery; `session.ts` writes an encrypted (symmetric `dir`/
+  `A256GCM` JWE) session cookie via `writeSession(cookies, SessionData)`; the Profile is
+  *not* in the cookie.
+- **`temper-cloud` is the Neon-backed TS home.** `packages/temper-cloud/src/db.ts`
+  `getDb()` returns a `@neondatabase/serverless` client used per-request (tagged-template
+  queries, e.g. `middleware.ts`). The CLI callback relay already lives here:
+  `api/auth/cli-callback.ts` → `packages/temper-cloud/src/cli-callback.ts`
+  `buildCliCallbackResponse(url, host)` 302-redirects to `http://localhost:{port}?code=…`
+  with the port carried in `state`. (`packages/temper-ui/src/lib/server/db.ts` exists
+  but is unused and uses a TCP pooler `postgres@3` ill-suited to serverless — not the
+  home for this work.)
+- **Temper signs nothing today (greenfield), but the verify paths partly anticipate
+  EdDSA.** No TS signing/key-gen exists anywhere (`SignJWT`/`importPKCS8`/
+  `generateKeyPair`/`exportJWK` return zero hits); only symmetric session JWE (UI) and
+  JWKS-based `jwtVerify` (`temper-cloud/src/auth.ts`, whose verify allow-list is *already*
+  `["RS256","EdDSA"]`). `temper-mcp/src/discovery.rs` publishes RFC 8414/9728 metadata but
+  advertises the **Auth0 tenant** as issuer. jose is `^6` (6.2.2) in both packages.
+- **Rust EdDSA gap (small, real).** `JwksKeyStore` *loads* Ed25519 keys correctly
+  (`is_supported_key` accepts `OctetKeyPair`/Ed25519; `refresh()` builds the `DecodingKey`
+  via `DecodingKey::from_jwk`), **but** `validation()` (`crates/temper-services/src/state.rs:100-101`)
+  hardcodes `v.algorithms = vec![Algorithm::RS256]`, so `require_auth`'s `decode()` rejects
+  an EdDSA-signed token. Accepting the AS's EdDSA tokens requires adding `Algorithm::EdDSA`
+  to that allow-list. The crate's own tests already validate EdDSA (`state.rs:272`), so the
+  underlying support exists — only the production allow-list is the gap. `JwksKeyStore` is
+  constructed in `crates/temper-api/src/main.rs:27` from `ApiConfig::from_env()`
+  (`JWKS_URL`/`AUTH_ISSUER`/`AUTH_AUDIENCE`/`AUTH_PROVIDER_NAME` in
+  `crates/temper-services/src/config.rs:53-56`).
 - **No existing SAML code.** Zero SAML dependencies; the only hit is a CLI test that
   asserts `saml` is rejected as an unknown `--idp`.
 
@@ -90,32 +114,39 @@ and means the CLI never has to speak SAML.
 ### 4.1 Components
 
 ```
-                         ┌───────────────────────────────────────────┐
-                         │  Temper Authorization Server (TS, Vercel)   │
-   SAML IdP  ──assertion─▶│  co-hosted in the SvelteKit UI server       │
-   (Okta, …)   (browser)  │                                             │
-                         │  SAML SP:   /auth/saml/{login,acs,metadata} │
-                         │  OAuth AS:  /oauth/authorize (code+PKCE)     │
-                         │             /oauth/token   (+ refresh)       │
+                         ┌─────────────────────────────────────────────────┐
+                         │  Temper Authorization Server                      │
+   SAML IdP  ──assertion─▶│  in temper-cloud (api/ TS fns, Neon-backed)       │
+   (Okta, …)   (browser)  │                                                   │
+                         │  SAML SP:   /oauth/saml/{login,acs,metadata}      │
+                         │  OAuth AS:  /oauth/authorize (code+PKCE)           │
+                         │             /oauth/token   (+ refresh)             │
                          │             /.well-known/oauth-authorization-server (RFC 8414)
-                         │             JWKS endpoint                     │
-                         │  Signing:   Ed25519 key (Vercel env, kid)     │
-                         └───────────────┬─────────────────────────────┘
+                         │             /oauth/jwks (published JWKS)           │
+                         │  Signing:   Ed25519 (jose SignJWT, key in env, kid)│
+                         │  State:     Neon — kb_saml_idp, authz codes,       │
+                         │             refresh tokens, assertion-replay cache │
+                         └───────────────┬───────────────────────────────────┘
                                          │ mints Temper JWT (AuthClaims shape)
              ┌───────────────────────────┼───────────────────────────┐
              ▼                           ▼                           ▼
-        UI (session)              CLI (code+PKCE loopback)      MCP (code+PKCE)
-        JWE cookie                ~/.config/temper/auth.json    [designed, not shipped]
+     UI (OAuth client)          CLI (OAuth client)           MCP (OAuth client)
+     /auth/login+callback        code+PKCE loopback           code+PKCE
+     → JWE session cookie        ~/.config/temper/auth.json   [designed, not shipped]
              │                           │                           │
              └───────────── Bearer Temper JWT ─────────────────────┘
                                          ▼
-                          temper-api (resource server, unchanged)
+                          temper-api (resource server)
                           require_auth → resolve_from_claims
+                          (+ EdDSA added to the validation allow-list)
 ```
 
-The AS is **co-hosted in the SvelteKit UI server** (it already runs OIDC, mints the
-session, and proxies `/oauth` + `/.well-known` same-origin). It is not a separate
-deployment.
+The AS lives in **`temper-cloud`** (the `api/` Vercel functions), which has the Neon
+client, already hosts the CLI callback relay, and is where the UI's proxied `/oauth` +
+`/.well-known` paths already terminate. The UI, CLI, and MCP are all **ordinary
+auth-code+PKCE OAuth clients** of it — there is no "UI mints in-process" special case.
+The browser sees one origin (the UI proxies `/oauth`/`/.well-known` to `temper-cloud`);
+the IdP's ACS URL resolves to `temper-cloud` through that same proxy.
 
 ### 4.2 One grant, three surfaces
 
@@ -123,19 +154,20 @@ All surfaces are **auth-code + PKCE** clients of the AS. This is the key simplif
 the CLI already uses exactly this grant, and MCP uses it too, so the AS needs only one
 authorization grant (plus refresh).
 
-- **UI** — co-hosts the AS. On its own login the SvelteKit server runs SAML
-  (`/auth/saml/login` → IdP → `/auth/saml/acs`), validates the assertion, mints the
-  Temper JWT, and writes the **same encrypted JWE session cookie** `session.ts` writes
-  today. No self-redirect through `/oauth/authorize` — for its own session it mints
-  in-process. The ACS distinguishes a UI-session initiation from an external OAuth-client
-  authorize request via **RelayState**.
+- **UI** — an **ordinary OAuth client** of the AS. Its existing `/auth/login` +
+  `/auth/callback` routes and `session.ts` are repointed from Auth0-OIDC to the Temper AS
+  (`oidc.ts`/`oidc-core.ts` are already generic auth-code+PKCE-via-discovery — largely a
+  config change plus consuming the AS's RFC 8414 metadata). Login redirects the browser to
+  `/oauth/authorize` (proxied to `temper-cloud`) → SAML upstream → the AS issues a code to
+  `/auth/callback` → the UI exchanges it at `/oauth/token` and writes its existing JWE
+  session cookie via `writeSession`. No special in-process minting path.
 - **CLI** — **config repoint only, no code change.** A `[[auth.providers]]` entry whose
-  `authorize_url`/`token_url` point at the AS; the existing PKCE + loopback + refresh
-  flow in `login.rs` works verbatim. On a SAML instance, hitting `/oauth/authorize`
-  triggers the SAML dance in the browser; after ACS the AS redirects back to the CLI's
-  loopback with an authorization code, which the CLI exchanges at `/oauth/token`. The
-  hosted callback-relay endpoint (analogous to today's `…/api/auth/cli-callback`) must
-  exist on the instance's own host.
+  `authorize_url`/`token_url` point at the AS; the existing PKCE + loopback + refresh flow
+  in `login.rs` works verbatim. Hitting `/oauth/authorize` triggers the SAML dance in the
+  browser; after ACS the AS issues a code and redirects to the **existing**
+  `…/api/auth/cli-callback` relay (`packages/temper-cloud/src/cli-callback.ts`), which
+  bounces to the CLI's `http://localhost:{port}?code=…`; the CLI exchanges the code at
+  `/oauth/token`. The relay is reused as-is.
 - **MCP** — **designed, not shipped.** Same grant. `temper-mcp`'s existing RFC 8414/9728
   discovery endpoints repoint from the Auth0 tenant to the AS in a later increment.
   Known MCP-phase needs, anticipated by the foundation but not built now: **RFC 7591**
@@ -163,13 +195,17 @@ IdP.
 
 ### 4.4 Signing & token lifetime
 
-- **Ed25519 (EdDSA)** signing key — consistent with what `temper-api` already validates.
-  Held in Vercel env, tagged with a `kid`, published at the AS's JWKS endpoint. Cert/key
-  rotation is supported by serving multiple keys keyed by `kid`.
+- **Ed25519 (EdDSA)** signing. Minting is **net-new in `temper-cloud`** (jose 6.2.2
+  `SignJWT` + an Ed25519 private key imported via `importPKCS8`; nothing in TS signs
+  today). The key is held in Vercel env, tagged with a `kid`, and the public half is
+  published at `/oauth/jwks` (built with `exportJWK`). Rotation is supported by serving
+  multiple public keys keyed by `kid`. `temper-api` must validate EdDSA — its allow-list
+  is extended in this phase (§7).
 - **Short-lived access tokens** (~15 min, tunable) + a **refresh token**. Refresh is
   non-negotiable: the CLI relies on the `refresh_token` grant today; without it every
-  expiry forces a browser round-trip. Refresh becomes a Temper-side concern (there is no
-  OIDC refresh token in the SAML path).
+  expiry forces a browser round-trip. Refresh becomes a Temper-side concern (no OIDC
+  refresh token in the SAML path) — refresh tokens are **stored** (Neon) so they are
+  revocable and single-use-rotatable.
 - Never place assertion contents or the minted token in URL parameters.
 
 ## 5. SAML SP details
@@ -188,32 +224,50 @@ IdP.
 - **Toolkit:** a maintained TS SAML library — `@node-saml/node-saml` or `samlify`. Final
   selection is a plan-time decision (evaluate maintenance, encrypted-assertion support,
   and API fit); do not hand-roll XML canonicalization or signature handling.
-- **Endpoints:** `/auth/saml/login` (SP-initiated AuthnRequest), `/auth/saml/acs`
-  (receive + validate), `/auth/saml/metadata` (SP metadata for the operator to hand the
-  IdP).
+- **Endpoints** (in `temper-cloud`, reached via the UI's existing `/oauth` proxy so the
+  browser stays same-origin): `/oauth/saml/login` (SP-initiated AuthnRequest — the AS
+  redirects here from `/oauth/authorize`), `/oauth/saml/acs` (receive + validate the
+  POSTed assertion; this is the ACS URL registered with the IdP), `/oauth/saml/metadata`
+  (SP metadata for the operator to hand the IdP).
 
 ## 6. Data model & configuration
 
-- **New additive migration** — a `kb_saml_idp`-style table keyed by `idp_key` holding:
-  IdP signing certificate(s), IdP SSO URL, IdP entityID/issuer, NameID format
-  preference, and the attribute mapping (email attribute, stable-id fallback attribute).
-  The **non-singleton keyed shape** admits a second IdP additively even though v1 runs a
-  single active IdP per instance. Cert rotation is a **data update**, not a redeploy. The
-  TS SP reads it via the Neon serverless client. Additive-only — safe under the
-  `main`-auto-deploy invariant.
-- **`temper-api` config:** a SAML instance sets `JWKS_URL`/`AUTH_ISSUER`/`AUTH_AUDIENCE`
-  to the AS. **No Rust code change** — single-issuer validation stays. temperkb.io keeps
-  trusting Auth0 alone, untouched.
+All new tables are additive-only (safe under the `main`-auto-deploy invariant), follow
+the repo conventions (`id UUID PRIMARY KEY DEFAULT uuid_generate_v7()`, `TIMESTAMPTZ …
+DEFAULT now()`, inline `idx_<table>_<cols>` indexes, no RLS/grants, version-portable
+PG17/PG18), and are read/written from `temper-cloud` via `getDb()` (`@neondatabase/
+serverless`). Phase 1 adds **no Rust `sqlx` query** touching them, so no `.sqlx` cache
+regeneration is required.
+
+- **`kb_saml_idp`** — keyed by `idp_key`; holds IdP signing certificate(s), SSO URL,
+  entityID/issuer, NameID-format preference, and the attribute mapping (email attribute,
+  stable-id fallback attribute). Non-singleton keyed shape → a second IdP is additive
+  even though v1 runs one active IdP. Cert rotation is a data update, not a redeploy.
+- **AS state tables** (OAuth AS bookkeeping):
+  - `kb_oauth_authz_codes` — short-lived, single-use authorization codes bound to the
+    PKCE challenge, redirect_uri, client_id, and the resolved `AuthClaims`.
+  - `kb_oauth_refresh_tokens` — stored refresh tokens (hashed), revocable + single-use
+    rotatable, bound to profile + client.
+  - `kb_saml_replay` — consumed assertion IDs within their validity window (replay
+    protection), TTL-pruned.
+- **`temper-api` config + one small code change:** a SAML instance sets
+  `JWKS_URL`/`AUTH_ISSUER`/`AUTH_AUDIENCE` to the AS. Validation stays single-issuer, but
+  `validation()` gains `Algorithm::EdDSA` in its allow-list (§7) so EdDSA tokens are
+  accepted. temperkb.io keeps trusting Auth0 alone, untouched.
 - **CLI onboarding:** an operator writes (or `temper init` gains a preset that writes) a
   `[[auth.providers]]` entry pointing at the AS. No compiled-in defaults change.
 
 ## 7. `temper-api` impact
 
-Essentially none. The instance trusts the AS as its **single** issuer. Because the AS
-mints EdDSA JWTs with the `AuthClaims` shape, `require_auth` validates them exactly as it
-validates Auth0 tokens today, and `resolve_from_claims` performs profile JIT unchanged.
-The single→multi issuer rework (issuer sets + `kid` matching + `refresh()` rewrite) is
-**deferred** to the mixed-mode phase (§9).
+**One small code change**, then config only. `validation()`
+(`crates/temper-services/src/state.rs:100-101`) currently pins `vec![Algorithm::RS256]`;
+Phase 1 extends it to `vec![Algorithm::RS256, Algorithm::EdDSA]` so the AS's EdDSA tokens
+are accepted (`JwksKeyStore` already *loads* Ed25519 keys). With that, the instance trusts
+the AS as its **single** issuer via `JWKS_URL`/`AUTH_ISSUER`/`AUTH_AUDIENCE`; `require_auth`
+validates the token and `resolve_from_claims` performs profile JIT unchanged. The e2e
+harness is RS256-only today, so an **Ed25519 mint helper + fixture** is added (the pattern
+exists at `state.rs:272`). The single→multi issuer rework (issuer sets + `kid` matching +
+`refresh()` rewrite) is **deferred** to the mixed-mode phase (§9).
 
 ## 8. Testing
 
@@ -268,10 +322,12 @@ is stated up front so it is a deliberate, named phase rather than a silent gap.
 ## 11. Key decisions (resolved in brainstorming)
 
 1. **Spec scope:** Phase 0 + 1 (authn only).
-2. **SP location:** a minimal Temper AS co-hosted in the UI tier (TS/Vercel), SAML
-   upstream, minted Temper JWT as a trusted issuer — not a native Rust ACS.
-3. **Surfaces:** UI (session) + CLI (auth-code+PKCE config repoint, no code change) in
-   Phase 1; MCP designed-not-shipped (drop-in later).
+2. **SP location:** a minimal Temper OAuth AS in **`temper-cloud`** (the Neon-backed
+   `api/` Vercel functions), SAML upstream, minted EdDSA Temper JWT as a trusted issuer —
+   not a native Rust ACS and not the SvelteKit UI tier.
+3. **Surfaces:** UI, CLI, and MCP are all **auth-code+PKCE OAuth clients** of the AS. UI
+   (repoint `/auth/login`+`/auth/callback` from Auth0 to the AS) + CLI (config repoint of
+   `login.rs`, no code change) ship in Phase 1; MCP designed-not-shipped (drop-in later).
 4. **NameID / `sub`:** persistent NameID → configured stable attribute → never email.
 5. **`email_verified`:** `true` for a signed trusted-IdP assertion (reconcile by email).
 6. **Multi-IdP:** single active IdP per instance, non-singleton config shape.
