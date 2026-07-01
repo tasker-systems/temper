@@ -335,6 +335,12 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 /// respect (same `auth_issuer`/`auth_audience`, same auto-provisioned token
 /// user) so the two harnesses only differ in signing algorithm.
 pub async fn setup_eddsa(pool: PgPool) -> E2eTestApp {
+    setup_eddsa_with_provider(pool, "test-provider").await
+}
+
+/// Like [`setup_eddsa`] but with a caller-chosen `auth_provider_name`, so a test can assert
+/// provider namespacing (e.g. `saml:test-idp`) on the JIT-created `kb_profile_auth_links` row.
+pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestApp {
     clean_and_seed(&pool).await;
 
     // --- Server setup ---
@@ -348,7 +354,7 @@ pub async fn setup_eddsa(pool: PgPool) -> E2eTestApp {
         jwks_url: "unused".to_string(),
         auth_issuer: "test-issuer".to_string(),
         auth_audience: None,
-        auth_provider_name: "test-provider".to_string(),
+        auth_provider_name: provider.to_string(),
         cors_origins: vec![],
         port: 0,
         enable_swagger: false,
