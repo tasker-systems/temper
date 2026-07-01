@@ -197,8 +197,22 @@ pub fn build_frontmatter_from_resource(
         open_meta,
     } = params;
 
-    let dt = DocType::from_str(doc_type)?;
-    let mut fm = Frontmatter::new(dt, body);
+    // Open tail (Task A2): don't fail-fast on an unrecognized doc_type — the
+    // enum is only used (as `Frontmatter::new`'s seed) when recognized. For
+    // an open-tail label, `Frontmatter::new` still needs *some* variant to
+    // construct (its typed `doc_type` has no "unknown" case), so `Task` is
+    // used as an inert scaffold and immediately overwritten below with the
+    // real label. This local-vault projection is a non-authoritative cache
+    // (see CLAUDE.md); the written `temper-type` value is what round-trips.
+    let dt = DocType::from_str(doc_type);
+    let is_open_tail = dt.is_err();
+    let mut fm = Frontmatter::new(dt.unwrap_or(DocType::Task), body);
+    if is_open_tail {
+        fm.set_managed_field(
+            "temper-type",
+            serde_json::Value::String(doc_type.to_string()),
+        );
+    }
     fm.set_managed_field(
         "temper-id",
         serde_json::Value::String(resource.id.to_string()),
@@ -441,6 +455,35 @@ mod tests {
             .and_then(|v| v.as_str())
             .expect("temper-owner must be set");
         assert_eq!(owner, "+platform-eng");
+    }
+
+    #[test]
+    fn build_frontmatter_from_resource_open_tail_doctype_passes_through() {
+        // Open tail (Task A2): an unrecognized doc_type must not fail-fast
+        // when projecting a resource fetched from the server into the local
+        // vault cache — the written temper-type reflects the real label.
+        let resource = test_resource_row();
+
+        let fm = build_frontmatter_from_resource(BuildFrontmatterParams {
+            resource: &resource,
+            context: "temper",
+            doc_type: "anecdote",
+            canonical_owner: "@j-cole-taylor",
+            body: String::new(),
+            managed_meta: None,
+            open_meta: None,
+        })
+        .expect("open-tail doctype should not fail-fast");
+
+        let temper_type = fm
+            .value()
+            .get("temper-type")
+            .and_then(|v| v.as_str())
+            .expect("temper-type must be set");
+        assert_eq!(
+            temper_type, "anecdote",
+            "unrecognized doctype must round-trip verbatim into the projected file"
+        );
     }
 
     #[test]

@@ -86,6 +86,10 @@ pub fn load_schema(doc_type: &str) -> Result<Validator> {
 /// is valid. Converts the YAML value to JSON before validation so that the
 /// `jsonschema` crate can process it.
 ///
+/// Open tail (spec D3 / Task A2): an unrecognized `doc_type` carries no
+/// embedded JSON schema to enforce, so it short-circuits to `Ok(vec![])`
+/// rather than erroring — recognized doctypes are unaffected.
+///
 /// # Errors
 /// Returns an error if the schema cannot be loaded or if YAML→JSON conversion
 /// fails.
@@ -93,6 +97,9 @@ pub fn validate_frontmatter(
     doc_type: &str,
     frontmatter: &serde_yaml::Value,
 ) -> Result<Vec<ValidationIssue>> {
+    if crate::frontmatter::DocType::from_str(doc_type).is_err() {
+        return Ok(Vec::new()); // open tail: unrecognized doctype has no frontmatter schema to enforce
+    }
     let validator = load_schema(doc_type)?;
 
     // Convert YAML → JSON string → serde_json::Value
