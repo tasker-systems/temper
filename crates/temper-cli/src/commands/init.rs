@@ -172,13 +172,15 @@ pub fn self_host_from_flags(
     idp: Option<String>,
     auth_server_id: Option<String>,
 ) -> Result<Option<SelfHostConfig>> {
-    // Temper AS preset: only --instance-url is required — client_id/audience default and there
-    // is no separate auth domain. Handled before the four-value gate so the others can be omitted.
+    // No instance URL → local-only init, regardless of --idp.
+    let Some(instance_url) = instance_url else {
+        return Ok(None);
+    };
+    let instance_url = instance_url.trim_end_matches('/').to_string();
+
+    // Temper AS preset: only the instance URL is needed — client_id/audience default and there is
+    // no separate auth domain.
     if idp.as_deref() == Some("temper-as") {
-        let Some(instance_url) = instance_url else {
-            return Ok(None);
-        };
-        let instance_url = instance_url.trim_end_matches('/').to_string();
         return Ok(Some(SelfHostConfig {
             audience: audience.unwrap_or_else(|| format!("{instance_url}/api")),
             client_id: client_id.unwrap_or_else(|| "temper-cli".to_string()),
@@ -188,11 +190,17 @@ pub fn self_host_from_flags(
         }));
     }
 
-    let (instance_url, auth_domain, client_id, audience) =
-        match (instance_url, auth_domain, client_id, audience) {
-            (Some(i), Some(d), Some(c), Some(a)) => (i, d, c, a),
-            _ => return Ok(None),
-        };
+    // Auth0/Okta: a self-hosted instance URL requires the full provider quad. The CLI arg layer no
+    // longer enforces this via clap `requires_all` (so `--idp temper-as` can omit them), so the
+    // requirement is validated here instead.
+    let (Some(auth_domain), Some(client_id), Some(audience)) = (auth_domain, client_id, audience)
+    else {
+        return Err(TemperError::Config(
+            "--instance-url requires --auth-domain, --auth-client-id, and --auth-audience \
+             (unless --idp temper-as)"
+                .to_string(),
+        ));
+    };
     let idp = match idp.as_deref() {
         None | Some("auth0") => Idp::Auth0,
         Some("okta") => {
@@ -208,7 +216,7 @@ pub fn self_host_from_flags(
         }
     };
     Ok(Some(SelfHostConfig {
-        instance_url: instance_url.trim_end_matches('/').to_string(),
+        instance_url,
         auth_domain,
         client_id,
         audience,
@@ -1152,6 +1160,54 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn flags_auth0_instance_without_quad_errors() {
+        // Auth0/Okta with an instance URL but a missing provider quad is a hard error. This used
+        // to be caught by clap's `requires_all` on --instance-url; it is now enforced at run time
+        // in `self_host_from_flags` (so `--idp temper-as` can omit the quad).
+        assert!(self_host_from_flags(
+            Some("https://x.com".into()),
+            None,
+            None,
+            None,
+            Some("auth0".into()),
+            None,
+        )
+        .is_err());
+        assert!(
+            self_host_from_flags(Some("https://x.com".into()), None, None, None, None, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn clap_temper_as_parses_without_auth_quad() {
+        use crate::cli::Cli;
+        use clap::Parser;
+        // Regression for the reproduced Critical: `--idp temper-as` must parse with only
+        // --instance-url (the clap arg layer no longer requires the auth quad).
+        assert!(Cli::try_parse_from([
+            "temper",
+            "init",
+            "--no-interactive",
+            "--instance-url",
+            "https://temper.acme.com",
+            "--idp",
+            "temper-as",
+        ])
+        .is_ok());
+        // Auth0 with just --instance-url now also parses at the clap layer; the quad requirement is
+        // enforced at run time instead (see `flags_auth0_instance_without_quad_errors`).
+        assert!(Cli::try_parse_from([
+            "temper",
+            "init",
+            "--no-interactive",
+            "--instance-url",
+            "https://x.com",
+        ])
+        .is_ok());
     }
 
     #[test]
