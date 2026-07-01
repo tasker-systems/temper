@@ -82,10 +82,27 @@ describe('resolveOidcConfig', () => {
 		).toThrow(/client id/i);
 	});
 
-	it('throws when client secret is missing', () => {
-		expect(() =>
-			resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_ID: 'c' })
-		).toThrow(/client secret/i);
+	it('resolves clientSecret as undefined (does not throw) for a public PKCE client', () => {
+		const cfg = resolveOidcConfig({ OIDC_ISSUER: 'https://x', OIDC_CLIENT_ID: 'c' });
+		expect(cfg.clientSecret).toBeUndefined();
+	});
+
+	it('resolves discoveryUrl from OIDC_DISCOVERY_URL, trimming a trailing slash', () => {
+		const cfg = resolveOidcConfig({
+			OIDC_ISSUER: 'https://as.example.com',
+			OIDC_CLIENT_ID: 'temper-ui',
+			OIDC_DISCOVERY_URL: 'https://as.example.com/.well-known/oauth-authorization-server/'
+		});
+		expect(cfg.discoveryUrl).toBe('https://as.example.com/.well-known/oauth-authorization-server');
+	});
+
+	it('leaves discoveryUrl undefined when OIDC_DISCOVERY_URL is unset', () => {
+		const cfg = resolveOidcConfig({
+			OIDC_ISSUER: 'https://org.okta.com/oauth2/abc',
+			OIDC_CLIENT_ID: 'c',
+			OIDC_CLIENT_SECRET: 's'
+		});
+		expect(cfg.discoveryUrl).toBeUndefined();
 	});
 });
 

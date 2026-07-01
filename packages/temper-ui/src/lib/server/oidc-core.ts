@@ -17,9 +17,22 @@
 export interface OidcConfig {
 	issuer: string;
 	clientId: string;
-	clientSecret: string;
+	/**
+	 * Optional — a public PKCE client (e.g. the Temper AS, which advertises
+	 * `token_endpoint_auth_methods_supported: ["none"]`) has no secret; PKCE
+	 * (code_verifier/code_challenge) is the security, not a shared secret.
+	 * Confidential clients (Auth0 Regular Web App) still supply one.
+	 */
+	clientSecret?: string;
 	/** Optional — Auth0 needs it; most providers don't. */
 	audience?: string;
+	/**
+	 * Optional discovery-document URL override. Defaults to
+	 * `${issuer}/.well-known/openid-configuration`; set this when the provider
+	 * serves metadata elsewhere, e.g. the Temper AS's RFC 8414 endpoint at
+	 * `/.well-known/oauth-authorization-server`.
+	 */
+	discoveryUrl?: string;
 }
 
 /** The subset of the discovery document we consume. */
@@ -66,6 +79,7 @@ export function resolveOidcConfig(env: EnvLike): OidcConfig {
 	const clientId = env.OIDC_CLIENT_ID ?? env.AUTH0_CLIENT_ID;
 	const clientSecret = env.OIDC_CLIENT_SECRET ?? env.AUTH0_CLIENT_SECRET;
 	const audience = env.OIDC_AUDIENCE ?? env.AUTH0_AUDIENCE;
+	const rawDiscoveryUrl = env.OIDC_DISCOVERY_URL;
 
 	if (!rawIssuer) {
 		throw new Error('OIDC issuer not configured: set OIDC_ISSUER (or AUTH0_DOMAIN)');
@@ -73,17 +87,15 @@ export function resolveOidcConfig(env: EnvLike): OidcConfig {
 	if (!clientId) {
 		throw new Error('OIDC client id not configured: set OIDC_CLIENT_ID (or AUTH0_CLIENT_ID)');
 	}
-	if (!clientSecret) {
-		throw new Error(
-			'OIDC client secret not configured: set OIDC_CLIENT_SECRET (or AUTH0_CLIENT_SECRET)'
-		);
-	}
+	// clientSecret is intentionally optional: a public PKCE client (e.g. the
+	// Temper AS) has no secret, and PKCE alone secures the code exchange.
 
 	return {
 		issuer: rawIssuer.replace(/\/$/, ''),
 		clientId,
-		clientSecret,
-		audience: audience ? audience : undefined
+		clientSecret: clientSecret ? clientSecret : undefined,
+		audience: audience ? audience : undefined,
+		discoveryUrl: rawDiscoveryUrl ? rawDiscoveryUrl.replace(/\/$/, '') : undefined
 	};
 }
 
