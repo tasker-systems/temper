@@ -52,6 +52,8 @@ export interface MakeSignedSamlResponseParams {
   nameId: string;
   nameIdFormat?: string;
   attributes?: Record<string, string>;
+  /** Attributes emitted with multiple <AttributeValue> children (e.g. group membership). */
+  multiValuedAttributes?: Record<string, string[]>;
   idpKeyPem: string;
   idpCertPem: string;
   assertionId?: string;
@@ -93,6 +95,7 @@ export function makeSignedSamlResponse({
   nameId,
   nameIdFormat = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
   attributes = {},
+  multiValuedAttributes = {},
   idpKeyPem,
   idpCertPem,
   assertionId = `_${randomUUID()}`,
@@ -114,6 +117,18 @@ export function makeSignedSamlResponse({
     )
     .join("");
 
+  const multiValuedAttributeXml = Object.entries(multiValuedAttributes)
+    .map(
+      ([name, values]) =>
+        `<saml:Attribute Name="${name}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic">` +
+        values
+          .map((v) => `<saml:AttributeValue xsi:type="xs:string">${v}</saml:AttributeValue>`)
+          .join("") +
+        `</saml:Attribute>`,
+    )
+    .join("");
+  const allAttributeXml = attributeXml + multiValuedAttributeXml;
+
   const assertionXml =
     `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ` +
     `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" ` +
@@ -131,7 +146,7 @@ export function makeSignedSamlResponse({
     `<saml:AuthnStatement AuthnInstant="${issueInstant}" SessionIndex="${sessionIndex}">` +
     `<saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext>` +
     `</saml:AuthnStatement>` +
-    (attributeXml ? `<saml:AttributeStatement>${attributeXml}</saml:AttributeStatement>` : "") +
+    (allAttributeXml ? `<saml:AttributeStatement>${allAttributeXml}</saml:AttributeStatement>` : "") +
     `</saml:Assertion>`;
 
   const signedAssertionXml = signEnveloped({
