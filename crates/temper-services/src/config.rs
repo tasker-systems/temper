@@ -10,6 +10,8 @@ pub struct ApiConfig {
     pub cors_origins: Vec<String>,
     pub port: u16,
     pub enable_swagger: bool,
+    /// Shared secret gating the internal SAML reconcile endpoint. `None` disables the endpoint.
+    pub internal_reconcile_secret: Option<String>,
 }
 
 impl ApiConfig {
@@ -60,6 +62,9 @@ impl ApiConfig {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
             enable_swagger,
+            internal_reconcile_secret: env::var("INTERNAL_RECONCILE_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }
