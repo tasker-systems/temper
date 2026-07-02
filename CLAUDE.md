@@ -24,6 +24,7 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 ### TypeScript Packages (packages/)
 - **temper-cloud** — Vercel serverless functions: file upload (Vercel Blob), background processing workflows, document extraction. Uses Neon serverless Postgres, Vitest, Biome.
 - **temper-ui** — SvelteKit app at temperkb.io. Uses Tailwind CSS v4, deployed to Vercel. TypeScript types are code-generated from Rust via ts-rs.
+- **agent-workflows** — Deployed agent runtimes over temper-mcp (Eve now, Claude Managed Agents later). Each agent is a **self-contained Eve project** (its own TS 7 toolchain, npm lockfile) that is **workspace-isolated** — deliberately NOT a bun `workspaces` member, so it never collides with temper-cloud's TS 5.8 and the repo pre-commit never touches it. Install/run tooling from inside each agent dir (`cd steward && npm install`; a root `npm install` inherits the root's bun `overrides` and fails). First agent: `steward/` (team self-cognition steward; MCP connection with env-driven `TEMPER_MCP_URL` + platform-carried auth).
 
 ### Deployment Glue (api/)
 - `api/axum.rs` — Vercel runtime adapter that wraps the Axum app as a Vercel Function.
