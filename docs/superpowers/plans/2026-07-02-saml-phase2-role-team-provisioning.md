@@ -371,7 +371,14 @@ async fn native_membership_is_never_touched(pool: PgPool) {
 }
 ```
 
-Confirm the `MIGRATOR` path: `grep -rn "pub static MIGRATOR\|migrate!" crates/temper-services/src/lib.rs` — if temper-services doesn't export a `MIGRATOR`, use the one the other `test-db` integration tests in this crate use (grep an existing `#[sqlx::test(migrator` in `crates/temper-services/tests/`). Match the existing convention exactly.
+**temper-services has no `MIGRATOR` export yet (this is its first `#[sqlx::test]`).** Before running, add one to `crates/temper-services/src/lib.rs` (mirroring temper-api's `pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");`):
+
+```rust
+/// Embedded workspace migrations, for `#[sqlx::test(migrator = "temper_services::MIGRATOR")]`.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+```
+
+`sqlx` is already a dependency; the `migrate` feature it needs is enabled transitively via the `sqlx::test` macro path used elsewhere in the workspace. If `cargo check` complains the `migrate` feature is missing, add `"migrate"` to temper-services' `sqlx` feature list in `crates/temper-services/Cargo.toml`.
 
 - [ ] **Step 6: Run the integration test to verify it fails**
 
@@ -556,6 +563,10 @@ And in `from_env()` (use `.ok()` so it's optional — mirror how `auth_audience`
         internal_reconcile_secret: env::var("INTERNAL_RECONCILE_SECRET").ok(),
 ```
 
+**This breaks every `ApiConfig { .. }` struct literal in the codebase** (a non-`Default` field). Update them:
+- `crates/temper-api/tests/common/mod.rs` — `setup_test_app`'s `ApiConfig { .. }` literal: add `internal_reconcile_secret: None,`.
+- Any other `ApiConfig { .. }` literal — find them: `grep -rn "ApiConfig {" crates/ tests/ api/`. Add `internal_reconcile_secret: None,` to each (or `Some(...)` where a test needs the endpoint live). `from_env()` is the only non-literal constructor.
+
 - [ ] **Step 2: Write the failing unit test**
 
 Create `crates/temper-api/src/middleware/internal_auth.rs`:
@@ -667,31 +678,185 @@ git commit -m "feat(api): internal shared-secret middleware + INTERNAL_RECONCILE
 - Consumes: `ReconcileRequest` (Task 2); `saml_provisioning_service::reconcile_idp_memberships` (Task 3); `profile_service::resolve_from_claims`; `require_internal_secret` + `INTERNAL_SECRET_HEADER` (Task 4).
 - Produces: `POST /internal/saml/reconcile` → `204 No Content` on success (fail-open lives in the AS caller; the endpoint itself returns real errors).
 
-- [ ] **Step 1: Write the failing integration test**
+- [ ] **Step 1: Add a config-parametrized harness helper**
 
-Create `crates/temper-api/tests/internal_saml_test.rs`. Follow the harness pattern used by the crate's other `test-db` handler tests (grep `crates/temper-api/tests/relationship_handler_test.rs` for how they build the app + `AppState`; mirror it). The test builds the app with `internal_reconcile_secret = Some("s3cr3t")` and `auth_provider_name = "saml:acme"`, seeds an IdP + mapping + team, POSTs a `ReconcileRequest`, and asserts a `kb_team_members` idp row appears.
+The existing `common::setup_test_app` (in `crates/temper-api/tests/common/mod.rs`) hardcodes `ApiConfig`. Add a variant that lets a test override the config (mirror `setup_test_app` exactly — the only change is the `configure` closure applied before `AppState::new`). Insert into `common/mod.rs`:
 
 ```rust
-#![cfg(feature = "test-db")]
-use axum::http::StatusCode;
-// ... use the crate's shared test harness helpers (see relationship_handler_test.rs) ...
+/// Like [`setup_test_app`] but lets the caller mutate the `ApiConfig` before the app is built
+/// (e.g. to set `internal_reconcile_secret` / `auth_provider_name` for a specific test).
+pub async fn setup_test_app_with_config(
+    pool: PgPool,
+    configure: impl FnOnce(&mut ApiConfig),
+) -> TestApp {
+    fixtures::clean_and_seed(&pool).await;
 
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn reconcile_endpoint_provisions_idp_membership(pool: sqlx::PgPool) {
-    // Seed IdP 'acme' (groups_attr='groups'), team 'eng', mapping engineering->eng member.
-    // Build AppState with internal_reconcile_secret=Some("s3cr3t"), auth_provider_name="saml:acme".
-    // POST /internal/saml/reconcile with header X-Temper-Internal-Secret: s3cr3t and body:
-    //   { provider: "saml:acme", external_user_id: "nid-1", email: "a@corp.io",
-    //     email_verified: true, idp_key: "acme", groups: ["engineering"] }
-    // Assert: 204; a kb_team_members row (source='idp', role='member') exists for the JIT profile.
-    //
-    // Second assertion: same POST with header X-Temper-Internal-Secret: wrong => 401, no change.
+    let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("test_rsa.pub"))
+        .expect("Failed to load test RSA public key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+
+    let mut config = ApiConfig {
+        database_url: "unused".to_string(),
+        jwks_url: "unused".to_string(),
+        auth_issuer: "test-issuer".to_string(),
+        auth_audience: None,
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+        internal_reconcile_secret: None,
+    };
+    configure(&mut config);
+
+    let state = AppState::new(pool.clone(), jwks_store, config);
+    let app = create_app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test listener");
+    let addr = listener.local_addr().expect("Failed to get local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("Test server failed");
+    });
+
+    TestApp { addr, pool, client: reqwest::Client::new() }
 }
 ```
 
-Fill the harness body concretely by copying the app-construction + request helpers from `relationship_handler_test.rs`. The two behaviors under test: (a) correct secret provisions membership + returns 204; (b) wrong/missing secret returns 401.
+(`ApiConfig` is already imported in `common/mod.rs`. Note the `internal_reconcile_secret: None` field — added by Task 4.)
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Write the failing integration test (complete)**
+
+Create `crates/temper-api/tests/internal_saml_test.rs`:
+
+```rust
+#![cfg(feature = "test-db")]
+//! HTTP-layer integration tests for the internal SAML reconcile endpoint.
+//! The endpoint is gated by a shared secret (not JWT). We build the app with a known
+//! `internal_reconcile_secret` and `auth_provider_name = "saml:acme"` so the JIT'd profile's
+//! auth link matches what the minted token would later resolve to.
+
+mod common;
+
+use sqlx::PgPool;
+use temper_core::types::ReconcileRequest;
+use uuid::Uuid;
+
+/// Seed an active IdP 'acme', a team, and a mapping engineering -> team (member). Returns team_id.
+async fn seed(pool: &PgPool) -> Uuid {
+    let team_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
+    )
+    .bind(format!("eng-{}", Uuid::new_v4()))
+    .fetch_one(pool)
+    .await
+    .expect("seed team");
+
+    sqlx::query(
+        "INSERT INTO kb_saml_idp (idp_key, is_active, idp_cert, idp_sso_url, idp_entity_id, sp_entity_id, acs_url, nameid_format, email_attr, stable_id_attr, groups_attr)
+         VALUES ('acme', true, 'x', 'https://idp/sso', 'idp', 'sp', 'https://sp/acs', 'persistent', 'email', 'uid', 'groups')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed idp");
+
+    sqlx::query("INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) VALUES ('acme', 'engineering', $1, 'member')")
+        .bind(team_id)
+        .execute(pool)
+        .await
+        .expect("seed mapping");
+
+    team_id
+}
+
+fn reconcile_body() -> ReconcileRequest {
+    ReconcileRequest {
+        provider: Some("saml:acme".to_string()),
+        external_user_id: "nid-1".to_string(),
+        email: "a@corp.io".to_string(),
+        email_verified: Some(true),
+        idp_key: "acme".to_string(),
+        groups: vec!["engineering".to_string()],
+    }
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_provisions_idp_membership(pool: PgPool) {
+    let team_id = seed(&pool).await;
+    let app = common::setup_test_app_with_config(pool.clone(), |c| {
+        c.auth_provider_name = "saml:acme".to_string();
+        c.internal_reconcile_secret = Some("s3cr3t".to_string());
+    })
+    .await;
+
+    let resp = app
+        .client
+        .post(app.url("/internal/saml/reconcile"))
+        .header("X-Temper-Internal-Secret", "s3cr3t")
+        .json(&reconcile_body())
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        204,
+        "correct secret should return 204; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    // The profile was JIT-created with provider 'saml:acme', external id 'nid-1'.
+    let profile_id: Uuid = sqlx::query_scalar(
+        "SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider = $1 AND auth_provider_user_id = $2",
+    )
+    .bind("saml:acme")
+    .bind("nid-1")
+    .fetch_one(&pool)
+    .await
+    .expect("JIT auth link must exist");
+
+    let (role, source): (String, String) = sqlx::query_as(
+        "SELECT role::text, source::text FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+    )
+    .bind(team_id)
+    .bind(profile_id)
+    .fetch_one(&pool)
+    .await
+    .expect("idp membership must exist");
+    assert_eq!(role, "member");
+    assert_eq!(source, "idp");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_rejects_wrong_secret(pool: PgPool) {
+    seed(&pool).await;
+    let app = common::setup_test_app_with_config(pool.clone(), |c| {
+        c.auth_provider_name = "saml:acme".to_string();
+        c.internal_reconcile_secret = Some("s3cr3t".to_string());
+    })
+    .await;
+
+    let resp = app
+        .client
+        .post(app.url("/internal/saml/reconcile"))
+        .header("X-Temper-Internal-Secret", "wrong")
+        .json(&reconcile_body())
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 401);
+
+    // No profile/link/membership was created.
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider_user_id = 'nid-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(links, 0);
+}
+```
+
+Note: `role::text`/`source::text` casts keep the fixture assertions as plain `String` (no `TeamRole`/enum FromRow needed in the test).
+
+- [ ] **Step 3: Run the test to verify it fails**
 
 Run:
 ```bash
@@ -699,7 +864,7 @@ DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo 
 ```
 Expected: FAIL — route/handler not found (won't compile / 404).
 
-- [ ] **Step 3: Implement the handler**
+- [ ] **Step 4: Implement the handler**
 
 Create `crates/temper-api/src/handlers/internal_saml.rs`:
 ```rust
@@ -758,7 +923,7 @@ pub async fn reconcile(
 ```
 Add `pub mod internal_saml;` to `crates/temper-api/src/handlers/mod.rs`.
 
-- [ ] **Step 4: Wire the route into `routes.rs`**
+- [ ] **Step 5: Wire the route into `routes.rs`**
 
 In `create_app`, add a new router after `gated` and merge it. It carries the internal-secret layer, NOT `require_auth`:
 ```rust
@@ -777,7 +942,7 @@ And extend the merge line:
     let mut app = Router::new().merge(public).merge(auth_only).merge(gated).merge(internal);
 ```
 
-- [ ] **Step 5: Regenerate the api test sqlx cache**
+- [ ] **Step 6: Regenerate the api test sqlx cache**
 
 Run:
 ```bash
@@ -785,7 +950,7 @@ cargo make prepare-api
 ```
 Expected: `crates/temper-api/.sqlx` updated for the new test queries (if the test uses macro queries; runtime `sqlx::query()` fixtures don't need it — but run it to be safe).
 
-- [ ] **Step 6: Run the integration test to verify it passes**
+- [ ] **Step 7: Run the integration test to verify it passes**
 
 Run:
 ```bash
@@ -793,7 +958,7 @@ DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo 
 ```
 Expected: PASS (204 + membership for correct secret; 401 for wrong secret).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add crates/temper-api
@@ -1054,48 +1219,189 @@ git commit -m "feat(saml): AS calls internal reconcile before minting (fail-open
 ### Task 8: End-to-end — SAML login with groups drives reconcile
 
 **Files:**
-- Modify: the Phase-1 SAML mock-IdP e2e (grep for the mock-IdP assertion builder: `grep -rln "SAMLResponse\|mock.*idp\|generateServiceProviderMetadata\|Assertion" packages/temper-cloud/tests/integration`) to include a `groups` attribute.
+- Modify: `packages/temper-cloud/test-fixtures/saml.ts` (add multi-valued attribute support to `makeSignedSamlResponse`)
 - Test: extend `packages/temper-cloud/tests/integration/oauth/e2e.saml.test.ts`.
 
 **Interfaces:**
-- Consumes: the full stack — ACS → reconcile client → (a live or stubbed) `/internal/saml/reconcile`. For the temper-cloud integration test (Neon-can't-hit-local-PG → uses the `postgres` pkg per CLAUDE.md), point `INTERNAL_RECONCILE_URL` at a test double OR assert the reconcile POST is issued with the right body.
+- The temper-cloud integration e2e drives the AS in-process against a real local PG (via the `postgres` pkg). The Rust `/internal/saml/reconcile` endpoint is a different process, so this TS e2e stubs `fetch` and asserts the ACS issues a reconcile POST carrying the asserted groups. (The Rust reconcile behavior is proven by Tasks 3 & 5.)
 
-- [ ] **Step 1: Decide the e2e seam and write the failing assertion**
+- [ ] **Step 1: Extend the fixture to emit multi-valued attributes**
 
-The temper-cloud integration e2e drives the AS against a real local PG (via the `postgres` pkg). The Rust `/internal/saml/reconcile` endpoint is a different process, so for this TS e2e stub `fetch` for the reconcile URL and assert it is called with the asserted groups. (The Rust-side reconcile behavior is already proven by Task 3 + Task 5.) Add to `e2e.saml.test.ts`:
+In `packages/temper-cloud/test-fixtures/saml.ts`, add a `multiValuedAttributes` param. Add to `MakeSignedSamlResponseParams`:
 ```ts
-  it("ACS issues a reconcile call carrying the asserted groups", async () => {
-    // Configure the seeded IdP row with groups_attr='groups'.
-    // Build the mock SAML Response with a multi-valued 'groups' attribute: ['engineering','eng-leads'].
-    // Stub global fetch; capture the POST to INTERNAL_RECONCILE_URL.
-    // Drive /oauth/saml/acs; assert a 302 with ?code=, AND that the captured reconcile body has
-    //   idp_key === '<seeded-key>' and groups deep-equals ['engineering','eng-leads'].
+  /** Attributes emitted with multiple <AttributeValue> children (e.g. group membership). */
+  multiValuedAttributes?: Record<string, string[]>;
+```
+Destructure it with a default in the `makeSignedSamlResponse` signature (beside `attributes = {}`):
+```ts
+  multiValuedAttributes = {},
+```
+Then, right after the existing `const attributeXml = ...` block, build the multi-valued XML and combine — and use the combined value in the `AttributeStatement` guard:
+```ts
+  const multiValuedAttributeXml = Object.entries(multiValuedAttributes)
+    .map(
+      ([name, values]) =>
+        `<saml:Attribute Name="${name}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic">` +
+        values
+          .map((v) => `<saml:AttributeValue xsi:type="xs:string">${v}</saml:AttributeValue>`)
+          .join("") +
+        `</saml:Attribute>`,
+    )
+    .join("");
+  const allAttributeXml = attributeXml + multiValuedAttributeXml;
+```
+Change the assertion-body line from `(attributeXml ? \`<saml:AttributeStatement>${attributeXml}...` to use `allAttributeXml`:
+```ts
+    (allAttributeXml ? `<saml:AttributeStatement>${allAttributeXml}</saml:AttributeStatement>` : "") +
+```
+(The signing logic is untouched — only the pre-signing XML string changes, so the byte-for-byte-verified signer still applies.)
+
+- [ ] **Step 2: Write the failing e2e assertion**
+
+In `packages/temper-cloud/tests/integration/oauth/e2e.saml.test.ts`, add `vi` to the vitest import:
+```ts
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+```
+Add this test inside the `describe` block (it reuses `db`, `rs` flow, `idpKeyPem`/`idpCertPem`, and the module constants):
+```ts
+  it("ACS issues a reconcile call carrying the asserted groups (fail-open)", async () => {
+    // Configure the seeded IdP for group provisioning + point the reconcile client at a stub.
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+
+    const reconcileCalls: Array<{ url: string; body: unknown; secret: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const headers = new Headers(init.headers);
+        reconcileCalls.push({
+          url,
+          body: JSON.parse(init.body as string),
+          secret: headers.get("X-Temper-Internal-Secret"),
+        });
+        return new Response(null, { status: 204 });
+      }),
+    );
+
+    try {
+      // authorize -> relay state
+      const verifier = `e2e-grp-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" +
+            challenge +
+            "&code_challenge_method=S256&state=grp-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+
+      // signed assertion carrying a multi-valued 'groups' attribute
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "grp-user-1",
+        attributes: { email: "grp@example.com", uid: "grp-user-1" },
+        multiValuedAttributes: { groups: ["engineering", "eng-leads"] },
+        idpKeyPem,
+        idpCertPem,
+      });
+
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+
+      // login still completes (fail-open is irrelevant here since the stub returns 204)
+      expect(acsRes.status).toBe(302);
+      expect(new URL(acsRes.headers.get("location") as string).searchParams.get("code")).toBeTruthy();
+
+      // the reconcile POST fired with the asserted groups + secret header
+      expect(reconcileCalls).toHaveLength(1);
+      expect(reconcileCalls[0].url).toBe("https://api.internal/internal/saml/reconcile");
+      expect(reconcileCalls[0].secret).toBe("s3cr3t");
+      expect(reconcileCalls[0].body).toMatchObject({
+        idp_key: "test",
+        external_user_id: "grp-user-1",
+        groups: ["engineering", "eng-leads"],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
   });
 ```
-
-- [ ] **Step 2: Extend the mock assertion builder to emit groups**
-
-In the mock-IdP fixture that builds the signed assertion (`packages/temper-cloud/test-fixtures/saml.ts` or the integration helper), add a `groups?: string[]` option that emits a multi-valued `<saml:Attribute Name="groups">` with one `<saml:AttributeValue>` per group. Keep the signature valid (sign as the existing fixture does).
 
 - [ ] **Step 3: Run the e2e to verify it fails, then passes**
 
 Run: `cd packages/temper-cloud && bun run test:integration oauth/e2e.saml && cd -`
-Expected: FAIL first (groups not emitted / reconcile not called), then PASS after Steps 1–2 are complete.
+Expected: FAIL before Task 6/7 land (no reconcile call) and before Step 1 (groups not emitted); PASS once the ACS wiring (Task 7) + fixture change (Step 1) are in place.
 
-- [ ] **Step 4: (Rust e2e, optional but recommended) cross-stack membership assertion**
+- [ ] **Step 4: Verify fail-open — a rejecting reconcile still logs in**
 
-If the Rust e2e suite (`tests/e2e`) has a SAML/EdDSA harness, add a test that seeds an IdP + mapping, POSTs a `ReconcileRequest` to a spawned temper-api `/internal/saml/reconcile` with the shared secret, then logs in with the minted token and asserts the profile's team memberships. This exercises the real Rust endpoint end-to-end. Gate under the embed/SAML tier and run:
-```bash
-cargo make test-e2e-embed
+Add a second test that stubs `fetch` to reject and asserts the ACS still returns a 302 with a `code` (login proceeds despite reconcile failure):
+```ts
+  it("ACS completes login even when reconcile fails (fail-open)", async () => {
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
+    try {
+      const verifier = `e2e-fo-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" + challenge + "&code_challenge_method=S256&state=fo-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID, acsUrl: ACS_URL, nameId: "fo-user-1",
+        attributes: { email: "fo@example.com", uid: "fo-user-1" },
+        multiValuedAttributes: { groups: ["engineering"] },
+        idpKeyPem, idpCertPem,
+      });
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+      expect(acsRes.status).toBe(302);
+      expect(new URL(acsRes.headers.get("location") as string).searchParams.get("code")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
 ```
-Expected: PASS. (If the e2e harness makes this disproportionately large, note it as a carry-forward instead — Task 5's integration test already covers the endpoint.)
+Run again: `cd packages/temper-cloud && bun run test:integration oauth/e2e.saml && cd -` → PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/temper-cloud tests/e2e
-git commit -m "test(saml): e2e — asserted groups drive the membership reconcile call"
+git add packages/temper-cloud
+git commit -m "test(saml): e2e — asserted groups drive the reconcile call; fail-open login"
 ```
+
+> **Carry-forward (not a task):** a true cross-process Rust e2e (spawn temper-api, POST a real `ReconcileRequest`, log in with the minted token, assert memberships) would exercise the live endpoint end-to-end. Task 5's `#[sqlx::test]` already covers the endpoint against a real DB, so this is deferred rather than built — note it in the session/issue as a possible hardening follow-up.
 
 ---
 
