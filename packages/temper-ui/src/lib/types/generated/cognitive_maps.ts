@@ -24,6 +24,27 @@ export type BindTeamRequest = {
 team_id: string, };
 
 /**
+ * One block of a cognitive map's telos charter, as returned by the `resource_blocks(cogmap_telos(…),
+ * …)` composition (T1 Sequence C). Mirrors the charter-read tuple field-for-field (`seq`, `role`,
+ * `body_text AS body`) so the service-direct read can `query_as!` straight into it. `role` is one of
+ * `statement` / `question` / `framing` (`temper-core/src/charter.rs`); a charter block always has both
+ * a role and body, so neither is `Option` (see `cogmap_charter_select`'s forced-non-null SQL).
+ */
+export type CharterBlock = { 
+/**
+ * Position within the charter (statement is 0, then questions, then framing).
+ */
+seq: number, 
+/**
+ * One of `statement` / `question` / `framing`.
+ */
+role: string, 
+/**
+ * Assembled block body text (a question-with-context block is `question + "\n\n" + context`).
+ */
+body: string, };
+
+/**
  * The map-level analytics picture as returned by `cogmap_analytics`: the telos charter resource id,
  * staleness, and the regulation set. Per-region scalar metrics are a SEPARATE read
  * (`cogmap_region_metrics`). The access gate is INSIDE the SQL: a principal who cannot read the map

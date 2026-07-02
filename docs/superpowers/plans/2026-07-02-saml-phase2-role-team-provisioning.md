@@ -108,16 +108,11 @@ git commit -m "feat(db): SAML group provisioning schema (provenance + mapping ta
 - Test: `crates/temper-core/tests/` (ts-rs export is verified by the generate step, not a unit test)
 
 **Interfaces:**
-- Produces: `temper_core::types::ReconcileRequest { provider: Option<String>, external_user_id: String, email: String, email_verified: Option<bool>, idp_key: String, groups: Vec<String> }`. `provider` is advisory only (the API ignores it for identity; see Global Constraints) — included so the wire shape is self-describing and future multi-IdP can use it. Generated TS type: `packages/temper-cloud/src/generated/ReconcileRequest.ts` (match the existing ts-rs output dir — verify with the next step).
+- Produces: `temper_core::types::ReconcileRequest { provider: Option<String>, external_user_id: String, email: String, email_verified: Option<bool>, idp_key: String, groups: Vec<String> }`. `provider` is advisory only (the API ignores it for identity; see Global Constraints) — included so the wire shape is self-describing and future multi-IdP can use it. The ts-rs derive generates `ReconcileRequest.ts` into **`packages/temper-ui/src/lib/types/generated/`** (that is the ONLY `TS_RS_EXPORT_DIR`, per `tools/cargo-make/main.toml:206`). **temper-cloud does NOT consume temper-ui's generated types** — it is a separate serverless package. Following the established Phase-1 precedent for a Rust↔temper-cloud boundary (`MintedClaims` in `mint.ts`, parity enforced by `tests/oauth/wire-contract.test.ts`), temper-cloud defines its OWN local `ReconcileRequest` interface in Task 7 and a wire-contract test asserts field parity with the Rust struct. The temper-core struct stays canonical.
 
-- [ ] **Step 1: Find where ts-rs types are generated and their output path**
+- [ ] **Step 1: (Grounded) ts-rs export convention**
 
-Run:
-```bash
-grep -rn "ts(export" crates/temper-core/src/types/team.rs | head -1
-grep -rn "TS_RS_EXPORT_DIR\|export_to\|generate-ts-types" Makefile.toml crates/temper-core 2>/dev/null | head
-```
-Expected: shows the `#[ts(export, export_to = "...")]` pattern and the output directory the workspace uses. Use the SAME `export_to` target as `TeamRole` so the generated file lands beside the others.
+Confirmed: `crates/temper-core/src/types/team.rs` uses `#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]` + `#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]`, with base dir `TS_RS_EXPORT_DIR = packages/temper-ui/src/lib/types/generated` set by `tools/cargo-make/main.toml:206`. Use `export_to = "ReconcileRequest.ts"` (per-type file is fine). `AuthClaims` is re-exported explicitly at `crates/temper-core/src/types/mod.rs:52` (`pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};`) — add `ReconcileRequest` there. `auth.rs` does NOT currently import serde — add `use serde::{Deserialize, Serialize};`.
 
 - [ ] **Step 2: Add the struct**
 
@@ -158,18 +153,14 @@ grep -rn "AuthClaims" crates/temper-core/src/types/mod.rs crates/temper-core/src
 ```
 If `AuthClaims` is re-exported via a `pub use ...auth::{...}` list, add `ReconcileRequest` to it. If the module is glob-exported, nothing to do.
 
-- [ ] **Step 4: Generate the TS type and verify it compiles**
+- [ ] **Step 4: Generate the TS type and verify it lands (in temper-ui)**
 
 Run:
 ```bash
 cargo make generate-ts-types
-git status --short packages/temper-cloud
+git status --short packages/temper-ui/src/lib/types/generated
 ```
-Expected: a new/updated `ReconcileRequest.ts` under the generated types dir. Then:
-```bash
-cd packages/temper-cloud && bun run typecheck && cd -
-```
-Expected: PASS.
+Expected: a new `packages/temper-ui/src/lib/types/generated/ReconcileRequest.ts`. (temper-cloud does not import it — Task 7 defines its own interface + wire-contract test. No temper-cloud typecheck needed here.)
 
 - [ ] **Step 5: Verify the Rust workspace still checks**
 
@@ -1137,8 +1128,8 @@ git commit -m "feat(saml): extractGroups + groups_attr on the active IdP config"
 - Test: `packages/temper-cloud/tests/oauth/reconcile.test.ts`; extend the ACS test to prove fail-open
 
 **Interfaces:**
-- Consumes: `extractGroups` (Task 6); the generated `ReconcileRequest` TS type (Task 2); env `INTERNAL_RECONCILE_URL`, `INTERNAL_RECONCILE_SECRET`.
-- Produces: `export async function reconcileMemberships(payload: ReconcileRequest): Promise<void>` — POSTs to `INTERNAL_RECONCILE_URL` with the secret header; throws on non-2xx or fetch error (the ACS caller catches and proceeds — fail-open).
+- Consumes: `extractGroups` (Task 6); env `INTERNAL_RECONCILE_URL`, `INTERNAL_RECONCILE_SECRET`.
+- Produces: a local `export interface ReconcileRequest` (co-located in `reconcile.ts`, mirroring the Rust `temper_core::types::ReconcileRequest` field-for-field — this is the `MintedClaims` precedent, since temper-cloud cannot import temper-ui's generated types); `export async function reconcileMemberships(payload: ReconcileRequest): Promise<void>` — POSTs to `INTERNAL_RECONCILE_URL` with the secret header; throws on non-2xx or fetch error (the ACS caller catches and proceeds — fail-open). Field parity with the Rust struct is enforced by a wire-contract test (Step 4b).
 
 - [ ] **Step 1: Write the failing test for the reconcile client**
 
@@ -1194,7 +1185,21 @@ Create `packages/temper-cloud/src/oauth/reconcile.ts`:
 ```ts
 import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
-import type { ReconcileRequest } from "../generated/ReconcileRequest.js";
+
+/**
+ * Wire payload for the internal SAML reconcile call. Mirrors the Rust
+ * `temper_core::types::ReconcileRequest` field-for-field. temper-cloud cannot import temper-ui's
+ * ts-rs-generated types (separate package), so — like `MintedClaims` in mint.ts — this is a local
+ * interface whose parity with the Rust struct is enforced by tests/oauth/wire-contract.test.ts.
+ */
+export interface ReconcileRequest {
+  provider: string | null;
+  external_user_id: string;
+  email: string;
+  email_verified: boolean | null;
+  idp_key: string;
+  groups: string[];
+}
 
 /**
  * Calls the internal temper-api reconcile endpoint (server-to-server) with the shared secret.
@@ -1218,12 +1223,40 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
   logger.info({ idp_key: payload.idp_key, groups: payload.groups.length }, "saml reconcile ok");
 }
 ```
-Adjust the `ReconcileRequest` import path to the actual generated location from Task 2 Step 4.
+The `reconcile.test.ts` from Step 1 imports `reconcileMemberships` and passes a plain payload object — it works unchanged against the local `ReconcileRequest` interface.
 
 - [ ] **Step 4: Run the reconcile client test to verify it passes**
 
 Run: `cd packages/temper-cloud && bun run test oauth/reconcile && cd -`
 Expected: PASS.
+
+- [ ] **Step 4b: Wire-contract test — the local interface matches the Rust struct**
+
+Following the Phase-1 precedent (`tests/oauth/wire-contract.test.ts`), add a case asserting the local `ReconcileRequest` interface has exactly the Rust struct's fields (a construction-time check catches drift). Append to `tests/oauth/wire-contract.test.ts`:
+```ts
+import type { ReconcileRequest } from "../../src/oauth/reconcile.js";
+
+describe("ReconcileRequest wire contract (mirrors Rust temper_core::types::ReconcileRequest)", () => {
+  it("has exactly the Rust struct fields", () => {
+    // A fully-populated value must satisfy the interface with no extra/missing keys.
+    const value: ReconcileRequest = {
+      provider: "saml:acme",
+      external_user_id: "nid-1",
+      email: "a@corp.io",
+      email_verified: true,
+      idp_key: "acme",
+      groups: ["engineering"],
+    };
+    expect(Object.keys(value).sort()).toEqual(
+      ["email", "email_verified", "external_user_id", "groups", "idp_key", "provider"],
+    );
+    // nullables accept null (matches Option<..> on the Rust side)
+    const nulls: ReconcileRequest = { ...value, provider: null, email_verified: null };
+    expect(nulls.provider).toBeNull();
+  });
+});
+```
+Run: `cd packages/temper-cloud && bun run test oauth/wire-contract && cd -` → PASS. (If the Rust struct's fields ever change, update both sides — this test is the drift tripwire.)
 
 - [ ] **Step 5: Wire reconcile into the ACS handler (fail-open)**
 
