@@ -58,6 +58,19 @@ your-org-on-temper.
 
 ## The sequence
 
+> **SAML instances — this runbook is *bracketed* by SAML setup.** On an instance that fronts a
+> SAML IdP (see [self-hosting-saml.md](./self-hosting-saml.md)), some SAML steps run *before* this
+> sequence and one runs *after* it:
+>
+> 1. `temper admin saml provision` → set the emitted env on **both** Vercel functions → deploy →
+>    apply the `kb_saml_idp` row. This must happen **before** anyone can authenticate.
+> 2. The first admin signs in via SAML, which JIT-provisions their `kb_profiles` row — this is the
+>    "must have signed in once already" precondition of step 0 below.
+> 3. Run this runbook (step 0 root → steps 1–5), which creates the teams.
+> 4. `temper admin saml map-group` → the `kb_saml_group_mappings` rows, **after** the teams those
+>    groups map to exist (created in this runbook).
+> 5. `temper admin saml verify`.
+
 ### 0. The irreducible SQL root step (operator-with-DB-credentials)
 
 There is nothing to authenticate an admin-gated command against until the first admin
