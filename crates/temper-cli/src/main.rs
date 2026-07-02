@@ -303,6 +303,32 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 temper_cli::commands::context_cmd::list(&config, output_format)
             }
+            ContextAction::Share { context, team } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::share_remote(
+                            client,
+                            &context,
+                            &team,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            ContextAction::Unshare { context, team } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::unshare_remote(
+                            client,
+                            &context,
+                            &team,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
         },
         Commands::Warmup { context } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;

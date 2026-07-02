@@ -522,6 +522,21 @@ pub enum ContextAction {
     },
     /// List configured contexts
     List,
+    /// Share a context into a team's read-reach (admin-only). The context ref is a UUID or the
+    /// `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted.
+    Share {
+        /// Context ref: a UUID or `@handle/slug` / `+team-slug/slug`.
+        context: String,
+        /// Team to share into: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
+    },
+    /// Unshare a context from a team (admin-only).
+    Unshare {
+        /// Context ref: a UUID or `@handle/slug` / `+team-slug/slug`.
+        context: String,
+        /// Team to unshare: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
