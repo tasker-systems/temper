@@ -10,7 +10,6 @@ use std::future::Future;
 use temper_core::types::{AuthClaims, AuthenticatedProfile};
 
 use temper_services::error::ApiError;
-use temper_services::services::profile_service;
 use temper_services::state::AppState;
 
 /// Internal JWT claim structure for deserialization.
@@ -98,16 +97,23 @@ pub async fn require_auth(
         iat: token_data.claims.iat,
     };
 
-    // 5. Resolve (or auto-provision) the profile.
-    let profile = profile_service::resolve_from_claims(&state.pool, &claims).await?;
-
-    // 5a. Reject deactivated accounts. This is the authn lever for soft-deleted
-    //     profiles — it applies regardless of which auth provider resolved the
-    //     claims (OAuth or SAML).
-    if !profile.is_active {
-        tracing::warn!(profile_id = %profile.id, "rejected: profile is deactivated");
-        return Err(ApiError::Unauthorized("account is deactivated".to_string()));
-    }
+    // 5. Resolve + deactivation gate via the shared seam (Level 1). The gate
+    //    sequence lives once in temper-services::auth; this surface only maps
+    //    the refusal to its transport.
+    let authed = temper_services::auth::authenticate(&state.pool, &claims)
+        .await
+        .map_err(|e| match e {
+            temper_services::auth::AuthzError::Deactivated { profile_id } => {
+                tracing::warn!(%profile_id, "rejected: profile is deactivated");
+                ApiError::Unauthorized("account is deactivated".to_string())
+            }
+            temper_services::auth::AuthzError::ProfileResolution(err) => err,
+            // Level 1 never denies system access.
+            temper_services::auth::AuthzError::SystemAccessDenied { .. } => {
+                ApiError::Internal("unexpected system-access error from authenticate".to_string())
+            }
+        })?;
+    let profile = authed.profile.clone();
 
     tracing::Span::current().record("profile_id", tracing::field::display(profile.id));
 
@@ -123,9 +129,7 @@ pub async fn require_auth(
     }
 
     // 7. Inject AuthenticatedProfile into extensions.
-    request
-        .extensions_mut()
-        .insert(AuthenticatedProfile { profile, claims });
+    request.extensions_mut().insert(authed);
 
     // 8. Continue.
     Ok(next.run(request).await)
