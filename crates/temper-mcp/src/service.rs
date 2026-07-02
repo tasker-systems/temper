@@ -21,7 +21,6 @@ use rmcp::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, Profile};
 use temper_services::services::profile_service;
 use temper_services::state::AppState;
@@ -58,24 +57,17 @@ impl TemperMcpService {
         }
     }
 
-    /// Resolve the caller's profile from JWT claims.
-    async fn resolve_profile(&self, claims: &McpClaims) -> Result<Profile, rmcp::ErrorData> {
-        let auth_claims = AuthClaims {
+    /// Build normalized `AuthClaims` from MCP JWT claims. MCP tokens may omit
+    /// email; the profile service resolves it from cached auth links downstream.
+    fn claims_from(&self, claims: &McpClaims) -> AuthClaims {
+        AuthClaims {
             provider: self.api_state.config.auth_provider_name.clone(),
             external_user_id: claims.sub.clone(),
-            // MCP tokens may not include email; the profile service will
-            // look it up from cached auth links.
             email: String::new(),
             email_verified: None,
             exp: claims.exp,
             iat: 0,
-        };
-
-        profile_service::resolve_from_claims(&self.api_state.pool, &auth_claims)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {e}"), None)
-            })
+        }
     }
 
     /// Resolve the profile from HTTP request parts and cache it.
@@ -92,50 +84,22 @@ impl TemperMcpService {
             rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
         })?;
 
-        let profile = self.resolve_profile(claims).await?;
-        tracing::debug!(
-            profile_id = %profile.id,
-            sub = %claims.sub,
-            "Profile resolved from request"
-        );
+        let auth_claims = self.claims_from(claims);
 
-        // Account deactivation is the authn lever (parity with temper-api's auth middleware):
-        // a soft-deleted profile cannot use MCP tools even with an otherwise-valid token. Checked
-        // before system-access so a deactivated account is refused outright.
-        if !profile.is_active {
-            tracing::warn!(profile_id = %profile.id, "rejected: profile is deactivated");
-            return Err(rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                "This account has been deactivated. This error is terminal and should not be retried."
-                    .to_string(),
-                None,
-            ));
-        }
+        // Level 1: resolve + deactivation gate (shared seam).
+        let authed = temper_services::auth::authenticate(&self.api_state.pool, &auth_claims)
+            .await
+            .map_err(map_authz_error)?;
 
-        // Check system access before allowing any tool use.
-        let has_access = temper_services::services::access_service::has_system_access(
-            &self.api_state.pool,
-            ProfileId::from(profile.id),
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to check system access: {e}"), None)
-        })?;
+        tracing::debug!(profile_id = %authed.profile.id, sub = %claims.sub, "Profile resolved");
 
-        if !has_access {
-            return Err(rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                "Access to this temper instance requires approval. \
-                 Visit https://temperkb.io/request-access or run \
-                 `temper team join` in the CLI to request access. \
-                 This error is terminal and should not be retried."
-                    .to_string(),
-                None,
-            ));
-        }
+        // Level 2: system-access gate (shared seam).
+        temper_services::auth::require_system_access(&self.api_state.pool, &authed)
+            .await
+            .map_err(map_authz_error)?;
 
         let mut guard = self.profile.lock().await;
-        *guard = Some(profile);
+        *guard = Some(authed.profile);
         Ok(())
     }
 
@@ -559,6 +523,39 @@ impl TemperMcpService {
     }
 }
 
+/// Map the shared seam's refusal vocabulary onto rmcp transport errors.
+/// The deactivation and access-required strings are terminal ("do not retry")
+/// and byte-identical to the pre-seam inline messages.
+fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
+    use temper_services::auth::AuthzError;
+    match e {
+        AuthzError::Deactivated { profile_id } => {
+            tracing::warn!(%profile_id, "rejected: profile is deactivated");
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                "This account has been deactivated. This error is terminal and should not be retried."
+                    .to_string(),
+                None,
+            )
+        }
+        AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            "Access to this temper instance requires approval. \
+             Visit https://temperkb.io/request-access or run \
+             `temper team join` in the CLI to request access. \
+             This error is terminal and should not be retried."
+                .to_string(),
+            None,
+        ),
+        AuthzError::ProfileResolution(err) => {
+            rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {err}"), None)
+        }
+        AuthzError::AccessCheck(err) => {
+            rmcp::ErrorData::internal_error(format!("Failed to check system access: {err}"), None)
+        }
+    }
+}
+
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerInfo {
@@ -592,7 +589,9 @@ impl rmcp::ServerHandler for TemperMcpService {
         // StreamableHttpService transport.
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
             if let Some(claims) = parts.extensions.get::<McpClaims>() {
-                match self.resolve_profile(claims).await {
+                let auth_claims = self.claims_from(claims);
+                match profile_service::resolve_from_claims(&self.api_state.pool, &auth_claims).await
+                {
                     Ok(profile) => {
                         tracing::info!(
                             profile_id = %profile.id,
