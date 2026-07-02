@@ -375,6 +375,12 @@ env). Documented in the self-hosting env-var table.
 - **Emptied-groups semantics** (§6) — resolved by decision 9: an *absent* attribute is no-signal (skip, never
   revoke), a *present-but-empty* attribute is a genuine revoke. A future per-IdP "never revoke even on empty" flag
   remains possible but is not v1.
+- **Multi-IdP reconcile scoping (corrects §3.4).** The reconcile diff reads *all* of a profile's non-`native`
+  `kb_team_members` rows and treats them as belonging to the asserting IdP — correct under the single active IdP v1
+  ships, but `kb_team_members` has no `idp_key` discriminator, so a second active IdP would let one IdP's login
+  revoke another IdP's provisioned rows. §3.4's "multi-IdP needs no schema change later — only the loader changes"
+  is therefore inaccurate: enabling multi-IdP also requires an `idp_key` column on `kb_team_members` (or equivalent)
+  and scoping the reconcile read/revoke by it. Carry-forward for the multi-IdP arc; no v1 action.
 
 ---
 

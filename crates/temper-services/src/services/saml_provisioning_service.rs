@@ -128,7 +128,7 @@ pub async fn reconcile_idp_memberships(
             Some(&existing) if existing == m.role => {}
             Some(_) => {
                 sqlx::query!(
-                    "UPDATE kb_team_members SET role = $3 WHERE team_id = $1 AND profile_id = $2",
+                    "UPDATE kb_team_members SET role = $3 WHERE team_id = $1 AND profile_id = $2 AND source = 'idp'",
                     m.team_id,
                     profile_id,
                     m.role as TeamRole,

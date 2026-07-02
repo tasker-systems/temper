@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE kb_team_members SET role = $3 WHERE team_id = $1 AND profile_id = $2",
+  "query": "UPDATE kb_team_members SET role = $3 WHERE team_id = $1 AND profile_id = $2 AND source = 'idp'",
   "describe": {
     "columns": [],
     "parameters": {
@@ -24,5 +24,5 @@
     },
     "nullable": []
   },
-  "hash": "1dd73a36a689acca23bbe4c5595f0239f0118b9bf0602bbdeccb39a397a752eb"
+  "hash": "658d01b45e83f5d2dd63f7f6b658f362e3efcf14095bee3e0ccf9f06ef246fc2"
 }
