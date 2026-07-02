@@ -73,6 +73,37 @@ You do **not** need `eve link` at all: its jobs are (a) link the project — `ve
 covers it — and (b) fetch an AI Gateway credential, which the deployed agent gets
 automatically via Vercel OIDC (see below).
 
+## Registering the temper-mcp connector (Vercel Connect)
+
+Production auth is **platform-carried**: the agent authenticates to temper-mcp through a
+**Vercel Connect connector** (app subject), so no token lives in code or env. temper-mcp is a
+full OAuth 2.0 server and serves the OAuth discovery endpoints (RFC 8414/9728), so Connect
+discovers everything it needs from the MCP URL — you do **not** hand it a client id/secret.
+
+Register the connector by its **full MCP endpoint URL**, from the agent directory (Connect reads
+the local project context to auto-configure project access and the connector `uid`):
+
+```bash
+cd packages/agent-workflows/steward
+vercel connect create https://temperkb.io/mcp --name steward
+```
+
+- The URL is the same value as `TEMPER_MCP_URL`. For a self-hosted instance, use its MCP URL.
+- The command **opens a browser** to complete the OAuth authorization — finish it there; the CLI
+  waits until you do.
+- On success it prints the **connector id**, of the form `mcp.<host>/<name>` (here
+  `mcp.temperkb.io/steward`). That id is the value of `TEMPER_CONNECT_CONNECTOR` below.
+- `vercel connect list` shows existing connectors; `vercel connect token <id> --subject app`
+  mints an app token to smoke-test the connector.
+
+The connection (`agent/connections/temper.ts`) reads `TEMPER_CONNECT_CONNECTOR` and, when set,
+authenticates via `connect({ connector, principalType: "app" })` — falling back to `TEMPER_TOKEN`
+only when the connector env is absent (local dev).
+
+> The connector's app principal resolves to a temper profile. Ensure that profile has **read
+> reach** over the corpus the agent tends (e.g. the shared ingest context) — clearing the
+> ingest-delta gate is not enough; the agent must be able to *read* the sources it distills.
+
 ## Environment contract
 
 Set these on the Vercel project (dashboard, or `vercel env add <NAME>`) **before** deploying —
@@ -84,7 +115,7 @@ the build reads them at discovery time and fails fast if a required one is missi
 | `TEMPER_MCP_URL` | yes | The temper-mcp endpoint, e.g. `https://temperkb.io/mcp`. The agent's sole seam to Temper. One agent dir points at temperkb.io or a self-hosted instance by this value alone. |
 | `TEMPER_API_URL` | yes | The temper REST base, e.g. `https://temperkb.io`. Distinct from `TEMPER_MCP_URL`; used by the region-materialize schedule's direct POST. |
 | `TEMPER_SELF_COGMAP_ID` | yes | The cognitive map this agent tends, by id (minted at genesis). See the design note below. |
-| `TEMPER_CONNECT_CONNECTOR` | prod | The Vercel Connect connector for temper-mcp (registered via `vercel connect create`). When set, the connection authenticates via Connect (app subject) — no secret in code. When unset, it falls back to `TEMPER_TOKEN`. |
+| `TEMPER_CONNECT_CONNECTOR` | prod | The Vercel Connect connector **id** for temper-mcp — the `mcp.<host>/<name>` string printed by `vercel connect create` (e.g. `mcp.temperkb.io/steward`). See [Registering the temper-mcp connector](#registering-the-temper-mcp-connector-vercel-connect). When set, the connection authenticates via Connect (app subject) — no secret in code. When unset, it falls back to `TEMPER_TOKEN`. |
 | `TEMPER_TOKEN` | dev only | An already-OAuth-obtained temper token. Drives `eve dev` and the pre-connector boot path. Not for production — use the Connect connector instead. |
 | `TEMPER_MCP_AUDIENCE` | optional | Only when the token audience varies by target and is not discovery-derived. |
 
