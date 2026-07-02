@@ -11,5 +11,6 @@ pub mod format;
 pub mod ids;
 pub mod output;
 pub mod projection;
+pub mod saml;
 pub mod templates;
 pub mod vault;
