@@ -121,4 +121,3 @@ the *decisions*, but it passes even if a surface forgot to wire the seam in — 
 what proves the wiring. Keep both.
 
 Run it: `cargo make test-e2e` (the parity test needs only `test-db`).
-</content>

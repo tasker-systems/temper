@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { importSPKI, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { ReconcileRequest } from "../../src/oauth/reconcile.js";
+import { type ReconcileRequest, signReconcile } from "../../src/oauth/reconcile.js";
 
 /**
  * Cross-language wire-contract proof (M1 Task 1.4).
@@ -97,5 +97,20 @@ describe("ReconcileRequest wire contract (mirrors Rust temper_core::types::Recon
     // nullables accept null (matches Option<..> on the Rust side)
     const nulls: ReconcileRequest = { ...value, provider: null, email_verified: null };
     expect(nulls.provider).toBeNull();
+  });
+});
+
+describe("internal reconcile signature (mirrors Rust temper_core::internal_sig)", () => {
+  // Shared known-answer vector. The identical inputs and expected signature are asserted
+  // on the Rust side in crates/temper-core/src/internal_sig.rs, so the TS signer and the
+  // Rust verifier cannot drift on the HMAC construction.
+  const KAT_SECRET = "topsecret-abcdefghijklmnopqrstuvwxyz012345";
+  const KAT_TIMESTAMP = 1_750_000_000;
+  const KAT_BODY =
+    '{"provider":"saml:acme","external_user_id":"nid-1","email":"a@corp.io","email_verified":true,"idp_key":"acme","groups":["engineering"]}';
+  const KAT_SIG = "41eed1973f8f2e35fa65ff4e300f076fa08c206ca6c51434bae7d8a0c827d485";
+
+  it("produces the shared known-answer signature", () => {
+    expect(signReconcile(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY)).toBe(KAT_SIG);
   });
 });

@@ -8,20 +8,48 @@ siblings — not a browser-facing endpoint, not a JWT path.
 Source: `crates/temper-api/src/middleware/internal_auth.rs`. Operator setup:
 [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md#3-map-idp-groups-to-temper-teamsroles-phase-2).
 
-## Trust model today: a shared secret
+## Trust model: an HMAC signature over the body
 
-The endpoint is gated by a static shared secret in the `X-Temper-Internal-Secret` header,
-compared constant-time against `INTERNAL_RECONCILE_SECRET`. The comparison is **fail-closed**:
-if the secret is unset the endpoint is disabled and never matches, so an unconfigured
-instance simply does no group provisioning (authentication still works).
+The AS signs each request with `HMAC-SHA256(secret, "{timestamp}.{raw_body}")` and sends two
+headers; the API (`require_internal_signature`) recomputes the MAC over the bytes it received
+and rejects a stale timestamp. Two wins over sending the secret in a header:
 
-```rust
-// internal_auth.rs — length-checked, no early return on content
-fn secret_matches(presented: &str, configured: Option<&str>) -> bool { … }
-```
+- **The secret never crosses the wire.** Only a signature derived from it travels, so a
+  captured request never leaks the secret.
+- **Captured requests are replay-proof.** The signed timestamp must be within ±30s of the
+  verifier's clock (`temper_core::internal_sig::MAX_SKEW_SECS`); a replayed request is stale.
 
-The AS and the API share one Vercel project env, so `INTERNAL_RECONCILE_SECRET` is set to
-the **same** value on both by construction.
+| Header | Value |
+|--------|-------|
+| `X-Temper-Timestamp` | Unix seconds the signature was computed at |
+| `X-Temper-Signature` | lowercase-hex `HMAC-SHA256(secret, "{timestamp}.{body}")` |
+
+Still **fail-closed**: if `INTERNAL_RECONCILE_SECRET` is unset the endpoint is disabled and
+every request is rejected, so an unconfigured instance simply does no group provisioning
+(authentication still works). The AS and the API share one Vercel project env, so the secret
+is the **same** value on both by construction.
+
+**We MAC the raw body bytes, not a re-serialized form.** The signer HMACs the exact JSON
+bytes it sends; the verifier buffers the exact bytes it received and HMACs those (before
+deserializing). Because both operate on identical bytes, there is no cross-language
+canonicalization to drift on — the same discipline every major webhook signature uses
+(GitHub `X-Hub-Signature-256`, Stripe). The signing scheme lives once in
+`temper_core::internal_sig` (shared home for the header names, the message format, and the
+skew window); the TS signer (`packages/temper-cloud/src/oauth/reconcile.ts`) and the Rust
+verifier are pinned together by a **shared known-answer test vector** (asserted in both
+`internal_sig.rs` and `tests/oauth/wire-contract.test.ts`), so they cannot drift on the HMAC
+construction. Rejection is verified end-to-end for wrong-secret, stale-timestamp, and
+tampered-body in `crates/temper-api/tests/internal_saml_test.rs`.
+
+### Secret strength & rotation
+
+- **Length.** Use a `INTERNAL_RECONCILE_SECRET` of **≥32 random bytes**
+  (e.g. `openssl rand -hex 32`). `temper admin saml provision` generates a strong one.
+- **Rotation.** Because both functions read the secret from one shared Vercel project env,
+  rotation is a single atomic swap: generate a new secret, set it on the project env, and
+  redeploy both functions together. There is no dual-secret overlap window to manage —
+  reconcile is fail-open at the ACS handler, so the brief redeploy gap at worst delays group
+  provisioning until the next login, never blocks authentication.
 
 ## Why not an origin allow-list on Vercel
 
@@ -55,24 +83,17 @@ Even if the endpoint were reached by an attacker, the damage is bounded by desig
   auto-join teams — reconcile manages only `source='idp'` rows.
 - It is **purely authorization**: it never creates, deletes, or deactivates a profile.
 
-## Hardening lever (planned): HMAC + timestamp signing
+## Further hardening: edge rate-limiting
 
-The honest upgrade for this topology — tracked as the auth-seam plan's Stage 3 — replaces
-the raw header with a signed request:
+The HMAC signing above (auth-seam plan's Stage 3) is the load-bearing control and is shipped.
+One operational companion remains **operator config, not code**: edge rate-limiting on the
+reconcile path via Vercel Firewall/WAF, to blunt brute-force or flooding against the endpoint.
+Configure it per instance; the code path does not enforce it.
 
-- The AS signs `HMAC(secret, canonical_body ‖ timestamp)`; the API verifies the MAC and
-  rejects stale timestamps (~30s window).
-- Wins over the raw header: the **secret never travels the wire**, and the call becomes
-  **replay-proof**. Same trust model, meaningfully hardened.
-- The canonical-body + timestamp contract is a shared wire concern across a TS signer
-  (temper-cloud) and a Rust verifier (`internal_auth.rs`) — it must be pinned once (a small
-  typed contract in temper-core with ts-rs, or at minimum a documented canonicalization) so
-  the two sides cannot drift on byte order.
-- Operational companions: a strong/rotated `INTERNAL_RECONCILE_SECRET` (≥32 random bytes,
-  with a **documented rotation procedure**) and edge rate-limiting (Vercel Firewall/WAF) on
-  the path.
+**Out of scope (explicit):** a true network boundary (making the API non-publicly-routable).
+The same API also serves public OAuth/SAML endpoints, so it must stay reachable, and private
+networking is Enterprise-tier Vercel — not worth it versus the HMAC signing already in place.
 
 Spec:
 [../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md](../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md)
-(Stage 3). **Not yet built** — today the static secret is the control.
-</content>
+(Stage 3).

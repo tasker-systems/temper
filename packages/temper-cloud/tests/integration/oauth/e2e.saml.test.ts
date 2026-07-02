@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { NeonClient } from "../../../src/db.js";
 import { handleAuthorize, handleSamlAcs, handleToken } from "../../../src/oauth/endpoints.js";
 import { getPublicJwks } from "../../../src/oauth/keys.js";
+import { SIGNATURE_HEADER, signReconcile, TIMESTAMP_HEADER } from "../../../src/oauth/reconcile.js";
 import { loadIdpFixtureCert, makeSignedSamlResponse } from "../../../test-fixtures/saml.js";
 import { makeTestDb, truncateOauthTables } from "../helpers/oauth-db.js";
 
@@ -144,15 +145,24 @@ describe("e2e: full mock-IdP SAML login", () => {
     process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
     process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
 
-    const reconcileCalls: Array<{ url: string; body: unknown; secret: string | null }> = [];
+    const reconcileCalls: Array<{
+      url: string;
+      body: unknown;
+      rawBody: string;
+      timestamp: string | null;
+      signature: string | null;
+    }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
         const headers = new Headers(init.headers);
+        const rawBody = init.body as string;
         reconcileCalls.push({
           url,
-          body: JSON.parse(init.body as string),
-          secret: headers.get("X-Temper-Internal-Secret"),
+          body: JSON.parse(rawBody),
+          rawBody,
+          timestamp: headers.get(TIMESTAMP_HEADER),
+          signature: headers.get(SIGNATURE_HEADER),
         });
         return new Response(null, { status: 204 });
       }),
@@ -201,11 +211,15 @@ describe("e2e: full mock-IdP SAML login", () => {
         new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
       ).toBeTruthy();
 
-      // the reconcile POST fired with the asserted groups + secret header
+      // the reconcile POST fired with the asserted groups and a valid HMAC signature
       expect(reconcileCalls).toHaveLength(1);
-      expect(reconcileCalls[0].url).toBe("https://api.internal/internal/saml/reconcile");
-      expect(reconcileCalls[0].secret).toBe("s3cr3t");
-      expect(reconcileCalls[0].body).toMatchObject({
+      const call = reconcileCalls[0];
+      expect(call.url).toBe("https://api.internal/internal/saml/reconcile");
+      // The secret never travels the wire; a fresh signature over the body does.
+      const timestamp = Number(call.timestamp);
+      expect(Number.isInteger(timestamp)).toBe(true);
+      expect(call.signature).toBe(signReconcile("s3cr3t", timestamp, call.rawBody));
+      expect(call.body).toMatchObject({
         idp_key: "test",
         external_user_id: "grp-user-1",
         groups: ["engineering", "eng-leads"],
