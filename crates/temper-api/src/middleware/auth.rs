@@ -101,6 +101,14 @@ pub async fn require_auth(
     // 5. Resolve (or auto-provision) the profile.
     let profile = profile_service::resolve_from_claims(&state.pool, &claims).await?;
 
+    // 5a. Reject deactivated accounts. This is the authn lever for soft-deleted
+    //     profiles — it applies regardless of which auth provider resolved the
+    //     claims (OAuth or SAML).
+    if !profile.is_active {
+        tracing::warn!(profile_id = %profile.id, "rejected: profile is deactivated");
+        return Err(ApiError::Unauthorized("account is deactivated".to_string()));
+    }
+
     tracing::Span::current().record("profile_id", tracing::field::display(profile.id));
 
     // 6. Optionally capture X-Temper-Device-Id.
