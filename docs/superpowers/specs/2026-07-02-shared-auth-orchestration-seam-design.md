@@ -3,12 +3,20 @@
 **Status:** Draft for review · **Date:** 2026-07-02 · **Task:** `019f22f9-716c-7123-9952-35528fcd1a39`
 **Mode/effort:** plan / medium · **Branch:** `jct/auth-seam-spec`
 
-> **Author's note (decisions made while Cole was away):** the scope question below was
-> answered as **"one spec, sequenced build tasks"** on my best judgment. The open
-> sub-decisions (does the seam own JWT verification; typestate shape; where the
-> cross-surface test lives) are resolved inline with rationale and flagged **[DECISION]**
-> so they are easy to review or override. Nothing here is built yet — this is the spec
-> for a follow-on `writing-plans` pass.
+> **Settled with Cole (2026-07-02):**
+> - **Scope:** one spec, sequenced build tasks.
+> - **Cadence:** T6 is important-not-urgent — no urgency-driven reordering; build in the
+>   order most natural to the work, which is **spine-first** (Stage 1 before Stage 4).
+> - **`resolve_from_claims` branches on provider** (the explicit, auditable choice);
+>   claim-shape detection happens once at the normalizer, which stamps the provider tag.
+> - **The TS/Rust boundary is issuer-mints / resource-server-validates, and stays split.**
+>   Grant advertisement is already single-sourced in TS (`metadata.ts`); Rust never
+>   advertises or mints. The only thing worth pinning across the boundary is a single
+>   machine-token **claim contract** both issuers conform to (see Stage 2 + Stage 4).
+>
+> Other sub-decisions (typestate shape; where the cross-surface test lives) are resolved
+> inline and flagged **[DECISION]**. Nothing here is built yet — this is the spec for a
+> follow-on `writing-plans` pass.
 
 ## Problem
 
@@ -166,6 +174,13 @@ written down. Cover:
   "why not an origin allow-list on Vercel" reasoning** (server-side `fetch` sends no
   `Origin`; egress IPs aren't pinnable; the secret *is* the sibling-trust signal).
 - Profile deactivation (`is_active`) as the authn lever; `system_access` gating.
+- **The issuer / resource-server boundary and the single machine-token claim contract**
+  (see Stage 4): who mints (Auth0 or the Temper AS) vs. who validates (the Rust seam), and
+  the one machine-claim shape (`azp`/`client_id`, `sub = <clientid>@clients`,
+  `gty: client-credentials`, no email) that **both** issuers conform to and the seam
+  normalizes. This document is the canonical home for that contract — the AS-mint path is
+  written to match it, and the Rust normalizer parses exactly one machine shape regardless
+  of issuer.
 
 Move/replace the scattered auth notes currently only in `self-hosting-saml.md` and crate
 CLAUDE.md files into this area (leave forward-pointers where notes are removed).
@@ -197,36 +212,63 @@ Rust `internal_auth.rs` middleware. The canonical-body + timestamp contract is a
 wire concern — define it once (a small typed struct in temper-core with ts-rs, or at
 minimum a documented canonicalization) so the two sides can't drift on byte order.
 
-### Stage 4 — M2M `client_credentials` for agent principals  *(highest external urgency: unblocks T6 steward)*
+### Stage 4 — M2M `client_credentials` for agent principals  *(unblocks the T6 steward; important, not urgent)*
 
-**Why this is the T6 deploy blocker:** the deployed steward authenticates via a Vercel
-Connect connector with `principalType: "app"` (a machine acting as itself, no user). But
-the OAuth AS advertises only `authorization_code` + `refresh_token` — **no
-`client_credentials`** — so an app principal can never mint a token → the MCP connection
-never establishes → zero MCP calls → no profile created. Verified 2026-07-02.
+**Why the steward needs it:** the deployed steward authenticates via a Vercel Connect
+connector with `principalType: "app"` (a machine acting as itself, no user). But the OAuth
+AS advertises only `authorization_code` + `refresh_token` — **no `client_credentials`** —
+so an app principal can never mint a token → the MCP connection never establishes → zero
+MCP calls → no profile created. Verified 2026-07-02.
 
-Fold into the seam because it is exactly a resolve+authorize concern:
+**Architecture reality (corrects the earlier draft's framing).** The OAuth AS is entirely
+TypeScript (temper-cloud) or Auth0 — **Rust never advertises or mints tokens**; it is a pure
+resource server that validates and normalizes. The former Rust discovery handler was already
+migrated to TS (`packages/temper-cloud/src/oauth/metadata.ts`,
+`handleAuthorizationServer`), which branches on `AS_ISSUER`:
 
-- **Advertise `client_credentials`** in the OAuth authorization-server metadata. **Note the
-  location:** RFC 8414 `/.well-known/oauth-authorization-server` (where
-  `grant_types_supported` lives) is served by the **temper-cloud AS layer (TypeScript)**,
-  not temper-mcp's Rust `discovery.rs` (which only serves protected-resource metadata +
-  the DCR proxy). So this advertisement is a temper-cloud change. Provision an **Auth0 M2M
-  application** authorized for the temper API audience.
-- **`authenticate` must handle a machine token.** No human `sub`/email — the `sub` is the
-  client id. The **shared claim normalizer** (introduced here) maps the M2M claim shape
-  (`azp`/`client_id`, audience, no email) into `AuthClaims`, and `resolve_from_claims`
-  maps the client → a **dedicated agent profile** (provisioned on first sight, keyed by the
-  client id via a `kb_profile_auth_links` row with a machine provider). The agent is its own
-  accountable principal — fits the invocation-envelope model — never a proxied human.
-- **This is where JWT-verify enters the seam.** Because M2M tokens need claim-shape
-  normalization that both surfaces must share, the seam grows a `verify_and_normalize`
-  entry that owns JWKS decode + claim-shape branching (human vs machine), audience passed
-  in by the caller. The per-surface verify blocks from Stage 1 collapse here.
-- The agent's provisioned profile then takes **ordinary grants** like any principal: team
-  membership for source read + `cogmap grant --write` for authoring. No special-casing in
-  the gates — a machine profile passes `is_active` and `system_access` on the same rails as
-  a human.
+- **Auth0-fronted instance (temperkb.io — where the steward lives).** `token_endpoint`
+  points at **Auth0**; Auth0 mints. `grant_types_supported` is a hardcoded advertisement in
+  `buildAuth0AsMetadata`.
+- **Temper AS instance (self-hosted SAML).** `token_endpoint` → temper-cloud's own
+  `handleToken` (`endpoints.ts`), which mints EdDSA tokens via `mintAccessToken` and today
+  supports only `authorization_code` + `refresh_token` (else `unsupported_grant_type`).
+
+So there is **no cross-language advertisement split to unify** — advertisement is already
+single-sourced in TS. What crosses the boundary is the **token claim shape**, and the
+unifying artifact is one machine-token claim contract both issuers conform to and the Rust
+seam normalizes (homed in `docs/auth/`, Stage 2). This splits the work cleanly by branch:
+
+**4a — Auth0 branch (the steward path; small).**
+- Add `client_credentials` to `grant_types_supported` in `buildAuth0AsMetadata` (one line,
+  TS). Provision an **Auth0 M2M application** authorized for the temper API audience.
+- **No token-minting code** — Auth0 mints the M2M token. This alone unblocks the steward.
+
+**4b — Rust resource-server side (both branches; the seam work).**
+- `authenticate` must handle a machine token. The **shared claim normalizer** (introduced
+  here — this is where JWT-verify enters the seam) owns JWKS decode + claim-shape branching
+  (human vs machine), audience passed in by the caller. It detects the machine shape
+  (`azp`/`client_id`, `sub = <clientid>@clients`, `gty: client-credentials`, no email) and
+  **stamps a distinct provider tag** (e.g. `auth0-m2m`) into `AuthClaims`. Detection lives
+  once, at the normalizer; the per-surface verify blocks from Stage 1 collapse into it.
+- `resolve_from_claims` then **branches on that provider** (the settled decision): a machine
+  provider does a `(provider, client_id)` link lookup and, on first sight, provisions a
+  **dedicated agent profile** (a `kb_profile_auth_links` row under the machine provider). It
+  never enters `reconcile_by_email` (no verified email). The agent is its own accountable
+  principal — fits the invocation-envelope model — never a proxied human.
+- The provisioned profile then takes **ordinary grants** like any principal: team
+  membership for source read + `cogmap grant --write` for authoring. No auth-path
+  special-casing — a machine profile passes `is_active` and `system_access` on the same rails
+  as a human.
+
+**4c — Temper AS branch (self-hosted M2M; deferrable).**
+- To offer agent principals on a self-hosted SAML instance, `handleToken` must actually
+  **implement** the `client_credentials` grant: authenticate the client (client secret vs a
+  registered-clients table) and mint via a **machine variant of `MintedClaims`** (which today
+  hardcodes `email`). The minted claims must match the single machine-claim contract so 4b's
+  normalizer handles AS-issued and Auth0-issued machine tokens identically — ideally via a
+  ts-rs-shared machine-claim type.
+- This matters only for a self-hosted instance that wants agents, so it can land after 4a/4b
+  when such an instance appears. Flagged, not built with the steward path.
 
 **Bridge, if the steward must go live before Stage 4 lands:** `authorization_code +
 refresh_token` as a dedicated steward login works with temper-mcp as-is (one-time browser
@@ -244,12 +286,16 @@ authorship, which Cole explicitly rejected.)
   `middleware/system_access.rs` (delegate the access gate). Transport mapping only.
 - **temper-mcp:** `service.rs::ensure_profile_from_parts` (delegate both levels),
   `middleware.rs` (Stage 4: hand verify to the seam).
-- **temper-services:** `profile_service::resolve_from_claims` (Stage 4: machine-principal
-  provisioning branch), `access_service` (unchanged; already the gate logic).
-- **temper-cloud (TS):** AS metadata `grant_types_supported += client_credentials`
-  (Stage 4); HMAC signing on the reconcile call (Stage 3).
-- **temper-core:** wire contracts — machine `AuthClaims` variant / reconcile
-  canonical-body struct (ts-rs shared).
+- **temper-services:** `profile_service::resolve_from_claims` (Stage 4b: branch on the
+  machine provider tag → agent-profile provisioning), `access_service` (unchanged; already
+  the gate logic).
+- **temper-cloud (TS):** `buildAuth0AsMetadata` `grant_types_supported += client_credentials`
+  (Stage 4a); `handleToken` `client_credentials` grant + machine `MintedClaims` variant
+  (Stage 4c, deferrable); HMAC signing on the reconcile call (Stage 3). Note: AS metadata
+  is already single-sourced here — no Rust advertisement to touch.
+- **temper-core:** wire contracts — the single machine-token claim shape (ts-rs shared, so
+  the AS-mint path in 4c and the Rust normalizer in 4b agree) + the reconcile canonical-body
+  struct (Stage 3).
 - **docs/auth/** (Stage 2, new area).
 - **tests/e2e:** cross-surface parity suite (Stage 1).
 
@@ -270,14 +316,13 @@ authorship, which Cole explicitly rejected.)
 
 ## Open questions / risks
 
-1. **Scope confirmation.** I chose "one spec, sequenced build tasks." If Cole wants
-   M2M-first (T6 urgency) driving Stage 1's shape, Stage 1 and Stage 4 partially merge —
-   verify-in-seam would land immediately rather than as a follow-on. Flagged for review.
-2. **Machine-provider modeling.** Does the agent profile use a distinct `auth_provider`
-   value (e.g. `"m2m"`/`"auth0-m2m"`) in `kb_profile_auth_links`, and does
-   `resolve_from_claims` branch on provider or on claim shape? Leaning provider-tagged so
-   the machine path is explicit and auditable. Resolve during Stage 4 design.
-3. **`SystemAuthorized` plumbing on temper-api.** temper-api applies system_access as a
+1. **Machine `sub`/`client_id` extraction (Stage 4b).** Auth0 M2M tokens set
+   `sub = <clientid>@clients` and `azp = <clientid>`. The normalizer should key the agent
+   profile on the stable client id — confirm whether to read `azp` directly or strip the
+   `@clients` suffix from `sub` (prefer `azp`; validate against a real Auth0 M2M token when
+   the app is provisioned). The `auth0-m2m` provider tag value is a naming choice to lock in
+   during Stage 4 design.
+2. **`SystemAuthorized` plumbing on temper-api.** temper-api applies system_access as a
    router *layer*, not inside a handler, so the `SystemAuthorized` token can't easily reach
    handlers as a value. Likely temper-api keeps injecting `AuthenticatedProfile` into
    extensions and the layer just *runs* `require_system_access` for its gate effect. The
@@ -295,4 +340,4 @@ authorship, which Cole explicitly rejected.)
 - **Stage 1** — build/medium: "Extract `temper-services::auth` two-level seam + cross-surface parity test"
 - **Stage 2** — build/small: "Stand up `docs/auth/` canonical area; migrate scattered auth notes"
 - **Stage 3** — build/medium: "HMAC + timestamp signing on the internal reconcile channel"
-- **Stage 4** — build/medium: "M2M `client_credentials` agent principals (advertise grant, Auth0 M2M app, machine-claim normalization, agent-profile provisioning) — unblocks T6 steward"
+- **Stage 4** — build/medium: "M2M `client_credentials` agent principals — 4a: advertise the grant in TS Auth0 metadata + Auth0 M2M app (unblocks the steward); 4b: Rust machine-claim normalizer + provider-branched agent-profile provisioning; 4c (deferrable): AS-mint `client_credentials` grant for self-hosted instances"
