@@ -694,7 +694,7 @@ pub enum AdminSamlAction {
         /// Override the signing key id (default `as-<YYYY-MM>`).
         #[arg(long)]
         kid: Option<String>,
-        /// Repeatable `client_id=redirect_uri` for AS_CLIENTS (e.g. temper-cli=https://…/cli-callback).
+        /// Repeatable `client_id=redirect_uri` for AS_CLIENTS (e.g. `temper-cli=https://host/api/auth/cli-callback`).
         #[arg(long = "client")]
         clients: Vec<String>,
         /// Write the env bundle here instead of stdout (chmod 0600 — contains the private key).
@@ -706,6 +706,34 @@ pub enum AdminSamlAction {
         /// Run the kb_saml_idp SQL against $DATABASE_URL via psql (default: emit only).
         #[arg(long)]
         apply: bool,
+    },
+    /// Emit a kb_saml_group_mappings INSERT for `group → (+team, role)` (run AFTER teams exist).
+    MapGroup {
+        #[arg(long)]
+        idp_key: String,
+        /// The IdP-asserted group value.
+        group: String,
+        /// Team to map into: a slug (optionally `+`-prefixed) or a UUID.
+        team: String,
+        #[arg(long, default_value = "member")]
+        role: String,
+        /// Instead of emitting a mapping, list groups the IdP has actually asserted
+        /// (reads kb_saml_seen_groups via psql; needs DATABASE_URL).
+        #[arg(long)]
+        from_seen: bool,
+        /// Run the INSERT against $DATABASE_URL via psql (default: emit only).
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Verify a provisioned instance: AS metadata reachable, caller is a system admin
+    /// (the gating_team_slug silent-403 check), and — with --db — one active kb_saml_idp row.
+    Verify {
+        /// Instance base URL to probe (e.g. <https://temper.acme.com>).
+        #[arg(long)]
+        instance_url: String,
+        /// Also check kb_saml_idp via psql (needs DATABASE_URL).
+        #[arg(long)]
+        db: bool,
     },
 }
 

@@ -296,6 +296,124 @@ pub fn apply_sql_via_psql(sql: &str) -> Result<()> {
     Ok(())
 }
 
+/// `temper admin saml map-group` — resolve `team` via the authenticated client, render the
+/// `kb_saml_group_mappings` INSERT via `saml::render_group_mapping_sql`, then emit or `--apply`.
+pub async fn map_group(
+    client: &temper_client::TemperClient,
+    idp_key: &str,
+    group: &str,
+    team: &str,
+    role: &str,
+    apply: bool,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    let sql = saml::render_group_mapping_sql(idp_key, group, team_id, role);
+    if apply {
+        apply_sql_via_psql(&sql)?;
+        output::success(format!("mapped '{group}' → {team} ({role})"));
+    } else {
+        println!("{sql}");
+    }
+    let _ = fmt;
+    Ok(())
+}
+
+/// List groups the IdP has actually asserted (kb_saml_seen_groups), most-recent first.
+pub fn from_seen(idp_key: &str) -> Result<()> {
+    let db = std::env::var("DATABASE_URL")
+        .map_err(|_| TemperError::Config("--from-seen needs DATABASE_URL".into()))?;
+    let out = std::process::Command::new("psql")
+        .arg(&db)
+        .arg("-tA")
+        .arg("-c")
+        .arg(format!(
+            "SELECT group_value, last_seen FROM kb_saml_seen_groups \
+             WHERE idp_key = '{}' ORDER BY last_seen DESC",
+            idp_key.replace('\'', "''")
+        ))
+        .output()
+        .map_err(|e| TemperError::Config(format!("failed to launch psql: {e}")))?;
+    if !out.status.success() {
+        return Err(TemperError::Config(format!(
+            "psql failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    print!("{}", String::from_utf8_lossy(&out.stdout));
+    Ok(())
+}
+
+/// `temper admin saml verify` — probe a provisioned instance: AS metadata reachable, caller is a
+/// system admin (proves the `gating_team_slug` gate is correctly set up), and — with `--db` —
+/// exactly one active `kb_saml_idp` row.
+pub async fn verify(
+    client: &temper_client::TemperClient,
+    instance_url: &str,
+    db_check: bool,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let base = instance_url.trim_end_matches('/');
+    let http = reqwest::Client::new();
+    let mut ok = true;
+
+    // 1. AS metadata + JWKS reachable ⇒ AS mode on.
+    for path in ["/.well-known/oauth-authorization-server", "/oauth/jwks"] {
+        let url = format!("{base}{path}");
+        match http.get(&url).send().await {
+            Ok(r) if r.status().is_success() => {
+                output::success(format!("AS reachable: {path}"));
+            }
+            Ok(r) => {
+                ok = false;
+                output::error(format!("{path} → HTTP {}", r.status()));
+            }
+            Err(e) => {
+                ok = false;
+                output::error(format!("{path} unreachable: {e}"));
+            }
+        }
+    }
+
+    // 2. Caller is a system admin (the gating_team_slug silent-403 check).
+    match client.admin().get_settings().await {
+        Ok(_) => output::success("caller is a system admin (is_system_admin = true)"),
+        Err(e) => {
+            ok = false;
+            output::error(format!(
+                "admin check failed ({e}) — verify gating_team_slug is set AND you own that team"
+            ));
+        }
+    }
+
+    // 3. Optional: exactly one active kb_saml_idp row.
+    if db_check {
+        let db = std::env::var("DATABASE_URL")
+            .map_err(|_| TemperError::Config("--db needs DATABASE_URL".into()))?;
+        let out = std::process::Command::new("psql")
+            .arg(&db)
+            .arg("-tA")
+            .arg("-c")
+            .arg("SELECT count(*) FROM kb_saml_idp WHERE is_active")
+            .output()
+            .map_err(|e| TemperError::Config(format!("failed to launch psql: {e}")))?;
+        let count = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        if count == "1" {
+            output::success("exactly one active kb_saml_idp row");
+        } else {
+            ok = false;
+            output::error(format!("expected 1 active kb_saml_idp row, found {count}"));
+        }
+    }
+
+    let _ = fmt;
+    if ok {
+        Ok(())
+    } else {
+        Err(TemperError::Api("one or more SAML checks failed".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

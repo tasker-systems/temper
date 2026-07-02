@@ -478,6 +478,46 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         apply,
                     },
                 ),
+                AdminSamlAction::MapGroup {
+                    idp_key,
+                    group,
+                    team,
+                    role,
+                    from_seen,
+                    apply,
+                } => {
+                    if from_seen {
+                        temper_cli::commands::admin_saml::from_seen(&idp_key)
+                    } else {
+                        temper_cli::actions::runtime::with_client(|client| {
+                            Box::pin(async move {
+                                temper_cli::commands::admin_saml::map_group(
+                                    client,
+                                    &idp_key,
+                                    &group,
+                                    &team,
+                                    &role,
+                                    apply,
+                                    output_format,
+                                )
+                                .await
+                            })
+                        })
+                    }
+                }
+                AdminSamlAction::Verify { instance_url, db } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_saml::verify(
+                                client,
+                                &instance_url,
+                                db,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
             },
         },
         Commands::Auth { action } => match action {
