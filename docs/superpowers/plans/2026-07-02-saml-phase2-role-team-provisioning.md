@@ -444,7 +444,7 @@ pub async fn reconcile_idp_memberships(
 
     // 2. Current state for this profile: role + source per team.
     let current = sqlx::query!(
-        r#"SELECT team_id, role AS "role: TeamRole", source AS "source: String"
+        r#"SELECT team_id, role AS "role: TeamRole", source::text AS "source: String"
            FROM kb_team_members WHERE profile_id = $1"#,
         profile_id,
     )
