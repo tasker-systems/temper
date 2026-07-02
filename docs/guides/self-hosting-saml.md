@@ -9,6 +9,11 @@ EdDSA-signed Temper JWT that `temper-api` trusts.
 Use this when your organization's IdP speaks SAML 2.0 (e.g. Okta, Entra ID, PingFederate, Shibboleth)
 and you want a native SP integration rather than an OIDC bridge.
 
+> **This guide is the operator runbook.** For the *security model* it implements — how
+> tokens are verified, the two-level authorization seam, the reconcile channel's trust
+> model, and profile deactivation as an authn lever — see [../auth/](../auth/README.md),
+> the canonical home for Temper's auth flows.
+
 ## How it works
 
 ```text
@@ -219,6 +224,9 @@ These gate the internal reconcile call the AS makes to `temper-api` before minti
 (they share a Vercel project env). If unset, the reconcile endpoint is disabled and no group
 provisioning occurs (authentication still works).
 
+> Why a shared secret rather than an origin/IP allow-list, and the endpoint's bounded blast
+> radius, are explained in [../auth/reconcile-channel.md](../auth/reconcile-channel.md).
+
 | Variable | Where | Purpose |
 | --- | --- | --- |
 | `INTERNAL_RECONCILE_SECRET` | AS + API (shared) | Shared secret gating the internal reconcile call. Same value on both. Unset ⇒ reconcile disabled, no group provisioning. |
@@ -281,6 +289,10 @@ UPDATE kb_profiles SET is_active = false WHERE id = '<profile-uuid>';
 A deactivated profile is rejected by the API auth middleware (`401`) even with a valid token.
 This never deletes the profile or its history, and it is independent of SAML group provisioning
 (re-activating restores access). Reconcile/deprovisioning of a team never deactivates a profile.
+
+> `is_active` is enforced by the shared authorization seam (Level 1), so **both** surfaces —
+> `temper-api` and `temper-mcp` — reject a deactivated profile identically. See
+> [../auth/authorization-seam.md](../auth/authorization-seam.md).
 
 ## Limitations (Phase 1)
 
