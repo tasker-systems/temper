@@ -7,6 +7,7 @@
 //! [`state::JwksKeyStore`], [`config::ApiConfig`]). The backend + services move in
 //! later chunks. See goal `019f149b`.
 
+pub mod auth;
 pub mod backend;
 pub mod config;
 pub mod error;
