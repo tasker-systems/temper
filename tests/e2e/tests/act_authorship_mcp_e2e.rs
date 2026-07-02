@@ -34,7 +34,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpServi
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
             .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
     let api_config = ApiConfig {
         database_url: "unused".to_string(),
         jwks_url: "unused".to_string(),

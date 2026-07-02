@@ -27,10 +27,6 @@ pub struct McpConfig {
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
     pub mcp_base_url: String,
 
-    /// Auth0 domain (issuer), e.g. `https://your-tenant.auth0.com/`.
-    /// Reuses AUTH_ISSUER — no new env var needed.
-    pub auth0_domain: String,
-
     /// OAuth audience / resource indicator for MCP tokens.
     /// Must match what Auth0 is configured to issue tokens for.
     pub mcp_audience: String,
@@ -52,7 +48,6 @@ impl McpConfig {
 
         Ok(Self {
             mcp_base_url: env::var("MCP_BASE_URL").map_err(McpConfigError::Env)?,
-            auth0_domain: env::var("AUTH_ISSUER").map_err(McpConfigError::Env)?,
             mcp_audience: env::var("MCP_AUDIENCE")
                 .or_else(|_| env::var("AUTH_AUDIENCE"))
                 .map_err(McpConfigError::Env)?,

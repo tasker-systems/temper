@@ -1,8 +1,11 @@
-//! OAuth well-known discovery endpoints and dynamic client registration.
+//! OAuth protected-resource metadata and dynamic client registration.
 //!
-//! These endpoints tell MCP clients how to authenticate. Auth0 is the
-//! authorization server; we advertise its endpoints and provide a thin
-//! registration endpoint that returns our pre-registered client_id.
+//! These endpoints tell MCP clients how to authenticate: the RFC 9728
+//! protected-resource metadata and a thin registration endpoint that returns
+//! our pre-registered client_id. The RFC 8414 authorization-server metadata
+//! (`/.well-known/oauth-authorization-server`) is served by the temper-cloud
+//! AS layer instead, so a single handler can advertise either the Temper AS
+//! (SAML instances) or Auth0 (legacy instances) from one shared deployment.
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
@@ -22,24 +25,6 @@ struct ProtectedResourceMetadata {
     scopes_supported: Vec<&'static str>,
 }
 
-/// RFC 8414 — Authorization Server Metadata.
-///
-/// Returns Auth0's OAuth endpoints so MCP clients can perform the
-/// authorization code + PKCE flow. Includes a `registration_endpoint`
-/// pointing to our thin DCR proxy.
-#[derive(Serialize)]
-struct AuthorizationServerMetadata {
-    issuer: String,
-    authorization_endpoint: String,
-    token_endpoint: String,
-    registration_endpoint: String,
-    scopes_supported: Vec<&'static str>,
-    response_types_supported: Vec<&'static str>,
-    grant_types_supported: Vec<&'static str>,
-    code_challenge_methods_supported: Vec<&'static str>,
-    resource: String,
-}
-
 /// Build RFC 9728 protected-resource metadata for the given server base URL.
 ///
 /// `offline_access` is advertised so conformant MCP clients request it
@@ -54,46 +39,9 @@ fn protected_resource_metadata(base: &str) -> ProtectedResourceMetadata {
     }
 }
 
-/// Build RFC 8414 authorization-server metadata.
-///
-/// `offline_access` is advertised alongside the `refresh_token` grant so
-/// MCP clients can obtain and use refresh tokens (see
-/// [`protected_resource_metadata`]).
-fn authorization_server_metadata(
-    base: &str,
-    auth0_domain: &str,
-    mcp_audience: &str,
-) -> AuthorizationServerMetadata {
-    let auth0 = auth0_domain.trim_end_matches('/');
-
-    AuthorizationServerMetadata {
-        issuer: format!("{auth0}/"),
-        authorization_endpoint: format!("{auth0}/authorize"),
-        token_endpoint: format!("{auth0}/oauth/token"),
-        registration_endpoint: format!("{base}/oauth/register"),
-        scopes_supported: vec!["openid", "profile", "email", "offline_access"],
-        response_types_supported: vec!["code"],
-        grant_types_supported: vec!["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: vec!["S256"],
-        resource: mcp_audience.to_string(),
-    }
-}
-
 /// `GET /.well-known/oauth-protected-resource`
 pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
     Json(protected_resource_metadata(&state.mcp_config.mcp_base_url))
-}
-
-/// `GET /.well-known/oauth-authorization-server`
-pub async fn oauth_authorization_server(
-    State(state): State<Arc<McpAppState>>,
-) -> impl IntoResponse {
-    let cfg = &state.mcp_config;
-    Json(authorization_server_metadata(
-        &cfg.mcp_base_url,
-        &cfg.auth0_domain,
-        &cfg.mcp_audience,
-    ))
 }
 
 // ── Dynamic Client Registration (thin proxy) ──────────────────────────
@@ -205,48 +153,6 @@ mod tests {
             meta.scopes_supported.contains(&"offline_access"),
             "offline_access must be advertised: {:?}",
             meta.scopes_supported
-        );
-    }
-
-    #[test]
-    fn authorization_server_metadata_advertises_offline_access() {
-        let meta = authorization_server_metadata(
-            "https://temperkb.io",
-            "https://tenant.auth0.com/",
-            "https://api.temperkb.io",
-        );
-        assert!(
-            meta.scopes_supported.contains(&"offline_access"),
-            "offline_access must be advertised: {:?}",
-            meta.scopes_supported
-        );
-    }
-
-    /// Advertising `offline_access` is only useful if clients can also
-    /// exchange the resulting refresh token via the `refresh_token` grant.
-    #[test]
-    fn authorization_server_metadata_supports_refresh_token_grant() {
-        let meta = authorization_server_metadata(
-            "https://temperkb.io",
-            "https://tenant.auth0.com/",
-            "https://api.temperkb.io",
-        );
-        assert!(meta.grant_types_supported.contains(&"refresh_token"));
-    }
-
-    /// A trailing slash on the configured Auth0 domain must not produce a
-    /// double slash in the derived endpoint URLs.
-    #[test]
-    fn authorization_server_metadata_trims_trailing_slash_on_issuer() {
-        let meta = authorization_server_metadata(
-            "https://temperkb.io",
-            "https://tenant.auth0.com/",
-            "https://api.temperkb.io",
-        );
-        assert_eq!(meta.issuer, "https://tenant.auth0.com/");
-        assert_eq!(
-            meta.authorization_endpoint,
-            "https://tenant.auth0.com/authorize"
         );
     }
 

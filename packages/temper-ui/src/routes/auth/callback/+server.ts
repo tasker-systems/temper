@@ -15,7 +15,7 @@
 
 import type { RequestHandler } from './$types';
 import { redirect } from '@sveltejs/kit';
-import { exchangeCode, decodeIdToken } from '$lib/server/oidc';
+import { exchangeCode, identityClaimsFromTokens } from '$lib/server/oidc';
 import { readPkce, clearPkce, writeSession } from '$lib/server/session';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
@@ -57,7 +57,14 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		throw redirect(303, '/?error=auth_exchange_failed');
 	}
 
-	const idTokenClaims = decodeIdToken(tokens.id_token);
+	let idTokenClaims;
+	try {
+		idTokenClaims = identityClaimsFromTokens(tokens);
+	} catch (err) {
+		console.error('OIDC identity decode failed', err);
+		clearPkce(cookies);
+		throw redirect(303, '/?error=auth_exchange_failed');
+	}
 
 	await writeSession(cookies, {
 		accessToken: tokens.access_token,

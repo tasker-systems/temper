@@ -1,12 +1,15 @@
 /**
  * Provider-agnostic OIDC server-side helpers (Authorization Code + PKCE).
  *
- * Endpoints are resolved at runtime from the issuer's discovery document
- * (`/.well-known/openid-configuration`), so any OIDC provider works — the
- * canonical deployment runs against Auth0, a self-hosted install can point at
- * Okta, Keycloak, etc. purely through env. Config is read from `OIDC_*` keys
- * with a fallback to the canonical deployment's existing `AUTH0_*` keys (see
- * `resolveOidcConfig`), so temperkb.io keeps working with no env changes.
+ * Endpoints are resolved at runtime from the issuer's discovery document,
+ * fetched by default from `/.well-known/openid-configuration` (or from
+ * `OIDC_DISCOVERY_URL` when set — e.g. a Temper AS instance serves RFC 8414
+ * metadata at `/.well-known/oauth-authorization-server`), so any OIDC/OAuth
+ * provider works — the canonical deployment runs against Auth0, a self-hosted
+ * install can point at a Temper AS, Okta, Keycloak, etc. purely through env.
+ * Config is read from `OIDC_*` keys with a fallback to the canonical
+ * deployment's existing `AUTH0_*` keys (see `resolveOidcConfig`), so
+ * temperkb.io keeps working with no env changes.
  *
  * The flow:
  *   1. /auth/login generates state + PKCE verifier, stashes them in a
@@ -29,13 +32,14 @@ import {
 	buildAuthorizeUrl,
 	buildLogoutUrl,
 	decodeIdToken,
+	identityClaimsFromTokens,
 	type OidcConfig,
 	type OidcEndpoints,
 	type OidcTokenResponse,
 	type OidcIdTokenClaims
 } from './oidc-core';
 
-export { decodeIdToken };
+export { decodeIdToken, identityClaimsFromTokens };
 export type { OidcTokenResponse, OidcIdTokenClaims };
 
 export const REFRESH_THRESHOLD_SECONDS = 60;
@@ -51,7 +55,7 @@ export const OIDC_REDIRECT_URI = `${APP_BASE_URL}/auth/callback`;
 let discoveryPromise: Promise<OidcEndpoints> | null = null;
 export function discovery(): Promise<OidcEndpoints> {
 	if (!discoveryPromise) {
-		const url = `${config.issuer}/.well-known/openid-configuration`;
+		const url = config.discoveryUrl ?? `${config.issuer}/.well-known/openid-configuration`;
 		discoveryPromise = fetch(url)
 			.then(async (res) => {
 				if (!res.ok) {
@@ -106,7 +110,7 @@ export async function exchangeCode(
 	return tokenRequest(token_endpoint, {
 		grant_type: 'authorization_code',
 		client_id: config.clientId,
-		client_secret: config.clientSecret,
+		...(config.clientSecret ? { client_secret: config.clientSecret } : {}),
 		code,
 		redirect_uri: OIDC_REDIRECT_URI,
 		code_verifier: codeVerifier
@@ -123,7 +127,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<OidcToke
 	return tokenRequest(token_endpoint, {
 		grant_type: 'refresh_token',
 		client_id: config.clientId,
-		client_secret: config.clientSecret,
+		...(config.clientSecret ? { client_secret: config.clientSecret } : {}),
 		refresh_token: refreshToken
 	});
 }
