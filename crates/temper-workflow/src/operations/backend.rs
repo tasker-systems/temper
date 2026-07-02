@@ -16,12 +16,13 @@ use async_trait::async_trait;
 use crate::types::resource::ResourceRow;
 use temper_core::error::TemperError;
 use temper_core::types::ids::{EdgeId, PropertyId};
+use temper_core::types::materialize::MaterializeAck;
 
 use super::commands::{
     AdvanceStewardWatermark, AssertRelationship, CloseInvocation, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, ListResources, OpenInvocation,
-    ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources, SetFacet,
-    ShowResource, UpdateResource,
+    CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
+    OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
+    SearchResources, SetFacet, ShowResource, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -149,6 +150,17 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: AdvanceStewardWatermark,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
+
+    // ── cron-driven region materialize-on-threshold (T4b) ──
+    // Re-materialize a cogmap's regions when its formation delta since the last materialize clears
+    // the threshold; a safe no-op below threshold. Gated on cogmap-write (auth before write). This is
+    // the substrate's deterministic region-formation cadence, distinct from the steward's authored
+    // acts — invoked by a cron, not by the agent.
+
+    async fn materialize_on_threshold(
+        &self,
+        cmd: MaterializeOnThreshold,
+    ) -> Result<CommandOutput<MaterializeAck>, TemperError>;
 }
 
 #[cfg(test)]

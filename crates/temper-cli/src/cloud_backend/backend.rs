@@ -60,8 +60,8 @@ mod embed_impl {
     use temper_workflow::operations::{
         AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
         CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
-        ListResources, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
-        ReweightRelationship, SearchResources, ShowResource, UpdateResource,
+        ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+        RetypeRelationship, ReweightRelationship, SearchResources, ShowResource, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::ResourceRow;
@@ -271,6 +271,16 @@ mod embed_impl {
                 "CloudBackend::advance_steward_watermark not wired until cutover".to_string(),
             ))
         }
+
+        async fn materialize_on_threshold(
+            &self,
+            _cmd: MaterializeOnThreshold,
+        ) -> Result<CommandOutput<temper_core::types::materialize::MaterializeAck>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::materialize_on_threshold not wired until cutover".to_string(),
+            ))
+        }
     }
 
     #[cfg(test)]
@@ -347,8 +357,9 @@ mod non_embed_impl {
     use temper_workflow::operations::{
         AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
         CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-        OpenInvocation, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
-        ReweightRelationship, SearchHit, SearchResources, ShowResource, UpdateResource,
+        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
+        RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
+        UpdateResource,
     };
     use temper_workflow::types::resource::ResourceRow;
 
@@ -502,6 +513,16 @@ mod non_embed_impl {
             &self,
             _cmd: AdvanceStewardWatermark,
         ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn materialize_on_threshold(
+            &self,
+            _cmd: MaterializeOnThreshold,
+        ) -> Result<CommandOutput<temper_core::types::materialize::MaterializeAck>, TemperError>
+        {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

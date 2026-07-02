@@ -448,6 +448,39 @@ pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uui
     touched_since(pool, cogmap, watermark, &names).await
 }
 
+/// COUNT of formation-affecting events (structural ∪ content) that touched the cogmap after
+/// `watermark` — the count twin of [`formation_touched_since`]. `watermark == None` counts from the
+/// beginning (the cogmap was never materialized), mirroring the `p_watermark IS NULL` gate the
+/// steward ingest count uses. Shares the same event-name sets + anchor-scoping predicate as the bool
+/// gate (via the shared `touched_since` body's siblings), so the "materialize now?" threshold and the
+/// "is the recorded fingerprint stale?" gate can never disagree on what a formation touch is.
+///
+/// Deliberately CHEAP — one scalar `count(*)` over the anchor-scoped event slice — so it can gate the
+/// materialize path without itself being as expensive as the load-and-cluster it guards (T4b).
+pub async fn formation_touched_count_since(
+    pool: &PgPool,
+    cogmap: Uuid,
+    watermark: Option<Uuid>,
+) -> Result<i64> {
+    let names: Vec<&str> = STRUCTURAL_EVENTS
+        .iter()
+        .chain(CONTENT_EVENTS)
+        .copied()
+        .collect();
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE ($2::uuid IS NULL OR e.id > $2) \
+            AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
+            AND et.name = ANY($3)",
+    )
+    .bind(cogmap)
+    .bind(watermark)
+    .bind(&names)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// The RESOURCES whose content moved on this cogmap after `watermark` (distinct) — the members behind
 /// each CONTENT event (a block-body revision / add / fold, the readout-only formation inputs), resolved
 /// block → owning resource. Incremental materialization refreshes a reused region's readouts only when

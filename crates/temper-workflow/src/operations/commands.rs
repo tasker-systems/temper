@@ -244,6 +244,17 @@ pub struct AdvanceStewardWatermark {
     pub origin: Surface,
 }
 
+/// Re-materialize a cognitive map's regions when its formation delta since the last materialize
+/// clears `threshold` (T4b) — the cron-invokable trigger for the substrate's own (deterministic,
+/// non-authored) region-formation cadence. Gated on cogmap-write (`cogmap_authorable_by_profile`),
+/// auth before write. Below threshold it is a safe no-op; `threshold == None` uses the default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaterializeOnThreshold {
+    pub cogmap: CogmapId,
+    pub threshold: Option<i64>,
+    pub origin: Surface,
+}
+
 /// Reconcile the L0-style kernel slice of a cognitive map to a pre-embedded
 /// desired-state manifest. Idempotent + additive-only + provenance-scoped: the
 /// `request` is the contract, the fired events are its consequence. `cogmap_id`

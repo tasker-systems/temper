@@ -11,12 +11,15 @@ use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
     GrantCapabilityRequest, RevokeCapabilityRequest,
 };
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::materialize::{
+    MaterializeAck, MaterializeDeltaInput, MaterializeTriggerInput,
+};
 use temper_core::types::reconcile::CreateCogmapRequest;
 use temper_services::backend::DbBackend;
 use temper_services::error::ApiError;
-use temper_services::services::{access_service, cogmap_service};
-use temper_workflow::operations::{Backend, CreateCognitiveMap, Surface};
+use temper_services::services::{access_service, cogmap_service, materialize_service};
+use temper_workflow::operations::{Backend, CreateCognitiveMap, MaterializeOnThreshold, Surface};
 
 use crate::service::TemperMcpService;
 
@@ -232,6 +235,75 @@ pub async fn cogmap_create(
         })?;
 
     let text = serde_json::to_string_pretty(&out.value).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+// ── cogmap_materialize_delta (read) / cogmap_materialize (trigger) ───────────
+
+/// Read a cogmap's materialize delta: how many formation events have landed since the last
+/// materialize, and whether that clears the threshold. Service-direct (gates on
+/// `anchor_readable_by_profile`).
+pub async fn cogmap_materialize_delta(
+    svc: &TemperMcpService,
+    input: MaterializeDeltaInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let cogmap = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let delta = materialize_service::materialize_delta(
+        &svc.api_state.pool,
+        ProfileId::from(profile.id),
+        CogmapId::from(cogmap),
+        input.threshold,
+    )
+    .await
+    .map_err(|e| map_api_error("cogmap_materialize_delta", e))?;
+
+    let text = serde_json::to_string_pretty(&delta).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// Re-materialize a cogmap's regions when its formation delta clears the threshold; a no-op below.
+/// Dispatches through `DbBackend` (auth-before-write + the threshold gate live there).
+pub async fn cogmap_materialize(
+    svc: &TemperMcpService,
+    input: MaterializeTriggerInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let cogmap = temper_workflow::operations::parse_ref(&input.cogmap)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
+        .0;
+
+    let cmd = MaterializeOnThreshold {
+        cogmap: CogmapId::from(cogmap),
+        threshold: input.threshold,
+        origin: Surface::Mcp,
+    };
+
+    let backend = DbBackend::new(svc.api_state.pool.clone(), ProfileId::from(profile.id));
+    let out = backend
+        .materialize_on_threshold(cmd)
+        .await
+        .map_err(|e| match e {
+            TemperError::Forbidden => rmcp::ErrorData::invalid_params(
+                "cogmap_materialize: cannot author this cognitive map".to_string(),
+                None,
+            ),
+            TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
+                "cogmap_materialize: cognitive map not found".to_string(),
+                None,
+            ),
+            other => rmcp::ErrorData::internal_error(format!("cogmap_materialize: {other}"), None),
+        })?;
+
+    let ack: MaterializeAck = out.value;
+    let text = serde_json::to_string_pretty(&ack).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))
