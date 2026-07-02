@@ -1,7 +1,7 @@
 # SAML Phase 2 — role + team provisioning (JIT reconcile-on-login) — design spec
 
-**Date:** 2026-07-01
-**Status:** Design (build/medium). Grounded against `main` after PR #231 (SAML Phase 1 shipped + deployed).
+**Date:** 2026-07-01 (revised 2026-07-02 — decisions 9–11 added after design review)
+**Status:** Design (build/medium), reviewed + approved by Cole. Grounded against `main` after PR #231 (SAML Phase 1 shipped + deployed).
 **Issue:** #224 — "SAML SP with profile, role, and team provisioning." Phase 1 (authn-only) shipped; this spec is **Phase 2**.
 **Predecessor spec:** [2026-07-01-saml-sp-temper-authorization-server-design.md](2026-07-01-saml-sp-temper-authorization-server-design.md) (Phase 0+1).
 **Branch:** `jct/saml-phase2-role-team-provisioning`.
@@ -107,6 +107,27 @@ These were settled during brainstorming (2026-07-01):
    the next successful login. Authn never depends on the provisioning path being healthy. No security escalation
    beyond the already-accepted staleness window.
 
+*Added 2026-07-02 after a design review of the "empty groups" edge (confirmed with Cole):*
+
+9. **Signal-missing guard (empty ≠ absent).** `extractGroups` returns `null` when the assertion carries **no
+   group signal** — either `groups_attr` is unconfigured, or the named attribute is absent from *this* assertion
+   (e.g. a transient IdP misconfiguration). The ACS **skips the reconcile call entirely** on `null`, so a missing
+   attribute never revokes memberships. Only an assertion that *carries* the attribute with an empty value list
+   (a genuine "member of no mapped groups now") yields `[]` and reconciles, revoking stale `idp` rows. This bounds
+   the original §6 "emptied-groups-revokes-all" behavior to a real deprovisioning signal.
+10. **Asserted-group discovery capture.** A new `kb_saml_seen_groups (idp_key, group_value, first_seen, last_seen)`
+    table is upserted with **every** asserted group value (mapped or not) on each reconcile, so operators discover
+    what the IdP actually sends and add mappings reactively via SQL — the mapping table never needs to be
+    pre-populated, and an unmapped group is never a hard blocker. This is the lightweight bridge that makes a live
+    mapping-management admin endpoint (still deferred, §11) unnecessary for v1.
+11. **Profile deactivation is the authn lever, a sibling to reconcile (not part of it).** `kb_profiles` gains
+    `is_active BOOLEAN NOT NULL DEFAULT true`; the API auth middleware rejects a resolved-but-deactivated profile
+    (`401`). Reconcile manages **authz** (team memberships) and never touches `kb_profiles`; account existence is
+    **authn**, controlled by this flag. Built as its own task on this branch. (Corrects a false premise surfaced
+    in review: `kb_profiles` had **no** soft-delete — `profile_service.rs:278` said so verbatim, and `Profile.is_active`
+    was a hardcoded `true` literal.) Auto-join memberships insert without a `source` ⇒ they are `native` ⇒ never
+    touched by reconcile, so a no-groups login keeps every auto-join team.
+
 ---
 
 ## 4. Architecture — seam C flow
@@ -160,12 +181,29 @@ CREATE INDEX idx_kb_saml_group_mappings_idp ON kb_saml_group_mappings(idp_key);
 
 -- 3. Which assertion attribute carries the group list. NULL ⇒ pure authn (no reconcile).
 ALTER TABLE kb_saml_idp ADD COLUMN groups_attr TEXT;
+
+-- 4. Discovery capture (decision 10): every asserted group value (mapped or not) is upserted
+--    here on each reconcile, so operators see what the IdP sends and map reactively. Not read
+--    by the reconcile diff.
+CREATE TABLE kb_saml_seen_groups (
+    idp_key     TEXT        NOT NULL REFERENCES kb_saml_idp(idp_key) ON DELETE CASCADE,
+    group_value TEXT        NOT NULL,
+    first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (idp_key, group_value)
+);
+```
+
+A **second additive migration** `20260702000002_profile_is_active.sql` (decision 11) adds the authn lever:
+
+```sql
+ALTER TABLE kb_profiles ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT true;
 ```
 
 Notes:
 - PK `(idp_key, group_value, team_id)` lets one group map into multiple teams, and multiple groups into one team.
-- `groups_attr` nullable keeps every Phase-1 IdP working unchanged: no `groups_attr` ⇒ the AS reads no groups
-  ⇒ the reconcile payload has an empty group list ⇒ no idp memberships are asserted (see §6 edge cases).
+- `groups_attr` nullable keeps every Phase-1 IdP working unchanged: no `groups_attr` ⇒ `extractGroups` returns
+  `null` ⇒ the AS skips reconcile entirely (decision 9) ⇒ no memberships change.
 
 ---
 
@@ -173,7 +211,13 @@ Notes:
 
 Runs in a new `crates/temper-services/src/services/saml_provisioning_service.rs`, transactional per login.
 
-**Inputs:** the resolved `profile_id`, `idp_key`, and the asserted `groups: Vec<String>`.
+**Inputs:** the resolved `profile_id`, `idp_key`, and the asserted `groups: Vec<String>`. (The service is only
+called when the assertion carried a group signal — the AS's signal-missing guard, decision 9, means a `null`
+signal never reaches here; an empty `groups` slice IS a genuine "no groups now" and revokes.)
+
+**Discovery capture (decision 10), first:** upsert every value in `groups` (mapped or not) into
+`kb_saml_seen_groups` (`ON CONFLICT … DO UPDATE SET last_seen = now()`). Done autonomously (outside the reconcile
+transaction) so discovery data survives even if the reconcile below fails.
 
 **Compute the desired IdP-driven membership set:**
 
@@ -192,10 +236,11 @@ For each `team_id`:
 - idp row exists, `desired` lacks it → **DELETE** the idp row (revocation).
 
 **Edge cases:**
-- `groups_attr` NULL or absent, or asserted `groups` empty → `desired` is empty → every existing `source='idp'`
-  row for the user is revoked. This is correct: an IdP that stops asserting groups (or was never configured for
-  them) is asserting "no IdP-driven memberships." Operators who want authn-only with **no** revocation simply
-  never create idp rows (nothing to revoke). Documented explicitly.
+- **Attribute absent / `groups_attr` NULL** (no signal) → the AS's guard (decision 9) skips the reconcile call
+  entirely; the service is not invoked and nothing is revoked. This is the transient-IdP-misconfiguration-safe path.
+- **Attribute present but empty** (`groups = []`, a genuine "in no mapped groups now") → `desired` is empty →
+  every existing `source='idp'` row for the user is revoked. Correct deprovisioning. Native/auto-join rows are
+  never touched (they are `source='native'`).
 - A mapping row referencing a `team_id` that no longer exists cannot occur (FK `ON DELETE CASCADE`).
 - A `group_value` asserted but unmapped → ignored (no row in `desired`).
 
@@ -207,15 +252,17 @@ For each `team_id`:
 
 ### 7.1 TS AS (temper-cloud)
 
-- `saml/sp.ts`: new pure `extractGroups(profile, idp): string[]` — reads the multi-valued `idp.groups_attr`
-  attribute (reusing the existing `readAttr` narrowing; returns `[]` when `groups_attr` is null/absent).
+- `saml/sp.ts`: new pure `extractGroups(profile, idp): string[] | null` — reads the multi-valued `idp.groups_attr`
+  attribute (reusing the existing `readAttr` narrowing). Returns `null` when there is no signal (`groups_attr`
+  unconfigured, or the attribute absent from this assertion) and an array (possibly empty `[]`) when the attribute
+  is present. Decision 9.
 - `saml/config.ts`: add `groups_attr: string | null` to `SamlIdpRow` and to the `loadActiveIdp` SELECT.
 - new `oauth/reconcile.ts`: `reconcileMemberships(payload): Promise<void>` — `POST`s to
   `${API_BASE_URL}/internal/saml/reconcile` with the shared-secret header; typed request body (no inline
   `json!`-style objects — a typed interface mirroring the Rust request struct). Throws on non-2xx.
-- `oauth/endpoints.ts` ACS handler: after `mapProfileToClaims`, call `extractGroups`, then
-  `await reconcileMemberships(...)` inside a `try/catch` that logs (pino) and proceeds on failure (fail-open),
-  then mint as today.
+- `oauth/endpoints.ts` ACS handler: after `mapProfileToClaims`, call `extractGroups`; **only when it returns
+  non-`null`** call `await reconcileMemberships(...)` inside a `try/catch` that logs (pino) and proceeds on failure
+  (fail-open), then mint as today. A `null` result skips reconcile (decision 9) — no call, no revocation.
 
 ### 7.2 Rust temper-api
 
@@ -238,6 +285,19 @@ For each `team_id`:
 - `ReconcileRequest { provider, external_user_id, email, email_verified, idp_key, groups }` is a boundary type
   (Rust ↔ TS). Per the shared-types rule it lives in `temper-core` with `ts-rs` derives; the TS side imports the
   generated type rather than hand-writing a mirror.
+
+### 7.5 Profile deactivation (authn control, decision 11)
+
+Sibling to reconcile, deliberately separate from it:
+
+- `kb_profiles.is_active BOOLEAN NOT NULL DEFAULT true` (second migration).
+- `profile_service::get_by_id` reads the real column instead of the current hardcoded `true AS "is_active!"`
+  literal; because every `resolve_from_claims` path returns through `get_by_id`, this surfaces the flag on all
+  resolve paths. The `Profile` domain type already has `pub is_active: bool` — no type change.
+- `middleware/auth.rs`: immediately after `resolve_from_claims`, reject a `!profile.is_active` profile with `401`
+  (before injecting `AuthenticatedProfile`). This is the authn choke point: a deactivated account's token is
+  useless on every API request, regardless of what the AS minted. Deactivation never deletes the profile or its
+  memberships; re-activating restores access.
 
 ---
 
@@ -297,7 +357,9 @@ env). Documented in the self-hosting env-var table.
 ## 11. Out of scope (explicit)
 
 - **SCIM / immediate deprovisioning** — Phase 3. Reconcile-on-login's staleness window is accepted here.
-- **Mapping-management CLI/API** — v1 is operator SQL; a `temper-as` surface is a later enhancement.
+- **Mapping-management CLI/API** — v1 is operator SQL; a `temper-as` surface is a later enhancement. The
+  `kb_saml_seen_groups` discovery table (decision 10) is the v1 bridge: operators read observed group values from
+  it and add mappings reactively, so a live admin endpoint is not needed to avoid pre-populating mappings.
 - **Multi-IdP ACS routing** — schema supports it; v1 ships the single-active-IdP loader unchanged.
 - **Encrypted assertions**, **IdP-initiated flow changes** — unchanged from Phase 1.
 - **Composite (team, user, source) membership** — rejected in favor of native-wins-skip (§3.6).
@@ -310,8 +372,9 @@ env). Documented in the self-hosting env-var table.
   works mechanically, but the gating team and its slug are configured by the org-provisioning surface
   (`docs/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`, still design-stage). Phase 2
   does not depend on that arc landing — it just documents that the *first* owner remains the SQL root step.
-- **Emptied-groups-revokes-all semantics** (§6) is the deliberate default. If a target deployment wants
-  "authn-only, never revoke" alongside mapped groups, that is a future per-IdP flag, not v1.
+- **Emptied-groups semantics** (§6) — resolved by decision 9: an *absent* attribute is no-signal (skip, never
+  revoke), a *present-but-empty* attribute is a genuine revoke. A future per-IdP "never revoke even on empty" flag
+  remains possible but is not v1.
 
 ---
 

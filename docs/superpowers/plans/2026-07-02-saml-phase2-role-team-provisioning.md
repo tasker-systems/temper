@@ -16,6 +16,10 @@
 - **Provenance is load-bearing** — reconcile touches ONLY `source='idp'` rows. `source='native'` rows are never inserted-over, updated, or deleted by reconcile. Native-wins-skip on `(team, user)` overlap.
 - **Identity provider string comes from server config** — the reconcile endpoint builds `AuthClaims.provider` from `state.config.auth_provider_name` (identical to `middleware/auth.rs`), NOT from the AS payload, so it resolves the *same* profile the minted token later resolves to. On a SAML instance `auth_provider_name` == `saml:<idp_key>`.
 - **Fail-open** — a reconcile failure (network, 401, 5xx, DB error) logs and lets login proceed; it never blocks authn.
+- **Signal-missing guard** — `extractGroups` returns `null` when the assertion carries NO group signal (no `groups_attr` configured, or the attribute absent from this assertion) and the ACS **skips reconcile** on `null` — so a transient IdP attribute-drop never revokes memberships. A present-but-empty attribute returns `[]`, a genuine "no groups now" signal that DOES reconcile (revoking stale `idp` rows). `null` vs `[]` is load-bearing.
+- **Discovery capture, never a blocker** — the mapping table need not be pre-populated; an unmapped asserted group is ignored for provisioning but recorded in `kb_saml_seen_groups` for reactive mapping. Capture runs for every asserted group (mapped or not).
+- **Authn vs authz separation** — reconcile manages team membership (authz) and NEVER touches `kb_profiles`. Account deactivation (authn) is `kb_profiles.is_active`, gated in the auth middleware (Task 9), independent of reconcile. Auto-join memberships insert without a `source` → they are `native` → never touched by reconcile.
+- **Two additive migrations** — `20260702000001` (phase-2 schema) and `20260702000002` (profile `is_active`). Both additive-only; safe under the `main` auto-deploy invariant.
 - **Typed structs over inline JSON** — the AS→API wire type is `ReconcileRequest`, defined once in `temper-core` with `ts-rs` derives; the TS side imports the generated type. No `serde_json::json!()`, no hand-written TS mirror.
 - **Compile-time SQL** — new queries use `sqlx::query!`/`query_as!`. After adding them: `cargo sqlx prepare --workspace -- --all-features` then `cargo make prepare-services` (and `cargo make prepare-e2e` if e2e gains macro queries).
 - **No unbounded channels; all public types derive `Debug`; `#[expect(..., reason=...)]` over `#[allow]`.**
@@ -29,7 +33,7 @@
 - Create: `migrations/20260702000001_saml_group_provisioning.sql`
 
 **Interfaces:**
-- Produces: `team_member_source` enum (`native|idp`); `kb_team_members.source` column (default `native`); `kb_saml_group_mappings(idp_key, group_value, team_id, role, created)` PK `(idp_key, group_value, team_id)`; `kb_saml_idp.groups_attr TEXT NULL`.
+- Produces: `team_member_source` enum (`native|idp`); `kb_team_members.source` column (default `native`); `kb_saml_group_mappings(idp_key, group_value, team_id, role, created)` PK `(idp_key, group_value, team_id)`; `kb_saml_idp.groups_attr TEXT NULL`; `kb_saml_seen_groups(idp_key, group_value, first_seen, last_seen)` PK `(idp_key, group_value)` (asserted-group discovery capture).
 
 - [ ] **Step 1: Write the migration**
 
@@ -57,6 +61,17 @@ CREATE INDEX idx_kb_saml_group_mappings_idp ON kb_saml_group_mappings(idp_key);
 
 -- 3. Which assertion attribute carries the group list. NULL => pure authn (no reconcile).
 ALTER TABLE kb_saml_idp ADD COLUMN groups_attr TEXT;
+
+-- 4. Discovery capture: every asserted group value (mapped or NOT) is upserted here on each
+--    reconcile, so operators can see what the IdP actually sends and add mappings reactively
+--    (the mapping table need not be pre-populated). Never read by the reconcile diff itself.
+CREATE TABLE kb_saml_seen_groups (
+    idp_key     TEXT        NOT NULL REFERENCES kb_saml_idp(idp_key) ON DELETE CASCADE,
+    group_value TEXT        NOT NULL,
+    first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (idp_key, group_value)
+);
 ```
 
 - [ ] **Step 2: Apply the migration to the dev DB**
@@ -72,9 +87,9 @@ Expected: the new migration applies clean, listed after `20260701000006`.
 
 Run:
 ```bash
-PGPASSWORD=temper psql -h localhost -p 5437 -U temper -d temper_development -c "\d kb_team_members" -c "\d kb_saml_group_mappings" -c "SELECT column_name FROM information_schema.columns WHERE table_name='kb_saml_idp' AND column_name='groups_attr';"
+PGPASSWORD=temper psql -h localhost -p 5437 -U temper -d temper_development -c "\d kb_team_members" -c "\d kb_saml_group_mappings" -c "\d kb_saml_seen_groups" -c "SELECT column_name FROM information_schema.columns WHERE table_name='kb_saml_idp' AND column_name='groups_attr';"
 ```
-Expected: `kb_team_members` shows a `source` column of type `team_member_source`; `kb_saml_group_mappings` exists with the four columns + PK; `groups_attr` row returned.
+Expected: `kb_team_members` shows a `source` column of type `team_member_source`; `kb_saml_group_mappings` exists with the four columns + PK; `kb_saml_seen_groups` exists with `(idp_key, group_value, first_seen, last_seen)` + PK `(idp_key, group_value)`; `groups_attr` row returned.
 
 - [ ] **Step 4: Commit**
 
@@ -369,6 +384,23 @@ async fn native_membership_is_never_touched(pool: PgPool) {
     assert_eq!(out.added, 0);
     assert_eq!(membership(&pool, team_a, profile).await, Some(("Owner".into(), "native".into())));
 }
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn asserted_groups_are_captured_for_discovery_even_when_unmapped(pool: PgPool) {
+    let (profile, _team_a, _team_b) = seed(&pool).await;
+    // 'engineering' is mapped; 'ghosts' is NOT mapped — both must still be captured.
+    reconcile_idp_memberships(&pool, profile, "acme", &["engineering".into(), "ghosts".into()])
+        .await
+        .unwrap();
+
+    let seen: Vec<String> = sqlx::query_scalar(
+        "SELECT group_value FROM kb_saml_seen_groups WHERE idp_key = 'acme' ORDER BY group_value",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(seen, vec!["engineering".to_string(), "ghosts".to_string()]);
+}
 ```
 
 **temper-services has no `MIGRATOR` export yet (this is its first `#[sqlx::test]`).** Before running, add one to `crates/temper-services/src/lib.rs` (mirroring temper-api's `pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");`):
@@ -420,6 +452,21 @@ pub async fn reconcile_idp_memberships(
     idp_key: &str,
     groups: &[String],
 ) -> ApiResult<ReconcileOutcome> {
+    // 0. Discovery capture: record EVERY asserted group (mapped or not) so operators can see
+    //    what the IdP sends and add mappings reactively. Autonomous (not in the reconcile tx
+    //    below) so discovery data survives even if the reconcile fails. No-op when no groups.
+    if !groups.is_empty() {
+        sqlx::query!(
+            r#"INSERT INTO kb_saml_seen_groups (idp_key, group_value)
+               SELECT $1, g FROM UNNEST($2::text[]) AS g
+               ON CONFLICT (idp_key, group_value) DO UPDATE SET last_seen = now()"#,
+            idp_key,
+            groups,
+        )
+        .execute(pool)
+        .await?;
+    }
+
     // 1. Desired set: mapping rows whose group is asserted, collapsed to one max role per team.
     let mut desired: HashMap<Uuid, TeamRole> = HashMap::new();
     if !groups.is_empty() {
@@ -975,7 +1022,7 @@ git commit -m "feat(api): POST /internal/saml/reconcile — JIT profile + reconc
 - Test: `packages/temper-cloud/tests/saml/sp.test.ts` (add cases; create the file if the SAML unit tests live elsewhere — grep first)
 
 **Interfaces:**
-- Produces: `export function extractGroups(profile: Profile, idp: SamlIdpRow): string[]` — reads the multi-valued attribute named by `idp.groups_attr`; returns `[]` when `groups_attr` is null or the attribute is absent.
+- Produces: `export function extractGroups(profile: Profile, idp: SamlIdpRow): string[] | null` — reads the multi-valued attribute named by `idp.groups_attr`. Returns `null` (**no group signal**) when `groups_attr` is null OR the named attribute is absent from this assertion; returns an array (possibly empty `[]`, a **genuine "no groups now"** signal) when the attribute is present. The `null`-vs-`[]` distinction is load-bearing: the ACS caller skips reconcile on `null` (so a transient IdP attribute-drop never revokes memberships) but reconciles on `[]` (real deprovisioning). See Global Constraints "signal-missing guard".
 - Modifies: `SamlIdpRow` gains `groups_attr: string | null`.
 
 - [ ] **Step 1: Locate the existing SAML unit tests**
@@ -1002,8 +1049,12 @@ const profileWith = (attrs: Record<string, unknown>): Profile =>
   ({ attributes: attrs } as unknown as Profile);
 
 describe("extractGroups", () => {
-  it("returns [] when groups_attr is null", () => {
-    expect(extractGroups(profileWith({ groups: ["a"] }), idp(null))).toEqual([]);
+  it("returns null (no signal) when groups_attr is not configured", () => {
+    expect(extractGroups(profileWith({ groups: ["a"] }), idp(null))).toBeNull();
+  });
+  it("returns null (no signal) when the named attribute is absent from the assertion", () => {
+    // Transient IdP misconfig: groups configured, but this assertion omitted the attribute.
+    expect(extractGroups(profileWith({ other: ["a"] }), idp("groups"))).toBeNull();
   });
   it("reads a multi-valued attribute", () => {
     expect(extractGroups(profileWith({ groups: ["a", "b"] }), idp("groups"))).toEqual(["a", "b"]);
@@ -1011,8 +1062,9 @@ describe("extractGroups", () => {
   it("coerces a single-valued attribute to a one-element array", () => {
     expect(extractGroups(profileWith({ groups: "solo" }), idp("groups"))).toEqual(["solo"]);
   });
-  it("returns [] when the named attribute is absent", () => {
-    expect(extractGroups(profileWith({ other: ["a"] }), idp("groups"))).toEqual([]);
+  it("returns [] (genuine empty signal) when the attribute is present but empty", () => {
+    // Attribute present with no values → real "in no groups now" → caller DOES reconcile/revoke.
+    expect(extractGroups(profileWith({ groups: [] }), idp("groups"))).toEqual([]);
   });
 });
 ```
@@ -1037,17 +1089,25 @@ In `packages/temper-cloud/src/saml/sp.ts`, add (reusing the file's `readAttr` na
 ```ts
 /**
  * Reads the multi-valued group attribute named by `idp.groups_attr` from a validated assertion.
- * Returns [] when no groups attribute is configured or the attribute is absent — either way the
- * reconcile call will assert "no IdP-driven memberships".
+ *
+ * Returns `null` when there is NO group signal — either no `groups_attr` is configured for this
+ * IdP, or the named attribute is absent from THIS assertion (e.g. a transient IdP misconfig). The
+ * ACS caller skips the reconcile entirely on `null`, so a missing attribute never revokes
+ * memberships. Returns an array (possibly empty `[]`) when the attribute IS present: `[]` is a
+ * genuine "member of no mapped groups now" signal and the caller DOES reconcile (revoking stale
+ * `idp` rows). This null-vs-empty split is the signal-missing guard.
  */
-export function extractGroups(profile: Profile, idp: SamlIdpRow): string[] {
+export function extractGroups(profile: Profile, idp: SamlIdpRow): string[] | null {
   if (!idp.groups_attr) {
-    return [];
+    return null;
   }
   const attrs = (profile.attributes ?? {}) as Record<string, unknown>;
+  if (!(idp.groups_attr in attrs)) {
+    return null;
+  }
   const value = attrs[idp.groups_attr];
   if (value === undefined || value === null) {
-    return [];
+    return null;
   }
   const arr = Array.isArray(value) ? value : [value];
   return arr.map((v) => String(v)).filter((s) => s.length > 0);
@@ -1173,14 +1233,21 @@ In `packages/temper-cloud/src/oauth/endpoints.ts`, inside `handleSamlAcs`'s `try
     // error must never block authentication (design spec §3.8). Its own try/catch so a reconcile
     // failure is NOT misreported as an assertion rejection by the outer catch.
     try {
-      await reconcileMemberships({
-        provider: `saml:${idp.idp_key}`,
-        external_user_id: claims.sub,
-        email: claims.email,
-        email_verified: claims.email_verified,
-        idp_key: idp.idp_key,
-        groups: extractGroups(profile, idp),
-      });
+      const groups = extractGroups(profile, idp);
+      // Signal-missing guard: null means the assertion carried no group signal (groups_attr not
+      // configured, or the attribute absent from THIS assertion). Skip reconcile so a transient
+      // IdP attribute-drop never revokes memberships. A present-but-empty list ([]) IS a signal
+      // ("in no mapped groups now") and DOES reconcile, revoking stale idp rows.
+      if (groups !== null) {
+        await reconcileMemberships({
+          provider: `saml:${idp.idp_key}`,
+          external_user_id: claims.sub,
+          email: claims.email,
+          email_verified: claims.email_verified,
+          idp_key: idp.idp_key,
+          groups,
+        });
+      }
     } catch (reconcileErr) {
       logger.error(
         { err: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr) },
@@ -1394,18 +1461,195 @@ Add a second test that stubs `fetch` to reject and asserts the ACS still returns
 ```
 Run again: `cd packages/temper-cloud && bun run test:integration oauth/e2e.saml && cd -` → PASS.
 
+- [ ] **Step 4b: Verify the signal-missing guard — an absent groups attribute issues NO reconcile call**
+
+Add a third test: `groups_attr` is configured on the IdP, but the signed assertion omits the `groups` attribute entirely (no `multiValuedAttributes`). Assert login still completes (302 + `code`) AND `fetch` was **never** called (reconcile skipped — a transient IdP attribute-drop must not revoke memberships):
+```ts
+  it("skips reconcile when the assertion omits the configured groups attribute", async () => {
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const verifier = `e2e-nosig-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" + challenge + "&code_challenge_method=S256&state=nosig-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      // No multiValuedAttributes → assertion carries no 'groups' attribute at all.
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID, acsUrl: ACS_URL, nameId: "nosig-user-1",
+        attributes: { email: "nosig@example.com", uid: "nosig-user-1" },
+        idpKeyPem, idpCertPem,
+      });
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+      expect(acsRes.status).toBe(302);
+      expect(new URL(acsRes.headers.get("location") as string).searchParams.get("code")).toBeTruthy();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+```
+Run: `cd packages/temper-cloud && bun run test:integration oauth/e2e.saml && cd -` → PASS.
+
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/temper-cloud
-git commit -m "test(saml): e2e — asserted groups drive the reconcile call; fail-open login"
+git commit -m "test(saml): e2e — asserted groups drive reconcile; empty=revoke, absent=skip; fail-open"
 ```
 
 > **Carry-forward (not a task):** a true cross-process Rust e2e (spawn temper-api, POST a real `ReconcileRequest`, log in with the minted token, assert memberships) would exercise the live endpoint end-to-end. Task 5's `#[sqlx::test]` already covers the endpoint against a real DB, so this is deferred rather than built — note it in the session/issue as a possible hardening follow-up.
 
 ---
 
-### Task 9: Docs + env surface
+### Task 9: Profile deactivation (authn control) — sibling to reconcile, not part of it
+
+> **Why this is here and separate:** SAML reconcile manages **authz** (team memberships) and never
+> touches the profile. Account deactivation is **authn** — the lever to stop an account from
+> authenticating at all. Today `kb_profiles` has no soft-delete (`profile_service.rs` says so
+> verbatim: *"The substrate `kb_profiles` has no `is_active`, so there is no soft-delete predicate"*),
+> and the auth middleware gates on nothing. This task adds the flag and the gate. It is deliberately
+> independent of Tasks 1–8: reconcile-deprovisioning of a team must never delete/deactivate a profile.
+
+**Files:**
+- Create: `migrations/20260702000002_profile_is_active.sql`
+- Modify: `crates/temper-services/src/services/profile_service.rs` (`get_by_id` reads the real column; update the stale comment)
+- Modify: `crates/temper-api/src/middleware/auth.rs` (reject a resolved-but-deactivated profile)
+- Test: `crates/temper-api/tests/deactivation_test.rs` (feature `test-db`)
+
+**Interfaces:**
+- Produces: `kb_profiles.is_active BOOLEAN NOT NULL DEFAULT true`; the API auth middleware returns `401` for a valid token whose resolved profile is `is_active = false`. The `Profile` domain type already has `pub is_active: bool` (`temper-core/src/types/profile.rs:28`) — no type change.
+
+- [ ] **Step 1: Write the migration**
+
+Create `migrations/20260702000002_profile_is_active.sql`:
+```sql
+-- Profile soft-delete / deactivation: the authn lever, distinct from SAML authz reconcile.
+-- Existing profiles are active by definition (the DEFAULT backfills them). A deactivated
+-- profile (is_active = false) cannot authenticate even with a valid IdP assertion; its team
+-- memberships (authz) are a separate concern and are left untouched.
+ALTER TABLE kb_profiles ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT true;
+```
+
+Apply it:
+```bash
+DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development sqlx migrate run
+```
+
+- [ ] **Step 2: Surface the real column in `get_by_id`**
+
+In `crates/temper-services/src/services/profile_service.rs`, replace the hardcoded literal `true AS "is_active!",` (currently at ~line 291) with the real column `is_active,`, and replace the stale doc comment above `get_by_id` (currently *"The substrate `kb_profiles` has no `is_active`, so there is no soft-delete predicate (visibility lives elsewhere)."*) with one noting `is_active` is now a real deactivation flag read from the column. Every `resolve_from_claims` path returns through `get_by_id`, so this single change surfaces the flag on all resolve paths.
+
+- [ ] **Step 3: Write the failing gate test**
+
+Create `crates/temper-api/tests/deactivation_test.rs`:
+```rust
+#![cfg(feature = "test-db")]
+//! A deactivated profile (kb_profiles.is_active = false) cannot authenticate, even with an
+//! otherwise-valid token. Gate lives in middleware/auth.rs, after profile resolution.
+
+mod common;
+
+use sqlx::PgPool;
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn deactivated_profile_is_rejected(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let token = common::generate_test_jwt("deact-user", "deact@example.com");
+
+    // First authed request JIT-creates the profile (is_active defaults true) -> 200.
+    let ok = app
+        .client
+        .get(app.url("/api/profile"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(ok.status().as_u16(), 200, "active profile should authenticate");
+
+    // Deactivate the JIT'd profile.
+    sqlx::query(
+        "UPDATE kb_profiles SET is_active = false WHERE id = (
+             SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'deact-user'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("deactivate");
+
+    // Same valid token, now rejected.
+    let rejected = app
+        .client
+        .get(app.url("/api/profile"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(rejected.status().as_u16(), 401, "deactivated profile must be rejected");
+}
+```
+(Confirm `/api/profile` is the require_auth endpoint `auth_test.rs` exercises; if the harness uses a different authed path or bearer helper, mirror that file exactly.)
+
+- [ ] **Step 4: Run the test to verify it fails**
+
+Run:
+```bash
+DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo nextest run -p temper-api --features test-db --test deactivation_test 2>&1 | tail -20
+```
+Expected: FAIL — the second request returns 200 (no gate yet).
+
+- [ ] **Step 5: Add the middleware gate**
+
+In `crates/temper-api/src/middleware/auth.rs`, immediately after the profile is resolved
+(`let profile = profile_service::resolve_from_claims(&state.pool, &claims).await?;`) and before
+the `AuthenticatedProfile` is injected, add:
+```rust
+    // Account deactivation is the authn lever: a soft-deleted profile cannot authenticate,
+    // regardless of a valid IdP assertion. Team-membership authz is a separate concern.
+    if !profile.is_active {
+        tracing::warn!(profile_id = %profile.id, "rejected: profile is deactivated");
+        return Err(ApiError::Unauthorized("account is deactivated".to_string()));
+    }
+```
+
+- [ ] **Step 6: Regenerate caches and run the gate test**
+
+```bash
+cargo sqlx prepare --workspace -- --all-features   # get_by_id query shape changed
+cargo make prepare-api
+DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo nextest run -p temper-api --features test-db --test deactivation_test
+```
+Expected: PASS (200 while active, 401 after deactivation).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add migrations/20260702000002_profile_is_active.sql crates/temper-services crates/temper-api .sqlx crates/temper-api/.sqlx
+git commit -m "feat(authn): profile soft-delete (kb_profiles.is_active) + deactivation gate in auth middleware"
+```
+
+---
+
+### Task 10: Docs + env surface
 
 **Files:**
 - Modify: `docs/guides/self-hosting-saml.md` (add a "Group → team/role mapping" section + the new env vars)
@@ -1448,8 +1692,36 @@ the IdP reconcile skips that team for them entirely.**
    team. Note: the **first** admin still requires the SQL bootstrap step (`org-bootstrap.md`);
    SAML does not bootstrap the system.
 
-Unmapped asserted groups are ignored. Removing a group from the assertion revokes the
-corresponding `idp` membership on the next login.
+Unmapped asserted groups are ignored for provisioning, but they ARE recorded in
+`kb_saml_seen_groups` (with first/last-seen) so you can discover what the IdP actually sends
+and add mappings reactively — the mapping table never needs to be pre-populated:
+
+```sql
+-- What groups has the IdP actually asserted? (add mappings for the ones you care about)
+SELECT group_value, first_seen, last_seen FROM kb_saml_seen_groups
+ WHERE idp_key = 'acme-okta' ORDER BY last_seen DESC;
+```
+
+**Removal semantics.** Removing a group from the assertion revokes the corresponding `idp`
+membership on the next login. Note the distinction: if the assertion **omits the groups
+attribute entirely** (e.g. a transient IdP misconfiguration), reconcile is **skipped** and no
+memberships are revoked; only an assertion that carries the attribute with **no values** ("in
+no groups now") revokes all of the user's `idp` memberships. Native/auto-join/in-app
+memberships are never touched either way.
+
+## 5. Deactivating an account (authn control)
+
+Team membership is **authz**; it does not control whether an account can log in. To stop an
+account from authenticating at all — regardless of what the IdP asserts — soft-delete the
+profile:
+
+```sql
+UPDATE kb_profiles SET is_active = false WHERE id = '<profile-uuid>';
+```
+
+A deactivated profile is rejected by the API auth middleware (`401`) even with a valid token.
+This never deletes the profile or its history, and it is independent of SAML group provisioning
+(re-activating restores access). Reconcile/deprovisioning of a team never deactivates a profile.
 ````
 
 - [ ] **Step 2: Document the new env vars**
@@ -1472,8 +1744,8 @@ Run: `git add docs/guides/self-hosting-saml.md && git commit -m "docs(saml): gro
 ## Final verification (run after all tasks)
 
 - [ ] `cargo make check` (fmt + clippy + docs + machete; honest offline sqlx probe)
-- [ ] `DATABASE_URL=… cargo make test-db` (Rust integration incl. Tasks 3 & 5)
-- [ ] `cargo make test-e2e-embed` (SAML e2e tier — Task 8 Step 4 if added)
+- [ ] `DATABASE_URL=… cargo make test-db` (Rust integration incl. Task 3 reconcile+discovery, Task 5 endpoint, Task 9 deactivation gate)
+- [ ] `cargo make test-e2e-embed` (SAML e2e tier — Task 8, incl. the signal-missing-guard test)
 - [ ] `cd packages/temper-cloud && bun run test && bun run test:integration && bun run check && bun run typecheck`
-- [ ] Confirm `.sqlx` caches are committed (workspace + `crates/temper-services/.sqlx` + `crates/temper-api/.sqlx`) and no orphaned entries remain.
-- [ ] Update issue #224: Phase 2 delivered; Phase 3 (SCIM) remains.
+- [ ] Confirm both migrations applied (`20260702000001`, `20260702000002`) and `.sqlx` caches are committed (workspace + `crates/temper-services/.sqlx` + `crates/temper-api/.sqlx`) with no orphaned entries.
+- [ ] Update issue #224: Phase 2 delivered (role+team provisioning, discovery capture, signal-missing guard, profile deactivation); Phase 3 (SCIM) remains.
