@@ -617,6 +617,10 @@ pub enum TeamAction {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap requires arg fields inline on each variant (the Saml subcommand carries the wide Provision flag set); boxing is incompatible with the derive"
+)]
 pub enum AdminAction {
     /// Show system settings, or update them when any flag is provided
     Settings {
@@ -657,6 +661,10 @@ pub enum AdminAction {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap requires the ~14 Provision flags inline on the variant; boxing is incompatible with the derive"
+)]
 pub enum AdminSamlAction {
     /// Generate the AS signing key + reconcile secret and emit the env bundle + kb_saml_idp SQL.
     ///
