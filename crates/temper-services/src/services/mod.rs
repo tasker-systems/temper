@@ -6,5 +6,6 @@ pub mod event_service;
 pub mod graph_service;
 pub mod profile_service;
 pub mod resource_service;
+pub mod saml_provisioning_service;
 pub mod steward_service;
 pub mod team_service;

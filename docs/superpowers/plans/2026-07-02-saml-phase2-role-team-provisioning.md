@@ -275,7 +275,7 @@ async fn seed(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let profile: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_profiles (id, handle, display_name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
     )
-    .bind(format!("user-{}", Uuid::new_v4()))
+    .bind(format!("user-{}", Uuid::now_v7()))
     .fetch_one(pool)
     .await
     .unwrap();
@@ -283,7 +283,7 @@ async fn seed(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let team_a: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
     )
-    .bind(format!("eng-{}", Uuid::new_v4()))
+    .bind(format!("eng-{}", Uuid::now_v7()))
     .fetch_one(pool)
     .await
     .unwrap();
@@ -291,7 +291,7 @@ async fn seed(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let team_b: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
     )
-    .bind(format!("ops-{}", Uuid::new_v4()))
+    .bind(format!("ops-{}", Uuid::now_v7()))
     .fetch_one(pool)
     .await
     .unwrap();
