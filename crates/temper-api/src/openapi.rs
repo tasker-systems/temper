@@ -6,7 +6,9 @@ use temper_core::types::api::{
     EventCursorResponse, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
     UnifiedSearchResultRow,
 };
-use temper_core::types::context::ContextRowWithCounts;
+use temper_core::types::context::{
+    ContextRowWithCounts, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+};
 use temper_services::error::{ErrorBody, ErrorDetail};
 use temper_workflow::types::managed_meta::ResourceMetaListResponse;
 use temper_workflow::types::resource::{
@@ -24,6 +26,8 @@ use temper_workflow::types::resource::{
         crate::handlers::resources::create,
         crate::handlers::resources::update,
         crate::handlers::resources::delete,
+        crate::handlers::contexts::share_team,
+        crate::handlers::contexts::unshare_team,
         crate::handlers::profiles::get,
         crate::handlers::profiles::update,
         crate::handlers::profiles::list_auth_links,
@@ -68,6 +72,9 @@ use temper_workflow::types::resource::{
         ContentResponse,
         DeleteResponse,
         ContextRowWithCounts,
+        ShareContextRequest,
+        ShareContextOutcome,
+        UnshareContextOutcome,
         ProfileUpdateRequest,
         EventCursorResponse,
         SearchParams,
