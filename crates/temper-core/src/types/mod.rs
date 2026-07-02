@@ -28,6 +28,7 @@ pub mod ingest;
 pub mod invitation;
 pub mod invocation;
 pub mod invocation_requests;
+pub mod materialize;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
@@ -64,6 +65,10 @@ pub use graph::{EdgeKind, Polarity};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
+pub use materialize::{
+    MaterializeAck, MaterializeDelta, MaterializeDeltaInput, MaterializeRequest,
+    MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,
+};
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};

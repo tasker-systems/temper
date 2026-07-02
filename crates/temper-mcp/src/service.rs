@@ -315,6 +315,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Read a cognitive map's materialize delta: how many formation events (created resources, asserted/folded edges, facets, block edits) have landed on the map since it was last materialized, and whether that clears the threshold (i.e. the map should re-materialize)."
+    )]
+    async fn cogmap_materialize_delta(
+        &self,
+        Parameters(input): Parameters<temper_core::types::materialize::MaterializeDeltaInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_materialize_delta(self, input).await
+    }
+
+    #[tool(
+        description = "Re-materialize a cognitive map's regions when its formation delta since the last materialize clears the threshold; a safe no-op below threshold (materialized: false). This is the substrate's deterministic region-formation cadence — not an authored act. Requires cogmap-write."
+    )]
+    async fn cogmap_materialize(
+        &self,
+        Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_materialize(self, input).await
+    }
+
+    #[tool(
         description = "Bind a cognitive map to a team (system-admin only). Widens the map's producer-intersection reach to include the team's shared resources. Idempotent — re-binding is a no-op (bound: false). Pass the map by ref and the team by UUID."
     )]
     async fn cogmap_bind(

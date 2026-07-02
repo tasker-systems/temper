@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::{access_service, cogmap_service};
+use temper_services::services::{access_service, cogmap_service, materialize_service};
 use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{
@@ -23,10 +23,13 @@ use temper_core::types::cognitive_maps::{
     RevokeCapabilityRequest, RevokeOutcome, UnbindTeamOutcome,
 };
 use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
 };
-use temper_workflow::operations::{Backend, CreateCognitiveMap, ReconcileCognitiveMap, Surface};
+use temper_workflow::operations::{
+    Backend, CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap, Surface,
+};
 
 /// Query params for the shape read. `lens` is optional (omit → all lenses).
 #[derive(Debug, Deserialize)]
@@ -145,6 +148,75 @@ pub async fn shape(
     )
     .await
     .map(Json)
+}
+
+/// Query params for the materialize-delta read. `threshold` is optional (omit → the service default).
+#[derive(Debug, Deserialize)]
+pub struct MaterializeDeltaQuery {
+    pub threshold: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/cognitive-maps/{id}/materialize-delta",
+    tag = "Cognitive Maps",
+    params(
+        ("id" = Uuid, Path, description = "Cognitive map ID"),
+        ("threshold" = Option<i64>, Query, description = "Materialize threshold to gate on (default applies when omitted)"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The materialize delta since the last materialize", body = MaterializeDelta),
+        (status = 404, description = "Cogmap not found, or not readable by the caller (uniform — no existence oracle)"),
+    )
+)]
+pub async fn materialize_delta(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Query(q): Query<MaterializeDeltaQuery>,
+) -> ApiResult<Json<MaterializeDelta>> {
+    let delta = materialize_service::materialize_delta(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        CogmapId::from(cogmap_id),
+        q.threshold,
+    )
+    .await?;
+    Ok(Json(delta))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/cognitive-maps/{id}/materialize",
+    tag = "Cognitive Maps",
+    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    security(("bearer_auth" = [])),
+    request_body = MaterializeRequest,
+    responses(
+        (status = 200, description = "Materialize ran (over threshold) or was a no-op (below)", body = MaterializeAck),
+        (status = 403, description = "Caller cannot author (write) this cogmap"),
+        (status = 404, description = "Cogmap not found (uniform — no existence oracle)"),
+    )
+)]
+pub async fn materialize(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Json(req): Json<MaterializeRequest>,
+) -> ApiResult<Json<MaterializeAck>> {
+    // Auth-before-write + the threshold gate live inside DbBackend::materialize_on_threshold — just dispatch.
+    let cmd = MaterializeOnThreshold {
+        cogmap: CogmapId::from(cogmap_id),
+        threshold: req.threshold,
+        origin: Surface::ApiHttp,
+    };
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let out = backend
+        .materialize_on_threshold(cmd)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(out.value))
 }
 
 #[utoipa::path(

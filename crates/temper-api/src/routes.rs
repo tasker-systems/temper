@@ -102,6 +102,14 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::cognitive_maps::shape),
         )
         .route(
+            "/api/cognitive-maps/{id}/materialize-delta",
+            get(handlers::cognitive_maps::materialize_delta),
+        )
+        .route(
+            "/api/cognitive-maps/{id}/materialize",
+            post(handlers::cognitive_maps::materialize),
+        )
+        .route(
             "/api/cognitive-maps/{id}/region-metrics",
             get(handlers::cognitive_maps::region_metrics),
         )

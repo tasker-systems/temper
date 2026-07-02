@@ -18,6 +18,9 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
     CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
+use temper_core::types::materialize::{
+    MaterializeAck, DEFAULT_MATERIALIZE_LENS, DEFAULT_MATERIALIZE_THRESHOLD,
+};
 use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
@@ -26,9 +29,9 @@ use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
     CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    OpenInvocation, ReconcileCognitiveMap, ResourceSummary, RetypeRelationship,
-    ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource, Surface,
-    UpdateResource,
+    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
+    RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
+    Surface, UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
@@ -1674,6 +1677,95 @@ impl Backend for DbBackend {
         .map_err(api_err)?;
 
         Ok(CommandOutput::new(cmd.event_id))
+    }
+
+    /// Re-materialize a cogmap's regions when its formation delta clears the threshold (T4b). AUTH
+    /// BEFORE WRITE: one gated lookup does existence + read-visibility (absent/unreadable → uniform
+    /// 404), rides the cogmap-write capability along (readable-but-not-writable → 403), and reads the
+    /// current materialize watermark in the same round-trip. The threshold gate is a cheap event count
+    /// — deliberately cheaper than the load-and-cluster it guards — so below threshold this is an
+    /// idempotent no-op (`materialized: false`) that never touches the substrate. At/above threshold it
+    /// delegates to the existing incremental-materialize path (which fires `region_materialized` and
+    /// advances `shape_materialized_event_id` via its projection); NO new clustering logic lives here.
+    async fn materialize_on_threshold(
+        &self,
+        cmd: MaterializeOnThreshold,
+    ) -> Result<CommandOutput<MaterializeAck>, TemperError> {
+        let row = sqlx::query!(
+            r#"
+            SELECT cogmap_authorable_by_profile($2, $1) AS "can_write!",
+                   shape_materialized_event_id AS "watermark: uuid::Uuid"
+              FROM kb_cogmaps
+             WHERE id = $1
+               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
+            "#,
+            *cmd.cogmap,
+            *self.profile_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| {
+            TemperError::NotFound(format!("cognitive map {} not found", cmd.cogmap.uuid()))
+        })?;
+        if !row.can_write {
+            return Err(TemperError::Forbidden);
+        }
+
+        let formation_events = temper_substrate::replay::formation_touched_count_since(
+            &self.pool,
+            cmd.cogmap.uuid(),
+            row.watermark,
+        )
+        .await
+        .map_err(api_err)?;
+        let threshold = cmd.threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
+
+        if formation_events < threshold {
+            return Ok(CommandOutput::new(MaterializeAck {
+                cogmap_id: cmd.cogmap.uuid(),
+                materialized: false,
+                formation_events,
+                threshold,
+                regions: None,
+                membership_fingerprint: None,
+            }));
+        }
+
+        // Attribute the materialize to the entity that seeded this cogmap — the earliest map-anchored
+        // event's emitter, a real referent (mirrors the substrate harness). At/above threshold there is
+        // at least one map-anchored formation event, so this always resolves.
+        let emitter: uuid::Uuid = sqlx::query_scalar!(
+            r#"
+            SELECT emitter_entity_id AS "emitter!"
+              FROM kb_events
+             WHERE producing_anchor_table = 'kb_cogmaps' AND producing_anchor_id = $1
+             ORDER BY occurred_at ASC
+             LIMIT 1
+            "#,
+            *cmd.cogmap,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+
+        let outcome = temper_substrate::write::incremental_materialize_cogmap(
+            &self.pool,
+            cmd.cogmap,
+            DEFAULT_MATERIALIZE_LENS,
+            EntityId::from(emitter),
+        )
+        .await
+        .map_err(api_err)?;
+
+        Ok(CommandOutput::new(MaterializeAck {
+            cogmap_id: cmd.cogmap.uuid(),
+            materialized: true,
+            formation_events,
+            threshold,
+            regions: Some(outcome.regions as i64),
+            membership_fingerprint: Some(outcome.membership_fingerprint),
+        }))
     }
 }
 

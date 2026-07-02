@@ -13,6 +13,7 @@ use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapGrantBody, CogmapRegionMetricsRow,
     CogmapRegionRow, CogmapRevokeBody, GrantOutcome, RevokeOutcome, UnbindTeamOutcome,
 };
+use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
 };
@@ -79,6 +80,38 @@ impl<'a> CognitiveMapClient<'a> {
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/cognitive-maps/{id}/materialize-delta[?threshold=] — how many formation events have
+    /// landed since the last materialize, and whether that clears the threshold. 404 if the map is not
+    /// readable by the caller.
+    pub async fn materialize_delta(
+        &self,
+        cogmap_id: Uuid,
+        threshold: Option<i64>,
+    ) -> Result<MaterializeDelta> {
+        let token = self.http.resolve_token()?;
+        let path = materialize_delta_path(cogmap_id, threshold);
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/cognitive-maps/{id}/materialize — re-materialize the map when its delta clears the
+    /// threshold; a no-op below (`materialized: false`). Requires cogmap-write.
+    pub async fn materialize(
+        &self,
+        cogmap_id: Uuid,
+        threshold: Option<i64>,
+    ) -> Result<MaterializeAck> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/cognitive-maps/{cogmap_id}/materialize");
+        let body = MaterializeRequest { threshold };
+        let req = self.http.post(&path).json(&body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 
@@ -166,6 +199,16 @@ fn shape_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
     }
 }
 
+/// `/api/cognitive-maps/{id}/materialize-delta` with an optional `?threshold=` query — shared by the
+/// method and its test.
+fn materialize_delta_path(cogmap_id: Uuid, threshold: Option<i64>) -> String {
+    let base = format!("/api/cognitive-maps/{cogmap_id}/materialize-delta");
+    match threshold {
+        Some(t) => format!("{base}?threshold={t}"),
+        None => base,
+    }
+}
+
 /// `/api/cognitive-maps/{id}/region-metrics` with an optional `?lens=` query.
 fn region_metrics_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
     let base = format!("/api/cognitive-maps/{cogmap_id}/region-metrics");
@@ -223,6 +266,19 @@ mod tests {
         assert_eq!(
             analytics_path(id),
             format!("/api/cognitive-maps/{id}/analytics")
+        );
+    }
+
+    #[test]
+    fn materialize_delta_path_omits_and_includes_threshold() {
+        let id = Uuid::from_u128(7);
+        assert_eq!(
+            materialize_delta_path(id, None),
+            format!("/api/cognitive-maps/{id}/materialize-delta")
+        );
+        assert_eq!(
+            materialize_delta_path(id, Some(5)),
+            format!("/api/cognitive-maps/{id}/materialize-delta?threshold=5")
         );
     }
 }
