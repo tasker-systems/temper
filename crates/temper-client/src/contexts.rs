@@ -6,7 +6,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
+use temper_core::types::context::{
+    ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
+};
 
 /// Sub-client for context operations.
 pub struct ContextClient<'a> {
@@ -55,6 +58,34 @@ impl<'a> ContextClient<'a> {
         let req = self.http.post("/api/contexts").json(&body);
         self.http
             .send_json(&Method::POST, "/api/contexts", req, Some(&token))
+            .await
+    }
+
+    /// POST /api/contexts/{id}/teams — share the context into a team (admin-gated, idempotent).
+    pub async fn share_team(
+        &self,
+        context_id: Uuid,
+        body: &ShareContextRequest,
+    ) -> Result<ShareContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/teams");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/contexts/{id}/teams/{team_id} — unshare (admin-gated, no-op safe).
+    pub async fn unshare_team(
+        &self,
+        context_id: Uuid,
+        team_id: Uuid,
+    ) -> Result<UnshareContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/teams/{team_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
             .await
     }
 }
