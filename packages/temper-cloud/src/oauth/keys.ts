@@ -26,7 +26,10 @@ export async function getSigningKey(): Promise<SigningKey> {
     return cachedSigningKey;
   }
 
-  const pem = requireEnv("AS_SIGNING_KEY_PKCS8");
+  // AS_SIGNING_KEY_PKCS8 may arrive as a flat env-bundle value with literal `\n` escapes
+  // (temper admin saml provision's render_env) or with real newlines (a Vercel field
+  // paste) — normalize to real newlines so jose's PEM parser accepts either form.
+  const pem = requireEnv("AS_SIGNING_KEY_PKCS8").replace(/\\n/g, "\n");
   const kid = requireEnv("AS_SIGNING_KID");
   const key = await importPKCS8(pem, "EdDSA");
 
@@ -43,7 +46,8 @@ export async function getPublicJwks(): Promise<PublicJwks> {
     return cachedPublicJwks;
   }
 
-  const pem = requireEnv("AS_SIGNING_KEY_PKCS8");
+  // Same normalization as getSigningKey — tolerate escaped or real newlines.
+  const pem = requireEnv("AS_SIGNING_KEY_PKCS8").replace(/\\n/g, "\n");
   const kid = requireEnv("AS_SIGNING_KID");
 
   const publicKey = createPublicKey(pem);

@@ -83,6 +83,14 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/api/contexts/{id}", get(handlers::contexts::get))
         .route(
+            "/api/contexts/{id}/teams",
+            post(handlers::contexts::share_team),
+        )
+        .route(
+            "/api/contexts/{id}/teams/{team_id}",
+            delete(handlers::contexts::unshare_team),
+        )
+        .route(
             "/api/teams",
             get(handlers::teams::list).post(handlers::teams::create),
         )

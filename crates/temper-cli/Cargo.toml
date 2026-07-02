@@ -16,13 +16,17 @@ anstream = "0.6"
 anstyle = "1"
 askama = "0.12"
 async-trait = "0.1"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.12"
 dirs = "5"
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 filetime = "0.2"
 indicatif = "0.17"
 libc = "0.2"
+pkcs8 = { version = "0.10", features = ["pem"] }
+rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls"
 ] }

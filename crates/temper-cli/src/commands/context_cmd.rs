@@ -1,8 +1,11 @@
+use uuid::Uuid;
+
 use crate::commands::resource::inject_context_ref;
 use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
 use temper_core::context_ref::ContextOwnerRef;
+use temper_core::types::context::ShareContextRequest;
 
 /// Parse the `--owner` CLI value into a typed owner descriptor.
 ///
@@ -134,6 +137,81 @@ pub fn list(config: &Config, fmt: crate::format::OutputFormat) -> Result<()> {
     names.sort();
 
     let rendered = crate::format::render(&names, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// Resolve a context ref (a bare UUID, or the `@handle/slug` / `+team-slug/slug` form that
+/// `context list` renders) to its context id. `@me` shorthand is NOT resolved here — an operator
+/// sharing a context addresses it by the concrete owner shown in the list (or by UUID).
+pub async fn resolve_context_id(
+    client: &temper_client::TemperClient,
+    context: &str,
+) -> Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(context) {
+        return Ok(id);
+    }
+    let (owner, slug) = context.split_once('/').ok_or_else(|| {
+        TemperError::BadRequest(format!(
+            "invalid context ref {context:?}: use a UUID or `@handle/slug` / `+team-slug/slug`"
+        ))
+    })?;
+    if owner == "@me" {
+        return Err(TemperError::BadRequest(
+            "`@me` is not accepted for share — use your `@handle/slug` (see `context list`) or the context UUID"
+                .to_owned(),
+        ));
+    }
+    let contexts = client
+        .contexts()
+        .list()
+        .await
+        .map_err(crate::commands::client_err)?;
+    contexts
+        .into_iter()
+        .find(|c| c.owner_ref == owner && c.slug == slug)
+        .map(|c| *c.id)
+        .ok_or_else(|| {
+            TemperError::Api(format!(
+                "context '{context}' not found among the contexts you can see"
+            ))
+        })
+}
+
+/// `temper context share <context_ref> <team>` — share a context into a team (admin-only).
+pub async fn share_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    team: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id(client, context).await?;
+    let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    let outcome = client
+        .contexts()
+        .share_team(context_id, &ShareContextRequest { team_id })
+        .await
+        .map_err(crate::commands::client_err)?;
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `temper context unshare <context_ref> <team>` — unshare a context from a team (admin-only).
+pub async fn unshare_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    team: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id(client, context).await?;
+    let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    let outcome = client
+        .contexts()
+        .unshare_team(context_id, team_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
     Ok(())
 }

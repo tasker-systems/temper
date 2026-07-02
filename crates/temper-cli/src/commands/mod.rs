@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod admin_saml;
 pub mod auth;
 pub mod check;
 pub mod cogmap;

@@ -30,6 +30,57 @@ The AS is **SP-initiated only**, supports a **single active IdP** per instance, 
 NameID** (or a configured stable-id attribute) to the token `sub`. A validly signed assertion implies
 `email_verified: true`.
 
+## Quickstart with `temper admin saml` (recommended)
+
+Rather than hand-assembling the keys, environment, and SQL documented in the sections below,
+an operator working from a repo checkout can generate them with the **`temper admin saml`**
+command group. It is an *emitter*: it prints the exact env bundle and SQL (or writes them with
+`--env-out` / runs them with `--apply`), keeping the AS↔API shared values (`AS_AUDIENCE` ==
+`AUTH_AUDIENCE`, `AUTH_ISSUER` == `AS_ISSUER`, the one `INTERNAL_RECONCILE_SECRET`,
+`AUTH_PROVIDER_NAME` == `saml:<idp-key>`) consistent by construction. The numbered sections that
+follow remain the authoritative reference and the manual fallback.
+
+1. **Provision keys + env + the IdP row** — before anyone can log in:
+
+   ```bash
+   temper admin saml provision \
+     --instance-url https://<instance> --idp-key <acme-okta> \
+     --idp-cert-file idp.pem --idp-sso-url https://idp.example.com/sso --idp-entity-id http://idp \
+     --client temper-cli=https://<instance>/api/auth/cli-callback \
+     --client temper-ui=https://<app-url>/auth/callback
+   ```
+
+   Omit flags for interactive prompts, or add `--no-interactive` for a scripted run. It generates
+   the Ed25519 signing key (`AS_SIGNING_KEY_PKCS8`), `AS_SIGNING_KID`, and a strong
+   `INTERNAL_RECONCILE_SECRET`, then emits the full env bundle and the `kb_saml_idp` INSERT to
+   stdout. `--env-out .env.saml` writes the env (mode 0600 — it holds the private key); `--apply`
+   runs the SQL against `$DATABASE_URL`. Paste the env into **both** Vercel functions and deploy.
+
+2. **Map IdP groups to teams** — after the teams exist (see the org-bootstrap runbook):
+
+   ```bash
+   temper admin saml map-group --idp <acme-okta> engineering +engineering --role member
+   temper admin saml map-group --idp <acme-okta> --from-seen   # groups the IdP has actually asserted
+   ```
+
+   Emits a `kb_saml_group_mappings` INSERT (add `--apply` to run it). `--from-seen` reads
+   `kb_saml_seen_groups` so you can add mappings reactively.
+
+3. **Verify**:
+
+   ```bash
+   temper admin saml verify --instance-url https://<instance> --db
+   ```
+
+   Confirms AS metadata/JWKS are reachable, that you resolve as a **system admin** (a missing
+   `gating_team_slug` otherwise fails silently with 403s), and — with `--db` — that exactly one
+   active `kb_saml_idp` row exists.
+
+> **Ordering.** SAML setup *brackets* the [org-bootstrap runbook](./org-bootstrap.md): run
+> `provision` + deploy + apply the IdP row **before** the first admin can log in, then run the
+> org-bootstrap (which creates the teams), then run `map-group` **after** those teams exist. See
+> that runbook's interleave note.
+
 ## 1. Register Temper as an SP with your IdP
 
 In your IdP, create a new SAML application ("SP") with:

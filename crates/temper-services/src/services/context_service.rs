@@ -13,12 +13,16 @@
 use sqlx::PgPool;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::access_service;
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_workflow::operations::sluggify;
 
-pub use temper_core::types::context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
+pub use temper_core::types::context::{
+    ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
+};
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
 pub async fn list_visible(
@@ -323,4 +327,183 @@ pub async fn create(
     .await?;
 
     Ok(row)
+}
+
+/// Assert both `context_id` and `team_id` exist before a `kb_team_contexts` write —
+/// otherwise a nonexistent id hits the FK constraint and surfaces as an opaque 500
+/// instead of a clean 404. Called AFTER the admin gate (auth stays first) and BEFORE
+/// the INSERT/DELETE.
+async fn ensure_context_and_team_exist(
+    pool: &PgPool,
+    context_id: uuid::Uuid,
+    team_id: uuid::Uuid,
+) -> ApiResult<()> {
+    let context_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_contexts WHERE id = $1) AS "ok!""#,
+        context_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !context_exists {
+        return Err(ApiError::NotFound);
+    }
+    let team_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "ok!""#,
+        team_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !team_exists {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Share a context into a team's read-reach (write a `kb_team_contexts` row).
+///
+/// Auth before writes: admin-only (interim gate, mirroring `cogmap bind` — its
+/// structural sibling; a later RBAC arc may relax it). Idempotent —
+/// `INSERT … ON CONFLICT DO NOTHING`; `shared: false` when it already existed.
+pub async fn share(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+    req: &ShareContextRequest,
+) -> ApiResult<ShareContextOutcome> {
+    if !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_context_and_team_exist(pool, context_id, req.team_id).await?;
+    let inserted = sqlx::query_scalar!(
+        r#"
+        INSERT INTO kb_team_contexts (context_id, team_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        RETURNING context_id
+        "#,
+        context_id,
+        req.team_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(ShareContextOutcome {
+        context_id,
+        team_id: req.team_id,
+        shared: inserted.is_some(),
+    })
+}
+
+/// Unshare a context from a team (delete the `kb_team_contexts` row). Admin-only, no-op safe.
+pub async fn unshare(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+    team_id: uuid::Uuid,
+) -> ApiResult<UnshareContextOutcome> {
+    if !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_context_and_team_exist(pool, context_id, team_id).await?;
+    let result = sqlx::query!(
+        "DELETE FROM kb_team_contexts WHERE context_id = $1 AND team_id = $2",
+        context_id,
+        team_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(UnshareContextOutcome {
+        context_id,
+        team_id,
+        unshared: result.rows_affected() > 0,
+    })
+}
+
+#[cfg(all(test, feature = "test-db"))]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// Seed two profiles, a team, and a context owned by profile 1. Profile 1 is made an
+    /// `owner` of the `temper-system` gating team (with `kb_system_settings.gating_team_slug`
+    /// pointed at it), so `is_system_admin` resolves true for it — mirroring the admin-minting
+    /// idiom in `cogmap_authz_test.rs`. Fixture inserts use runtime `sqlx::query(...)`, not the
+    /// compile-time macro, per project convention for test-fixture writes.
+    async fn seed_admin_team_context(pool: &PgPool) -> (ProfileId, ProfileId, Uuid, ContextId) {
+        let admin: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('admin', 'Admin') \
+             RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let non_admin: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('member', 'Member') \
+             RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        // `temper-system` is created by migration 20260625000001 — use the existing row.
+        let team_id: Uuid =
+            sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        // The auto-join trigger may already have enrolled the profile as `watcher`
+        // (open-mode auto-join on temper-system) — promote it to `owner` so
+        // `is_system_admin` (OWNER of the gating team) resolves true.
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner'",
+        )
+        .bind(team_id)
+        .bind(admin)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let context_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_profiles', $1, 'ctx', 'Ctx') RETURNING id",
+        )
+        .bind(admin)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        (
+            ProfileId::from(admin),
+            ProfileId::from(non_admin),
+            team_id,
+            ContextId::from(context_id),
+        )
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn share_is_admin_gated_and_idempotent(pool: PgPool) {
+        // Non-admin caller → Forbidden.
+        let (admin, non_admin, team_id, context_id) = seed_admin_team_context(&pool).await;
+        let req = ShareContextRequest { team_id };
+        let denied = share(&pool, non_admin, *context_id, &req).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)));
+
+        // Admin → shares; first call inserts, second is a no-op.
+        let first = share(&pool, admin, *context_id, &req).await.unwrap();
+        assert!(first.shared);
+        let second = share(&pool, admin, *context_id, &req).await.unwrap();
+        assert!(!second.shared);
+
+        // Unshare removes it; second unshare is a no-op.
+        let u1 = unshare(&pool, admin, *context_id, team_id).await.unwrap();
+        assert!(u1.unshared);
+        let u2 = unshare(&pool, admin, *context_id, team_id).await.unwrap();
+        assert!(!u2.unshared);
+    }
 }

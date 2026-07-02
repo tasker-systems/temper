@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lens_create($1,$2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lens_create",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "28f00399a1a97a0120f78e957a8a7ef8844ba4091abedd429c11421e87606a48"
+}

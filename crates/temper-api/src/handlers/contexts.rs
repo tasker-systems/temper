@@ -7,7 +7,8 @@ use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::error::ApiResult;
 use temper_services::services::context_service::{
-    self, ContextCreateRequest, ContextRow, ContextRowWithCounts,
+    self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::state::AppState;
 
@@ -75,4 +76,61 @@ pub async fn get(
     )
     .await
     .map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/contexts/{id}/teams",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    request_body = ShareContextRequest,
+    responses(
+        (status = 200, description = "Context shared (or idempotent no-op)", body = ShareContextOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+    )
+)]
+pub async fn share_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+    Json(body): Json<ShareContextRequest>,
+) -> ApiResult<Json<ShareContextOutcome>> {
+    let outcome = context_service::share(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        context_id,
+        &body,
+    )
+    .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/contexts/{id}/teams/{team_id}",
+    tag = "Contexts",
+    params(
+        ("id" = Uuid, Path, description = "Context ID"),
+        ("team_id" = Uuid, Path, description = "Team ID to unshare"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Context unshared (or no-op)", body = UnshareContextOutcome),
+        (status = 403, description = "Caller is not a system admin"),
+    )
+)]
+pub async fn unshare_team(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((context_id, team_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<UnshareContextOutcome>> {
+    let outcome = context_service::unshare(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        context_id,
+        team_id,
+    )
+    .await?;
+    Ok(Json(outcome))
 }
