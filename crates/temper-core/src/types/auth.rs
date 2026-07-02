@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use super::profile::Profile;
 
 /// Identity provider configuration — Neon Auth default, swappable for enterprise.
@@ -49,4 +51,27 @@ pub struct AuthClaims {
 pub struct AuthenticatedProfile {
     pub profile: Profile,
     pub claims: AuthClaims,
+}
+
+/// Wire payload for the internal SAML membership-reconcile call (AS → temper-api).
+///
+/// `provider` is advisory: the API derives the authoritative provider from its own
+/// config (`auth_provider_name`) so the resolved profile matches the one the minted
+/// token resolves to. `idp_key` selects the `kb_saml_group_mappings` rows to apply.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "ReconcileRequest.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconcileRequest {
+    /// Advisory provider label (e.g. "saml:acme-okta"); the API ignores it for identity.
+    pub provider: Option<String>,
+    /// Stable NameID — the same value minted as the token `sub`.
+    pub external_user_id: String,
+    /// Email attribute from the assertion.
+    pub email: String,
+    /// Verified flag (a signed trusted-IdP assertion is treated as verified).
+    pub email_verified: Option<bool>,
+    /// Which IdP's group mappings to apply.
+    pub idp_key: String,
+    /// Asserted group values (possibly empty).
+    pub groups: Vec<String>,
 }
