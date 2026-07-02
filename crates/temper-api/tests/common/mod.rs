@@ -112,6 +112,7 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
         cors_origins: vec![],
         port: 0,
         enable_swagger: false,
+        internal_reconcile_secret: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);
@@ -123,6 +124,51 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
         .expect("Failed to bind test listener");
     let addr = listener.local_addr().expect("Failed to get local addr");
 
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("Test server failed");
+    });
+
+    TestApp {
+        addr,
+        pool,
+        client: reqwest::Client::new(),
+    }
+}
+
+/// Like [`setup_test_app`] but lets the caller mutate the `ApiConfig` before the app is built
+/// (e.g. to set `internal_reconcile_secret` / `auth_provider_name` for a specific test).
+pub async fn setup_test_app_with_config(
+    pool: PgPool,
+    configure: impl FnOnce(&mut ApiConfig),
+) -> TestApp {
+    fixtures::clean_and_seed(&pool).await;
+
+    let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("test_rsa.pub"))
+        .expect("Failed to load test RSA public key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+
+    let mut config = ApiConfig {
+        database_url: "unused".to_string(),
+        jwks_url: "unused".to_string(),
+        auth_issuer: "test-issuer".to_string(),
+        auth_audience: None,
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+        internal_reconcile_secret: None,
+    };
+    configure(&mut config);
+
+    let state = AppState::new(pool.clone(), jwks_store, config);
+    let app = create_app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test listener");
+    let addr = listener.local_addr().expect("Failed to get local addr");
     tokio::spawn(async move {
         axum::serve(listener, app)
             .await

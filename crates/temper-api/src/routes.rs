@@ -165,9 +165,25 @@ pub fn create_app(state: AppState) -> Router {
             auth::require_auth,
         ));
 
+    // Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.
+    // Called by the co-deployed SAML Authorization Server before it mints a token.
+    let internal = Router::new()
+        .route(
+            "/internal/saml/reconcile",
+            post(handlers::internal_saml::reconcile),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_internal_secret,
+        ));
+
     let cors = cors_layer(&state);
 
-    let mut app = Router::new().merge(public).merge(auth_only).merge(gated);
+    let mut app = Router::new()
+        .merge(public)
+        .merge(auth_only)
+        .merge(gated)
+        .merge(internal);
 
     if state.config.enable_swagger {
         app = app
