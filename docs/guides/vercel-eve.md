@@ -91,18 +91,38 @@ vercel connect create https://temperkb.io/mcp --name steward
 - The URL is the same value as `TEMPER_MCP_URL`. For a self-hosted instance, use its MCP URL.
 - The command **opens a browser** to complete the OAuth authorization — finish it there; the CLI
   waits until you do.
-- On success it prints the **connector id**, of the form `mcp.<host>/<name>` (here
-  `mcp.temperkb.io/steward`). That id is the value of `TEMPER_CONNECT_CONNECTOR` below.
-- `vercel connect list` shows existing connectors; `vercel connect token <id> --subject app`
-  mints an app token to smoke-test the connector.
+- On success it prints a **connector ID** (`scl_…`) and a **UID** of the form `<host>/<name>`
+  (here `temperkb.io/steward`). Either the `scl_…` id or the `<host>/<name>` UID is a valid
+  value for `TEMPER_CONNECT_CONNECTOR` — but note the UID is `temperkb.io/steward`, **not**
+  `mcp.temperkb.io/steward`.
+- `vercel connect list` shows the connector and both forms. Note that `vercel connect token …
+  --subject app` run from the CLI (a human requester) returns *"Token subject is not accessible
+  to this requester"* — app-subject tokens are mintable only by the deployed project's runtime
+  (its Vercel OIDC), not by a user at the CLI. Use `--subject user --yes` to smoke-test the
+  connector interactively.
 
 The connection (`agent/connections/temper.ts`) reads `TEMPER_CONNECT_CONNECTOR` and, when set,
-authenticates via `connect({ connector, principalType: "app" })` — falling back to `TEMPER_TOKEN`
-only when the connector env is absent (local dev).
+authenticates via the `connect` helper — falling back to `TEMPER_TOKEN` only when the connector
+env is absent (local dev).
 
-> The connector's app principal resolves to a temper profile. Ensure that profile has **read
-> reach** over the corpus the agent tends (e.g. the shared ingest context) — clearing the
-> ingest-delta gate is not enough; the agent must be able to *read* the sources it distills.
+### Which subject: `app` vs `user`
+
+temper-mcp resolves the caller's **profile from the token's `sub` claim**
+(`profile_service::resolve_from_claims`): a `sub` with an existing auth link loads that profile;
+a `sub` with none **creates a brand-new blank profile** (its own empty default context, no reach
+to anyone else's corpus). So the connector subject decides *who the agent is* in temper:
+
+- **`user`** (the human who authorized in the browser) → the agent acts **as that person**, with
+  their profile and read reach. Simplest reach, but it conflates agent-authored nodes with the
+  human's identity — at odds with the invocation envelope's authorship discipline.
+- **`app`** (the agent's own machine identity) → a **distinct principal**, which is the right
+  shape for authorship accountability — but its `sub` maps to a fresh empty profile, so it has
+  **no read reach** until you grant it. After the first run, find that profile and grant it read
+  on the ingest context (the same shape as sharing a context into a team during bootstrap), or
+  pre-provision + grant it before deploy.
+
+Clearing the ingest-delta gate is **not** enough — the agent must be able to *read* the sources
+it distills, which is a property of the resolved profile, not the delta.
 
 ## Environment contract
 
