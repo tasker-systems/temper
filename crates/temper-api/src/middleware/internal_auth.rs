@@ -1,6 +1,14 @@
-//! Shared-secret gate for the internal SAML reconcile endpoint (AS -> temper-api).
-//! Not a JWT path: the caller is the co-deployed Authorization Server, trusted by a
-//! constant-time-compared shared secret from `INTERNAL_RECONCILE_SECRET`.
+//! HMAC-signature gate for the internal SAML reconcile endpoint (AS -> temper-api).
+//! Not a JWT path: the caller is the co-deployed Authorization Server, which signs each
+//! request with `HMAC(secret, "{timestamp}.{raw_body}")` over the shared
+//! `INTERNAL_RECONCILE_SECRET`. The secret never crosses the wire, and a captured request
+//! is replay-proof (a stale timestamp is rejected). The signing scheme + the shared
+//! known-answer vector live in `temper_core::internal_sig`.
+//!
+//! Fail-closed: if the secret is unset the endpoint is disabled and every request is
+//! rejected.
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -8,57 +16,80 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
+use temper_core::internal_sig::{timestamp_is_fresh, verify, SIGNATURE_HEADER, TIMESTAMP_HEADER};
 use temper_services::error::ApiError;
 use temper_services::state::AppState;
 
-pub const INTERNAL_SECRET_HEADER: &str = "X-Temper-Internal-Secret";
+/// Cap on the buffered reconcile body. The payload is a small membership list; a real one
+/// is well under a kilobyte, so 64 KiB is generous while bounding the read.
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
-/// Constant-time-ish comparison: equal length AND equal bytes, no early return on content.
-/// `configured == None` means the endpoint is disabled and never matches.
-fn secret_matches(presented: &str, configured: Option<&str>) -> bool {
-    let Some(expected) = configured else {
-        return false;
-    };
-    if expected.is_empty() || presented.len() != expected.len() {
-        return false;
-    }
-    let mut diff: u8 = 0;
-    for (a, b) in presented.bytes().zip(expected.bytes()) {
-        diff |= a ^ b;
-    }
-    diff == 0
-}
-
-/// Rejects the request unless it carries the correct `X-Temper-Internal-Secret` header.
-pub async fn require_internal_secret(
+/// Rejects the request unless it carries a fresh, valid HMAC signature over its body.
+pub async fn require_internal_signature(
     State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let presented = request
-        .headers()
-        .get(INTERNAL_SECRET_HEADER)
+    // Fail-closed when unconfigured: no secret ⇒ endpoint disabled.
+    let secret = match state.config.internal_reconcile_secret.as_deref() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            tracing::warn!("internal reconcile: rejected (endpoint disabled — secret unset)");
+            return Err(ApiError::Unauthorized(
+                "internal reconcile disabled".to_string(),
+            ));
+        }
+    };
+
+    // Pull the signature headers before consuming the body.
+    let (parts, body) = request.into_parts();
+    let timestamp = parts
+        .headers
+        .get(TIMESTAMP_HEADER)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !secret_matches(presented, state.config.internal_reconcile_secret.as_deref()) {
-        tracing::warn!("internal reconcile: rejected (bad or missing shared secret)");
+        .and_then(|s| s.parse::<i64>().ok());
+    let signature = parts
+        .headers
+        .get(SIGNATURE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+
+    let (Some(timestamp), Some(signature)) = (timestamp, signature) else {
+        tracing::warn!("internal reconcile: rejected (missing or malformed signature headers)");
         return Err(ApiError::Unauthorized(
-            "invalid internal secret".to_string(),
+            "invalid internal signature".to_string(),
+        ));
+    };
+
+    // Reject replays: the timestamp must be within the allowed skew of now.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if !timestamp_is_fresh(timestamp, now) {
+        tracing::warn!(
+            timestamp,
+            now,
+            "internal reconcile: rejected (stale timestamp)"
+        );
+        return Err(ApiError::Unauthorized(
+            "stale internal signature".to_string(),
         ));
     }
-    Ok(next.run(request).await)
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    // Buffer the body so we can MAC the exact bytes received, then hand them downstream.
+    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
+        .await
+        .map_err(|_| ApiError::Unauthorized("internal reconcile body too large".to_string()))?;
 
-    #[test]
-    fn constant_time_eq_matches_only_identical_secrets() {
-        assert!(secret_matches("hunter2", Some("hunter2")));
-        assert!(!secret_matches("hunter2", Some("Hunter2")));
-        assert!(!secret_matches("hunter2", Some("")));
-        assert!(!secret_matches("hunter2", None)); // endpoint unconfigured
-        assert!(!secret_matches("", Some("hunter2")));
+    if !verify(secret.as_bytes(), timestamp, &bytes, &signature) {
+        tracing::warn!("internal reconcile: rejected (signature mismatch)");
+        return Err(ApiError::Unauthorized(
+            "invalid internal signature".to_string(),
+        ));
     }
+
+    // Rebuild the request with the buffered body for the handler's `Json` extractor.
+    let request = Request::from_parts(parts, Body::from(bytes));
+    Ok(next.run(request).await)
 }
