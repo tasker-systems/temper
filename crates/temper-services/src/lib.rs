@@ -12,3 +12,6 @@ pub mod config;
 pub mod error;
 pub mod services;
 pub mod state;
+
+/// Embedded workspace migrations, for `#[sqlx::test(migrator = "temper_services::MIGRATOR")]`.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");

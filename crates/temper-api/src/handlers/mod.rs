@@ -7,6 +7,7 @@ pub mod facets;
 pub mod graph;
 pub mod health;
 pub mod ingest;
+pub mod internal_saml;
 pub mod invocations;
 pub mod meta;
 pub mod profiles;

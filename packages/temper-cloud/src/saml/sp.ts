@@ -50,6 +50,32 @@ export function mapProfileToClaims(profile: Profile, idp: SamlIdpRow): MintedCla
   };
 }
 
+/**
+ * Reads the multi-valued group attribute named by `idp.groups_attr` from a validated assertion.
+ *
+ * Returns `null` when there is NO group signal — either no `groups_attr` is configured for this
+ * IdP, or the named attribute is absent from THIS assertion (e.g. a transient IdP misconfig). The
+ * ACS caller skips the reconcile entirely on `null`, so a missing attribute never revokes
+ * memberships. Returns an array (possibly empty `[]`) when the attribute IS present: `[]` is a
+ * genuine "member of no mapped groups now" signal and the caller DOES reconcile (revoking stale
+ * `idp` rows). This null-vs-empty split is the signal-missing guard.
+ */
+export function extractGroups(profile: Profile, idp: SamlIdpRow): string[] | null {
+  if (!idp.groups_attr) {
+    return null;
+  }
+  const attrs = (profile.attributes ?? {}) as Record<string, unknown>;
+  if (!(idp.groups_attr in attrs)) {
+    return null;
+  }
+  const value = attrs[idp.groups_attr];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const arr = Array.isArray(value) ? value : [value];
+  return arr.map((v) => String(v)).filter((s) => s.length > 0);
+}
+
 /** Builds the IdP-initiated SP login redirect URL, carrying our opaque relay state. */
 export async function buildLoginRedirect(idp: SamlIdpRow, relayState: string): Promise<string> {
   return new SAML(toSamlConfig(idp)).getAuthorizeUrlAsync(relayState, undefined, {});

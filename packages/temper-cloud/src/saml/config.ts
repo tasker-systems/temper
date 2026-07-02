@@ -13,6 +13,7 @@ export interface SamlIdpRow {
   nameid_format: string;
   email_attr: string;
   stable_id_attr: string;
+  groups_attr: string | null;
   created: string;
   updated: string;
 }
@@ -40,7 +41,7 @@ export function toSamlConfig(row: SamlIdpRow): SamlConfig {
 /** Loads the single active IdP configuration row, or null if none is active. */
 export async function loadActiveIdp(db: NeonClient): Promise<SamlIdpRow | null> {
   const rows = await db`SELECT idp_key, is_active, idp_cert, idp_sso_url, idp_entity_id,
-    sp_entity_id, acs_url, nameid_format, email_attr, stable_id_attr, created, updated
+    sp_entity_id, acs_url, nameid_format, email_attr, stable_id_attr, groups_attr, created, updated
     FROM kb_saml_idp WHERE is_active = true LIMIT 1`;
   return rows.length > 0 ? (rows[0] as SamlIdpRow) : null;
 }

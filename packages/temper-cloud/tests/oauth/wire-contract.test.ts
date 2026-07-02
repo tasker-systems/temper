@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { importSPKI, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { ReconcileRequest } from "../../src/oauth/reconcile.js";
 
 /**
  * Cross-language wire-contract proof (M1 Task 1.4).
@@ -71,5 +72,30 @@ describe("AS mint → Rust JwtClaims wire contract", () => {
     expect(typeof payload.iat).toBe("number");
     // exp is in the future relative to iat (short-lived access token).
     expect((payload.exp as number) > (payload.iat as number)).toBe(true);
+  });
+});
+
+describe("ReconcileRequest wire contract (mirrors Rust temper_core::types::ReconcileRequest)", () => {
+  it("has exactly the Rust struct fields", () => {
+    // A fully-populated value must satisfy the interface with no extra/missing keys.
+    const value: ReconcileRequest = {
+      provider: "saml:acme",
+      external_user_id: "nid-1",
+      email: "a@corp.io",
+      email_verified: true,
+      idp_key: "acme",
+      groups: ["engineering"],
+    };
+    expect(Object.keys(value).sort()).toEqual([
+      "email",
+      "email_verified",
+      "external_user_id",
+      "groups",
+      "idp_key",
+      "provider",
+    ]);
+    // nullables accept null (matches Option<..> on the Rust side)
+    const nulls: ReconcileRequest = { ...value, provider: null, email_verified: null };
+    expect(nulls.provider).toBeNull();
   });
 });

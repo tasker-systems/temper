@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createLocalJWKSet, exportPKCS8, generateKeyPair, jwtVerify } from "jose";
 import type postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NeonClient } from "../../../src/db.js";
 import { handleAuthorize, handleSamlAcs, handleToken } from "../../../src/oauth/endpoints.js";
 import { getPublicJwks } from "../../../src/oauth/keys.js";
@@ -136,5 +136,185 @@ describe("e2e: full mock-IdP SAML login", () => {
     expect(payload.sub).toBe("persistent-user-xyz");
     expect(payload.email).toBe("e2e@example.com");
     expect(payload.email_verified).toBe(true);
+  });
+
+  it("ACS issues a reconcile call carrying the asserted groups (fail-open)", async () => {
+    // Configure the seeded IdP for group provisioning + point the reconcile client at a stub.
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+
+    const reconcileCalls: Array<{ url: string; body: unknown; secret: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const headers = new Headers(init.headers);
+        reconcileCalls.push({
+          url,
+          body: JSON.parse(init.body as string),
+          secret: headers.get("X-Temper-Internal-Secret"),
+        });
+        return new Response(null, { status: 204 });
+      }),
+    );
+
+    try {
+      // authorize -> relay state
+      const verifier = `e2e-grp-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" +
+            challenge +
+            "&code_challenge_method=S256&state=grp-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+
+      // signed assertion carrying a multi-valued 'groups' attribute
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "grp-user-1",
+        attributes: { email: "grp@example.com", uid: "grp-user-1" },
+        multiValuedAttributes: { groups: ["engineering", "eng-leads"] },
+        idpKeyPem,
+        idpCertPem,
+      });
+
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+
+      // login still completes (fail-open is irrelevant here since the stub returns 204)
+      expect(acsRes.status).toBe(302);
+      expect(
+        new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
+      ).toBeTruthy();
+
+      // the reconcile POST fired with the asserted groups + secret header
+      expect(reconcileCalls).toHaveLength(1);
+      expect(reconcileCalls[0].url).toBe("https://api.internal/internal/saml/reconcile");
+      expect(reconcileCalls[0].secret).toBe("s3cr3t");
+      expect(reconcileCalls[0].body).toMatchObject({
+        idp_key: "test",
+        external_user_id: "grp-user-1",
+        groups: ["engineering", "eng-leads"],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+
+  it("ACS completes login even when reconcile fails (fail-open)", async () => {
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 500 })),
+    );
+    try {
+      const verifier = `e2e-fo-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" +
+            challenge +
+            "&code_challenge_method=S256&state=fo-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "fo-user-1",
+        attributes: { email: "fo@example.com", uid: "fo-user-1" },
+        multiValuedAttributes: { groups: ["engineering"] },
+        idpKeyPem,
+        idpCertPem,
+      });
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+      expect(acsRes.status).toBe(302);
+      expect(
+        new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
+      ).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+
+  it("skips reconcile when the assertion omits the configured groups attribute", async () => {
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const verifier = `e2e-nosig-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" +
+            challenge +
+            "&code_challenge_method=S256&state=nosig-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      // No multiValuedAttributes → assertion carries no 'groups' attribute at all.
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "nosig-user-1",
+        attributes: { email: "nosig@example.com", uid: "nosig-user-1" },
+        idpKeyPem,
+        idpCertPem,
+      });
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+      expect(acsRes.status).toBe(302);
+      expect(
+        new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
+      ).toBeTruthy();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
   });
 });

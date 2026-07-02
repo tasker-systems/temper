@@ -14,6 +14,7 @@ function fakeRow(overrides: Partial<SamlIdpRow> = {}): SamlIdpRow {
     nameid_format: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
     email_attr: "email",
     stable_id_attr: "uid",
+    groups_attr: null,
     created: "2026-07-01T00:00:00.000Z",
     updated: "2026-07-01T00:00:00.000Z",
     ...overrides,

@@ -275,8 +275,10 @@ async fn provision_profile_entities(
 
 /// Load a profile by ID.
 ///
-/// The substrate `kb_profiles` has no `is_active`, so there is no soft-delete
-/// predicate (visibility lives elsewhere).
+/// `is_active` is a real deactivation flag read from the `kb_profiles` column —
+/// it is the authn lever for soft-deleted/deactivated accounts. `require_auth`
+/// rejects the request when it comes back `false`; every `resolve_from_claims`
+/// path routes through here, so the flag surfaces everywhere.
 pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
     let profile = sqlx::query_as!(
         Profile,
@@ -288,7 +290,7 @@ pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
                NULL::text AS avatar_url,
                preferences as "preferences: serde_json::Value",
                '{}'::jsonb AS "vault_config!: serde_json::Value",
-               true AS "is_active!",
+               is_active,
                created,
                created AS "updated!"
           FROM kb_profiles

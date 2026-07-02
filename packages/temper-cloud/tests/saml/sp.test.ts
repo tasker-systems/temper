@@ -2,7 +2,12 @@ import { fileURLToPath } from "node:url";
 import type { Profile } from "@node-saml/node-saml";
 import { describe, expect, it } from "vitest";
 import type { SamlIdpRow } from "../../src/saml/config.js";
-import { buildSpMetadata, mapProfileToClaims, validateAssertion } from "../../src/saml/sp.js";
+import {
+  buildSpMetadata,
+  extractGroups,
+  mapProfileToClaims,
+  validateAssertion,
+} from "../../src/saml/sp.js";
 import {
   loadIdpFixtureCert,
   makeSignedSamlResponse,
@@ -25,6 +30,7 @@ function fakeIdp(overrides: Partial<SamlIdpRow> = {}): SamlIdpRow {
     nameid_format: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
     email_attr: "email",
     stable_id_attr: "uid",
+    groups_attr: null,
     created: "2026-07-01T00:00:00.000Z",
     updated: "2026-07-01T00:00:00.000Z",
     ...overrides,
@@ -193,5 +199,42 @@ describe("buildSpMetadata", () => {
     expect(metadata.length).toBeGreaterThan(0);
     expect(metadata).toContain("<EntityDescriptor");
     expect(metadata).toContain(idp.sp_entity_id);
+  });
+});
+
+describe("extractGroups", () => {
+  const profileWith = (attrs: Record<string, unknown>): Profile =>
+    ({ attributes: attrs }) as unknown as Profile;
+
+  it("returns null (no signal) when groups_attr is not configured", () => {
+    expect(
+      extractGroups(profileWith({ groups: ["a"] }), fakeIdp({ groups_attr: null })),
+    ).toBeNull();
+  });
+
+  it("returns null (no signal) when the named attribute is absent from the assertion", () => {
+    // Transient IdP misconfig: groups configured, but this assertion omitted the attribute.
+    expect(
+      extractGroups(profileWith({ other: ["a"] }), fakeIdp({ groups_attr: "groups" })),
+    ).toBeNull();
+  });
+
+  it("reads a multi-valued attribute", () => {
+    expect(
+      extractGroups(profileWith({ groups: ["a", "b"] }), fakeIdp({ groups_attr: "groups" })),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("coerces a single-valued attribute to a one-element array", () => {
+    expect(
+      extractGroups(profileWith({ groups: "solo" }), fakeIdp({ groups_attr: "groups" })),
+    ).toEqual(["solo"]);
+  });
+
+  it("returns [] (genuine empty signal) when the attribute is present but empty", () => {
+    // Attribute present with no values → real "in no groups now" → caller DOES reconcile/revoke.
+    expect(extractGroups(profileWith({ groups: [] }), fakeIdp({ groups_attr: "groups" }))).toEqual(
+      [],
+    );
   });
 });

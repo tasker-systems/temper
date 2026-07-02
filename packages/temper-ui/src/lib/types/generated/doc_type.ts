@@ -3,5 +3,10 @@
 /**
  * Typed vault doctype. All valid values are enumerated exhaustively —
  * unknown doctypes fail at parse, not at validation.
+ *
+ * Includes the 8 cognitive-map node labels (spec D3: fact, memory,
+ * question, theme, concern, principle, commitment, domain) alongside the
+ * original resource doctypes. The set is still closed here — Task A2 loosens
+ * the parse gate to an open tail; this variant list is the recognized core.
  */
-export type DocType = "task" | "goal" | "session" | "research" | "decision" | "concept";
+export type DocType = "task" | "goal" | "session" | "research" | "decision" | "concept" | "fact" | "memory" | "question" | "theme" | "concern" | "principle" | "commitment" | "domain";

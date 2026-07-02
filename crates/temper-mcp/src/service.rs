@@ -99,6 +99,19 @@ impl TemperMcpService {
             "Profile resolved from request"
         );
 
+        // Account deactivation is the authn lever (parity with temper-api's auth middleware):
+        // a soft-deleted profile cannot use MCP tools even with an otherwise-valid token. Checked
+        // before system-access so a deactivated account is refused outright.
+        if !profile.is_active {
+            tracing::warn!(profile_id = %profile.id, "rejected: profile is deactivated");
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                "This account has been deactivated. This error is terminal and should not be retried."
+                    .to_string(),
+                None,
+            ));
+        }
+
         // Check system access before allowing any tool use.
         let has_access = temper_services::services::access_service::has_system_access(
             &self.api_state.pool,

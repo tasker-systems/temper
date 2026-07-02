@@ -8,6 +8,7 @@ import { guardReplay } from "../saml/replay.js";
 import {
   buildLoginRedirect,
   buildSpMetadata,
+  extractGroups,
   mapProfileToClaims,
   validateAssertion,
 } from "../saml/sp.js";
@@ -20,6 +21,7 @@ import {
   storeRefreshToken,
 } from "./flow.js";
 import { accessTtlSeconds, type MintedClaims, mintAccessToken, newOpaqueToken } from "./mint.js";
+import { reconcileMemberships } from "./reconcile.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
 const PENDING_FLOW_TTL_SECONDS = 600;
@@ -151,6 +153,33 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
     const { profile, assertionId } = await validateAssertion(idp, String(samlResponse));
     await guardReplay(db, assertionId, new Date(Date.now() + REPLAY_TTL_SECONDS * 1000));
     const claims = mapProfileToClaims(profile, idp);
+
+    // Phase 2: reconcile IdP-driven team memberships before minting. Fail-open — a provisioning
+    // error must never block authentication (design spec §3.8). Its own try/catch so a reconcile
+    // failure is NOT misreported as an assertion rejection by the outer catch.
+    try {
+      const groups = extractGroups(profile, idp);
+      // Signal-missing guard: null means the assertion carried no group signal (groups_attr not
+      // configured, or the attribute absent from THIS assertion). Skip reconcile so a transient
+      // IdP attribute-drop never revokes memberships. A present-but-empty list ([]) IS a signal
+      // ("in no mapped groups now") and DOES reconcile, revoking stale idp rows.
+      if (groups !== null) {
+        await reconcileMemberships({
+          provider: `saml:${idp.idp_key}`,
+          external_user_id: claims.sub,
+          email: claims.email,
+          email_verified: claims.email_verified,
+          idp_key: idp.idp_key,
+          groups,
+        });
+      }
+    } catch (reconcileErr) {
+      logger.error(
+        { err: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr) },
+        "SAML ACS: membership reconcile failed (fail-open, login proceeds)",
+      );
+    }
+
     const code = newOpaqueToken();
     const { redirectUri, oauthState } = await bindCodeToFlow(db, String(relayState), {
       code,
