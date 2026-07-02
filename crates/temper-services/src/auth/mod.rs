@@ -8,11 +8,12 @@
 //! Two levels form a typestate chain:
 //! 1. [`authenticate`] — resolve the profile + `is_active`. Runs on every authed
 //!    request on both surfaces. Yields [`AuthenticatedProfile`].
-//! 2. `require_system_access` — consumes proof of Level 1, adds the access gate.
-//!    Runs on the gated tier of both surfaces. Yields `SystemAuthorized`.
+//! 2. [`require_system_access`] — consumes proof of Level 1, adds the access gate.
+//!    Runs on the gated tier of both surfaces. Yields [`SystemAuthorized`].
 
 use sqlx::PgPool;
 
+use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, AuthenticatedProfile};
 
 use crate::error::ApiError;
@@ -58,7 +59,34 @@ pub async fn authenticate(
     })
 }
 
-// `require_system_access` + `SystemAuthorized` land in Task 2.
+/// Proof that a profile passed **both** levels: authenticated *and*
+/// system-authorized. Only obtainable from [`require_system_access`], which
+/// only accepts an [`AuthenticatedProfile`] — so the type makes it impossible
+/// to run Level 2 without having passed Level 1.
+#[derive(Debug)]
+pub struct SystemAuthorized(pub AuthenticatedProfile);
+
+/// Level 2 — system authorization. Consumes proof of Level 1, adds the
+/// gating-team access gate. Runs on the gated tier of both surfaces.
+pub async fn require_system_access(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+) -> Result<SystemAuthorized, AuthzError> {
+    let has_access = crate::services::access_service::has_system_access(
+        pool,
+        ProfileId::from(authed.profile.id),
+    )
+    .await
+    .map_err(AuthzError::ProfileResolution)?;
+
+    if !has_access {
+        return Err(AuthzError::SystemAccessDenied {
+            profile_id: authed.profile.id,
+        });
+    }
+
+    Ok(SystemAuthorized(authed.clone()))
+}
 
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
@@ -102,6 +130,45 @@ mod tests {
         assert!(
             matches!(err, AuthzError::Deactivated { profile_id } if profile_id == id),
             "expected Deactivated, got {err:?}",
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn require_system_access_allows_approved_profile(pool: PgPool) {
+        // Open-mode default: an authenticated profile has system access.
+        let c = claims("seam-approved", "approved@example.test");
+        let authed = authenticate(&pool, &c).await.expect("authenticate");
+        let ok = require_system_access(&pool, &authed).await;
+        assert!(
+            ok.is_ok(),
+            "open-mode profile should be system-authorized: {ok:?}"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn require_system_access_refuses_when_gated(pool: PgPool) {
+        // Enable invite-only so a fresh profile is NOT an approved member.
+        // enable_invite_only lives in the e2e harness; here we set the gate
+        // directly: point kb_system_settings at a gating team the profile
+        // does not belong to.
+        let c = claims("seam-gated", "gated@example.test");
+        let authed = authenticate(&pool, &c).await.expect("authenticate");
+        let id = authed.profile.id;
+
+        sqlx::query(
+            "UPDATE kb_system_settings SET access_mode = 'invite_only', \
+             gating_team_slug = 'nonexistent-gating-team'",
+        )
+        .execute(&pool)
+        .await
+        .expect("enable gate");
+
+        let err = require_system_access(&pool, &authed)
+            .await
+            .expect_err("gated profile should be refused");
+        assert!(
+            matches!(err, AuthzError::SystemAccessDenied { profile_id } if profile_id == id),
+            "expected SystemAccessDenied, got {err:?}",
         );
     }
 }
