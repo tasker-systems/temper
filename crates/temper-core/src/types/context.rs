@@ -61,3 +61,41 @@ pub struct ContextCreateRequest {
     #[serde(default)]
     pub owner: Option<ContextOwnerRef>,
 }
+
+/// Request body for `POST /api/contexts/{id}/teams` — share a context into a team's read-reach.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareContextRequest {
+    /// The team whose members (and DAG descendants) gain read-reach into the context.
+    pub team_id: Uuid,
+}
+
+/// Result of sharing a context into a team. `shared` is `false` when the share already
+/// existed (idempotent no-op).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareContextOutcome {
+    pub context_id: Uuid,
+    pub team_id: Uuid,
+    /// `true` when this call inserted the share; `false` when it already existed.
+    pub shared: bool,
+}
+
+/// Result of unsharing a context from a team. `unshared` is `false` when no share existed.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnshareContextOutcome {
+    pub context_id: Uuid,
+    pub team_id: Uuid,
+    /// `true` when this call deleted a share; `false` when none existed.
+    pub unshared: bool,
+}

@@ -28,3 +28,31 @@ slug: string,
  * Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
  */
 owner_ref: string, };
+
+/**
+ * Result of sharing a context into a team. `shared` is `false` when the share already
+ * existed (idempotent no-op).
+ */
+export type ShareContextOutcome = { context_id: string, team_id: string, 
+/**
+ * `true` when this call inserted the share; `false` when it already existed.
+ */
+shared: boolean, };
+
+/**
+ * Request body for `POST /api/contexts/{id}/teams` — share a context into a team's read-reach.
+ */
+export type ShareContextRequest = { 
+/**
+ * The team whose members (and DAG descendants) gain read-reach into the context.
+ */
+team_id: string, };
+
+/**
+ * Result of unsharing a context from a team. `unshared` is `false` when no share existed.
+ */
+export type UnshareContextOutcome = { context_id: string, team_id: string, 
+/**
+ * `true` when this call deleted a share; `false` when none existed.
+ */
+unshared: boolean, };
