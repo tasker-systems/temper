@@ -550,6 +550,9 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
         AuthzError::ProfileResolution(err) => {
             rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {err}"), None)
         }
+        AuthzError::AccessCheck(err) => {
+            rmcp::ErrorData::internal_error(format!("Failed to check system access: {err}"), None)
+        }
     }
 }
 

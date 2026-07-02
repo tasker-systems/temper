@@ -58,7 +58,10 @@ pub async fn require_system_access(
                 details: Box::new(details),
             });
         }
-        Err(temper_services::auth::AuthzError::ProfileResolution(err)) => return Err(err),
+        Err(
+            temper_services::auth::AuthzError::ProfileResolution(err)
+            | temper_services::auth::AuthzError::AccessCheck(err),
+        ) => return Err(err),
         Err(temper_services::auth::AuthzError::Deactivated { .. }) => {
             // require_auth already gated deactivation before this layer runs.
             return Err(ApiError::Unauthorized("account is deactivated".to_string()));

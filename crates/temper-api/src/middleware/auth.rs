@@ -108,8 +108,10 @@ pub async fn require_auth(
                 ApiError::Unauthorized("account is deactivated".to_string())
             }
             temper_services::auth::AuthzError::ProfileResolution(err) => err,
-            // Level 1 never denies system access.
-            temper_services::auth::AuthzError::SystemAccessDenied { .. } => {
+            // Level 1 never runs the system-access gate; these are defensively
+            // unreachable from `authenticate`.
+            temper_services::auth::AuthzError::AccessCheck(_)
+            | temper_services::auth::AuthzError::SystemAccessDenied { .. } => {
                 ApiError::Internal("unexpected system-access error from authenticate".to_string())
             }
         })?;

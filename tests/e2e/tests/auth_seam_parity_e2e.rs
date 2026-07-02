@@ -59,6 +59,34 @@ fn mcp_parts(sub: &str) -> axum::http::request::Parts {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
+    // Positive control: the happy path is admitted identically on both surfaces,
+    // so the parity truth-table is self-contained (refusal cases below prove the
+    // negatives). Open mode → an active, authenticated profile has system access.
+    let app = common::setup(pool.clone()).await;
+
+    // API surface: a gated endpoint succeeds.
+    let api = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .expect("api request");
+    assert_eq!(
+        api.status(),
+        StatusCode::OK,
+        "API must admit an active, approved profile"
+    );
+
+    // MCP surface: the production gate resolves + authorizes without error.
+    let svc = build_mcp_service(&pool).await;
+    svc.ensure_profile_from_parts(&mcp_parts("e2e-test-user"))
+        .await
+        .expect("MCP must admit an active, approved profile");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn deactivated_profile_refused_on_both_surfaces(pool: sqlx::PgPool) {
     // Open mode — deactivation is gated BEFORE system_access in the seam, so it
     // refuses even without invite-only.

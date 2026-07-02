@@ -26,6 +26,11 @@ use crate::services::profile_service;
 pub enum AuthzError {
     /// `resolve_from_claims` failed (DB error, missing link data, etc.).
     ProfileResolution(ApiError),
+    /// The `has_system_access` gate check itself failed (DB error) — distinct
+    /// from a clean `SystemAccessDenied`, so surfaces can keep the pre-seam
+    /// "failed to check system access" diagnostic instead of collapsing it into
+    /// the resolve-failure message.
+    AccessCheck(ApiError),
     /// The resolved profile is soft-deleted (`is_active == false`).
     Deactivated { profile_id: uuid::Uuid },
     /// The profile is not an approved member of the gating team.
@@ -77,7 +82,7 @@ pub async fn require_system_access(
         ProfileId::from(authed.profile.id),
     )
     .await
-    .map_err(AuthzError::ProfileResolution)?;
+    .map_err(AuthzError::AccessCheck)?;
 
     if !has_access {
         return Err(AuthzError::SystemAccessDenied {
