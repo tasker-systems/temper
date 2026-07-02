@@ -649,6 +649,64 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminRequestsAction,
     },
+    /// SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling).
+    Saml {
+        #[command(subcommand)]
+        action: AdminSamlAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AdminSamlAction {
+    /// Generate the AS signing key + reconcile secret and emit the env bundle + kb_saml_idp SQL.
+    ///
+    /// Interactive by default; pass --no-interactive with the flags below for scripted runs.
+    /// Emits to stdout unless --env-out / --sql-out are given; --apply runs the SQL via psql.
+    Provision {
+        #[arg(long)]
+        no_interactive: bool,
+        #[arg(long)]
+        instance_url: Option<String>,
+        /// API origin the AS calls for reconcile (defaults to --instance-url).
+        #[arg(long)]
+        api_origin: Option<String>,
+        #[arg(long)]
+        idp_key: Option<String>,
+        /// Path to the IdP signing certificate (PEM).
+        #[arg(long)]
+        idp_cert_file: Option<String>,
+        #[arg(long)]
+        idp_sso_url: Option<String>,
+        #[arg(long)]
+        idp_entity_id: Option<String>,
+        #[arg(
+            long,
+            default_value = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+        )]
+        nameid_format: String,
+        #[arg(long, default_value = "email")]
+        email_attr: String,
+        #[arg(long, default_value = "uid")]
+        stable_id_attr: String,
+        /// Assertion attribute carrying the group list (omit for authn-only).
+        #[arg(long)]
+        groups_attr: Option<String>,
+        /// Override the signing key id (default `as-<YYYY-MM>`).
+        #[arg(long)]
+        kid: Option<String>,
+        /// Repeatable `client_id=redirect_uri` for AS_CLIENTS (e.g. temper-cli=https://…/cli-callback).
+        #[arg(long = "client")]
+        clients: Vec<String>,
+        /// Write the env bundle here instead of stdout (chmod 0600 — contains the private key).
+        #[arg(long)]
+        env_out: Option<String>,
+        /// Write the SQL here instead of stdout.
+        #[arg(long)]
+        sql_out: Option<String>,
+        /// Run the kb_saml_idp SQL against $DATABASE_URL via psql (default: emit only).
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]

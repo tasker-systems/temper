@@ -1,7 +1,8 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AdminAction, AdminRequestsAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
-    ContextAction, InvocationCmd, ResourceAction, SkillAction, StewardCmd, TeamAction,
+    AdminAction, AdminRequestsAction, AdminSamlAction, AuthAction, Cli, CogmapCmd, Commands,
+    ConfigAction, ContextAction, InvocationCmd, ResourceAction, SkillAction, StewardCmd,
+    TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -438,6 +439,45 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         .await
                     })
                 }),
+            },
+            AdminAction::Saml { action } => match action {
+                AdminSamlAction::Provision {
+                    no_interactive,
+                    instance_url,
+                    api_origin,
+                    idp_key,
+                    idp_cert_file,
+                    idp_sso_url,
+                    idp_entity_id,
+                    nameid_format,
+                    email_attr,
+                    stable_id_attr,
+                    groups_attr,
+                    kid,
+                    clients,
+                    env_out,
+                    sql_out,
+                    apply,
+                } => temper_cli::commands::admin_saml::provision(
+                    temper_cli::commands::admin_saml::ProvisionArgs {
+                        no_interactive,
+                        instance_url,
+                        api_origin,
+                        idp_key,
+                        idp_cert_file,
+                        idp_sso_url,
+                        idp_entity_id,
+                        nameid_format,
+                        email_attr,
+                        stable_id_attr,
+                        groups_attr,
+                        kid,
+                        clients,
+                        env_out,
+                        sql_out,
+                        apply,
+                    },
+                ),
             },
         },
         Commands::Auth { action } => match action {
