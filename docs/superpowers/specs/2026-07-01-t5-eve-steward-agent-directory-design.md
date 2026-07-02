@@ -39,7 +39,7 @@ Two framing decisions from the brainstorm shape this spec beyond T3:
 **In (this session):** the full `agent-workflows/steward/agent/` directory (agent.ts,
 instructions, MCP connection, tools allow-list, schedule backstop, map-stewardship
 skill); `eve dev` boots and the directory typechecks; **one real temper-mcp read**
-against a live deployment via the interactive-auth flow.
+against a live deployment (proving target + token resolve).
 
 **Deferred (named):** the full authored-4 **write** loop run end-to-end against the live
 team self-cogmap (T6, needs the map to exist + deploy); the scheduler dispatch wiring
@@ -60,25 +60,31 @@ actually exists. The name reserves the room; we do not pre-abstract.
 
 ```
 packages/agent-workflows/
-├── package.json          # deps: eve, @vercel/connect, zod; devDeps: typescript, @biomejs/biome, @types/node
-│                         # scripts: dev (eve dev), typecheck (tsc --noEmit), check (biome check)
-├── tsconfig.json         # ESM, strict; mirrors temper-cloud's TS config
-├── biome.json            # extends the repo Biome config
-└── steward/
-    └── agent/            # Eve "an agent is a directory"
-        ├── agent.ts          # defineAgent({ model, description, compaction })
+├── README.md                 # why the package is workspace-isolated; deploy notes
+└── steward/                  # a self-contained Eve project (from `eve init`)
+    ├── package.json          # Eve's OWN toolchain: eve, @vercel/connect, ai v7, zod; TS 7 RC; node 24
+    ├── package-lock.json     # pins the isolated toolchain (npm, not bun)
+    ├── tsconfig.json         # Eve's own (ES2022, NodeNext, strict) — NOT shared with the repo
+    └── agent/                # Eve "an agent is a directory"
+        ├── agent.ts          # defineAgent({ model, description })
         ├── instructions.md   # always-on steward persona
+        ├── channels/eve.ts   # scaffold entry point (vercelOidc/localDev/placeholderAuth)
         ├── connections/
-        │   └── temper.ts     # defineMcpClientConnection — env URL, platform auth, 24-tool allow-list
+        │   └── temper.ts     # defineMcpClientConnection — env URL, platform auth, approval never(), 24-tool allow-list
         ├── skills/
         │   └── map-stewardship.md   # on-demand: D3/D5/D6/D7/D8 procedure + concrete loop
         └── schedules/
-            └── steward.ts    # defineSchedule({ cron }) — cron backstop
+            └── steward.ts    # defineSchedule({ cron, markdown }) — cron backstop
 ```
 
-The exact Eve project layout (whether `eve dev` runs from `steward/` and whether each
-future agent is its own eve project) is settled at scaffold time via `npx eve@latest
-init`; the tree above is the intended shape.
+**As-built note:** the earlier draft of this tree had the package share the repo's
+biome/tsconfig. The real `eve init` scaffold (eve 0.18.1) brings its own opinionated
+toolchain (TypeScript 7 RC, `ai` v7, npm lockfile, node 24) and no biome, so the Eve
+project keeps its scaffolded toolchain and is **not** a bun-`workspaces` member — the
+repo pre-commit (`cd packages/temper-cloud`) never touches it, and its own TS 7 never
+collides with temper-cloud's TS 5.8. Install/run tooling from inside `steward/` (an
+`npm install` from the repo root inherits the root's bun-oriented `overrides` and
+fails).
 
 ### D2 — MCP connection: direct allow-list binding, no wrapper code
 
@@ -132,14 +138,19 @@ temper-mcp is a complete OAuth 2.0 server — Auth0 discovery at
 `/.well-known/oauth-authorization-server` (RFC 8414), protected-resource metadata (RFC
 9728), dynamic client registration at `/oauth/register`, PKCE, and the `refresh_token`
 grant (`crates/temper-mcp/src/discovery.rs`; the temper CLI already drives this exact
-flow). The Eve connection therefore uses **`defineInteractiveAuthorization`** (PKCE) wired
-to temper-mcp's own discovery/authorize/token endpoints: browser-consent once, token
-cached and refreshed, carried through durably. **No static token env var.**
+flow). Auth is **platform-carried, not a static secret in code**.
 
-`@vercel/connect`'s `connect({ connector, principalType })` is the alternative for a
-first-party pre-registered Vercel connector; temper-mcp is not one, so
-`defineInteractiveAuthorization` is the fit. (Recorded as the fallback path if temper-mcp
-is later registered as a Vercel Connect connector.)
+**As-built note (eve 0.18.1):** the earlier draft named `defineInteractiveAuthorization`,
+which does not exist in the shipped eve. The real connection-auth surface is two modes:
+`connect()` from `@vercel/connect/eve` (Vercel Connect — the documented, recommended path
+for OAuth-backed MCP servers: it owns consent, encrypted storage, and refresh), and
+`auth: { getToken }` (which explicitly supports "your own OAuth exchange", runs per
+connection attempt, and honors `expiresAt` for refresh-ahead-of-401). The shipped
+connection uses **`connect({ connector, principalType: "app" })` as the production path**
+(gated on `TEMPER_CONNECT_CONNECTOR`, registered via `vercel connect create` in T6), with
+a **`getToken` dev fallback** that returns an already-OAuth-obtained temper token
+(`TEMPER_TOKEN`) for local boot and the one-real-read gate. Approval is `never()`
+(fully autonomous + audited, D8).
 
 **Only the target URL is env-driven:** `url: process.env.TEMPER_MCP_URL`. One agent dir
 points at `https://temperkb.io/mcp` or the self-hosted instance by env value alone. Any
@@ -190,10 +201,15 @@ ingest-delta threshold and no-ops under threshold).
 
 ### D6 — Verification this session
 
-- `eve dev` boots the agent directory; `tsc --noEmit` and `biome check` pass.
-- **One real temper-mcp read** — `cogmap_read_charter` (or `search`) against
-  `TEMPER_MCP_URL=https://temperkb.io/mcp` through the `defineInteractiveAuthorization`
-  flow — proving the connection + auth + tool wiring end-to-end.
+- `eve dev` boots the agent directory (`tsc` passes; the repo `biome check` still
+  only touches temper-cloud — the isolated package is invisible to it).
+- **One real temper-mcp read** against live `TEMPER_MCP_URL=https://temperkb.io/mcp`
+  proving the connection's target + token resolve: `initialize` returns 401 without
+  the bearer and 200 with it, and a `tools/call` for the allow-listed `list_contexts`
+  returns real data. **As-built:** the model-driven eve-session read is blocked in a
+  local dev loop by AI Gateway auth (`eve link` / `AI_GATEWAY_API_KEY` — a deploy
+  concern), so the read was proven by a direct authenticated MCP call, per the risk
+  note. The full model-driven session read lands with T6.
 - The full authored-4 **write** loop against the live team self-cogmap is T6.
 
 ## The steward loop (inherited from T3, for reference)
@@ -231,17 +247,23 @@ on tick:
 
 ## Risks & open items
 
-- **Eve API drift** — Eve is beta; the `defineMcpClientConnection` / interactive-auth API
-  is verified as of 2026-07-01 (`npx eve@latest`, `eve/connections`) but re-verify at
-  scaffold time. The exact allow/block-list filter syntax lives at
-  `eve.dev/docs/connections/mcp` — a mechanical lookup at implementation time; the *set*
-  of tools is the decision.
-- **Interactive auth in `eve dev`** — the one-real-read verification requires a browser
-  consent round-trip against temperkb.io's Auth0; if that is friction in a headless dev
-  loop, fall back to proving the read against a local temper-mcp with a dev token, and
-  record the temperkb.io read as the T6 gate.
+- **Eve API drift (resolved this build)** — Eve is beta; the connection API was verified
+  against the *installed* eve 0.18.1 docs at `node_modules/eve/docs/` (authoritative,
+  version-matched). Net corrections vs the earlier web-sourced draft: no
+  `defineInteractiveAuthorization` (use `connect()` / `getToken`); `tools: { allow: [...] }`
+  is the filter shape; `defineSchedule({ cron, markdown })`; skills auto-discover under
+  `agent/skills/` with a `description` frontmatter routing hint.
+- **AI Gateway in `eve dev`** — the model-driven session read needs `eve link`
+  (`VERCEL_OIDC_TOKEN`) or `AI_GATEWAY_API_KEY`; unavailable in a bare local loop. The
+  one-real-read was therefore proven by a direct authenticated MCP call (401→200 +
+  `list_contexts` real data). Wiring the gateway credential and running the full
+  model-driven read is folded into T6 (deploy).
+- **Production Connect connector** — `connect()` needs temper-mcp registered as a Vercel
+  Connect connector (`vercel connect create`) and `TEMPER_CONNECT_CONNECTOR` set; that
+  registration + the app-scoped token issuance is a T6 step. Until then the `getToken`
+  dev fallback carries local runs.
 - **Self-hosted target parity** — the self-hosted instance's Auth0 tenant/audience may
-  differ; the discovery-driven interactive-auth flow should absorb this via
+  differ; the discovery-driven flow should absorb this via
   `TEMPER_MCP_URL` + discovery, but confirm against the self-hosted `/.well-known`
   endpoints.
 
