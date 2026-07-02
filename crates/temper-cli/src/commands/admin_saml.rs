@@ -305,7 +305,6 @@ pub async fn map_group(
     team: &str,
     role: &str,
     apply: bool,
-    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
     let sql = saml::render_group_mapping_sql(idp_key, group, team_id, role);
@@ -315,7 +314,6 @@ pub async fn map_group(
     } else {
         println!("{sql}");
     }
-    let _ = fmt;
     Ok(())
 }
 
@@ -351,7 +349,6 @@ pub async fn verify(
     client: &temper_client::TemperClient,
     instance_url: &str,
     db_check: bool,
-    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let base = instance_url.trim_end_matches('/');
     let http = reqwest::Client::new();
@@ -397,16 +394,23 @@ pub async fn verify(
             .arg("SELECT count(*) FROM kb_saml_idp WHERE is_active")
             .output()
             .map_err(|e| TemperError::Config(format!("failed to launch psql: {e}")))?;
-        let count = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        if count == "1" {
-            output::success("exactly one active kb_saml_idp row");
-        } else {
+        if !out.status.success() {
             ok = false;
-            output::error(format!("expected 1 active kb_saml_idp row, found {count}"));
+            output::error(format!(
+                "psql failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        } else {
+            let count = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if count == "1" {
+                output::success("exactly one active kb_saml_idp row");
+            } else {
+                ok = false;
+                output::error(format!("expected 1 active kb_saml_idp row, found {count}"));
+            }
         }
     }
 
-    let _ = fmt;
     if ok {
         Ok(())
     } else {

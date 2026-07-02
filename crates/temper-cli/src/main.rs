@@ -492,13 +492,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         temper_cli::actions::runtime::with_client(|client| {
                             Box::pin(async move {
                                 temper_cli::commands::admin_saml::map_group(
-                                    client,
-                                    &idp_key,
-                                    &group,
-                                    &team,
-                                    &role,
-                                    apply,
-                                    output_format,
+                                    client, &idp_key, &group, &team, &role, apply,
                                 )
                                 .await
                             })
@@ -508,13 +502,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 AdminSamlAction::Verify { instance_url, db } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {
-                            temper_cli::commands::admin_saml::verify(
-                                client,
-                                &instance_url,
-                                db,
-                                output_format,
-                            )
-                            .await
+                            temper_cli::commands::admin_saml::verify(client, &instance_url, db)
+                                .await
                         })
                     })
                 }

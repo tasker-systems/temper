@@ -329,6 +329,36 @@ pub async fn create(
     Ok(row)
 }
 
+/// Assert both `context_id` and `team_id` exist before a `kb_team_contexts` write —
+/// otherwise a nonexistent id hits the FK constraint and surfaces as an opaque 500
+/// instead of a clean 404. Called AFTER the admin gate (auth stays first) and BEFORE
+/// the INSERT/DELETE.
+async fn ensure_context_and_team_exist(
+    pool: &PgPool,
+    context_id: uuid::Uuid,
+    team_id: uuid::Uuid,
+) -> ApiResult<()> {
+    let context_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_contexts WHERE id = $1) AS "ok!""#,
+        context_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !context_exists {
+        return Err(ApiError::NotFound);
+    }
+    let team_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "ok!""#,
+        team_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !team_exists {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 /// Share a context into a team's read-reach (write a `kb_team_contexts` row).
 ///
 /// Auth before writes: admin-only (interim gate, mirroring `cogmap bind` — its
@@ -343,6 +373,7 @@ pub async fn share(
     if !access_service::is_system_admin(pool, caller).await? {
         return Err(ApiError::Forbidden);
     }
+    ensure_context_and_team_exist(pool, context_id, req.team_id).await?;
     let inserted = sqlx::query_scalar!(
         r#"
         INSERT INTO kb_team_contexts (context_id, team_id)
@@ -372,6 +403,7 @@ pub async fn unshare(
     if !access_service::is_system_admin(pool, caller).await? {
         return Err(ApiError::Forbidden);
     }
+    ensure_context_and_team_exist(pool, context_id, team_id).await?;
     let result = sqlx::query!(
         "DELETE FROM kb_team_contexts WHERE context_id = $1 AND team_id = $2",
         context_id,

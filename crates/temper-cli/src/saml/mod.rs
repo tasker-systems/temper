@@ -277,4 +277,36 @@ mod tests {
         assert!(sql.contains(&team.to_string()));
         assert!(sql.contains("'member'"));
     }
+
+    /// Proves the round-trip the TS AS now performs: `render_env` escapes the PEM's real
+    /// newlines to literal `\n` for the flat env bundle; `keys.ts` (`getSigningKey` /
+    /// `getPublicJwks`) reverses that with `.replace(/\\n/g, "\n")` before handing the PEM to
+    /// jose/node crypto. Exercise the same reversal here against a REAL generated key and
+    /// confirm the unescaped PEM re-parses as a valid PKCS#8 Ed25519 key.
+    #[test]
+    fn emitted_env_signing_key_round_trips_through_escape_unescape() {
+        use pkcs8::DecodePrivateKey;
+
+        let generated = generate_signing_key(None, "2026-07").unwrap();
+        let mut cfg = sample_config();
+        cfg.signing_key_pem = generated.pem.clone();
+        cfg.signing_kid = generated.kid.clone();
+
+        let env = cfg.render_env();
+        let escaped = env
+            .lines()
+            .find_map(|l| l.strip_prefix("AS_SIGNING_KEY_PKCS8="))
+            .expect("AS_SIGNING_KEY_PKCS8 line present");
+
+        // The emitted line must actually be escaped (single-line, literal backslash-n).
+        assert!(!escaped.contains('\n'));
+        assert!(escaped.contains("\\n"));
+
+        // Reverse the escaping — this is what keys.ts's `.replace(/\\n/g, "\n")` does.
+        let unescaped = escaped.replace("\\n", "\n");
+        assert_eq!(unescaped, generated.pem);
+
+        // And it must re-parse as a valid PKCS#8 Ed25519 key.
+        ed25519_dalek::SigningKey::from_pkcs8_pem(&unescaped).unwrap();
+    }
 }
