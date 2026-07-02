@@ -105,6 +105,17 @@ The connection (`agent/connections/temper.ts`) reads `TEMPER_CONNECT_CONNECTOR` 
 authenticates via the `connect` helper — falling back to `TEMPER_TOKEN` only when the connector
 env is absent (local dev).
 
+### Status (2026-07-02): `app` principal needs M2M, not yet available
+
+The **`app`** path below is the intended design, but it is **currently blocked**: an app
+principal can only obtain a token via the OAuth `client_credentials` grant, and temper-mcp's
+OAuth server advertises only `authorization_code` + `refresh_token`
+(`/.well-known/oauth-authorization-server`). So the deployed connector cannot mint an app token
+and the agent never reaches temper-mcp. Adding machine-to-machine (`client_credentials`) support
+is tracked as part of the temper-services auth-seam task (`019f22f9`). Until it lands, use the
+`authorization_code` + `refresh_token` bridge (a dedicated steward login) described under `user`
+below. The rest of this guide — link, connector registration, env, deploy, crons — is validated.
+
 ### Which subject: `app` vs `user`
 
 temper-mcp resolves the caller's **profile from the token's `sub` claim**
