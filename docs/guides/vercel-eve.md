@@ -146,20 +146,55 @@ this authenticates automatically via **OIDC** (`VERCEL_OIDC_TOKEN` is injected a
 no credential to set. You only need a gateway key for **local** `eve dev`; after `vercel link`,
 `vercel env pull` writes it into `.env.local`.
 
-## Deploy and verify
+## Deploy and verify (two-phase, app principal)
+
+Because the agent runs as its own **app** principal, its temper profile does not exist until
+its first authenticated call creates it — so reach is granted in a second phase, after deploy.
+
+### Phase 1 — deploy
+
+Set every env var (see the contract above) on the Vercel project first, then:
 
 ```bash
 cd packages/agent-workflows/steward
 eve deploy            # rides the existing .vercel link; no eve picker
 ```
 
-Then confirm:
+On the first cron tick the agent authenticates to temper-mcp; temper-mcp resolves its `sub` to
+a **new, empty profile** (`resolve_from_claims`). That tick does no useful work yet (no reach,
+no cogmap write grant), but the profile now exists.
+
+**Verify the app token actually minted** (the one open risk): check Vercel → *Observability →
+Logs* for the tick. Success = a profile was resolved / an auth line, not a token error. If the
+connector cannot issue an app token (temper-mcp's OAuth server must support the app/client-
+credentials exchange), no profile is created — pivot before granting.
+
+### Phase 2 — grant the agent's profile reach
+
+Find the just-created profile (newest row after deploy), then grant it the two capabilities it
+needs: **read** on the ingest sources (via team membership) and **write/author** on the map.
+
+```bash
+# Identify the steward profile (via neonctl → psql):
+#   SELECT p.id, p.handle, p.created, l.auth_provider_user_id AS sub
+#     FROM kb_profiles p JOIN kb_profile_auth_links l ON l.profile_id = p.id
+#    ORDER BY p.created DESC LIMIT 5;   -- the newest is the steward's
+
+# 1. Source read reach — join the team the ingest context is shared into (watcher = read-only):
+temper team add-member <team-id> <steward-profile-id> --role watcher
+#    (e.g. team personal-j-cole-taylor 019eea5e-… — the bound team from genesis)
+
+# 2. Cogmap authoring — explicit write grant (post-Q-A, authoring is not conferred by membership):
+temper cogmap grant <cogmap-ref> --to-profile <steward-profile-id> --write
+```
+
+### Verify
 
 - **Cron Jobs** (Vercel → *Settings → Cron Jobs*): every `defineSchedule` becomes a Vercel
   Cron Job, evaluated in **UTC**. Expect the steward tick and the region-materialize tick.
 - **Execution** (Vercel → *Observability → Cron Jobs* / *Logs*): a tick that clears the ingest
-  threshold produces a **closed invocation envelope** with correlated mutation events; a tick
-  under threshold opens and closes the envelope with a no-op outcome.
+  threshold produces a **closed invocation envelope** with correlated mutation events, authored
+  by the steward's own profile; a tick under threshold opens and closes with a no-op outcome.
 
 ## Design note — `TEMPER_SELF_COGMAP_ID` is an MVP binding
 
