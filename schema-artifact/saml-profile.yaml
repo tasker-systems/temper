@@ -1,0 +1,34 @@
+# saml-profile.yaml — declarative desired-state for the SAML half of the enterprise install.
+#
+# Input to scripts/bootstrap/saml-setup.sh. Separate from install-profile.yaml (the auth-agnostic
+# db+admin spine) so system-bootstrap.sh stays usable for Auth0/OAuth installs. Mirrors the
+# `temper admin saml provision/map-group/verify` flag surface.
+idp:
+  key: "acme-okta"                       # --idp-key (also AUTH_PROVIDER_NAME suffix: saml:<key>)
+  instance_url: "https://temper.acme.com"  # --instance-url
+  api_origin: ""                         # --api-origin (defaults to instance_url when empty)
+  cert_file: "schema-artifact/acme-okta.pem"  # --idp-cert-file (Okta signing cert, PEM)
+  sso_url: "https://acme.okta.com/app/xxx/sso/saml"  # --idp-sso-url
+  entity_id: "http://www.okta.com/xxx"   # --idp-entity-id
+  nameid_format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"  # --nameid-format
+  email_attr: "email"                    # --email-attr
+  stable_id_attr: "uid"                  # --stable-id-attr
+  groups_attr: "groups"                  # --groups-attr (omit/empty for authn-only)
+  kid: ""                                # --kid (empty ⇒ default as-<YYYY-MM>)
+
+# AS client allowlist — repeated --client <id>=<redirect_uri> (fail-closed: missing ⇒ all authorize denied)
+clients:
+  - "temper-cli=https://temper.acme.com/api/auth/cli-callback"
+
+# Emitted-artifact paths.
+env_out: "schema-artifact/acme-saml.env"   # --env-out (chmod 0600 — contains the private key)
+sql_out: "schema-artifact/acme-saml-idp.sql"  # --sql-out
+
+# group → (+team, role) mappings — applied at step 11, AFTER the teams exist (system-bootstrap.sh).
+group_mappings:
+  - group: "temper-admins"
+    team: "temper-system"
+    role: "owner"
+  - group: "everyone"
+    team: "everyone"
+    role: "watcher"

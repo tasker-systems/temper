@@ -43,6 +43,35 @@ run() {
 }
 prof() { yq -r "$1 // \"\"" "$PROFILE"; }
 
+# ── Profile values ───────────────────────────────────────────────────────────────────────────────
+# Read now; consumed as Tasks B3 (provision), B4 (apply), and B5 (map-group/verify) fill in the step
+# bodies below. shellcheck can't see that forward reference, so SC2034 is disabled per-line until
+# each var gains a real use.
+IDP_KEY="$(prof '.idp.key')";           [ -n "$IDP_KEY" ] || die "profile missing .idp.key"
+INSTANCE_URL="$(prof '.idp.instance_url')"; [ -n "$INSTANCE_URL" ] || die "profile missing .idp.instance_url"
+# shellcheck disable=SC2034
+API_ORIGIN="$(prof '.idp.api_origin')"
+# shellcheck disable=SC2034
+CERT_FILE="$(prof '.idp.cert_file')"
+# shellcheck disable=SC2034
+SSO_URL="$(prof '.idp.sso_url')"
+# shellcheck disable=SC2034
+ENTITY_ID="$(prof '.idp.entity_id')"
+# shellcheck disable=SC2034
+NAMEID="$(prof '.idp.nameid_format')"
+# shellcheck disable=SC2034
+EMAIL_ATTR="$(prof '.idp.email_attr')"
+# shellcheck disable=SC2034
+STABLE_ID_ATTR="$(prof '.idp.stable_id_attr')"
+# shellcheck disable=SC2034
+GROUPS_ATTR="$(prof '.idp.groups_attr')"
+# shellcheck disable=SC2034
+KID="$(prof '.idp.kid')"
+# shellcheck disable=SC2034
+ENV_OUT="$(prof '.env_out')"
+# shellcheck disable=SC2034
+SQL_OUT="$(prof '.sql_out')"
+
 # ── Step 3 — provision (emit env + hold kb_saml_idp SQL) ───────────────────────────────────────────
 info "Step 3 — provision (emit env bundle + kb_saml_idp SQL)  [TODO: Task B3]"
 
