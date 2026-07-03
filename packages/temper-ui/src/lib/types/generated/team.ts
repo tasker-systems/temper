@@ -33,7 +33,7 @@ export type TeamCreateRequest = { slug: string, name: string | null, parent: str
  * Full team detail — the team row plus its member roster. Response body for
  * `GET /api/teams/{id}`.
  */
-export type TeamDetail = { id: string, slug: string, name: string, created: string, auto_join_role: TeamRole | null, members: Array<TeamMemberDetail>, };
+export type TeamDetail = { id: string, slug: string, name: string, description: string | null, created: string, auto_join_role: TeamRole | null, members: Array<TeamMemberDetail>, };
 
 /**
  * A profile's membership in a team with a specific role.
@@ -70,9 +70,21 @@ export type TeamRole = "owner" | "maintainer" | "member" | "watcher";
 /**
  * Response row for team endpoints — matches the real `kb_teams` columns.
  */
-export type TeamRow = { id: string, slug: string, name: string, created: string, 
+export type TeamRow = { id: string, slug: string, name: string, 
+/**
+ * Optional human description; NULL until set via `PATCH /api/teams/{id}`.
+ */
+description: string | null, created: string, 
 /**
  * NULL = not an auto-join ("everyone") team; otherwise the role new
  * members are enrolled at. Admin-gated to set.
  */
 auto_join_role: TeamRole | null, };
+
+/**
+ * Request body for `PATCH /api/teams/{id}` — update team metadata.
+ *
+ * Both fields are optional: a `None` leaves that column unchanged (partial
+ * merge via SQL COALESCE). Sending neither is a no-op that returns the row.
+ */
+export type TeamUpdateRequest = { name: string | null, description: string | null, };

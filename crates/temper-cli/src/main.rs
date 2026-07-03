@@ -381,6 +381,27 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     .await
                 })
             }),
+            TeamAction::Update {
+                team,
+                name,
+                description,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::update_remote(
+                        client,
+                        &team,
+                        name.as_deref(),
+                        description.as_deref(),
+                        output_format,
+                    )
+                    .await
+                })
+            }),
+            TeamAction::Delete { team } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::delete_remote(client, &team, output_format).await
+                })
+            }),
             TeamAction::Create {
                 slug,
                 name,

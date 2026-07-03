@@ -5,7 +5,9 @@ use crate::actions::cogmap::resolve_team_id;
 use crate::error::{Result, TemperError};
 use crate::output;
 use temper_core::types::access_gate::JoinRequestStatus;
-use temper_core::types::team::{AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamRole};
+use temper_core::types::team::{
+    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamRole, TeamUpdateRequest,
+};
 
 /// Parse a CLI role string into the `TeamRole` enum (snake_case wire form).
 fn parse_role(s: &str) -> Result<TeamRole> {
@@ -186,6 +188,49 @@ pub async fn add_member_remote(
 
     let rendered = crate::format::render(&member, fmt)?;
     println!("{rendered}");
+    Ok(())
+}
+
+/// Update a team's metadata (name/description) and render the resulting row.
+pub async fn update_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    if name.is_none() && description.is_none() {
+        return Err(TemperError::Api(
+            "nothing to update: pass --name and/or --description".to_string(),
+        ));
+    }
+    let team_id = resolve_team_id(client, team).await?;
+    let req = TeamUpdateRequest {
+        name: name.map(str::to_owned),
+        description: description.map(str::to_owned),
+    };
+    let row = client
+        .teams()
+        .update(team_id, &req)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&row, fmt)?);
+    Ok(())
+}
+
+/// Soft-delete a team (owner only).
+pub async fn delete_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    client
+        .teams()
+        .delete(team_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    output::success("Team deleted.");
     Ok(())
 }
 

@@ -95,7 +95,12 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::teams::list).post(handlers::teams::create),
         )
         .route("/api/teams/{id}/members", post(handlers::teams::add_member))
-        .route("/api/teams/{id}", get(handlers::teams::detail))
+        .route(
+            "/api/teams/{id}",
+            get(handlers::teams::detail)
+                .patch(handlers::teams::update)
+                .delete(handlers::teams::delete),
+        )
         .route(
             "/api/teams/{id}/members/{profile_id}",
             delete(handlers::teams::remove_member).patch(handlers::teams::change_role),
