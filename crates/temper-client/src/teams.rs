@@ -5,9 +5,12 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamMemberRow, TeamRow};
+use temper_core::types::team::{
+    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+};
 
-/// Sub-client for team lifecycle operations (create / add-member / list).
+/// Sub-client for team lifecycle operations (create / add-member / list /
+/// detail / remove-member / change-role).
 pub struct TeamsClient<'a> {
     http: &'a HttpClient,
 }
@@ -53,5 +56,44 @@ impl<'a> TeamsClient<'a> {
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
             .await
+    }
+
+    /// GET /api/teams/{id} — team detail + member roster.
+    pub async fn get(&self, team_id: Uuid) -> Result<TeamDetail> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// PATCH /api/teams/{id}/members/{profile_id} — change a member's role.
+    pub async fn change_role(
+        &self,
+        team_id: Uuid,
+        profile_id: Uuid,
+        body: &ChangeRoleRequest,
+    ) -> Result<TeamMemberRow> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}/members/{profile_id}");
+        let req = self.http.patch(&path).json(body);
+        self.http
+            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/teams/{id}/members/{profile_id} — remove a member (or self-leave).
+    ///
+    /// Returns `()` on a 204; `send` errors on any non-2xx (403/404/409), so
+    /// callers surface the guard failures without decoding a body.
+    pub async fn remove_member(&self, team_id: Uuid, profile_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}/members/{profile_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send(&Method::DELETE, &path, req, Some(&token))
+            .await?;
+        Ok(())
     }
 }

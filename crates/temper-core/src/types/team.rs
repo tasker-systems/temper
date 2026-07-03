@@ -118,3 +118,58 @@ pub struct AddMemberRequest {
     pub profile_id: Uuid,
     pub role: TeamRole,
 }
+
+/// Provenance of a team membership row. Maps to the `team_member_source`
+/// Postgres enum (added by `20260702000001_saml_group_provisioning.sql`).
+/// `Idp` rows are owned by SAML reconcile and are not user-mutable.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "team_member_source", rename_all = "snake_case")]
+pub enum TeamMemberSource {
+    Native,
+    Idp,
+}
+
+/// A team member enriched with the profile handle and provenance — the row
+/// shape returned inside `TeamDetail`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TeamMemberDetail {
+    pub profile_id: Uuid,
+    pub handle: String,
+    pub role: TeamRole,
+    pub source: TeamMemberSource,
+}
+
+/// Full team detail — the team row plus its member roster. Response body for
+/// `GET /api/teams/{id}`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamDetail {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub created: DateTime<Utc>,
+    pub auto_join_role: Option<TeamRole>,
+    pub members: Vec<TeamMemberDetail>,
+}
+
+/// Request body for `PATCH /api/teams/{id}/members/{profile_id}`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeRoleRequest {
+    pub role: TeamRole,
+}

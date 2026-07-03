@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
-use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamMemberRow, TeamRow};
+use temper_core::types::team::{
+    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+};
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
 use temper_services::state::AppState;
@@ -77,4 +79,91 @@ pub async fn add_member(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(row)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/teams/{id}",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Team detail + members", body = TeamDetail),
+        (status = 404, description = "Team not found or not visible to caller"),
+    )
+)]
+pub async fn detail(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+) -> ApiResult<Json<TeamDetail>> {
+    team_service::team_detail(&state.pool, ProfileId::from(auth.0.profile.id), team_id)
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/teams/{id}/members/{profile_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "Team ID"),
+        ("profile_id" = Uuid, Path, description = "Member profile ID"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Member removed"),
+        (status = 403, description = "Forbidden (not owner/maintainer and not self)"),
+        (status = 404, description = "Member not found"),
+        (status = 409, description = "Cannot remove last owner or SAML-provisioned row"),
+    )
+)]
+pub async fn remove_member(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<StatusCode> {
+    team_service::remove_member(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        team_id,
+        profile_id,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/teams/{id}/members/{profile_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "Team ID"),
+        ("profile_id" = Uuid, Path, description = "Member profile ID"),
+    ),
+    security(("bearer_auth" = [])),
+    request_body = ChangeRoleRequest,
+    responses(
+        (status = 200, description = "Role changed", body = TeamMemberRow),
+        (status = 400, description = "Cannot grant owner via role change"),
+        (status = 403, description = "Forbidden (not owner/maintainer)"),
+        (status = 404, description = "Member not found"),
+        (status = 409, description = "Cannot demote last owner or SAML-provisioned row"),
+    )
+)]
+pub async fn change_role(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<ChangeRoleRequest>,
+) -> ApiResult<Json<TeamMemberRow>> {
+    team_service::change_role(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        team_id,
+        profile_id,
+        body.role,
+    )
+    .await
+    .map(Json)
 }

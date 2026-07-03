@@ -1,10 +1,11 @@
 //! Team membership commands: join, status, leave; plus the lifecycle surface
 //! (create, add-member, list) that round-trips CLI → client → API → service.
 
+use crate::actions::cogmap::resolve_team_id;
 use crate::error::{Result, TemperError};
 use crate::output;
 use temper_core::types::access_gate::JoinRequestStatus;
-use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamRole};
+use temper_core::types::team::{AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamRole};
 
 /// Parse a CLI role string into the `TeamRole` enum (snake_case wire form).
 fn parse_role(s: &str) -> Result<TeamRole> {
@@ -95,8 +96,8 @@ pub fn status() -> crate::error::Result<()> {
     })
 }
 
-/// Withdraw a pending request or leave a team.
-pub fn leave() -> crate::error::Result<()> {
+/// Withdraw a pending join request.
+pub fn withdraw_request() -> crate::error::Result<()> {
     crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             let request = client
@@ -201,5 +202,84 @@ pub async fn list_remote(
 
     let rendered = crate::format::render(&teams, fmt)?;
     println!("{rendered}");
+    Ok(())
+}
+
+/// Show a team's detail + members.
+pub async fn show_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let detail = client
+        .teams()
+        .get(team_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&detail, fmt)?);
+    Ok(())
+}
+
+/// Leave a team you are a member of (self-removal).
+pub async fn leave_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let me = client
+        .profile()
+        .get()
+        .await
+        .map_err(crate::commands::client_err)?;
+    client
+        .teams()
+        .remove_member(team_id, me.id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    output::success("You have left the team.");
+    Ok(())
+}
+
+/// Remove a member from a team (owner/maintainer).
+pub async fn remove_member_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    profile: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let profile_id = uuid::Uuid::parse_str(profile)
+        .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))?;
+    client
+        .teams()
+        .remove_member(team_id, profile_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    output::success("Member removed.");
+    Ok(())
+}
+
+/// Change a member's role (owner/maintainer).
+pub async fn set_role_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    profile: &str,
+    role: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let profile_id = uuid::Uuid::parse_str(profile)
+        .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))?;
+    let req = ChangeRoleRequest {
+        role: parse_role(role)?,
+    };
+    let member = client
+        .teams()
+        .change_role(team_id, profile_id, &req)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&member, fmt)?);
     Ok(())
 }

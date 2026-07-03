@@ -77,7 +77,8 @@ pub use steward::{
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,
 };
 pub use team::{
-    AddMemberRequest, Team, TeamCreateRequest, TeamMember, TeamMemberRow, TeamRole, TeamRow,
+    AddMemberRequest, ChangeRoleRequest, Team, TeamCreateRequest, TeamDetail, TeamMember,
+    TeamMemberDetail, TeamMemberRow, TeamMemberSource, TeamRole, TeamRow,
 };
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};
 pub use upload::{UploadProcessingStatus, UploadResponse};
