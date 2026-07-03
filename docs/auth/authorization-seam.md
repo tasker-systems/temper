@@ -101,9 +101,10 @@ reads that extension and calls the seam's Level 2 for its gate effect.
 > extensions via the `AuthUser` extractor.
 
 **temper-mcp.** `ensure_profile_from_parts` (called at the top of every tool) builds
-`AuthClaims` from `McpClaims`, calls `authenticate` then `require_system_access` back to
-back, and caches the resolved profile for the tool body. Both refusals route through
-`map_authz_error`.
+`AuthClaims` from the injected `RawJwtClaims` (via `normalize_machine`, which also handles the
+machine branch — see [machine-token-contract.md](./machine-token-contract.md)), calls
+`authenticate` then `require_system_access` back to back, and caches the resolved profile for
+the tool body. Both refusals route through `map_authz_error`.
 
 ## The parity test — at the production caller's level
 
@@ -113,7 +114,7 @@ profile are refused **identically** on both surfaces:
 - The **API** surface is driven over HTTP through the real middleware stack.
 - The **MCP** surface is driven by constructing a `TemperMcpService` over the same test
   pool and calling the production gate `ensure_profile_from_parts` with hand-built request
-  `Parts` carrying `McpClaims`.
+  `Parts` carrying `RawJwtClaims`.
 
 This is the test the per-surface `is_active` gap would have failed. A direct-call unit test
 over `authenticate` / `require_system_access` (which also exists, in the seam module) proves
