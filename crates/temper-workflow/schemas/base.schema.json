@@ -10,7 +10,22 @@
     },
     "temper-type": {
       "type": "string",
-      "enum": ["task", "goal", "session", "research", "decision", "concept"],
+      "enum": [
+        "task",
+        "goal",
+        "session",
+        "research",
+        "decision",
+        "concept",
+        "fact",
+        "memory",
+        "question",
+        "theme",
+        "concern",
+        "principle",
+        "commitment",
+        "domain"
+      ],
       "description": "Document type"
     },
     "temper-context": {

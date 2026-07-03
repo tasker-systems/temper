@@ -1,5 +1,5 @@
 use serde_yaml::Value;
-use temper_workflow::frontmatter::Frontmatter;
+use temper_workflow::frontmatter::{DocType, Frontmatter};
 use temper_workflow::schema::{check_unknown_temper_fields, load_schema, validate_frontmatter};
 
 fn yaml(s: &str) -> Value {
@@ -12,12 +12,51 @@ fn yaml(s: &str) -> Value {
 
 #[test]
 fn test_load_schema_for_each_doctype() {
-    for doctype in &["task", "goal", "session", "research", "decision", "concept"] {
-        let result = load_schema(doctype);
+    // Iterate the canonical set so any newly-registered doc type is covered
+    // automatically — DocType::ALL is the single source of truth.
+    for doctype in DocType::ALL {
+        let name = doctype.as_str();
+        let result = load_schema(name);
         assert!(
             result.is_ok(),
-            "load_schema({doctype}) failed: {:?}",
+            "load_schema({name}) failed: {:?}",
             result.err()
+        );
+    }
+}
+
+/// Regression for the T3 prod finding: the 8 cognitive-map node labels
+/// (`fact`, `memory`, `question`, `theme`, `concern`, `principle`,
+/// `commitment`, `domain`) must validate. Each per-type schema pins
+/// `temper-type` via `const` *and* `$ref`s base.schema.json, so if the base
+/// `temper-type` enum omits a label, validation fails with
+/// `"<label>" is not one of ...` even though the schema file exists.
+#[test]
+fn test_validate_cognitive_map_label_frontmatter() {
+    for doctype in &[
+        "fact",
+        "memory",
+        "question",
+        "theme",
+        "concern",
+        "principle",
+        "commitment",
+        "domain",
+    ] {
+        let fm = yaml(&format!(
+            r#"
+temper-id: "01930000-0000-7000-8000-000000000002"
+temper-type: {doctype}
+temper-context: my-project
+temper-created: "2024-01-01T00:00:00Z"
+temper-title: "A {doctype} node"
+temper-slug: a-{doctype}-node
+"#
+        ));
+        let issues = validate_frontmatter(doctype, &fm).expect("validate_frontmatter succeeded");
+        assert!(
+            issues.is_empty(),
+            "expected no issues for valid {doctype}, got: {issues:?}"
         );
     }
 }
