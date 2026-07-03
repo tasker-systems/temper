@@ -160,7 +160,17 @@ argument grouping as the cogmap variant does.
 Follow `superpowers:test-driven-development`: red (assert the owner-grant path fails
 before the seam fix / before the surface exists) → green → refactor.
 
-### 7. sqlx cache
+### 7. MCP surface (parity)
+
+Add `resource_grant` / `resource_revoke` tools to `temper-mcp`, mirroring the cogmap
+grant MCP tool (`crates/temper-mcp/src/tools/cognitive_maps.rs:474`, service-direct into
+`access_service::grant_capability` / `revoke_capability`). Same one shared logic layer as
+API + CLI — the tool widens its params into `GrantCapabilityRequest` with
+`subject_table = "kb_resources"`. Register in the MCP tool router and add a tool-level
+test mirroring the cogmap grant tool test. This honors full MCP+API+CLI surface parity
+(the standing intent).
+
+### 8. sqlx cache
 
 Regenerate after SQL / new `query!` macros:
 `cargo sqlx prepare --workspace -- --all-features`, then `cargo make prepare-e2e`
@@ -172,13 +182,11 @@ any new Rust `query!` in tests.
 
 - Retiring dead `AccessLevel` / `TeamResource` in `types/access.rs` and the old
   `access_level` enum — sibling task #6 (`019f25da-3e89`).
-- MCP surface for resource grants. Not in the acceptance criteria; the cogmap grant MCP
-  tool is the template if we add it later. (Full-surface parity is the eventual intent —
-  flagged here as a deliberate deferral, not an omission.)
 
 ## Acceptance
 
 - Owner grants a team `read` on one resource → a team member sees it via
   `resources_visible_to`; `revoke` removes it; a `write` grant enables
   `can_modify_resource`. Verified through the real CLI in the e2e suite.
+- The same grant/revoke reachable over all three surfaces — CLI, API, MCP.
 - `cargo make check` clean; targeted crate suites + the new e2e green.
