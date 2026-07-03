@@ -67,8 +67,8 @@ follow remain the authoritative reference and the manual fallback.
 2. **Map IdP groups to teams** — after the teams exist (see the org-bootstrap runbook):
 
    ```bash
-   temper admin saml map-group --idp <acme-okta> engineering +engineering --role member
-   temper admin saml map-group --idp <acme-okta> --from-seen   # groups the IdP has actually asserted
+   temper admin saml map-group --idp-key <acme-okta> engineering +engineering --role member
+   temper admin saml map-group --idp-key <acme-okta> --from-seen   # groups the IdP has actually asserted
    ```
 
    Emits a `kb_saml_group_mappings` INSERT (add `--apply` to run it). `--from-seen` reads
@@ -296,6 +296,33 @@ This never deletes the profile or its history, and it is independent of SAML gro
 > `is_active` is enforced by the shared authorization seam (Level 1), so **both** surfaces —
 > `temper-api` and `temper-mcp` — reject a deactivated profile identically. See
 > [../auth/authorization-seam.md](../auth/authorization-seam.md).
+
+## Running it as the applier
+
+[`saml-setup.sh`](../../scripts/bootstrap/saml-setup.sh) automates the `temper admin saml`
+sequence above from a declarative profile — it loops `provision` / `map-group` / `verify` from
+[`saml-profile.yaml`](../../schema-artifact/saml-profile.yaml):
+
+```bash
+# Dry-run first — prints the commands without executing:
+scripts/bootstrap/saml-setup.sh --profile schema-artifact/saml-profile.yaml --dry-run
+
+# Emit only (default) — env bundle + kb_saml_idp SQL, safe to run anytime, no DB writes:
+scripts/bootstrap/saml-setup.sh --profile schema-artifact/saml-profile.yaml
+
+# Apply — writes the kb_saml_idp row, applies group mappings, verifies against the live DB
+# (needs DATABASE_URL + psql; run post-migrate, and after the org-bootstrap teams exist):
+DATABASE_URL=postgresql://… scripts/bootstrap/saml-setup.sh \
+  --profile schema-artifact/saml-profile.yaml --apply-db
+```
+
+It needs `yq` to read the profile and `temper` on PATH. Emit-by-default and idempotency are
+inherited from the underlying `temper admin saml` commands, not reimplemented by the script. It
+is the SAML sibling of
+[`system-bootstrap.sh`](../../scripts/bootstrap/system-bootstrap.sh)
+(kept separate so that script stays usable for Auth0/Okta-OAuth installs) — see
+[enterprise-install.md](./enterprise-install.md#the-timeline) for how the two appliers interleave
+across the full install timeline.
 
 ## Limitations (Phase 1)
 

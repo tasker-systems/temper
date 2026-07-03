@@ -151,25 +151,30 @@ impossible, not just out of order.
 | 3 | `temper admin saml provision` → generate keys, `--env-out` bundle, `--sql-out` kb_saml_idp SQL (inert; early for the env keys) | `saml-setup.sh` (emit) | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 4 | Set Vercel env (matrix + emitted bundle) on api + mcp | manual | [Environment matrix](#environment-matrix) |
 | 5 | Deploy backend; `sqlx migrate run` against `DATABASE_URL_UNPOOLED` | manual | [self-hosting.md § Run migrations](./self-hosting.md#run-migrations) |
-| 6 | Apply the `kb_saml_idp` row (`--apply`, or `psql` the `--sql-out` file) | `saml-setup.sh` (apply) | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 6 | Apply the `kb_saml_idp` row (`saml-setup.sh --apply-db`, or `psql` the `--sql-out` file by hand) | `saml-setup.sh` (`--apply-db`) | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 7 | First admin signs in via SAML → JIT `kb_profiles` row | manual | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 8 | SQL root step: gating team + first admin; VERIFY `is_system_admin(<uuid>) = true` | `system-bootstrap.sh --run-root` | [org-bootstrap.md § 0](./org-bootstrap.md#0-the-irreducible-sql-root-step-operator-with-db-credentials) |
 | 9 | `temper admin settings` (instance name, gating team, mode) | `system-bootstrap.sh` | [org-bootstrap.md § 1](./org-bootstrap.md#1-instance-settings) |
 | 10 | `temper team create everyone --auto-join-role watcher` | `system-bootstrap.sh` | [org-bootstrap.md § 2](./org-bootstrap.md#2-create-the-everyone-team) |
-| 11 | `temper admin saml map-group` (after teams exist) | `saml-setup.sh` (emit/apply) | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 11 | `temper admin saml map-group` (after teams exist) | `saml-setup.sh` (emit / `--apply-db`) | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 12 | `temper admin saml verify` | `saml-setup.sh` | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 13 | Telos-charter: `temper cogmap create` → `temper cogmap reconcile` → bind `+everyone` | `system-bootstrap.sh` | [org-bootstrap.md §§ 3–5](./org-bootstrap.md#3-birth-the-org-identity-cognitive-map) |
 | 14 | (optional) UI deploy: confidential OIDC client, `API_BASE_URL`, `SESSION_SECRET` | manual | [self-hosting.md § Deploy the UI (optional)](./self-hosting.md#deploy-the-ui-optional) |
 | 15 | Verify: health, `temper login`, resource round-trip | manual | [self-hosting.md § Verify](./self-hosting.md#verify) |
 | — | → team-self-cognition + Eve steward: **DEFERRED** | — | [vercel-eve.md](./vercel-eve.md) |
 
-**The expected path.** The happy path is: run `temper admin saml provision` (step 3), do the two
-platform steps by hand (4–5, Vercel env + deploy/migrate), then run the two scripts — `saml-setup.sh`
-for steps 6, 11, and 12, and `system-bootstrap.sh --run-root` for steps 8–10 and 13. The numbered
-breakdown above is the reference an operator reads to understand what each script does, or falls
-back to when running by hand. The two scripts are kept separate so `system-bootstrap.sh` (steps
-8–10, 13) works unchanged for Auth0/Okta-OAuth installs, which swap steps 2–3, 6, and 11–12 for the
-Auth0 app registration documented in [self-hosting.md](./self-hosting.md) instead.
+**The expected path.** The happy path is: run
+`scripts/bootstrap/saml-setup.sh --profile schema-artifact/saml-profile.yaml` (step 3, default
+emit — writes the env bundle consumed at step 4 and holds the `kb_saml_idp` SQL for step 6), do
+the two platform steps by hand (4–5, Vercel env + deploy/migrate), then run
+`system-bootstrap.sh --run-root` (steps 8–10 and 13) and re-run
+`saml-setup.sh --profile schema-artifact/saml-profile.yaml --apply-db` (steps 6, 11, and 12 —
+applies the `kb_saml_idp` row, maps the now-existing teams' IdP groups, and verifies against the
+live DB). The numbered breakdown above is the reference an operator reads to understand what each
+script does, or falls back to when running by hand. The two scripts are kept separate so
+`system-bootstrap.sh` (steps 8–10, 13) works unchanged for Auth0/Okta-OAuth installs, which swap
+steps 2–3, 6, and 11–12 for the Auth0 app registration documented in
+[self-hosting.md](./self-hosting.md) instead.
 
 ### Okta SAML app
 
@@ -230,7 +235,7 @@ from the happy path (SAML variant swaps, a failed step to re-run by hand, etc.).
 | Steps | Automated by | Status |
 | --- | --- | --- |
 | 8–10, 13 | `system-bootstrap.sh --run-root` | Exists today |
-| 3, 6, 11, 12 | `saml-setup.sh` | Lands alongside this guide (Arc B, same PR) |
+| 3, 6, 11, 12 | `saml-setup.sh --profile schema-artifact/saml-profile.yaml` (`--apply-db` for 6, 11, 12) | Exists today |
 | 1–2, 4–5, 7, 14–15 | — (manual) | Platform-console and human-in-the-loop steps: provisioning Neon and the Okta app, setting Vercel env, deploying, the first SAML login, and the optional UI deploy/verify — none of these are things a script can safely do on an operator's behalf |
 
 **What's deferred beyond this runbook** — the roadmap tail, not steps to sequence here:

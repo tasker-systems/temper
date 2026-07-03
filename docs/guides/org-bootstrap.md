@@ -215,6 +215,11 @@ step is idempotent, re-applying the profile **converges** rather than duplicatin
 pin the org-identity `cogmap_id` in the profile to keep genesis a no-op on re-runs.
 There is no state backend; plan/diff (Terraform-like) semantics are deferred.
 
+The SAML half of an install (provision the IdP, apply `kb_saml_idp`, map groups) is a
+**separate** applier, [`scripts/bootstrap/saml-setup.sh`](../../scripts/bootstrap/saml-setup.sh) —
+kept out of this script so `system-bootstrap.sh` stays auth-agnostic and usable for Auth0/Okta-OAuth
+installs. See the SAML bracket note above and [self-hosting-saml.md](./self-hosting-saml.md#running-it-as-the-applier).
+
 ## Validation gate
 
 The end-to-end sequence is proven by `tests/e2e/tests/org_bootstrap_e2e.rs` (the CI
