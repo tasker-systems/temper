@@ -20,6 +20,7 @@ Temper is a knowledge base for builders — a structured markdown vault that giv
 | `assets/` | Logos, favicon, brand mark, social preview, diagrams. |
 | `fonts/` | Font-loading instructions. (Temper doesn't self-host fonts.) |
 | `preview/` | The Design System cards — each small HTML showing one concept. |
+| `preview/graph-atlas/` | Design targets for the graph-visualization rethink (Atlas direction + semantic-zoom tiers). See its `README.md` and the [Atlas spec](../docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md). |
 | `ui_kits/landing/` | Public marketing site components + a reconstructed landing page. |
 | `ui_kits/app/` | Authed vault browser — sidebar, grid, markdown viewer, palette. |
 

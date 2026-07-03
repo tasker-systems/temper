@@ -1,0 +1,220 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Graph Atlas — Visual Direction (Atlas ✓ vs Constellation)</title>
+<link rel="stylesheet" href="../_shared.css">
+<style>
+  body { padding: 26px 28px; }
+  h2 { font-family: var(--serif); font-weight: 600; font-size: 22px; margin: 0 0 6px; color: var(--parchment); }
+  .subtitle { font-family: var(--serif); font-size: 14px; color: var(--chalk); margin: 0 0 20px; line-height: 1.5; }
+  .subtitle b, .subtitle i { color: var(--parchment); }
+  .vc-wrap { max-width: 1040px; margin: 0 auto; }
+  .vc-scene { font: 12px/1.3 "JetBrains Mono", ui-monospace, monospace; }
+  .vc-caption { margin: 10px 2px 22px; }
+  .vc-caption h3 { margin: 0 0 4px; }
+  .vc-caption p { margin: 0; opacity: .72; font-size: 13px; }
+  .vc-card { border-radius: 14px; overflow: hidden; border: 1px solid rgba(128,128,128,.28); }
+  .vc-card.selected { outline: 3px solid #7c9cff; outline-offset: 2px; }
+  svg { display: block; width: 100%; height: auto; }
+  .vc-legend { display:flex; flex-wrap:wrap; gap:14px 26px; font: 11px/1.4 "JetBrains Mono",monospace; opacity:.8; margin: 6px 4px 26px; }
+  .vc-legend b { font-weight:600; letter-spacing:.04em; text-transform:uppercase; font-size:10px; }
+  .vc-legend span { display:inline-flex; align-items:center; gap:7px; }
+</style>
+
+<div class="vc-wrap">
+  <h2>Whole-graph canvas — two visual directions</h2>
+  <p class="subtitle">Design target from the 2026-07-03 Atlas brainstorm. Same scene both times: a team's graph, both homes as peers, force-laid-out. Concept <b>steward architecture</b> is selected → its event trail is in the right rail. <b>Direction B · Atlas was chosen</b> — cartographic and information-dense, for an org-scale deployment (hundreds of teams, 100k+ nodes). A is kept for reference.</p>
+
+  <div class="vc-legend">
+    <span><b>homes</b></span>
+    <span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="#e8b673"/></svg> cogmap-homed (authored)</span>
+    <span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#6fa8c7" stroke-width="2"/></svg> context-homed (resource)</span>
+    <span style="width:100%"></span>
+    <span><b>edges</b></span>
+    <span><svg width="34" height="10"><line x1="1" y1="5" x2="33" y2="5" stroke="#999" stroke-width="1"/></svg> near / relates_to</span>
+    <span><svg width="34" height="10"><line x1="1" y1="5" x2="33" y2="5" stroke="#999" stroke-width="3"/></svg> weight = thickness</span>
+    <span><svg width="34" height="10"><line x1="1" y1="5" x2="33" y2="5" stroke="#999" stroke-width="1.4" stroke-dasharray="5 3"/></svg> leads_to / derived_from (▸ polarity)</span>
+    <span><svg width="34" height="10"><line x1="1" y1="5" x2="33" y2="5" stroke="#c77" stroke-width="1.6"/></svg> contradicts</span>
+  </div>
+
+  <!-- ================= DIRECTION A : CONSTELLATION (dark editorial, evolved) ================= -->
+  <div class="vc-caption">
+    <h3>A · Constellation <span style="opacity:.6">— evolve today's dark editorial serif</span></h3>
+    <p>Near-black canvas. The word <i>is</i> the node (serif). Homes split by hue+fill: authored nodes glow warm & filled; context resources are cool open rings. Regions are faint luminous washes named at their centroid. Edges are thin light strokes; weight = luminosity+thickness.</p>
+  </div>
+  <div class="vc-card vc-scene">
+    <svg viewBox="0 0 1040 540" role="img">
+      <defs>
+        <radialGradient id="regA1" cx="50%" cy="50%" r="60%">
+          <stop offset="0%" stop-color="#e8b673" stop-opacity="0.16"/>
+          <stop offset="100%" stop-color="#e8b673" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="regA2" cx="50%" cy="50%" r="60%">
+          <stop offset="0%" stop-color="#6fa8c7" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="#6fa8c7" stop-opacity="0"/>
+        </radialGradient>
+        <marker id="arrA" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#8a93b5"/>
+        </marker>
+      </defs>
+      <rect x="0" y="0" width="1040" height="540" fill="#0a0a0c"/>
+      <!-- region washes -->
+      <ellipse cx="620" cy="250" rx="210" ry="170" fill="url(#regA1)"/>
+      <ellipse cx="255" cy="285" rx="150" ry="140" fill="url(#regA2)"/>
+      <text x="620" y="118" text-anchor="middle" fill="#e8b673" opacity="0.5" font-size="10" letter-spacing="2">◜ REGION · STEWARD ARCHITECTURE ◝</text>
+      <text x="255" y="168" text-anchor="middle" fill="#6fa8c7" opacity="0.5" font-size="10" letter-spacing="2">CONTEXT · TEMPER</text>
+
+      <!-- edges (context ← cogmap bridges are dashed derived_from) -->
+      <g stroke-linecap="round" fill="none">
+        <line x1="560" y1="250" x2="330" y2="330" stroke="#8a93b5" stroke-width="1.4" stroke-dasharray="5 3" opacity="0.7" marker-end="url(#arrA)"/>
+        <line x1="640" y1="200" x2="360" y2="235" stroke="#8a93b5" stroke-width="1.4" stroke-dasharray="5 3" opacity="0.6" marker-end="url(#arrA)"/>
+        <line x1="600" y1="315" x2="330" y2="410" stroke="#8a93b5" stroke-width="1.4" stroke-dasharray="5 3" opacity="0.55" marker-end="url(#arrA)"/>
+        <!-- intra-cogmap -->
+        <line x1="560" y1="250" x2="640" y2="200" stroke="#c9c4b8" stroke-width="1" opacity="0.5"/>
+        <line x1="600" y1="315" x2="560" y2="250" stroke="#e8b673" stroke-width="3.4" opacity="0.75"/>
+        <line x1="710" y1="285" x2="600" y2="315" stroke="#c9c4b8" stroke-width="1" opacity="0.45"/>
+        <line x1="680" y1="380" x2="710" y2="285" stroke="#c9c4b8" stroke-width="1.2" opacity="0.5"/>
+        <line x1="500" y1="345" x2="560" y2="250" stroke="#c9c4b8" stroke-width="1" opacity="0.4"/>
+        <line x1="740" y1="205" x2="640" y2="200" stroke="#c77" stroke-width="1.6" opacity="0.7"/>
+      </g>
+      <!-- context nodes (open rings) -->
+      <g>
+        <circle cx="330" cy="330" r="7" fill="#0a0a0c" stroke="#6fa8c7" stroke-width="2"/>
+        <text x="330" y="352" text-anchor="middle" fill="#9fbccd" font-family="Georgia,serif" font-size="12">T3 act-model spec</text>
+        <circle cx="360" cy="235" r="6" fill="#0a0a0c" stroke="#6fa8c7" stroke-width="2"/>
+        <text x="360" y="222" text-anchor="middle" fill="#9fbccd" font-family="Georgia,serif" font-size="11">threading PR #248</text>
+        <circle cx="330" cy="410" r="6" fill="#0a0a0c" stroke="#6fa8c7" stroke-width="2"/>
+        <text x="330" y="430" text-anchor="middle" fill="#9fbccd" font-family="Georgia,serif" font-size="11">invocation design</text>
+        <circle cx="185" cy="300" r="5" fill="#0a0a0c" stroke="#6fa8c7" stroke-width="2"/>
+        <text x="185" y="318" text-anchor="middle" fill="#9fbccd" font-family="Georgia,serif" font-size="11">lifecycle_tests gate</text>
+      </g>
+      <!-- cogmap nodes (filled serif words) -->
+      <g font-family="Georgia,serif">
+        <circle cx="560" cy="250" r="11" fill="#e8b673"/>
+        <circle cx="560" cy="250" r="18" fill="none" stroke="#e8b673" stroke-width="1" opacity="0.5"/>
+        <text x="578" y="248" fill="#f4e3c8" font-size="17" font-style="italic" font-weight="600">steward architecture</text>
+        <circle cx="640" cy="200" r="7" fill="#e8b673"/>
+        <text x="652" y="198" fill="#e9d9bd" font-size="13">act envelope</text>
+        <circle cx="600" cy="315" r="7" fill="#d8a95f"/>
+        <text x="612" y="319" fill="#e9d9bd" font-size="13">authorship threading</text>
+        <circle cx="710" cy="285" r="6" fill="#d8a95f"/>
+        <text x="722" y="289" fill="#e9d9bd" font-size="12">confidence band</text>
+        <circle cx="680" cy="380" r="6" fill="#b98bd6"/>
+        <text x="692" y="384" fill="#dcc6ea" font-size="12" font-style="italic">why a hard invariant?</text>
+        <circle cx="500" cy="345" r="6" fill="#7fb98a"/>
+        <text x="500" y="365" text-anchor="middle" fill="#bfe0c6" font-size="12">team self-cognition</text>
+      </g>
+      <!-- side rail -->
+      <g>
+        <rect x="840" y="0" width="200" height="540" fill="#101014"/>
+        <line x1="840" y1="0" x2="840" y2="540" stroke="#2a2a30" stroke-width="1"/>
+        <circle cx="864" cy="42" r="7" fill="#e8b673"/>
+        <text x="878" y="40" fill="#f4e3c8" font-family="Georgia,serif" font-size="14" font-style="italic">steward architecture</text>
+        <text x="878" y="56" fill="#7d7d88" font-size="9">CONCEPT · cogmap-homed</text>
+        <line x1="864" y1="78" x2="864" y2="500" stroke="#2a2a30" stroke-width="1.5"/>
+        <g font-size="10">
+          <circle cx="864" cy="96" r="3.5" fill="#e8b673"/><text x="878" y="94" fill="#cfcfd6">authored</text><text x="878" y="106" fill="#6a6a74">Jul 3 · Confident</text>
+          <circle cx="864" cy="152" r="3.5" fill="#e8b673"/><text x="878" y="150" fill="#cfcfd6">re-asserted</text><text x="878" y="162" fill="#6a6a74">Jul 3 · Probable</text>
+          <circle cx="864" cy="208" r="3.5" fill="#d8a95f"/><text x="878" y="206" fill="#cfcfd6">reweighted ×1.4</text><text x="878" y="218" fill="#6a6a74">supports ↑</text>
+          <circle cx="864" cy="264" r="3.5" fill="#8a93b5"/><text x="878" y="262" fill="#cfcfd6">+ derived_from</text><text x="878" y="274" fill="#6a6a74">→ T3 act-model spec</text>
+          <circle cx="864" cy="320" r="3.5" fill="#8a93b5"/><text x="878" y="318" fill="#cfcfd6">materialized</text><text x="878" y="330" fill="#6a6a74">region · salience .82</text>
+        </g>
+        <text x="864" y="516" fill="#4d4d55" font-size="9">invocation · steward-run #7</text>
+      </g>
+      <!-- filter chrome -->
+      <g font-size="10">
+        <rect x="20" y="18" width="150" height="22" rx="11" fill="#17171c" stroke="#33333a"/>
+        <text x="34" y="33" fill="#cfcfd6">team ▾ temper-system</text>
+        <text x="185" y="33" fill="#6a6a74">context ▾   cogmap ▾   region ▾   ⌕</text>
+      </g>
+    </svg>
+  </div>
+
+  <!-- ================= DIRECTION B : ATLAS (cartographic, lighter) ================= -->
+  <div class="vc-caption">
+    <h3>B · Atlas &nbsp;✓ CHOSEN <span style="opacity:.6">— cartographic, denser, legible-at-1000</span></h3>
+    <p>Slate canvas, less atmosphere. Regions become tinted <i>territories</i> with hull outlines & map-style labels. Nodes are compact chips (dot + label) — homes split by fill vs. outline, doc-type by dot hue. Denser and more scannable; an explicit edge legend. Leans utilitarian over moody.</p>
+  </div>
+  <div class="vc-card vc-scene">
+    <svg viewBox="0 0 1040 540" role="img">
+      <defs>
+        <marker id="arrB" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#5f6b86"/>
+        </marker>
+      </defs>
+      <rect x="0" y="0" width="1040" height="540" fill="#1b1e26"/>
+      <!-- territory hulls -->
+      <path d="M470,150 Q760,120 800,270 Q800,430 590,430 Q450,400 460,270 Z" fill="#e8b673" fill-opacity="0.09" stroke="#e8b673" stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <path d="M130,200 Q400,150 400,300 Q380,440 250,430 Q120,410 120,300 Z" fill="#6fa8c7" fill-opacity="0.09" stroke="#6fa8c7" stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <text x="630" y="150" text-anchor="middle" fill="#e8b673" opacity="0.85" font-size="11" letter-spacing="3" font-weight="600">STEWARD ARCHITECTURE</text>
+      <text x="630" y="164" text-anchor="middle" fill="#e8b673" opacity="0.5" font-size="9">region · salience .82 · cohesion .71</text>
+      <text x="250" y="188" text-anchor="middle" fill="#6fa8c7" opacity="0.85" font-size="11" letter-spacing="3" font-weight="600">TEMPER · CONTEXT</text>
+
+      <g stroke-linecap="round" fill="none">
+        <line x1="560" y1="250" x2="330" y2="330" stroke="#5f6b86" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arrB)"/>
+        <line x1="640" y1="200" x2="360" y2="235" stroke="#5f6b86" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arrB)"/>
+        <line x1="600" y1="315" x2="330" y2="410" stroke="#5f6b86" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arrB)"/>
+        <line x1="560" y1="250" x2="640" y2="200" stroke="#8b93a5" stroke-width="1"/>
+        <line x1="600" y1="315" x2="560" y2="250" stroke="#e8b673" stroke-width="3.4" opacity="0.9"/>
+        <line x1="710" y1="285" x2="600" y2="315" stroke="#8b93a5" stroke-width="1"/>
+        <line x1="680" y1="380" x2="710" y2="285" stroke="#8b93a5" stroke-width="1.2"/>
+        <line x1="500" y1="345" x2="560" y2="250" stroke="#8b93a5" stroke-width="1"/>
+        <line x1="740" y1="205" x2="640" y2="200" stroke="#d98a8a" stroke-width="1.6"/>
+      </g>
+      <!-- chips: helper look = dot + pill label -->
+      <g font-family="ui-sans-serif,system-ui" font-size="12">
+        <!-- context chips: outline dot + label -->
+        <g>
+          <circle cx="330" cy="330" r="6" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2.5"/>
+          <rect x="342" y="321" width="118" height="18" rx="9" fill="#232733"/><text x="351" y="334" fill="#c7d4dd">T3 act-model spec</text>
+          <circle cx="360" cy="235" r="5" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2.5"/>
+          <rect x="371" y="227" width="112" height="17" rx="8" fill="#232733"/><text x="379" y="239" fill="#c7d4dd" font-size="11">threading PR #248</text>
+          <circle cx="330" cy="410" r="5" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2.5"/>
+          <rect x="341" y="402" width="112" height="17" rx="8" fill="#232733"/><text x="349" y="414" fill="#c7d4dd" font-size="11">invocation design</text>
+          <circle cx="185" cy="300" r="5" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2.5"/>
+          <rect x="196" y="292" width="120" height="17" rx="8" fill="#232733"/><text x="204" y="304" fill="#c7d4dd" font-size="11">lifecycle_tests gate</text>
+        </g>
+        <!-- cogmap chips: filled dot + label -->
+        <g>
+          <circle cx="560" cy="250" r="9" fill="#e8b673"/>
+          <rect x="574" y="239" width="150" height="22" rx="11" fill="#3a3324"/><text x="584" y="254" fill="#f4e3c8" font-weight="600">steward architecture</text>
+          <circle cx="640" cy="200" r="6" fill="#e8b673"/>
+          <rect x="651" y="191" width="86" height="18" rx="9" fill="#2b2a26"/><text x="659" y="204" fill="#e9d9bd" font-size="11">act envelope</text>
+          <circle cx="600" cy="315" r="6" fill="#e8b673"/>
+          <rect x="611" y="306" width="128" height="18" rx="9" fill="#2b2a26"/><text x="619" y="319" fill="#e9d9bd" font-size="11">authorship threading</text>
+          <circle cx="710" cy="285" r="5" fill="#e8b673"/>
+          <rect x="720" y="277" width="98" height="17" rx="8" fill="#2b2a26"/><text x="728" y="289" fill="#e9d9bd" font-size="11">confidence band</text>
+          <circle cx="680" cy="380" r="5" fill="#b98bd6"/>
+          <rect x="690" y="372" width="118" height="17" rx="8" fill="#2c2635"/><text x="698" y="384" fill="#dcc6ea" font-size="11">why hard invariant?</text>
+          <circle cx="500" cy="345" r="5" fill="#7fb98a"/>
+          <rect x="384" y="337" width="112" height="17" rx="8" fill="#233028"/><text x="392" y="349" fill="#bfe0c6" font-size="11">team self-cognition</text>
+        </g>
+      </g>
+      <!-- side rail -->
+      <g>
+        <rect x="840" y="0" width="200" height="540" fill="#151821"/>
+        <line x1="840" y1="0" x2="840" y2="540" stroke="#2c3140" stroke-width="1"/>
+        <circle cx="862" cy="42" r="7" fill="#e8b673"/>
+        <text x="876" y="46" fill="#f4e3c8" font-family="ui-sans-serif,system-ui" font-size="13" font-weight="600">steward architecture</text>
+        <text x="876" y="60" fill="#7d8496" font-size="9">CONCEPT · cogmap-homed</text>
+        <line x1="862" y1="80" x2="862" y2="500" stroke="#2c3140" stroke-width="1.5"/>
+        <g font-size="10" font-family="ui-sans-serif,system-ui">
+          <circle cx="862" cy="98" r="3.5" fill="#e8b673"/><text x="876" y="96" fill="#c9ced9">authored</text><text x="876" y="108" fill="#6c7284">Jul 3 · Confident</text>
+          <circle cx="862" cy="154" r="3.5" fill="#e8b673"/><text x="876" y="152" fill="#c9ced9">re-asserted</text><text x="876" y="164" fill="#6c7284">Jul 3 · Probable</text>
+          <circle cx="862" cy="210" r="3.5" fill="#d8a95f"/><text x="876" y="208" fill="#c9ced9">reweighted ×1.4</text><text x="876" y="220" fill="#6c7284">supports ↑</text>
+          <circle cx="862" cy="266" r="3.5" fill="#5f6b86"/><text x="876" y="264" fill="#c9ced9">+ derived_from</text><text x="876" y="276" fill="#6c7284">→ T3 act-model spec</text>
+          <circle cx="862" cy="322" r="3.5" fill="#5f6b86"/><text x="876" y="320" fill="#c9ced9">materialized</text><text x="876" y="332" fill="#6c7284">region · salience .82</text>
+        </g>
+        <text x="862" y="516" fill="#525a6e" font-size="9">invocation · steward-run #7</text>
+      </g>
+      <!-- filter chrome -->
+      <g font-size="10" font-family="ui-sans-serif,system-ui">
+        <rect x="20" y="18" width="158" height="22" rx="6" fill="#232733" stroke="#3a4152"/>
+        <text x="34" y="33" fill="#c9ced9">team ▾ temper-system</text>
+        <text x="192" y="33" fill="#7d8496">context ▾   cogmap ▾   region ▾   ⌕</text>
+      </g>
+    </svg>
+  </div>
+
+  <p class="subtitle" style="margin-top:20px">Both encode the same substrate truthfully: <b>home</b> = fill vs. outline, <b>doc-type</b> = hue (concept amber · question violet · memory green), <b>edge kind</b> = line style, <b>polarity</b> = arrow, <b>weight</b> = thickness, <b>region</b> = hull/wash, <b>history</b> = the selected node's trail in the rail. The choice is mostly mood + density.</p>
+</div>
+
+</body></html>
