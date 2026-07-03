@@ -626,6 +626,30 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Reassign a resource's owner via the API (`POST /api/resources/{id}/reassign`).
+///
+/// Auth is enforced server-side (current owner, or a team admin with reach over
+/// the resource + target). The recipient is a bare profile UUID, matching the
+/// `team` member commands.
+pub fn reassign(r#ref: &str, to: &str, fmt: crate::format::OutputFormat) -> Result<()> {
+    let id = temper_workflow::operations::parse_ref(r#ref)?;
+    let to_profile_id = uuid::Uuid::parse_str(to.trim())
+        .map_err(|e| TemperError::Api(format!("invalid profile id '{to}': {e}")))?;
+    let req = temper_core::types::reassign::ReassignResourceRequest { to_profile_id };
+    let ack = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .reassign(uuid::Uuid::from(id), &req)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&ack, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
 /// Delete a resource.
 ///
 /// temper is cloud-only: the server-side soft-delete is the operation;

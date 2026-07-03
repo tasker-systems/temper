@@ -484,6 +484,17 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Reassign a resource's owner (mis-attribution self-fix, or a team admin
+    /// acting over a resource scoped to their team).
+    ///
+    /// Sends a `POST /api/resources/{id}/reassign` request via `temper-client`.
+    Reassign {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Recipient profile UUID
+        #[arg(long)]
+        to: String,
+    },
     /// Set a facet property on a resource (cloud-mode-only API write).
     ///
     /// Sends a `POST /api/facets` request via `temper-client`.
@@ -642,6 +653,21 @@ pub enum TeamAction {
     Delete {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,
+    },
+    /// Bulk-reassign a departing member's team-scoped resources (offboarding).
+    ///
+    /// Reassigns every resource owned by `--from` and homed in a context shared
+    /// to this team, over to `--to` (who must be a team member). Owner/maintainer
+    /// only. Sends a `POST /api/teams/{id}/reassign` request via `temper-client`.
+    Reassign {
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+        /// Current owner (departing) profile UUID
+        #[arg(long)]
+        from: String,
+        /// New owner profile UUID (must be a team member)
+        #[arg(long)]
+        to: String,
     },
     /// Create a team (you become its owner)
     Create {
