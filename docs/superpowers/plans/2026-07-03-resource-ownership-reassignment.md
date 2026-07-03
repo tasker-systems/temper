@@ -25,7 +25,7 @@
 ## File Structure
 
 **Created:**
-- `migrations/20260703000003_resource_reassign_fns.sql` — event-type seed + `_project_resource_reassigned` + `resource_reassign` SQL fns.
+- `migrations/20260703140000_resource_reassign_fns.sql` — event-type seed + `_project_resource_reassigned` + `resource_reassign` SQL fns.
 - `crates/temper-services/src/services/reassign_service.rs` — auth + single/bulk reassign logic + tests.
 - `crates/temper-api/src/handlers/reassign.rs` — thin single + bulk handlers.
 - `crates/temper-core/src/types/reassign.rs` — wire types (renamed from `transfer.rs`).
@@ -47,7 +47,7 @@
 ## Task 1: Substrate `resource_reassigned` event + writes layer
 
 **Files:**
-- Create: `migrations/20260703000003_resource_reassign_fns.sql`
+- Create: `migrations/20260703140000_resource_reassign_fns.sql`
 - Modify: `crates/temper-substrate/src/payloads.rs` (after `ResourceRehomed`, ~line 430)
 - Modify: `crates/temper-substrate/src/events.rs` (`EventKind` ~42/65/93; `SeedAction` ~253; `event_type()` ~304; `fire` arm ~830)
 - Modify: `crates/temper-substrate/src/replay.rs` (~158, ~347)
@@ -58,7 +58,7 @@
 
 - [ ] **Step 1: Write the migration**
 
-Create `migrations/20260703000003_resource_reassign_fns.sql`:
+Create `migrations/20260703140000_resource_reassign_fns.sql`:
 
 ```sql
 -- Ownership reassignment: event-sourced owner change on kb_resource_homes.
