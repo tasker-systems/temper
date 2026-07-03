@@ -107,7 +107,8 @@ if [ "$map_count" != "0" ] && [ "$map_count" != "null" ]; then
     grp="$(yq -r ".group_mappings[$i].group" "$PROFILE")"
     tm="$(yq -r ".group_mappings[$i].team" "$PROFILE")"
     rl="$(yq -r ".group_mappings[$i].role" "$PROFILE")"
-    mg_args=(admin saml map-group --idp-key "$IDP_KEY" --group "$grp" --team "$tm" --role "$rl")
+    # group + team are POSITIONAL args (cli.rs MapGroup), not --group/--team flags.
+    mg_args=(admin saml map-group --idp-key "$IDP_KEY" "$grp" "$tm" --role "$rl")
     [ "$APPLY_DB" -eq 1 ] && mg_args+=(--apply)
     run temper "${mg_args[@]}"
     i=$((i + 1))
