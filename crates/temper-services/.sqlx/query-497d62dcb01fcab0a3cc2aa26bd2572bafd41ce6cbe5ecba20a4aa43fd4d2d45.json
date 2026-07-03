@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS(SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id=$2)",
+  "query": "SELECT EXISTS(SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id=$2) AS \"e!: bool\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "exists",
+        "name": "e!: bool",
         "type_info": "Bool"
       }
     ],
@@ -19,5 +19,5 @@
       null
     ]
   },
-  "hash": "37943373132ee1d291db7fb73c1a97062c9c3a0d18b6c27e08d11da550ac75ec"
+  "hash": "497d62dcb01fcab0a3cc2aa26bd2572bafd41ce6cbe5ecba20a4aa43fd4d2d45"
 }
