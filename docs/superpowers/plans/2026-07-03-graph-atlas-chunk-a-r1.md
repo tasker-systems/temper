@@ -14,7 +14,7 @@
 ## Global Constraints
 
 - **Access-semantics change → the e2e tier is mandatory.** `cargo make test-db` green is a *false signal* for access changes; the acceptance gate is `cargo make test-e2e`, which exercises deny-code + auth + handler together. (CLAUDE.md; `feedback_access_semantics_changes_need_e2e_tier`.)
-- **Migrations are additive & immutable once shipped.** New file `migrations/20260703000001_team_graph_scope_reads.sql`; never edit an applied migration. New functions use bare `CREATE FUNCTION`; `LANGUAGE sql STABLE`; **namespace-free** (no `SET search_path`; unqualified names resolve against `public`).
+- **Migrations are additive & immutable once shipped.** New file `migrations/20260703000002_team_graph_scope_reads.sql`; never edit an applied migration. New functions use bare `CREATE FUNCTION`; `LANGUAGE sql STABLE`; **namespace-free** (no `SET search_path`; unqualified names resolve against `public`).
 - **These reads use runtime `sqlx::query`/`query_scalar`, NOT the `query!` macro** — the visibility helper functions are unqualified and the sqlx describe step can't resolve them (see `crates/temper-services/src/services/edge_service.rs:24-28`). Therefore **no `.sqlx` cache regeneration is required** for this chunk (no `query!`/`query_as!` macro is added).
 - **Reads are service-direct.** Never inline SQL in a handler; the handler calls a `temper-services` function. (Backend trait is writes-only.)
 - **Wire types live in `temper-core` with the ts-rs derive stack; regenerate with `cargo make generate-ts-types`.** Never hand-model TS.
@@ -23,7 +23,7 @@
 
 ## File Structure
 
-- `migrations/20260703000001_team_graph_scope_reads.sql` — **Create.** The three SQL functions: `team_descendants`, `team_child_zones`, `resources_in_team_scope`.
+- `migrations/20260703000002_team_graph_scope_reads.sql` — **Create.** The three SQL functions: `team_descendants`, `team_child_zones`, `resources_in_team_scope`.
 - `crates/temper-core/src/types/graph_scope.rs` — **Create.** Wire types `TeamRef`, `TeamZone`, `TeamScopeView` (ts-rs, serde, FromRow where applicable).
 - `crates/temper-core/src/types/mod.rs` — **Modify.** Register `pub mod graph_scope;` + `pub use`.
 - `crates/temper-services/src/services/team_service.rs` — **Modify.** Add `graph_scope(pool, profile_id, team_id)` service-direct read.
@@ -37,7 +37,7 @@
 ### Task 1: SQL functions — descendant walk, child-zone enumeration, team-scope filter
 
 **Files:**
-- Create: `migrations/20260703000001_team_graph_scope_reads.sql`
+- Create: `migrations/20260703000002_team_graph_scope_reads.sql`
 - Test: `tests/e2e/tests/team_graph_scope_sql_test.rs`
 
 **Interfaces:**
@@ -223,7 +223,7 @@ Expected: FAIL — the three functions don't exist yet (`function team_descendan
 
 - [ ] **Step 3: Write the migration**
 
-Create `migrations/20260703000001_team_graph_scope_reads.sql`:
+Create `migrations/20260703000002_team_graph_scope_reads.sql`:
 
 ```sql
 -- Graph Atlas — Chunk A / R1: team-graph-scope read functions.
@@ -325,7 +325,7 @@ Expected: the three `team_graph_scope_sql_test` cases PASS. (If `sqlx migrate ru
 - [ ] **Step 5: Commit**
 
 ```bash
-git add migrations/20260703000001_team_graph_scope_reads.sql tests/e2e/tests/team_graph_scope_sql_test.rs
+git add migrations/20260703000002_team_graph_scope_reads.sql tests/e2e/tests/team_graph_scope_sql_test.rs
 git commit -m "feat(graph): R1 team-graph-scope SQL functions (descendants, child-zones, scope filter)"
 ```
 
