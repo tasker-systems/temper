@@ -100,9 +100,26 @@ else
 fi
 
 # ── Step 11 — map IdP groups to teams (run AFTER teams exist) ──────────────────────────────────────
-info "Step 11 — map-group  [TODO: Task B5]"
+info "Step 11 — map-group (IdP groups → teams; run AFTER teams exist)"
+map_count="$(yq -r '.group_mappings | length' "$PROFILE")"
+if [ "$map_count" != "0" ] && [ "$map_count" != "null" ]; then
+  i=0; while [ "$i" -lt "$map_count" ]; do
+    grp="$(yq -r ".group_mappings[$i].group" "$PROFILE")"
+    tm="$(yq -r ".group_mappings[$i].team" "$PROFILE")"
+    rl="$(yq -r ".group_mappings[$i].role" "$PROFILE")"
+    mg_args=(admin saml map-group --idp-key "$IDP_KEY" --group "$grp" --team "$tm" --role "$rl")
+    [ "$APPLY_DB" -eq 1 ] && mg_args+=(--apply)
+    run temper "${mg_args[@]}"
+    i=$((i + 1))
+  done
+else
+  info "  (no group_mappings in profile — authn-only)"
+fi
 
 # ── Step 12 — verify ──────────────────────────────────────────────────────────────────────────────
-info "Step 12 — verify  [TODO: Task B5]"
+info "Step 12 — verify (AS metadata reachable + system-admin gate + active idp row)"
+vf_args=(admin saml verify --instance-url "$INSTANCE_URL")
+[ "$APPLY_DB" -eq 1 ] && vf_args+=(--db)
+run temper "${vf_args[@]}"
 
 info "saml-setup complete."
