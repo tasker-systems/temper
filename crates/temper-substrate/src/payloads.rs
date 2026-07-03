@@ -432,6 +432,16 @@ pub struct ResourceRehomed {
     pub home: AnchorRef,
 }
 
+/// Reassign a resource's owner — set its home row's `owner_profile_id` to `to_profile_id`.
+/// `from_profile_id` is recorded for the audit trail; the projector writes only the new owner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceReassigned {
+    pub resource_id: ResourceId,
+    pub from_profile_id: ProfileId,
+    pub to_profile_id: ProfileId,
+}
+
 /// Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]

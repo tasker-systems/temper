@@ -276,6 +276,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         output_format,
                     )
                 }
+                ResourceAction::Reassign { r#ref, to } => {
+                    temper_cli::commands::resource::reassign(&r#ref, &to, output_format)
+                }
                 ResourceAction::Facet {
                     r#ref,
                     values,
@@ -435,6 +438,20 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::team::delete_remote(client, &team, output_format).await
                 })
             }),
+            TeamAction::Reassign { team, from, to } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::reassign_remote(
+                            client,
+                            &team,
+                            &from,
+                            &to,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             TeamAction::Create {
                 slug,
                 name,

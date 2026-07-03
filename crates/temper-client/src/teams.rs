@@ -8,6 +8,7 @@ use crate::http::HttpClient;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, TeamInvitation,
 };
+use temper_core::types::reassign::{BulkReassignAck, BulkReassignRequest};
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
     TeamUpdateRequest,
@@ -133,6 +134,20 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<TeamInvitation> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/teams/{team_id}/invite");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/teams/{id}/reassign — bulk-reassign the team's resources.
+    pub async fn reassign(
+        &self,
+        team_id: Uuid,
+        body: &BulkReassignRequest,
+    ) -> Result<BulkReassignAck> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}/reassign");
         let req = self.http.post(&path).json(body);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))

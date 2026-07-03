@@ -40,6 +40,7 @@ pub enum EventKind {
     ResourceUpdated,
     ResourceDeleted,
     ResourceRehomed,
+    ResourceReassigned,
     RelationshipAsserted,
     RelationshipRetyped,
     RelationshipReweighted,
@@ -63,6 +64,7 @@ impl EventKind {
             EventKind::ResourceUpdated => "resource_updated",
             EventKind::ResourceDeleted => "resource_deleted",
             EventKind::ResourceRehomed => "resource_rehomed",
+            EventKind::ResourceReassigned => "resource_reassigned",
             EventKind::RelationshipAsserted => "relationship_asserted",
             EventKind::RelationshipRetyped => "relationship_retyped",
             EventKind::RelationshipReweighted => "relationship_reweighted",
@@ -91,6 +93,7 @@ impl EventKind {
             "resource_updated" => EventKind::ResourceUpdated,
             "resource_deleted" => EventKind::ResourceDeleted,
             "resource_rehomed" => EventKind::ResourceRehomed,
+            "resource_reassigned" => EventKind::ResourceReassigned,
             "relationship_asserted" => EventKind::RelationshipAsserted,
             "relationship_retyped" => EventKind::RelationshipRetyped,
             "relationship_reweighted" => EventKind::RelationshipReweighted,
@@ -256,6 +259,12 @@ pub enum SeedAction<'a> {
         home: payloads::AnchorRef,
         emitter: EntityId,
     },
+    ResourceReassign {
+        resource: ResourceId,
+        from_profile: ProfileId,
+        to_profile: ProfileId,
+        emitter: EntityId,
+    },
     RelationshipRetype {
         edge: EdgeId,
         kind: EdgeKind,
@@ -302,6 +311,7 @@ impl SeedAction<'_> {
             SeedAction::ResourceDelete { .. } => EventKind::ResourceDeleted,
             SeedAction::ResourceUpdate { .. } => EventKind::ResourceUpdated,
             SeedAction::ResourceRehome { .. } => EventKind::ResourceRehomed,
+            SeedAction::ResourceReassign { .. } => EventKind::ResourceReassigned,
             SeedAction::RelationshipRetype { .. } => EventKind::RelationshipRetyped,
             SeedAction::RelationshipReweight { .. } => EventKind::RelationshipReweighted,
             SeedAction::InvocationOpen { .. } => EventKind::DelegatedLaunch,
@@ -827,6 +837,30 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("resource_rehome returned null")?;
+            Ok(Fired::Resource(ResourceId::from(id)))
+        }
+
+        SeedAction::ResourceReassign {
+            resource,
+            from_profile,
+            to_profile,
+            emitter,
+        } => {
+            let payload = payloads::ResourceReassigned {
+                resource_id: resource,
+                from_profile_id: from_profile,
+                to_profile_id: to_profile,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT resource_reassign($1,$2,$3,$4)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("resource_reassign returned null")?;
             Ok(Fired::Resource(ResourceId::from(id)))
         }
 

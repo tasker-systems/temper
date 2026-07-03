@@ -327,6 +327,57 @@ pub async fn delete_resource_in_tx(
     Ok(())
 }
 
+/// Reassign a resource's owner (event-sourced, in-place). Un-attributed convenience.
+pub async fn reassign_resource(
+    pool: &PgPool,
+    resource: ResourceId,
+    from: ProfileId,
+    to: ProfileId,
+    emitter: EntityId,
+) -> Result<()> {
+    reassign_resource_with(pool, resource, from, to, emitter, EventContext::default()).await
+}
+
+/// [`reassign_resource`] under an explicit [`EventContext`] — the `resource_reassigned`
+/// act is correlated to the caller's invocation + stamped with its authorship.
+pub async fn reassign_resource_with(
+    pool: &PgPool,
+    resource: ResourceId,
+    from: ProfileId,
+    to: ProfileId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    reassign_resource_in_tx(&mut tx, resource, from, to, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant — fires on a caller-supplied connection (no begin/commit),
+/// so the bulk path can reassign N resources atomically.
+pub async fn reassign_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    from: ProfileId,
+    to: ProfileId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    fire_with(
+        conn,
+        SeedAction::ResourceReassign {
+            resource,
+            from_profile: from,
+            to_profile: to,
+            emitter,
+        },
+        ctx,
+    )
+    .await?;
+    Ok(())
+}
+
 // ── cogmap-homed kernel writes (L0 reconcile) ──────────────────────────────────
 
 /// Create a kernel resource homed to a **cogmap** (not a context) — the shape the L0 reconciler

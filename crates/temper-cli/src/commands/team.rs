@@ -188,6 +188,34 @@ pub async fn delete_remote(
     Ok(())
 }
 
+/// Bulk-reassign a departing member's team-scoped resources (owner/maintainer).
+/// Reassigns every resource owned by `from` and homed in a context shared to the
+/// team, over to `to` (who must be a team member). `from`/`to` are profile UUIDs.
+pub async fn reassign_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    from: &str,
+    to: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let from_profile_id = uuid::Uuid::parse_str(from.trim())
+        .map_err(|e| TemperError::Api(format!("invalid from id '{from}': {e}")))?;
+    let to_profile_id = uuid::Uuid::parse_str(to.trim())
+        .map_err(|e| TemperError::Api(format!("invalid to id '{to}': {e}")))?;
+    let req = temper_core::types::reassign::BulkReassignRequest {
+        from_profile_id,
+        to_profile_id,
+    };
+    let ack = client
+        .teams()
+        .reassign(team_id, &req)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&ack, fmt)?);
+    Ok(())
+}
+
 /// List the teams the caller is a member of and render them.
 pub async fn list_remote(
     client: &temper_client::TemperClient,
