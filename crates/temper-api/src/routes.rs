@@ -78,6 +78,10 @@ pub fn create_app(state: AppState) -> Router {
             post(handlers::graph::neighborhood_slice),
         )
         .route(
+            "/api/teams/{id}/graph/territories",
+            get(handlers::graph::territory_overview),
+        )
+        .route(
             "/api/resources/{id}/meta",
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
         )

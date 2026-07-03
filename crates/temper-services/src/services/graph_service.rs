@@ -14,6 +14,9 @@ use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
 };
+use temper_core::types::graph_territory::{
+    Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview,
+};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
 use temper_workflow::types::graph::{is_aggregator, GraphEdge, GraphNode, SubgraphResponse};
@@ -328,6 +331,116 @@ pub async fn neighborhood_slice(
     .collect();
 
     Ok(AtlasSubgraph { nodes, edges })
+}
+
+/// R2 — Tier-0 territory overview for a team scope. Service-direct read.
+pub async fn territory_overview(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    team_id: Uuid,
+    lens_id: Option<Uuid>,
+) -> ApiResult<TerritoryOverview> {
+    let viewable: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_descendants($1) d \
+         JOIN kb_team_members tm ON tm.team_id = d.team_id AND tm.profile_id = $2)",
+    )
+    .bind(team_id)
+    .bind(profile_id.as_uuid())
+    .fetch_one(pool)
+    .await?;
+    if !viewable {
+        return Err(ApiError::NotFound);
+    }
+
+    // Default lens = the global 'telos-default' (cogmap_id IS NULL).
+    let lens: Uuid = match lens_id {
+        Some(l) => l,
+        None => sqlx::query_scalar(
+            "SELECT id FROM kb_cogmap_lenses WHERE name = 'telos-default' AND cogmap_id IS NULL LIMIT 1",
+        )
+        .fetch_one(pool)
+        .await?,
+    };
+
+    let mut territories: Vec<Territory> = Vec::new();
+
+    let regions = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64)>(
+        "SELECT region_id, cogmap_id, label, member_count, salience FROM graph_region_territories($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(lens)
+    .fetch_all(pool)
+    .await?;
+    for (region_id, cogmap_id, label, member_count, salience) in regions {
+        territories.push(Territory {
+            id: region_id,
+            kind: TerritoryKind::Region,
+            label,
+            member_count,
+            salience: Some(salience),
+            anchor_id: cogmap_id,
+        });
+    }
+
+    let contexts = sqlx::query_as::<_, (Uuid, String, i32)>(
+        "SELECT context_id, label, member_count FROM graph_context_territories($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?;
+    for (context_id, label, member_count) in contexts {
+        territories.push(Territory {
+            id: context_id,
+            kind: TerritoryKind::Context,
+            label: Some(label),
+            member_count,
+            salience: None,
+            anchor_id: context_id,
+        });
+    }
+
+    const ORPHAN_LIMIT: usize = 50;
+    let orphan_nodes: Vec<OrphanNode> =
+        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid)>(
+            "SELECT id, title, doc_type, degree, anchor_id FROM graph_orphan_salient_nodes($1, $2)",
+        )
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .take(ORPHAN_LIMIT)
+        .map(|(id, title, doc_type, degree, anchor_id)| OrphanNode {
+            id,
+            title,
+            doc_type,
+            degree,
+            anchor_id,
+        })
+        .collect();
+
+    let bridges: Vec<Bridge> = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
+        "SELECT source_territory, target_territory, edge_count FROM graph_territory_bridges($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(source_territory, target_territory, edge_count)| Bridge {
+        source_territory,
+        target_territory,
+        edge_count,
+    })
+    .collect();
+
+    Ok(TerritoryOverview {
+        territories,
+        orphan_nodes,
+        bridges,
+    })
 }
 
 #[cfg(test)]

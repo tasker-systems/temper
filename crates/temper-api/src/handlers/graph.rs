@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_territory::TerritoryOverview;
 use temper_core::types::ids::ProfileId;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_service::resolve_context_ref;
@@ -90,6 +91,41 @@ pub async fn neighborhood_slice(
         ProfileId::from(auth.0.profile.id),
         team_id,
         req,
+    )
+    .await
+    .map(Json)
+}
+
+/// Query parameters for `GET /api/teams/{id}/graph/territories`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct TerritoryQuery {
+    /// Optional lens override; defaults to the global `telos-default` lens.
+    pub lens_id: Option<Uuid>,
+}
+
+/// GET /api/teams/{id}/graph/territories — R2 Tier-0 panorama.
+#[utoipa::path(
+    get,
+    path = "/api/teams/{id}/graph/territories",
+    tag = "Graph",
+    params(("id" = Uuid, Path, description = "Team id"), TerritoryQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Territory overview", body = TerritoryOverview),
+        (status = 404, description = "Team not viewable by this profile")
+    )
+)]
+pub async fn territory_overview(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Query(q): Query<TerritoryQuery>,
+) -> ApiResult<Json<TerritoryOverview>> {
+    graph_service::territory_overview(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        team_id,
+        q.lens_id,
     )
     .await
     .map(Json)
