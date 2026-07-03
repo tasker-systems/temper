@@ -70,7 +70,7 @@ Sources: [self-hosting.md § Environment variable contract](./self-hosting.md#en
 | `JWKS_URL` | Yes | — | — | Auth0 JWKS, or `https://<instance>/oauth/jwks` in the SAML path |
 | `AUTH_AUDIENCE` | Yes | — | — | Must equal `AS_AUDIENCE` / `MCP_AUDIENCE` / UI `OIDC_AUDIENCE` |
 | `AUTH_PROVIDER_NAME` | Yes | — | — | `auth0`, or `saml:<idp-key>` in the SAML path (max 32 chars) |
-| `MCP_AUDIENCE` | Yes | — | — | Typically the same value as `AUTH_AUDIENCE` |
+| `MCP_AUDIENCE` | Yes | — | — | Same value as `AUTH_AUDIENCE` (single-audience AS — see must-match table) |
 | `MCP_CLIENT_ID` | Yes | — | — | Auth0 MCP native app client_id; n/a in the SAML path (client allowlisting is `AS_CLIENTS` instead) |
 | `MCP_BASE_URL` | Yes | — | — | `https://<instance>` — used in OAuth discovery responses |
 | **SAML Authorization Server (AS) block** | | | | |
@@ -203,23 +203,23 @@ install; read this before step 8.
 > **`API_BASE_URL` pointed at the UI's own public origin creates a self-proxy loop → `508 Loop
 > Detected`.** It must be the API backend's own distinct origin — its `*.vercel.app` URL or a
 > dedicated `api.` subdomain — never the shared public domain the UI also serves
-> ([self-hosting.md:277](./self-hosting.md#environment-variable-contract-ui-project)).
+> ([self-hosting.md](./self-hosting.md#environment-variable-contract-ui-project)).
 >
 > **`AS_CLIENTS` unset rejects every `/oauth/authorize` call (fail-closed); `INTERNAL_RECONCILE_SECRET`
 > unset silently disables group provisioning while auth still works.** The first fails loud, the
 > second doesn't — nothing errors, groups just never sync, so verify reconcile explicitly rather
-> than trusting a clean login ([self-hosting-saml.md:195](./self-hosting-saml.md#authorization-server-temper-cloud--the-api-deployment),
-> [self-hosting-saml.md:230-233](./self-hosting-saml.md#group-provisioning-phase-2)).
+> than trusting a clean login ([AS deployment](./self-hosting-saml.md#authorization-server-temper-cloud--the-api-deployment),
+> [group provisioning](./self-hosting-saml.md#group-provisioning-phase-2)).
 >
 > **`cogmap create` / `cogmap reconcile` require an `embed`-feature `temper` binary.** A
 > non-`embed` build fails with a clear `requires the 'embed' feature` error rather than a cryptic
 > one, but only at step 13, well after the rest of the install has succeeded — check this
-> up front instead ([org-bootstrap.md:49-52](./org-bootstrap.md#prerequisites)).
+> up front instead ([org-bootstrap.md](./org-bootstrap.md#prerequisites)).
 >
 > **Migrations are a deploy step, not a startup step — the API never auto-migrates.** Run
 > `sqlx migrate run` against `DATABASE_URL_UNPOOLED` (step 5) yourself, and back up the database
 > first — there is no automatic rollback if a migration fails partway
-> ([self-hosting.md:66-73](./self-hosting.md#run-migrations), [DEPLOYING.md](../../DEPLOYING.md)).
+> ([self-hosting.md](./self-hosting.md#run-migrations), [DEPLOYING.md](../../DEPLOYING.md)).
 
 ## Scripted vs. manual, and what's deferred
 
