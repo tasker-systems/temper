@@ -400,6 +400,65 @@ async fn cross_owner_edge_attempt_filtered(pool: PgPool) {
     );
 }
 
+/// Security regression: an edge between two Alice-visible nodes but homed in an
+/// anchor Alice CANNOT read must be excluded — the subgraph edge read gates the
+/// edge's own home anchor (via `edges_visible_to`), not just endpoint visibility.
+/// C3 is a documented singleton (edgeless in the fixture), so the only edge that
+/// could touch it here is the one we plant with an unreadable home.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn edge_with_unreadable_home_anchor_excluded(pool: PgPool) {
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("at least one kb_events row exists");
+    // A cogmap joined to none of Alice's teams → anchor_readable_by_profile is false.
+    let private_cogmap = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_edges \
+             (source_table, source_id, target_table, target_id, edge_kind, \
+              home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
+         VALUES ('kb_resources', $1, 'kb_resources', $2, 'near', 'kb_cogmaps', $3, $4, $4)",
+    )
+    .bind(uuid(C1_IDEMPOTENCY))
+    .bind(uuid(C3_SINGLETON))
+    .bind(private_cogmap)
+    .bind(event)
+    .execute(&pool)
+    .await
+    .expect("insert edge homed in an unreadable cogmap");
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_id: uuid(CTX_PRIMARY),
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let ids: Vec<Uuid> = result.nodes.iter().map(|n| Uuid::from(n.id)).collect();
+    assert!(
+        ids.contains(&uuid(C1_IDEMPOTENCY)) && ids.contains(&uuid(C3_SINGLETON)),
+        "both endpoints are Alice-visible nodes, so only the home-anchor gate can drop the edge"
+    );
+    let c3_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.source == uuid(C3_SINGLETON) || e.target == uuid(C3_SINGLETON))
+        .collect();
+    assert_eq!(
+        c3_edges.len(),
+        0,
+        "the C1->C3 edge homed in an unreadable cogmap is excluded despite both endpoints being visible: {c3_edges:?}"
+    );
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn deleted_concept_excluded(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;

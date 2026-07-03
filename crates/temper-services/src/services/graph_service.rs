@@ -138,7 +138,7 @@ pub async fn aggregator_subgraph(
         });
     }
 
-    let edges = fetch_subgraph_edges(pool, &node_ids).await?;
+    let edges = fetch_subgraph_edges(pool, params.caller_profile_id, &node_ids).await?;
 
     Ok(SubgraphResponse { nodes, edges })
 }
@@ -211,18 +211,29 @@ async fn fetch_subgraph_nodes(
 /// Query 2: edge rows — both endpoints must be in the resolved set. Because
 /// `node_ids` only contains active resources (query 1), no dangling edges can
 /// appear here.
-async fn fetch_subgraph_edges(pool: &PgPool, node_ids: &[Uuid]) -> ApiResult<Vec<GraphEdge>> {
+async fn fetch_subgraph_edges(
+    pool: &PgPool,
+    caller_profile_id: Uuid,
+    node_ids: &[Uuid],
+) -> ApiResult<Vec<GraphEdge>> {
+    // Both endpoints are already in the visibility-scoped node set, but that is NOT
+    // sufficient: an edge's own home anchor must also be readable, or we leak a private
+    // relationship asserted between two resources the caller can independently see.
+    // Route through edges_visible_to (anchor + both endpoints + NOT is_folded) — the
+    // canonical edge gate — rather than re-checking a subset here.
     let edge_records = sqlx::query!(
         r#"
         SELECT source_id AS "source!: Uuid", target_id AS "target!: Uuid",
                edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
                label AS "label: String"
-          FROM kb_edges
+          FROM kb_edges e
          WHERE source_table = 'kb_resources' AND target_table = 'kb_resources'
            AND source_id = ANY($1::uuid[]) AND target_id = ANY($1::uuid[])
            AND NOT is_folded
+           AND e.id IN (SELECT edge_id FROM edges_visible_to($2))
         "#,
         node_ids,
+        caller_profile_id,
     )
     .fetch_all(pool)
     .await?;
