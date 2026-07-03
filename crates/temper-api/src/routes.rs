@@ -181,6 +181,10 @@ pub fn create_app(state: AppState) -> Router {
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),
         )
+        .route(
+            "/api/graph/elements/{kind}/{id}/trail",
+            get(handlers::events::element_trail),
+        )
         .route("/api/search", post(handlers::search::search))
         .route(
             "/api/access/admin/requests",

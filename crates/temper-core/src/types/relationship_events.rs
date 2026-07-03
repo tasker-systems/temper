@@ -13,6 +13,13 @@ use super::graph::{EdgeKind, Polarity};
 /// The target endpoint of an asserted relationship — a resolved resource id,
 /// or an unresolved slug (forward reference). A slug target projects no edge
 /// until a resource with that slug exists; this replaces `kb_deferred_edges`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum TargetEndpoint {
@@ -21,6 +28,13 @@ pub enum TargetEndpoint {
 }
 
 /// `relationship_asserted` — genesis of a relationship. Topic class: Declaration.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipAsserted {
     pub source_resource_id: Uuid,
@@ -35,6 +49,13 @@ pub struct RelationshipAsserted {
 ///
 /// `label` is intentionally absent: no surface exposes label-on-retype, and
 /// the projection apply never updated it. Relabel-on-retype is future scope.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipRetyped {
     pub edge_kind: EdgeKind,
@@ -42,6 +63,13 @@ pub struct RelationshipRetyped {
 }
 
 /// `relationship_reweighted` — change the weight. Declaration.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipReweighted {
     pub weight: f64,
@@ -50,6 +78,13 @@ pub struct RelationshipReweighted {
 /// `relationship_folded` — edge preserved but removed from the default
 /// projection. The retraction mechanism: "no longer current, but not wrong".
 /// Topic class: Deformation.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipFolded {
     /// Optional human note on why the edge was folded.
@@ -59,6 +94,13 @@ pub struct RelationshipFolded {
 
 /// `relationship_decayed` — schema only in phases 1-2; mechanics are phase 4.
 /// Topic class: Deformation.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipDecayed {
     /// Multiplicative decay factor applied to the edge weight (0.0..1.0).
@@ -67,6 +109,13 @@ pub struct RelationshipDecayed {
 
 /// `relationship_corrected` — the edge was *wrong*; carries a scar.
 /// Schema only in phases 1-2; mechanics are phase 4. Topic class: Judgment.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "relationship_events.ts")
+)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipCorrected {
     /// Structured account of the wrongness — the scar.
