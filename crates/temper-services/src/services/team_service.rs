@@ -19,7 +19,8 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{
-    AddMemberRequest, TeamCreateRequest, TeamMemberRow, TeamRole, TeamRow,
+    AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
+    TeamMemberSource, TeamRole, TeamRow,
 };
 
 /// Map a sqlx error to `Conflict` when it is a unique-constraint violation
@@ -214,4 +215,124 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
     .await?;
 
     Ok(rows)
+}
+
+/// Full team detail (row + member roster with handles + provenance).
+///
+/// Visible to any member of the team, or to a system admin. Non-visible teams
+/// return `NotFound` (not `Forbidden`) to avoid leaking team existence to
+/// non-members — team slugs are globally unique and used in share flows.
+pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> ApiResult<TeamDetail> {
+    // Auth (read gate): member (any role) or system admin.
+    let is_member = role_on_team(pool, team_id, caller).await?.is_some();
+    if !is_member && !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let team = sqlx::query_as!(
+        TeamRow,
+        r#"SELECT id, slug, name, created,
+                  auto_join_role AS "auto_join_role: TeamRole"
+             FROM kb_teams WHERE id = $1"#,
+        team_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    let members = sqlx::query_as!(
+        TeamMemberDetail,
+        r#"SELECT tm.profile_id,
+                  p.handle,
+                  tm.role AS "role: TeamRole",
+                  tm.source AS "source: TeamMemberSource"
+             FROM kb_team_members tm
+             JOIN kb_profiles p ON p.id = tm.profile_id
+            WHERE tm.team_id = $1
+            ORDER BY tm.role, p.handle"#,
+        team_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(TeamDetail {
+        id: team.id,
+        slug: team.slug,
+        name: team.name,
+        created: team.created,
+        auto_join_role: team.auto_join_role,
+        members,
+    })
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use sqlx::PgPool;
+    use temper_core::types::team::{TeamMemberSource, TeamRole};
+
+    /// Insert a profile with the given handle, return its id.
+    async fn mk_profile(pool: &PgPool, handle: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Insert a root team with the given slug, return its id.
+    async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_teams (id, slug, name) VALUES (gen_random_uuid(), $1, $1) RETURNING id",
+        )
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn add(pool: &PgPool, team: Uuid, profile: Uuid, role: &str, source: &str) {
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+             VALUES ($1, $2, $3::team_role, $4::team_member_source)",
+        )
+        .bind(team)
+        .bind(profile)
+        .bind(role)
+        .bind(source)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn team_detail_lists_members_for_a_member(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        let detail = team_detail(&pool, ProfileId::from(owner), team)
+            .await
+            .unwrap();
+        assert_eq!(detail.slug, "acme");
+        assert_eq!(detail.members.len(), 2);
+        assert!(detail.members.iter().any(|m| m.handle == "member"
+            && matches!(m.role, TeamRole::Member)
+            && matches!(m.source, TeamMemberSource::Native)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn team_detail_hides_from_non_member(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let outsider = mk_profile(&pool, "outsider").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let denied = team_detail(&pool, ProfileId::from(outsider), team).await;
+        assert!(matches!(denied, Err(ApiError::NotFound)));
+    }
 }
