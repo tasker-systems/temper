@@ -72,6 +72,8 @@ pub struct TeamRow {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    /// Optional human description; NULL until set via `PATCH /api/teams/{id}`.
+    pub description: Option<String>,
     pub created: DateTime<Utc>,
     /// NULL = not an auto-join ("everyone") team; otherwise the role new
     /// members are enrolled at. Admin-gated to set.
@@ -159,9 +161,24 @@ pub struct TeamDetail {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    pub description: Option<String>,
     pub created: DateTime<Utc>,
     pub auto_join_role: Option<TeamRole>,
     pub members: Vec<TeamMemberDetail>,
+}
+
+/// Request body for `PATCH /api/teams/{id}` — update team metadata.
+///
+/// Both fields are optional: a `None` leaves that column unchanged (partial
+/// merge via SQL COALESCE). Sending neither is a no-op that returns the row.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeamUpdateRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
 }
 
 /// Request body for `PATCH /api/teams/{id}/members/{profile_id}`.

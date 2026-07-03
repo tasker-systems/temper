@@ -20,7 +20,7 @@ use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{
     AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
-    TeamMemberSource, TeamRole, TeamRow,
+    TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
 };
 
 /// Map a sqlx error to `Conflict` when it is a unique-constraint violation
@@ -89,10 +89,13 @@ pub async fn create_team(
     // Child team: resolve the parent and require owner/maintainer on it.
     let parent_id = if let Some(parent_ref) = &req.parent {
         let slug = team_slug(parent_ref);
-        let parent_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
-            .fetch_optional(pool)
-            .await?
-            .ok_or(ApiError::NotFound)?;
+        let parent_id = sqlx::query_scalar!(
+            "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+            slug
+        )
+        .fetch_optional(pool)
+        .await?
+        .ok_or(ApiError::NotFound)?;
         match role_on_team(pool, parent_id, creator).await? {
             Some(role) if can_manage(role) => {}
             _ => return Err(ApiError::Forbidden),
@@ -121,7 +124,7 @@ pub async fn create_team(
         r#"
         INSERT INTO kb_teams (id, slug, name, auto_join_role)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, slug, name, created,
+        RETURNING id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
         "#,
         team_id,
@@ -202,11 +205,11 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
     let rows = sqlx::query_as!(
         TeamRow,
         r#"
-        SELECT t.id, t.slug, t.name, t.created,
+        SELECT t.id, t.slug, t.name, t.description, t.created,
                t.auto_join_role AS "auto_join_role: TeamRole"
           FROM kb_teams t
           JOIN kb_team_members tm ON tm.team_id = t.id
-         WHERE tm.profile_id = $1
+         WHERE tm.profile_id = $1 AND t.is_active
          ORDER BY t.name
         "#,
         *caller,
@@ -231,9 +234,9 @@ pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> Api
 
     let team = sqlx::query_as!(
         TeamRow,
-        r#"SELECT id, slug, name, created,
+        r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
-             FROM kb_teams WHERE id = $1"#,
+             FROM kb_teams WHERE id = $1 AND is_active"#,
         team_id,
     )
     .fetch_optional(pool)
@@ -259,10 +262,94 @@ pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> Api
         id: team.id,
         slug: team.slug,
         name: team.name,
+        description: team.description,
         created: team.created,
         auto_join_role: team.auto_join_role,
         members,
     })
+}
+
+/// Update a team's mutable metadata (name/description). Owner/maintainer only.
+///
+/// Partial merge: a `None` field leaves that column unchanged (SQL COALESCE).
+/// A soft-deleted team is not updatable — the `is_active` filter yields
+/// `NotFound`. Auth precedes the write.
+pub async fn update_team(
+    pool: &PgPool,
+    caller: ProfileId,
+    team_id: Uuid,
+    req: &TeamUpdateRequest,
+) -> ApiResult<TeamRow> {
+    // Auth before writes: owner or maintainer.
+    match role_on_team(pool, team_id, caller).await? {
+        Some(role) if can_manage(role) => {}
+        _ => return Err(ApiError::Forbidden),
+    }
+
+    let row = sqlx::query_as!(
+        TeamRow,
+        r#"
+        UPDATE kb_teams
+           SET name = COALESCE($2, name),
+               description = COALESCE($3, description)
+         WHERE id = $1 AND is_active
+        RETURNING id, slug, name, description, created,
+                  auto_join_role AS "auto_join_role: TeamRole"
+        "#,
+        team_id,
+        req.name.as_deref(),
+        req.description.as_deref(),
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    Ok(row)
+}
+
+/// Soft-delete a team (`is_active = false`). Owner only.
+///
+/// Refuses the `temper-system` root (load-bearing: every profile descends from
+/// it). Idempotency: a team that is absent OR already soft-deleted yields
+/// `NotFound`. Rows are preserved — recovery is a DB-level `is_active = true`.
+/// Children are NOT recursively deleted (see the migration's cascade note).
+pub async fn delete_team(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> ApiResult<()> {
+    // Auth before writes: owner only (stricter than manage — a maintainer cannot
+    // dissolve the team).
+    match role_on_team(pool, team_id, caller).await? {
+        Some(TeamRole::Owner) => {}
+        _ => return Err(ApiError::Forbidden),
+    }
+
+    // Guard the DAG root. Folded into the UPDATE's WHERE so the check and the
+    // write are one atomic statement.
+    let result = sqlx::query!(
+        r#"UPDATE kb_teams
+              SET is_active = false
+            WHERE id = $1 AND is_active AND slug <> 'temper-system'"#,
+        team_id,
+    )
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        // Either absent, already soft-deleted, or the protected root. The root
+        // case is only reachable by its owner (auth passed), so distinguish it.
+        let is_root = sqlx::query_scalar!(
+            "SELECT slug = 'temper-system' FROM kb_teams WHERE id = $1",
+            team_id
+        )
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+        .unwrap_or(false);
+        return Err(if is_root {
+            ApiError::Conflict("the temper-system root team cannot be deleted".to_string())
+        } else {
+            ApiError::NotFound
+        });
+    }
+    Ok(())
 }
 
 /// Load a member's role + provenance, if the row exists.
@@ -439,6 +526,54 @@ mod lifecycle_tests {
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    /// Insert a context owned by a team, return its id.
+    async fn mk_team_context(pool: &PgPool, team: Uuid, slug: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_teams', $1, $2, $2) RETURNING id",
+        )
+        .bind(team)
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Insert a resource homed in `ctx`, owned+originated by `owner` (so it is
+    /// visible to nobody else by ownership). Return its id.
+    async fn mk_homed_resource(pool: &PgPool, ctx: Uuid, owner: Uuid) -> Uuid {
+        let rid: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('r', 'r') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+                (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(rid)
+        .bind(ctx)
+        .bind(owner)
+        .execute(pool)
+        .await
+        .unwrap();
+        rid
+    }
+
+    async fn is_visible(pool: &PgPool, profile: Uuid, resource: Uuid) -> bool {
+        sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
+            profile,
+            resource,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .unwrap_or(false)
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -665,5 +800,153 @@ mod lifecycle_tests {
             .unwrap();
         assert_eq!(detail.slug, "acme");
         assert_eq!(detail.members.len(), 1);
+    }
+
+    // --- Team metadata + soft-delete (scope task #5) ---
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_updates_name_and_description(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let req = TeamUpdateRequest {
+            name: Some("Acme Inc".to_string()),
+            description: Some("the roadrunner people".to_string()),
+        };
+        let row = update_team(&pool, ProfileId::from(owner), team, &req)
+            .await
+            .unwrap();
+        assert_eq!(row.name, "Acme Inc");
+        assert_eq!(row.description.as_deref(), Some("the roadrunner people"));
+
+        // Partial merge: updating only the name leaves the description intact.
+        let req2 = TeamUpdateRequest {
+            name: Some("Acme LLC".to_string()),
+            description: None,
+        };
+        let row2 = update_team(&pool, ProfileId::from(owner), team, &req2)
+            .await
+            .unwrap();
+        assert_eq!(row2.name, "Acme LLC");
+        assert_eq!(row2.description.as_deref(), Some("the roadrunner people"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn non_manager_cannot_update(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        let req = TeamUpdateRequest {
+            name: Some("hijack".to_string()),
+            description: None,
+        };
+        let denied = update_team(&pool, ProfileId::from(member), team, &req).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn update_soft_deleted_team_is_not_found(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        delete_team(&pool, ProfileId::from(owner), team)
+            .await
+            .unwrap();
+        let req = TeamUpdateRequest {
+            name: Some("ghost".to_string()),
+            description: None,
+        };
+        let denied = update_team(&pool, ProfileId::from(owner), team, &req).await;
+        assert!(matches!(denied, Err(ApiError::NotFound)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_soft_deletes_team_and_it_disappears(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        // `acme` is listed while active (the caller also has an auto-provisioned
+        // personal team, so assert on membership of `acme` specifically, not a count).
+        let before = list_teams(&pool, ProfileId::from(owner)).await.unwrap();
+        assert!(before.iter().any(|t| t.id == team));
+
+        delete_team(&pool, ProfileId::from(owner), team)
+            .await
+            .unwrap();
+
+        // Gone from the caller's listing and no longer showable.
+        let after = list_teams(&pool, ProfileId::from(owner)).await.unwrap();
+        assert!(!after.iter().any(|t| t.id == team));
+        let shown = team_detail(&pool, ProfileId::from(owner), team).await;
+        assert!(matches!(shown, Err(ApiError::NotFound)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_cannot_delete_team(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let maintainer = mk_profile(&pool, "maintainer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, maintainer, "maintainer", "native").await;
+
+        // A maintainer may manage membership but NOT dissolve the team.
+        let denied = delete_team(&pool, ProfileId::from(maintainer), team).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_delete_temper_system_root(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let sys: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // Profiles auto-join temper-system via the sync_system_membership trigger, so
+        // upsert the owner role rather than insert a fresh row.
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner'",
+        )
+        .bind(sys)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let denied = delete_team(&pool, ProfileId::from(owner), sys).await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn soft_deleted_team_stops_conferring_read_reach(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let stranger = mk_profile(&pool, "stranger").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        // A resource homed in a team-owned context, owned by an unrelated profile —
+        // so `member`'s ONLY path to it is team membership, not ownership.
+        let ctx = mk_team_context(&pool, team, "acme-ctx").await;
+        let resource = mk_homed_resource(&pool, ctx, stranger).await;
+
+        // While the team is active, the member sees it via the team-owned-context branch.
+        assert!(is_visible(&pool, member, resource).await);
+
+        // Soft-delete the team → the read-reach evaporates for the member...
+        delete_team(&pool, ProfileId::from(owner), team)
+            .await
+            .unwrap();
+        assert!(!is_visible(&pool, member, resource).await);
+
+        // ...while the resource's own owner still sees it (unaffected by the team).
+        assert!(is_visible(&pool, stranger, resource).await);
     }
 }

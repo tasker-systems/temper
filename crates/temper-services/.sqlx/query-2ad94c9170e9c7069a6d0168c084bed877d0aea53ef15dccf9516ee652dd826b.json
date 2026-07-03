@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO kb_teams (id, slug, name, auto_join_role)\n        VALUES ($1, $2, $3, $4)\n        RETURNING id, slug, name, created,\n                  auto_join_role AS \"auto_join_role: TeamRole\"\n        ",
+  "query": "\n        SELECT t.id, t.slug, t.name, t.description, t.created,\n               t.auto_join_role AS \"auto_join_role: TeamRole\"\n          FROM kb_teams t\n          JOIN kb_team_members tm ON tm.team_id = t.id\n         WHERE tm.profile_id = $1 AND t.is_active\n         ORDER BY t.name\n        ",
   "describe": {
     "columns": [
       {
@@ -20,11 +20,16 @@
       },
       {
         "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
         "name": "created",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "auto_join_role: TeamRole",
         "type_info": {
           "Custom": {
@@ -43,31 +48,17 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Text",
-        "Text",
-        {
-          "Custom": {
-            "name": "team_role",
-            "kind": {
-              "Enum": [
-                "owner",
-                "maintainer",
-                "member",
-                "watcher"
-              ]
-            }
-          }
-        }
+        "Uuid"
       ]
     },
     "nullable": [
       false,
       false,
       false,
+      true,
       false,
       true
     ]
   },
-  "hash": "b6988a1dca06aac0291ee3b9e5f44fa247f19f6b59e2511e38c0867bf480f7f5"
+  "hash": "2ad94c9170e9c7069a6d0168c084bed877d0aea53ef15dccf9516ee652dd826b"
 }
