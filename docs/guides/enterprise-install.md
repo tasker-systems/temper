@@ -184,3 +184,65 @@ Auth0 app registration documented in [self-hosting.md](./self-hosting.md) instea
 > This note covers only what to pull out of Okta's app screen. The generic SAML-IdP side — the SP
 > ACS URL and entity id Temper's AS expects the IdP to send assertions to — is documented in
 > [self-hosting-saml.md](./self-hosting-saml.md), and is the same regardless of which IdP you use.
+
+## Traps
+
+Five ways this install silently misbehaves instead of failing loudly. Each has bitten a real
+install; read this before step 8.
+
+> **`is_system_admin` reads gating-team ownership, not `system_access`.** It is true only when
+> the profile is an **`owner`** member of the team whose slug equals
+> `kb_system_settings.gating_team_slug` — `kb_profiles.system_access = 'admin'` does nothing for
+> it, and `gating_team_slug` is `NULL` by canonical-seed default, which denies **everyone**
+> ([self-hosting-saml.md](./self-hosting-saml.md#7-verify) — a missing `gating_team_slug` "fails
+> silently with 403s"; [l0-content-delivery.md § The gotcha](./l0-content-delivery.md#the-gotcha-l0-writes-are-fail-closed)
+> spells out both halves; confirmed in the field 2026-07-02). **Set both halves at step 8** — the
+> gating team *and* the owner membership — and verify with `is_system_admin(<uuid>) = true` before
+> moving on, not just that the SQL ran.
+>
+> **`API_BASE_URL` pointed at the UI's own public origin creates a self-proxy loop → `508 Loop
+> Detected`.** It must be the API backend's own distinct origin — its `*.vercel.app` URL or a
+> dedicated `api.` subdomain — never the shared public domain the UI also serves
+> ([self-hosting.md:277](./self-hosting.md#environment-variable-contract-ui-project)).
+>
+> **`AS_CLIENTS` unset rejects every `/oauth/authorize` call (fail-closed); `INTERNAL_RECONCILE_SECRET`
+> unset silently disables group provisioning while auth still works.** The first fails loud, the
+> second doesn't — nothing errors, groups just never sync, so verify reconcile explicitly rather
+> than trusting a clean login ([self-hosting-saml.md:195](./self-hosting-saml.md#authorization-server-temper-cloud-the-api-deployment),
+> [self-hosting-saml.md:230-233](./self-hosting-saml.md#group-provisioning-phase-2)).
+>
+> **`cogmap create` / `cogmap reconcile` require an `embed`-feature `temper` binary.** A
+> non-`embed` build fails with a clear `requires the 'embed' feature` error rather than a cryptic
+> one, but only at step 13, well after the rest of the install has succeeded — check this
+> up front instead ([org-bootstrap.md:49-52](./org-bootstrap.md#prerequisites)).
+>
+> **Migrations are a deploy step, not a startup step — the API never auto-migrates.** Run
+> `sqlx migrate run` against `DATABASE_URL_UNPOOLED` (step 5) yourself, and back up the database
+> first — there is no automatic rollback if a migration fails partway
+> ([self-hosting.md:66-73](./self-hosting.md#run-migrations), [DEPLOYING.md](../../DEPLOYING.md)).
+
+## Scripted vs. manual, and what's deferred
+
+The **expected path** is the two scripts, not the numbered table read step-by-step — the table
+is the reference an operator falls back to when a script needs debugging or the install deviates
+from the happy path (SAML variant swaps, a failed step to re-run by hand, etc.).
+
+| Steps | Automated by | Status |
+| --- | --- | --- |
+| 8–10, 13 | `system-bootstrap.sh --run-root` | Exists today |
+| 3, 6, 11, 12 | `saml-setup.sh` | Lands alongside this guide (Arc B, same PR) |
+| 1–2, 4–5, 7, 14–15 | — (manual) | Platform-console and human-in-the-loop steps: provisioning Neon and the Okta app, setting Vercel env, deploying, the first SAML login, and the optional UI deploy/verify — none of these are things a script can safely do on an operator's behalf |
+
+**What's deferred beyond this runbook** — the roadmap tail, not steps to sequence here:
+
+- **Eve / machine-to-machine auth.** The `app` principal needs `client_credentials` (M2M) support
+  that doesn't exist yet; until then Eve can't reach temper-mcp unattended
+  ([vercel-eve.md § Status](./vercel-eve.md#status-2026-07-02-app-principal-needs-m2m-not-yet-available)).
+- **`plan`/`diff` applier semantics.** `system-bootstrap.sh` has no state backend — re-applying a
+  profile converges because every step is idempotent, but there's no Terraform-like plan/diff
+  preview ([org-bootstrap.md](./org-bootstrap.md#running-it-as-the-applier)).
+- **SCIM (Phase 3).** Group provisioning today is JIT on login; immediate deprovisioning needs
+  SCIM, not yet available ([self-hosting-saml.md § 3](./self-hosting-saml.md#3-map-idp-groups-to-temper-teamsroles-phase-2)).
+- **Cogmap-write-by-team-role.** Authorial (write) RBAC for team contexts and team cognitive maps
+  is still undefined — de facto, any team member can write, not just admins/owners. This runbook's
+  `is_system_admin` gate covers the L0 kernel only, not team-scoped cogmaps.
