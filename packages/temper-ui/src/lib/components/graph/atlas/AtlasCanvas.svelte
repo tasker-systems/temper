@@ -3,7 +3,7 @@
 	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
 	import { attachCamera, type Camera } from '$lib/graph/atlas/camera';
-	import { paletteStyleVars } from '$lib/graph/atlas/palette';
+	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
 	import TierPanorama from './TierPanorama.svelte';
 
 	interface Props {
@@ -32,7 +32,7 @@
 
 <div class="atlas-canvas" style={paletteStyleVars()}>
 	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Team graph atlas">
-		<rect x="0" y="0" width={W} height={H} fill="#1b1e26" />
+		<rect x="0" y="0" width={W} height={H} fill={CANVAS_BG} />
 		<g bind:this={viewportEl}>
 			{#if tier === 0 && territories}
 				<TierPanorama overview={territories} {zones} width={W} height={H} />

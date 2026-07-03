@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Territory } from '$lib/types/generated/graph_territory';
+	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
 
 	interface Props {
 		x: number;
@@ -12,12 +13,7 @@
 
 	// Region = warm-neutral tint; context = cool tint; cogmap = warm tint. Low-opacity
 	// washes with a dashed hull outline, cartographic style.
-	const TINTS: Record<Territory['kind'], string> = {
-		region: '#e0b060',
-		context: '#6fa8c7',
-		cogmap: '#e8942e'
-	};
-	const tint = $derived(TINTS[kind]);
+	const tint = $derived(TERRITORY_TINTS[kind]);
 </script>
 
 <g class="territory">

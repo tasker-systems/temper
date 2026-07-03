@@ -12,6 +12,7 @@
  * stack and are removed in Chunk D.
  */
 import type { NodeHome } from '$lib/types/generated/graph_atlas';
+import type { TerritoryKind } from '$lib/types/generated/graph_territory';
 
 export type AtlasDocType =
 	| 'concept' | 'fact' | 'domain' | 'principle' | 'commitment' | 'concern' | 'theme' | 'question'
@@ -54,6 +55,22 @@ export const EDGE_COLORS = {
 
 /** Dark contrast ring applied to dots in light mode so pale hues read. */
 export const LIGHT_MODE_RING = '#2a2f38';
+
+/**
+ * Low-opacity cartographic hull washes for Tier-0 territories: region is
+ * warm-neutral, context is cool, cogmap is warm.
+ */
+export const TERRITORY_TINTS: Record<TerritoryKind, string> = {
+	region: '#e0b060',
+	context: '#6fa8c7',
+	cogmap: '#e8942e'
+};
+
+/** Atlas canvas slate background. */
+export const CANVAS_BG = '#1b1e26';
+
+/** Team-zone rectangle fill, name label, and sub-count text. */
+export const TEAM_ZONE = { fill: '#6fa8c7', label: '#9fc4d6', sub: '#5f7686' } as const;
 
 const SALIENCE_FLOOR = 0.35;
 

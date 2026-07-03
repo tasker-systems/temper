@@ -2,8 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import {
 	AUTHORED_DOC_TYPES,
+	CANVAS_BG,
 	DOC_TYPE_HUES,
 	FALLBACK_HUE,
+	TEAM_ZONE,
+	TERRITORY_TINTS,
 	docTypeHue,
 	isAuthored,
 	nodeMark,
@@ -65,5 +68,23 @@ describe('paletteStyleVars', () => {
 		const s = paletteStyleVars();
 		expect(s).toContain('--dt-concept:#e8942e');
 		expect(s).toContain('--dt-goal:#3a8ae8');
+	});
+});
+
+describe('TERRITORY_TINTS / chrome', () => {
+	it('defines all three territory kinds with non-empty hex strings', () => {
+		for (const kind of ['region', 'context', 'cogmap'] as const) {
+			expect(TERRITORY_TINTS[kind]).toMatch(/^#[0-9a-f]{6}$/i);
+		}
+	});
+
+	it('locks the canvas background', () => {
+		expect(CANVAS_BG).toBe('#1b1e26');
+	});
+
+	it('defines team-zone fill, label, and sub colors', () => {
+		expect(TEAM_ZONE.fill).toMatch(/^#[0-9a-f]{6}$/i);
+		expect(TEAM_ZONE.label).toMatch(/^#[0-9a-f]{6}$/i);
+		expect(TEAM_ZONE.sub).toMatch(/^#[0-9a-f]{6}$/i);
 	});
 });
