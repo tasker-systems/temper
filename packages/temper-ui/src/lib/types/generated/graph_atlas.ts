@@ -23,8 +23,9 @@ export type AtlasSubgraph = { nodes: Array<AtlasNode>, edges: Array<AtlasEdge>, 
 
 /**
  * Which home a node is bound to — drives the Atlas fill-vs-outline encoding
- * (cogmap-homed = filled chip, context-homed = outlined chip). Dual-homed
- * resources resolve to `Cogmap` (the authored side wins).
+ * (cogmap-homed = filled chip, context-homed = outlined chip). A resource has
+ * exactly one home (`kb_resource_homes.resource_id` is unique); this
+ * distinguishes the two anchor kinds.
  */
 export type NodeHome = "context" | "cogmap";
 

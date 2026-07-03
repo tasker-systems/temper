@@ -296,3 +296,59 @@ async fn atlas_nodes_preserves_null_doc_type_and_excludes_out_of_scope(pool: sql
         "a resource outside resources_in_team_scope is excluded entirely"
     );
 }
+
+/// I1 regression: with multiple seeds, the same edge can be reached at two
+/// different depths (e.g. directly from one seed, and via a hop from another).
+/// The recursive `walk` CTE's `UNION` dedups on the full row *including*
+/// `depth`, so before the fix such an edge survived as two output rows once
+/// `depth` was dropped. `graph_traverse_scoped` must return each distinct
+/// `(source_id, target_id, edge_kind)` at most once.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn traverse_scoped_dedupes_edge_reached_at_multiple_depths(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "gas-multi-seed").await;
+    let team = create_team(&pool, "gas-multi-seed-team").await;
+    add_member(&pool, team, profile).await;
+    let event = any_event(&pool).await;
+
+    let a = create_resource(&pool, "a", "temper://gas/a").await;
+    let b = create_resource(&pool, "b", "temper://gas/b").await;
+    let c = create_resource(&pool, "c", "temper://gas/c").await;
+    for r in [a, b, c] {
+        grant_read_to_team(&pool, r, team, profile).await;
+    }
+
+    // a --contains--> b   (reachable directly from seed a at depth 1)
+    // c --contains--> a   (reachable directly from seed c at depth 1)
+    // So a->b is ALSO reachable via c->a->b at depth 2 — the same edge at two depths.
+    assert_edge(&pool, a, b, "contains", "kb_contexts", Uuid::nil(), event).await;
+    assert_edge(&pool, c, a, "contains", "kb_contexts", Uuid::nil(), event).await;
+
+    let rows: Vec<(Uuid, Uuid, EdgeKind)> = sqlx::query_as(
+        "SELECT source_id, target_id, edge_kind FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
+    )
+    .bind(profile)
+    .bind(team)
+    .bind(vec![a, c])
+    .bind(2_i32)
+    .bind(Vec::<EdgeKind>::new())
+    .fetch_all(&pool)
+    .await
+    .expect("traverse with multiple seeds");
+
+    let mut seen = std::collections::HashSet::new();
+    for row in &rows {
+        assert!(
+            seen.insert(*row),
+            "duplicate (source_id, target_id, edge_kind) row: {row:?} in {rows:?}"
+        );
+    }
+
+    let expected: std::collections::HashSet<(Uuid, Uuid, EdgeKind)> =
+        [(a, b, EdgeKind::Contains), (c, a, EdgeKind::Contains)]
+            .into_iter()
+            .collect();
+    assert_eq!(
+        seen, expected,
+        "each edge appears exactly once, regardless of how many depths reach it"
+    );
+}

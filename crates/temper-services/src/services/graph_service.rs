@@ -257,14 +257,11 @@ pub async fn neighborhood_slice(
         return Err(ApiError::BadRequest("seeds must be non-empty".into()));
     }
     // Deny-as-absence: profile must read the team (member of it or a descendant).
-    let viewable: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM team_descendants($1) d \
-         JOIN kb_team_members tm ON tm.team_id = d.team_id AND tm.profile_id = $2)",
-    )
-    .bind(team_id)
-    .bind(profile_id.as_uuid())
-    .fetch_one(pool)
-    .await?;
+    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_one(pool)
+        .await?;
     if !viewable {
         return Err(ApiError::NotFound);
     }
@@ -275,8 +272,8 @@ pub async fn neighborhood_slice(
     // natively via their `sqlx::Type` derive (same mechanism as fetch_subgraph_edges
     // above), so req.edge_kinds binds directly as an `edge_kind[]` array param —
     // no `::text` cast round-trip.
-    let walked = sqlx::query_as::<_, (Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64, i32)>(
-        "SELECT source_id, target_id, edge_kind, polarity, label, weight, depth \
+    let walked = sqlx::query_as::<_, (Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
+        "SELECT source_id, target_id, edge_kind, polarity, label, weight \
          FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
     )
     .bind(profile_id.as_uuid())
@@ -290,7 +287,7 @@ pub async fn neighborhood_slice(
     let edges: Vec<AtlasEdge> = walked
         .iter()
         .map(
-            |(source, target, edge_kind, polarity, label, weight, _depth)| AtlasEdge {
+            |(source, target, edge_kind, polarity, label, weight)| AtlasEdge {
                 source: *source,
                 target: *target,
                 edge_kind: *edge_kind,
@@ -341,14 +338,11 @@ pub async fn territory_overview(
     team_id: Uuid,
     lens_id: Option<Uuid>,
 ) -> ApiResult<TerritoryOverview> {
-    let viewable: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM team_descendants($1) d \
-         JOIN kb_team_members tm ON tm.team_id = d.team_id AND tm.profile_id = $2)",
-    )
-    .bind(team_id)
-    .bind(profile_id.as_uuid())
-    .fetch_one(pool)
-    .await?;
+    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_one(pool)
+        .await?;
     if !viewable {
         return Err(ApiError::NotFound);
     }

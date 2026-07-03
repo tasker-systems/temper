@@ -4,8 +4,9 @@ use uuid::Uuid;
 use crate::types::graph::{EdgeKind, Polarity};
 
 /// Which home a node is bound to — drives the Atlas fill-vs-outline encoding
-/// (cogmap-homed = filled chip, context-homed = outlined chip). Dual-homed
-/// resources resolve to `Cogmap` (the authored side wins).
+/// (cogmap-homed = filled chip, context-homed = outlined chip). A resource has
+/// exactly one home (`kb_resource_homes.resource_id` is unique); this
+/// distinguishes the two anchor kinds.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph_atlas.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

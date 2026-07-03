@@ -16,7 +16,7 @@ CREATE FUNCTION graph_traverse_scoped(
     p_edge_kinds  edge_kind[]
 ) RETURNS TABLE(
     source_id uuid, target_id uuid, edge_kind edge_kind,
-    polarity edge_polarity, label text, weight double precision, depth int
+    polarity edge_polarity, label text, weight double precision
 ) LANGUAGE sql STABLE AS $$
     WITH RECURSIVE scope AS (
         SELECT resource_id AS id FROM resources_in_team_scope(p_profile, p_team)
@@ -42,7 +42,10 @@ CREATE FUNCTION graph_traverse_scoped(
           AND (p_edge_kinds IS NULL OR array_length(p_edge_kinds, 1) IS NULL
                OR e.edge_kind = ANY(p_edge_kinds))
     )
-    SELECT source_id, target_id, edge_kind, polarity, label, weight, depth FROM walk;
+    -- DISTINCT: `walk`'s UNION dedups on the full row *including* depth, so an
+    -- edge reachable at two different depths (realistic with multiple seeds)
+    -- would otherwise survive as two rows once `depth` is dropped here.
+    SELECT DISTINCT source_id, target_id, edge_kind, polarity, label, weight FROM walk;
 $$;
 
 -- Project Atlas node attributes for a set of ids, clamped to team scope.

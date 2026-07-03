@@ -47,14 +47,27 @@ async fn mk_owned_context(pool: &sqlx::PgPool, profile: Uuid, slug: &str) -> Uui
 }
 
 async fn insert_event(pool: &sqlx::PgPool, type_name: &str, emitter: Uuid, payload: Value) -> Uuid {
+    insert_event_with_metadata(pool, type_name, emitter, payload, serde_json::json!({})).await
+}
+
+/// Same as [`insert_event`], but with caller-supplied `kb_events.metadata` — used
+/// to exercise the `metadata->>'confidence'` extraction in `event_service::element_trail`.
+async fn insert_event_with_metadata(
+    pool: &sqlx::PgPool,
+    type_name: &str,
+    emitter: Uuid,
+    payload: Value,
+    metadata: Value,
+) -> Uuid {
     sqlx::query_scalar(
         "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, metadata) \
-         VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, $3, '{}'::jsonb) \
+         VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, $3, $4) \
          RETURNING id",
     )
     .bind(type_name)
     .bind(emitter)
     .bind(payload)
+    .bind(metadata)
     .fetch_one(pool)
     .await
     .expect("insert event")
@@ -116,11 +129,14 @@ async fn edge_trail_returns_ordered_events_and_rejects_bad_kind(pool: sqlx::PgPo
     .await;
     insert_edge(&pool, edge_id, context, assert_event).await;
 
-    let reweight_event = insert_event(
+    // Carries a confidence band in metadata — exercises the `metadata->>'confidence'`
+    // extraction into `ElementEvent.confidence` (M5: otherwise never exercised).
+    let reweight_event = insert_event_with_metadata(
         &pool,
         "relationship_reweighted",
         entity,
         serde_json::json!({"edge_id": edge_id, "weight": 2.0}),
+        serde_json::json!({"confidence": "probable"}),
     )
     .await;
 
@@ -139,6 +155,14 @@ async fn edge_trail_returns_ordered_events_and_rejects_bad_kind(pool: sqlx::PgPo
     assert_eq!(events[0]["kind"], "relationship_asserted");
     assert_eq!(events[1]["event_id"], reweight_event.to_string());
     assert_eq!(events[1]["kind"], "relationship_reweighted");
+    assert_eq!(
+        events[1]["confidence"], "probable",
+        "metadata->>'confidence' surfaces on the ElementEvent: {events:?}"
+    );
+    assert!(
+        events[0]["confidence"].is_null(),
+        "the assert event has no confidence in its metadata: {events:?}"
+    );
 
     // Unknown kind — 400.
     let (status, _) = trail(&app, &app.token, "bogus", edge_id).await;
