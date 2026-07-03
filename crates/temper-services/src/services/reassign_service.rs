@@ -48,6 +48,8 @@ async fn admin_reach(
         SELECT EXISTS (
             SELECT 1
             FROM kb_team_contexts tc
+            JOIN kb_teams t
+              ON t.id = tc.team_id AND t.is_active
             JOIN kb_resource_homes h
               ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
             JOIN kb_team_members cm
@@ -98,6 +100,21 @@ pub async fn reassign_resource(
         return Ok(()); // idempotent no-op
     }
 
+    // The owner path admits any target; verify it's a real profile so a bad UUID is a
+    // clean 400 rather than an FK-violation 500 in the projector. (The admin path's
+    // membership join already guarantees existence, but this covers both uniformly.)
+    let to_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1) AS "e!: bool""#,
+        to_profile_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if !to_exists {
+        return Err(ApiError::BadRequest(
+            "target profile does not exist".to_string(),
+        ));
+    }
+
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -124,6 +141,19 @@ pub async fn reassign_team_resources(
     from_profile_id: Uuid,
     to_profile_id: Uuid,
 ) -> ApiResult<Vec<Uuid>> {
+    // A soft-deleted team is inert — it confers no reassignment authority.
+    // (`role_on_team` is is_active-blind; team_service gates is_active at each call
+    // site, so we do the same here.)
+    let team_active = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
+        team_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if !team_active {
+        return Err(ApiError::Forbidden);
+    }
+
     // Auth before writes: caller manages the team, and `to` is a member of it.
     match role_on_team(pool, team_id, caller).await? {
         Some(role) if can_manage(role) => {}
@@ -288,6 +318,14 @@ mod tests {
             .unwrap();
     }
 
+    async fn soft_delete_team(pool: &PgPool, team: Uuid) {
+        sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+            .bind(team)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     async fn owner_of(pool: &PgPool, resource: Uuid) -> Uuid {
         sqlx::query_scalar!(
             "SELECT owner_profile_id FROM kb_resource_homes WHERE resource_id=$1",
@@ -429,6 +467,58 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_reassign_to_nonexistent_profile_is_bad_request(pool: PgPool) {
+        let alice = mk_profile(&pool, "alice").await;
+        let ctx = mk_context(&pool, "c", alice).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+        let ghost = Uuid::now_v7(); // never inserted
+        let err = reassign_resource(&pool, alice, r, ghost).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+        assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn admin_cannot_reassign_via_soft_deleted_team(pool: PgPool) {
+        // Same shape as the passing admin case, but the team is soft-deleted → inert.
+        let alice = mk_profile(&pool, "alice").await;
+        let admin = mk_profile(&pool, "admin").await;
+        let steward = mk_profile(&pool, "steward").await;
+        let team = mk_team(&pool, "acme").await;
+        add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, steward, "member").await;
+        let ctx = mk_context(&pool, "shared", alice).await;
+        share_ctx(&pool, ctx, team).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+        soft_delete_team(&pool, team).await;
+
+        let err = reassign_resource(&pool, admin, r, *steward)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+        assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn bulk_forbidden_on_soft_deleted_team(pool: PgPool) {
+        let admin = mk_profile(&pool, "admin").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let steward = mk_profile(&pool, "steward").await;
+        let team = mk_team(&pool, "acme").await;
+        add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, steward, "member").await;
+        let shared = mk_context(&pool, "shared", leaver).await;
+        share_ctx(&pool, shared, team).await;
+        let r = mk_homed_resource(&pool, shared, leaver).await;
+        soft_delete_team(&pool, team).await;
+
+        let err = reassign_team_resources(&pool, admin, team, *leaver, *steward)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+        assert_eq!(owner_of(&pool, r).await, *leaver, "owner unchanged");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
