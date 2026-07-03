@@ -5,16 +5,20 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
-use temper_services::services::context_service;
 use temper_services::services::resource_service::{
     ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
     ResourceUpdateRequest,
 };
+use temper_services::services::{access_service, context_service};
 use temper_services::state::AppState;
 
 use temper_core::context_ref::ContextRef;
+use temper_core::types::cognitive_maps::{
+    GrantCapabilityRequest, GrantOutcome, RevokeCapabilityRequest, RevokeOutcome,
+};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
@@ -304,4 +308,73 @@ pub async fn delete(
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     backend.delete_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(DeleteResponse { deleted: true }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/resources/{id}/grants",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    request_body = ResourceGrantBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Grant minted (or updated in place)", body = GrantOutcome),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Caller may not administer grants on this resource", body = ErrorBody),
+    )
+)]
+pub async fn grant(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(resource_id): Path<Uuid>,
+    Json(body): Json<ResourceGrantBody>,
+) -> ApiResult<Json<GrantOutcome>> {
+    // Auth-before-writes lives in the service (`is_system_admin OR can(...,'grant',...)`, and
+    // — via the owner-grant seam — the resource owner). Widen the resource-scoped body into
+    // the polymorphic request by injecting subject_table + the path id.
+    let req = GrantCapabilityRequest {
+        subject_table: "kb_resources".to_string(),
+        subject_id: resource_id,
+        principal_table: body.principal_table,
+        principal_id: body.principal_id,
+        can_read: body.can_read,
+        can_write: body.can_write,
+        can_delete: body.can_delete,
+        can_grant: body.can_grant,
+    };
+    let outcome =
+        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+            .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/resources/{id}/grants",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    request_body = ResourceRevokeBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Grant revoked (no-op safe)", body = RevokeOutcome),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Caller may not administer grants on this resource", body = ErrorBody),
+    )
+)]
+pub async fn revoke(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(resource_id): Path<Uuid>,
+    Json(body): Json<ResourceRevokeBody>,
+) -> ApiResult<Json<RevokeOutcome>> {
+    let req = RevokeCapabilityRequest {
+        subject_table: "kb_resources".to_string(),
+        subject_id: resource_id,
+        principal_table: body.principal_table,
+        principal_id: body.principal_id,
+    };
+    let outcome =
+        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile.id), &req)
+            .await?;
+    Ok(Json(outcome))
 }

@@ -40,6 +40,7 @@ pub mod reassign;
 pub mod reconcile;
 pub mod relationship_events;
 pub mod relationship_requests;
+pub mod resource_grant;
 pub mod search;
 pub mod steward;
 pub mod team;

@@ -102,6 +102,10 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
         )
         .route(
+            "/api/resources/{id}/grants",
+            post(handlers::resources::grant).delete(handlers::resources::revoke),
+        )
+        .route(
             "/api/contexts",
             get(handlers::contexts::list).post(handlers::contexts::create),
         )
