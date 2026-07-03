@@ -44,3 +44,26 @@ pub struct TeamInvitation {
     pub expires_at: DateTime<Utc>,
     pub created: DateTime<Utc>,
 }
+
+/// Request body for `POST /api/teams/{id}/invite`.
+///
+/// `role` cannot be `Owner` — the service rejects it (ownership is transferred,
+/// not invited).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CreateInvitationRequest {
+    pub invited_email: String,
+    pub role: TeamRole,
+}
+
+/// Response from `POST /api/invitations/{token}/accept` — the team the caller
+/// just joined and at what role.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AcceptInvitationResponse {
+    pub team_id: Uuid,
+    pub team_slug: String,
+    pub role: TeamRole,
+}
