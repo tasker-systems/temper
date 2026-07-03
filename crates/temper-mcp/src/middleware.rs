@@ -1,8 +1,9 @@
 //! JWT validation middleware for the MCP endpoint.
 //!
 //! Re-uses temper-api's `JwksKeyStore` for token validation. Simpler than
-//! the full `require_auth` middleware — we validate the JWT and extract
-//! `sub` for tool-level scoping, without resolving a temper Profile.
+//! the full `require_auth` middleware — we validate the JWT and inject the
+//! decoded [`RawJwtClaims`] for the service to normalize (human vs machine)
+//! and resolve downstream.
 
 use axum::{
     body::Body,
@@ -12,21 +13,15 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use jsonwebtoken::decode;
-use serde::Deserialize;
 use std::sync::Arc;
+
+use temper_services::auth::RawJwtClaims;
 
 use crate::router::McpAppState;
 
-/// Claims extracted from every validated MCP access token.
-#[derive(Debug, Clone, Deserialize)]
-pub struct McpClaims {
-    pub sub: String,
-    pub exp: i64,
-}
-
 /// Validate the Auth0 Bearer JWT on every MCP request.
 ///
-/// On success, injects `McpClaims` into request extensions.
+/// On success, injects [`RawJwtClaims`] into request extensions.
 /// On failure, returns 401 with a `WWW-Authenticate` header that triggers
 /// the MCP client's OAuth flow (per MCP 2025-03-26 auth spec).
 pub async fn require_mcp_auth(
@@ -54,7 +49,7 @@ pub async fn require_mcp_auth(
         .jwks_store
         .validation(issuer, Some(audience), vk.algorithm);
 
-    match decode::<McpClaims>(&token, &vk.key, &validation) {
+    match decode::<RawJwtClaims>(&token, &vk.key, &validation) {
         Ok(data) => {
             request.extensions_mut().insert(data.claims);
             next.run(request).await

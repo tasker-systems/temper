@@ -26,7 +26,7 @@ describe("buildAsMetadata", () => {
 });
 
 describe("buildAuth0AsMetadata", () => {
-  it("is byte-identical to the retired Rust MCP handler's output", () => {
+  it("matches the retired Rust MCP handler's output, plus the Stage-4a client_credentials grant", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io",
       auth0Domain: "https://tenant.auth0.com/",
@@ -40,10 +40,22 @@ describe("buildAuth0AsMetadata", () => {
       registration_endpoint: "https://temperkb.io/oauth/register",
       scopes_supported: ["openid", "profile", "email", "offline_access"],
       response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
+      grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
       code_challenge_methods_supported: ["S256"],
       resource: "https://api.temperkb.io",
     });
+  });
+
+  it("advertises client_credentials for M2M agent principals (Stage 4a)", () => {
+    const meta = buildAuth0AsMetadata({
+      base: "https://temperkb.io",
+      auth0Domain: "https://tenant.auth0.com/",
+      mcpAudience: "https://api.temperkb.io",
+    });
+    expect(meta.grant_types_supported).toContain("client_credentials");
+    // Existing grants remain.
+    expect(meta.grant_types_supported).toContain("authorization_code");
+    expect(meta.grant_types_supported).toContain("refresh_token");
   });
 
   it("trims a trailing slash from auth0Domain before building endpoints", () => {

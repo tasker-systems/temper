@@ -16,6 +16,9 @@ use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, AuthenticatedProfile};
 
+mod normalize;
+pub use normalize::{normalize_machine, RawJwtClaims, MACHINE_PROVIDER_TAG};
+
 use crate::error::ApiError;
 use crate::services::profile_service;
 
@@ -100,6 +103,7 @@ mod tests {
     // Helper: build AuthClaims for a synthetic principal.
     fn claims(sub: &str, email: &str) -> AuthClaims {
         AuthClaims {
+            principal_kind: temper_core::types::PrincipalKind::Human,
             provider: "test-provider".to_string(),
             external_user_id: sub.to_string(),
             email: email.to_string(),
@@ -107,6 +111,34 @@ mod tests {
             exp: 0,
             iat: 0,
         }
+    }
+
+    // Helper: build machine (M2M) AuthClaims for a synthetic agent principal.
+    fn machine_claims(client_id: &str) -> AuthClaims {
+        AuthClaims {
+            principal_kind: temper_core::types::PrincipalKind::Machine,
+            provider: MACHINE_PROVIDER_TAG.to_string(),
+            external_user_id: client_id.to_string(),
+            email: String::new(),
+            email_verified: None,
+            exp: 0,
+            iat: 0,
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn machine_principal_rides_ordinary_gate_rails(pool: PgPool) {
+        let c = machine_claims("agent-rails");
+        let authed = authenticate(&pool, &c).await.expect("authenticate machine");
+        assert!(authed.profile.is_active);
+        assert_eq!(
+            authed.claims.principal_kind,
+            temper_core::types::PrincipalKind::Machine
+        );
+        // Open mode: an authenticated agent has system access, same rail as a human.
+        require_system_access(&pool, &authed)
+            .await
+            .expect("open-mode machine should be system-authorized");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

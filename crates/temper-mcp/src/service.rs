@@ -1,7 +1,7 @@
 //! MCP service — the central handler for all MCP tool calls.
 //!
 //! Each invocation creates a fresh `TemperMcpService`. The authenticated
-//! caller's profile is resolved from `McpClaims` (injected by the JWT
+//! caller's profile is resolved from `RawJwtClaims` (injected by the JWT
 //! middleware into the HTTP request extensions) on **every** request.
 //!
 //! In stateless mode (Vercel serverless), `initialize()` may run on a
@@ -22,10 +22,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use temper_core::types::{AuthClaims, Profile};
+use temper_services::auth::RawJwtClaims;
 use temper_services::services::profile_service;
 use temper_services::state::AppState;
 
-use crate::middleware::McpClaims;
 use crate::tools;
 
 /// Central MCP service. One instance per client session.
@@ -57,16 +57,21 @@ impl TemperMcpService {
         }
     }
 
-    /// Build normalized `AuthClaims` from MCP JWT claims. MCP tokens may omit
-    /// email; the profile service resolves it from cached auth links downstream.
-    fn claims_from(&self, claims: &McpClaims) -> AuthClaims {
+    /// Normalize decoded JWT claims into `AuthClaims`. A machine
+    /// (`client_credentials`) token resolves via the shared seam; a human MCP
+    /// token may omit email (resolved from cached auth links downstream).
+    fn claims_from(&self, raw: &RawJwtClaims) -> AuthClaims {
+        if let Some(machine) = temper_services::auth::normalize_machine(raw) {
+            return machine;
+        }
         AuthClaims {
+            principal_kind: temper_core::types::PrincipalKind::Human,
             provider: self.api_state.config.auth_provider_name.clone(),
-            external_user_id: claims.sub.clone(),
+            external_user_id: raw.sub.clone(),
             email: String::new(),
             email_verified: None,
-            exp: claims.exp,
-            iat: 0,
+            exp: raw.exp,
+            iat: raw.iat,
         }
     }
 
@@ -79,8 +84,8 @@ impl TemperMcpService {
         &self,
         parts: &http::request::Parts,
     ) -> Result<(), rmcp::ErrorData> {
-        let claims = parts.extensions.get::<McpClaims>().ok_or_else(|| {
-            tracing::warn!("McpClaims not found in HTTP request extensions");
+        let claims = parts.extensions.get::<RawJwtClaims>().ok_or_else(|| {
+            tracing::warn!("RawJwtClaims not found in HTTP request extensions");
             rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
         })?;
 
@@ -585,10 +590,10 @@ impl rmcp::ServerHandler for TemperMcpService {
             context.peer.set_peer_info(request);
         }
 
-        // Extract McpClaims from the HTTP request parts injected by the
+        // Extract RawJwtClaims from the HTTP request parts injected by the
         // StreamableHttpService transport.
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            if let Some(claims) = parts.extensions.get::<McpClaims>() {
+            if let Some(claims) = parts.extensions.get::<RawJwtClaims>() {
                 let auth_claims = self.claims_from(claims);
                 match profile_service::resolve_from_claims(&self.api_state.pool, &auth_claims).await
                 {
@@ -606,7 +611,7 @@ impl rmcp::ServerHandler for TemperMcpService {
                     }
                 }
             } else {
-                tracing::warn!("McpClaims not found in request extensions after middleware");
+                tracing::warn!("RawJwtClaims not found in request extensions after middleware");
             }
         }
 

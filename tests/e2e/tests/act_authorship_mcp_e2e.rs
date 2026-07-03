@@ -50,9 +50,14 @@ async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpServi
     let svc = temper_mcp::service::TemperMcpService::new(state);
 
     let req = axum::http::Request::builder()
-        .extension(temper_mcp::middleware::McpClaims {
+        .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
+            email: None,
+            email_verified: None,
+            azp: None,
+            gty: None,
             exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+            iat: 0,
         })
         .body(())
         .expect("build request");

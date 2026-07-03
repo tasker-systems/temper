@@ -62,7 +62,8 @@ export function buildAuth0AsMetadata(cfg: {
     registration_endpoint: `${cfg.base}/oauth/register`,
     scopes_supported: ["openid", "profile", "email", "offline_access"],
     response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code", "refresh_token"],
+    // client_credentials (Stage 4a): lets M2M agent principals mint tokens via Auth0.
+    grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
     code_challenge_methods_supported: ["S256"],
     resource: cfg.mcpAudience,
   };
