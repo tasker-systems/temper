@@ -132,3 +132,55 @@ because omitting it would misconfigure this guide's primary (SAML) path.
 
 `temper admin saml provision` renders the `AS_*` + reconcile block so these are consistent by
 construction — it is the reason the SAML env is emitted, not hand-written.
+
+## The timeline
+
+`temper admin saml provision` is an **inert emitter** — it never touches a running instance. It
+runs early (step 3, before the deploy) *only* because it generates the Ed25519 AS signing key and
+the `INTERNAL_RECONCILE_SECRET` that must already be in the env when the backend deploys. Emitting
+early does not mean applying early: `provision` produces two artifacts that land at different
+points in the timeline. The **env bundle** (`--env-out`) is consumed pre-deploy, at step 4 (Vercel
+env). The **`kb_saml_idp` INSERT** (`--sql-out`) can only be applied post-migrate, at step 6 —
+`kb_saml_idp` is a table created by the migrations run at step 5, so applying it any earlier is
+impossible, not just out of order.
+
+| # | Step | Owner | Detail link |
+| --- | --- | --- | --- |
+| 1 | Provision Neon (PG17, `vector` + `pg_uuidv7`, pooled/unpooled) | manual | [self-hosting.md § Provision Neon](./self-hosting.md#provision-neon) |
+| 2 | Register Okta SAML app; capture cert / SSO URL / entity ids / group attribute statement | manual | [self-hosting-saml.md](./self-hosting-saml.md) + [Okta SAML app note](#okta-saml-app) below |
+| 3 | `temper admin saml provision` → generate keys, `--env-out` bundle, `--sql-out` kb_saml_idp SQL (inert; early for the env keys) | `saml-setup.sh` (emit) | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 4 | Set Vercel env (matrix + emitted bundle) on api + mcp | manual | [Environment matrix](#environment-matrix) |
+| 5 | Deploy backend; `sqlx migrate run` against `DATABASE_URL_UNPOOLED` | manual | [self-hosting.md § Run migrations](./self-hosting.md#run-migrations) |
+| 6 | Apply the `kb_saml_idp` row (`--apply`, or `psql` the `--sql-out` file) | `saml-setup.sh` (apply) | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 7 | First admin signs in via SAML → JIT `kb_profiles` row | manual | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 8 | SQL root step: gating team + first admin; VERIFY `is_system_admin(<uuid>) = true` | `system-bootstrap.sh --run-root` | [org-bootstrap.md § 0](./org-bootstrap.md#0-the-irreducible-sql-root-step-operator-with-db-credentials) |
+| 9 | `temper admin settings` (instance name, gating team, mode) | `system-bootstrap.sh` | [org-bootstrap.md § 1](./org-bootstrap.md#1-instance-settings) |
+| 10 | `temper team create everyone --auto-join-role watcher` | `system-bootstrap.sh` | [org-bootstrap.md § 2](./org-bootstrap.md#2-create-the-everyone-team) |
+| 11 | `temper admin saml map-group` (after teams exist) | `saml-setup.sh` (emit/apply) | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 12 | `temper admin saml verify` | `saml-setup.sh` | [self-hosting-saml.md](./self-hosting-saml.md) |
+| 13 | Telos-charter: `temper cogmap create` → `temper cogmap reconcile` → bind `+everyone` | `system-bootstrap.sh` | [org-bootstrap.md §§ 3–5](./org-bootstrap.md#3-birth-the-org-identity-cognitive-map) |
+| 14 | (optional) UI deploy: confidential OIDC client, `API_BASE_URL`, `SESSION_SECRET` | manual | [self-hosting.md § Deploy the UI (optional)](./self-hosting.md#deploy-the-ui-optional) |
+| 15 | Verify: health, `temper login`, resource round-trip | manual | [self-hosting.md § Verify](./self-hosting.md#verify) |
+| — | → team-self-cognition + Eve steward: **DEFERRED** | — | [vercel-eve.md](./vercel-eve.md) |
+
+**The expected path.** The happy path is: run `temper admin saml provision` (step 3), do the two
+platform steps by hand (4–5, Vercel env + deploy/migrate), then run the two scripts — `saml-setup.sh`
+for steps 6, 11, and 12, and `system-bootstrap.sh --run-root` for steps 8–10 and 13. The numbered
+breakdown above is the reference an operator reads to understand what each script does, or falls
+back to when running by hand. The two scripts are kept separate so `system-bootstrap.sh` (steps
+8–10, 13) works unchanged for Auth0/Okta-OAuth installs, which swap steps 2–3, 6, and 11–12 for the
+Auth0 app registration documented in [self-hosting.md](./self-hosting.md) instead.
+
+### Okta SAML app
+
+> In Okta, create a **SAML 2.0 app** and capture four values off it:
+>
+> - the **SSO URL** → `idp_sso_url` / `--idp-sso-url`
+> - the **signing certificate** (PEM) → `idp_cert_file` / `--idp-cert-file`
+> - the **IdP entity id** → `idp_entity_id` / `--idp-entity-id`
+> - a **group attribute statement** exposing the user's groups → `groups_attr` / `--groups-attr`
+>   (e.g. `groups`)
+>
+> This note covers only what to pull out of Okta's app screen. The generic SAML-IdP side — the SP
+> ACS URL and entity id Temper's AS expects the IdP to send assertions to — is documented in
+> [self-hosting-saml.md](./self-hosting-saml.md), and is the same regardless of which IdP you use.
