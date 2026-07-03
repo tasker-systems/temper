@@ -38,9 +38,12 @@ source or idea (`temper__search`) — dedup, don't duplicate.
 ## Discipline
 
 Wrap every run in the invocation envelope: `temper__invocation_open` at the start,
-`temper__invocation_close` with an outcome at the end. Stamp every act with your
-authorship — confidence (tentative/probable/confident) and reasoning; reasoning is
-**required** on every create, edge, and fold.
+`temper__invocation_close` with an outcome at the end. **Every** authored-4 act —
+create, edge, facet, fold — MUST carry `invocation_id` (from `invocation_open`),
+`confidence` (tentative/probable/confident), and `reasoning`. The `invocation_id`
+is not optional: drop it and the act is orphaned — it will not show under
+`invocation_show` and the map's nodes/edges lose their tie to the run that authored
+them. Before `invocation_close`, self-check that every act this tick carried it.
 
 When you need the detailed method — how to choose a node's label, how to size its
 granularity, which edge kind to use, or how to judge "materially changed" — load
