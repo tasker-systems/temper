@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
-use temper_core::types::graph_territory::TerritoryOverview;
+use temper_core::types::graph_territory::{TerritoryOverview, TerritorySlice};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_service::resolve_context_ref;
@@ -129,4 +129,26 @@ pub async fn territory_overview(
     )
     .await
     .map(Json)
+}
+
+/// GET /api/graph/regions/{region_id}/slice — R3 Tier-1 territory drill-in.
+#[utoipa::path(
+    get,
+    path = "/api/graph/regions/{region_id}/slice",
+    tag = "Graph",
+    params(("region_id" = Uuid, Path, description = "Region id to slice")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Territory slice", body = TerritorySlice),
+        (status = 404, description = "Region not readable by this profile")
+    )
+)]
+pub async fn territory_slice(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(region_id): Path<Uuid>,
+) -> ApiResult<Json<TerritorySlice>> {
+    graph_service::territory_slice(&state.pool, ProfileId::from(auth.0.profile.id), region_id)
+        .await
+        .map(Json)
 }

@@ -15,7 +15,8 @@ use temper_core::types::graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
 };
 use temper_core::types::graph_territory::{
-    Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview,
+    Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
+    TerritorySlice,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
@@ -440,6 +441,64 @@ pub async fn territory_overview(
         territories,
         orphan_nodes,
         bridges,
+    })
+}
+
+/// R3 Tier-1 territory drill-in: a region's components plus its
+/// visibility-scoped interior members. Deny-as-absence — the region must
+/// exist, be unfolded, and be readable by the caller, else `NotFound`.
+pub async fn territory_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    region_id: Uuid,
+) -> ApiResult<TerritorySlice> {
+    let readable: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM kb_cogmap_regions reg \
+         WHERE reg.id = $1 AND NOT reg.is_folded \
+           AND cogmap_readable_by_profile($2, reg.cogmap_id))",
+    )
+    .bind(region_id)
+    .bind(profile_id.as_uuid())
+    .fetch_one(pool)
+    .await?;
+    if !readable {
+        return Err(ApiError::NotFound);
+    }
+
+    let components: Vec<Component> = sqlx::query_as::<_, (Uuid, i32)>(
+        "SELECT component_id, member_count FROM graph_region_components($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(region_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, member_count)| Component { id, member_count })
+    .collect();
+
+    const MEMBER_LIMIT: usize = 100;
+    let members: Vec<RegionMember> =
+        sqlx::query_as::<_, (Uuid, String, Option<String>, Option<f64>)>(
+            "SELECT id, title, doc_type, affinity FROM graph_region_members($1, $2)",
+        )
+        .bind(profile_id.as_uuid())
+        .bind(region_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .take(MEMBER_LIMIT)
+        .map(|(id, title, doc_type, affinity)| RegionMember {
+            id,
+            title,
+            doc_type,
+            affinity,
+        })
+        .collect();
+
+    Ok(TerritorySlice {
+        region_id,
+        components,
+        members,
     })
 }
 

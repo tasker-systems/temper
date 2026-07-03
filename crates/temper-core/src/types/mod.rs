@@ -67,7 +67,10 @@ pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
 pub use graph_atlas::{AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest};
 pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
-pub use graph_territory::{Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview};
+pub use graph_territory::{
+    Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
+    TerritorySlice,
+};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};

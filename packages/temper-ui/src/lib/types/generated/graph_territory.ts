@@ -6,10 +6,20 @@
 export type Bridge = { source_territory: string, target_territory: string, edge_count: number, };
 
 /**
+ * A sub-cluster (component) within a territory.
+ */
+export type Component = { id: string, member_count: number, };
+
+/**
  * A high-degree standalone node surfaced where its cogmap home has no region
  * (sparsity rule). `doc_type` is optional/free-form.
  */
 export type OrphanNode = { id: string, title: string, doc_type: string | null, degree: number, anchor_id: string, };
+
+/**
+ * A member of a region's interior (resolved per-member through resources_visible_to).
+ */
+export type RegionMember = { id: string, title: string, doc_type: string | null, affinity: number | null, };
 
 /**
  * A tinted, sized territory (Tier-0 aggregate). `salience` sizes regions;
@@ -30,3 +40,8 @@ export type TerritoryKind = "region" | "context" | "cogmap";
  * The whole Tier-0 panorama for a team scope.
  */
 export type TerritoryOverview = { territories: Array<Territory>, orphan_nodes: Array<OrphanNode>, bridges: Array<Bridge>, };
+
+/**
+ * R3 territory drill-in: components + top-N members (visibility-scoped).
+ */
+export type TerritorySlice = { region_id: string, components: Array<Component>, members: Array<RegionMember>, };

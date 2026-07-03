@@ -82,6 +82,10 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::graph::territory_overview),
         )
         .route(
+            "/api/graph/regions/{region_id}/slice",
+            get(handlers::graph::territory_slice),
+        )
+        .route(
             "/api/resources/{id}/meta",
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
         )

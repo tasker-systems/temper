@@ -76,3 +76,41 @@ pub struct TerritoryOverview {
     pub orphan_nodes: Vec<OrphanNode>,
     pub bridges: Vec<Bridge>,
 }
+
+/// A member of a region's interior (resolved per-member through resources_visible_to).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct RegionMember {
+    pub id: Uuid,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<f64>,
+}
+
+/// A sub-cluster (component) within a territory.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct Component {
+    pub id: Uuid,
+    pub member_count: i32,
+}
+
+/// R3 territory drill-in: components + top-N members (visibility-scoped).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct TerritorySlice {
+    pub region_id: Uuid,
+    pub components: Vec<Component>,
+    pub members: Vec<RegionMember>,
+}
