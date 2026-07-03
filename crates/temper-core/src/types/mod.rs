@@ -1,5 +1,5 @@
 //! Domain types for temper-cloud — profiles, teams, access control, auth,
-//! sync protocol, manifest, config, vault, upload, search, transfer,
+//! sync protocol, manifest, config, vault, upload, search, reassign,
 //! conflict resolution, device tracking, and events.
 //!
 //! All struct types derive `Debug, Clone, sqlx::FromRow` (database-backed)
@@ -33,13 +33,13 @@ pub mod materialize;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
+pub mod reassign;
 pub mod reconcile;
 pub mod relationship_events;
 pub mod relationship_requests;
 pub mod search;
 pub mod steward;
 pub mod team;
-pub mod transfer;
 pub mod upload;
 pub mod vault;
 pub mod vault_config;
@@ -76,6 +76,7 @@ pub use materialize::{
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
+pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest};
 pub use steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta, StewardAdvanceWatermarkInput,
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,
@@ -84,7 +85,6 @@ pub use team::{
     AddMemberRequest, ChangeRoleRequest, Team, TeamCreateRequest, TeamDetail, TeamMember,
     TeamMemberDetail, TeamMemberRow, TeamMemberSource, TeamRole, TeamRow,
 };
-pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};
 pub use upload::{UploadProcessingStatus, UploadResponse};
 pub use vault::{IngestionSource, ResourceFrontmatter, VaultAddResult};
 pub use vault_config::{DeviceOverrides, Subscription, SubscriptionOverride, VaultConfig};

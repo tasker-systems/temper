@@ -5,8 +5,8 @@ export * from './generated/invitation.ts';
 export * from './generated/profile.ts';
 export * from './generated/resource.ts';
 export * from './generated/search.ts';
+export * from './generated/reassign.ts';
 export * from './generated/team.ts';
-export * from './generated/transfer.ts';
 export * from './generated/serde_json/JsonValue.ts';
 
 import type { Profile } from './generated/profile.ts';
