@@ -7,6 +7,11 @@ import type { JsonValue } from "./serde_json/JsonValue";
 export type AddMemberRequest = { profile_id: string, role: TeamRole, };
 
 /**
+ * Request body for `PATCH /api/teams/{id}/members/{profile_id}`.
+ */
+export type ChangeRoleRequest = { role: TeamRole, };
+
+/**
  * A team — the unit of collaboration in temper.
  *
  * Teams are fully owned by temper, not delegated to the auth provider.
@@ -25,14 +30,33 @@ export type Team = { id: string, name: string, slug: string, description: string
 export type TeamCreateRequest = { slug: string, name: string | null, parent: string | null, auto_join_role: TeamRole | null, };
 
 /**
+ * Full team detail — the team row plus its member roster. Response body for
+ * `GET /api/teams/{id}`.
+ */
+export type TeamDetail = { id: string, slug: string, name: string, created: string, auto_join_role: TeamRole | null, members: Array<TeamMemberDetail>, };
+
+/**
  * A profile's membership in a team with a specific role.
  */
 export type TeamMember = { id: string, team_id: string, profile_id: string, role: TeamRole, joined_at: string, invited_by_profile_id: string | null, };
 
 /**
+ * A team member enriched with the profile handle and provenance — the row
+ * shape returned inside `TeamDetail`.
+ */
+export type TeamMemberDetail = { profile_id: string, handle: string, role: TeamRole, source: TeamMemberSource, };
+
+/**
  * Response row for team membership — matches the real `kb_team_members` columns.
  */
 export type TeamMemberRow = { team_id: string, profile_id: string, role: TeamRole, created: string, };
+
+/**
+ * Provenance of a team membership row. Maps to the `team_member_source`
+ * Postgres enum (added by `20260702000001_saml_group_provisioning.sql`).
+ * `Idp` rows are owned by SAML reconcile and are not user-mutable.
+ */
+export type TeamMemberSource = "native" | "idp";
 
 /**
  * Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.
