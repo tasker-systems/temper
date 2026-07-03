@@ -18,6 +18,10 @@ which loops these same commands from a declarative
 [`install-profile.yaml`](../../schema-artifact/install-profile.yaml). Run it by hand
 to understand it; run the applier to repeat it.
 
+> **Doing a full ground-up enterprise install?** This guide is one phase — the SAML bracket
+> note below covers *this guide's* relationship to SAML setup specifically. For the single
+> end-to-end sequence (deploy → SAML → org → agents) see [enterprise-install.md](./enterprise-install.md).
+
 ## Why a blank install isn't yet a usable org
 
 Resource **writes into** a team context already work end-to-end — a team member can
@@ -210,6 +214,11 @@ It needs `yq` to read the profile and `temper` on PATH (authenticated). Because 
 step is idempotent, re-applying the profile **converges** rather than duplicating —
 pin the org-identity `cogmap_id` in the profile to keep genesis a no-op on re-runs.
 There is no state backend; plan/diff (Terraform-like) semantics are deferred.
+
+The SAML half of an install (provision the IdP, apply `kb_saml_idp`, map groups) is a
+**separate** applier, [`scripts/bootstrap/saml-setup.sh`](../../scripts/bootstrap/saml-setup.sh) —
+kept out of this script so `system-bootstrap.sh` stays auth-agnostic and usable for Auth0/Okta-OAuth
+installs. See the SAML bracket note above and [self-hosting-saml.md](./self-hosting-saml.md#running-it-as-the-applier).
 
 ## Validation gate
 

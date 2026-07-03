@@ -4,6 +4,9 @@ This guide is for operators standing up their own Temper instance — on their o
 
 **Scope:** This runbook covers the API + MCP surfaces, plus an optional [web UI](#deploy-the-ui-optional). The `temper-ui` web application (SvelteKit) deploys as its own Vercel project with its own confidential OIDC client; it is fully config-driven (no per-org fork) and is documented in the UI section below.
 
+> **Doing a full ground-up enterprise install?** This guide is one phase. For the single
+> end-to-end sequence (deploy → SAML → org → agents) see [enterprise-install.md](./enterprise-install.md).
+
 ## Topology
 
 One Vercel project hosts two Rust services from a single deployment:
