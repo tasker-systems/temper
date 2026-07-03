@@ -95,6 +95,12 @@ BEGIN
     SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor
       FROM kb_resource_homes WHERE resource_id = v_resource;
     IF v_anchor IS NULL THEN RAISE EXCEPTION 'resource_reassign: resource % has no home', v_resource; END IF;
+    -- Backstop: only context-homed resources are reassignable. A cogmap interior is
+    -- team-resource-derived, not personally owned (spec non-goal) — refuse at the write
+    -- primitive so the invariant holds even if a future surface bypasses the service.
+    IF v_anchor_tbl <> 'kb_contexts' THEN
+        RAISE EXCEPTION 'resource_reassign: resource % is not context-homed (cogmap interiors are not reassignable)', v_resource;
+    END IF;
     v_ev := _event_append('resource_reassigned', p_emitter, v_anchor_tbl, v_anchor, p_payload,
                           p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_resource_reassigned(v_ev, p_payload);
@@ -347,6 +353,21 @@ mod tests {
         rid
     }
 
+    /// A resource homed in a cogmap (map interior). `anchor_id` needs no real cogmap row —
+    /// `kb_resource_homes.anchor_id` has no FK (the schema's polymorphic-anchor note), and the
+    /// reassign guard only inspects `anchor_table`.
+    async fn mk_cogmap_homed_resource(pool: &PgPool, owner: ProfileId) -> Uuid {
+        let rid: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('node','node') RETURNING id",
+        ).fetch_one(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+               (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_cogmaps', uuid_generate_v7(), $2, $2)",
+        ).bind(rid).bind(*owner).execute(pool).await.unwrap();
+        rid
+    }
+
     async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
         sqlx::query_scalar(
             "INSERT INTO kb_teams (id, slug, name) VALUES (gen_random_uuid(), $1, $1) RETURNING id",
@@ -424,6 +445,18 @@ mod tests {
         let r = mk_homed_resource(&pool, ctx, alice).await;
         let err = reassign_resource(&pool, mallory, r, *bob).await.unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_reassign_cogmap_homed_resource_even_as_owner(pool: PgPool) {
+        // The owner-path hole: alice owns a cogmap-homed node, but map interiors are not
+        // reassignable. Must be rejected BEFORE the owner-path auth would allow it.
+        let alice = mk_profile(&pool, "alice").await;
+        let bob = mk_profile(&pool, "bob").await;
+        let r = mk_cogmap_homed_resource(&pool, alice).await;
+        let err = reassign_resource(&pool, alice, r, *bob).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+        assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -539,6 +572,17 @@ pub async fn reassign_resource(
     to_profile_id: Uuid,
 ) -> ApiResult<()> {
     let home = home_of(pool, resource_id).await?;
+
+    // Only context-homed resources are reassignable. A cogmap-homed resource is a map
+    // interior (team-resource-derived, not personally owned) — the owner path would
+    // otherwise let its owner flip it, so guard here for BOTH paths. The admin path's
+    // reach query already excludes non-context homes structurally; this is the owner-path
+    // closure + a single clear 400 regardless of caller.
+    if home.anchor_table != "kb_contexts" {
+        return Err(ApiError::BadRequest(
+            "cannot reassign a cogmap-homed resource; map interiors are not personally owned".to_string(),
+        ));
+    }
 
     // Idempotent no-op — but still authorize, so an unauthorized caller can't probe.
     let authorized = home.owner == *caller
@@ -1268,4 +1312,4 @@ Confirm: no `ResourceTransfer`/`TransferRequest`/`TransferStatus` references rem
 
 ## Self-Review Notes (spec → task coverage)
 
-- Event-sourced owner change → Task 1. Owner + constrained-admin auth → Task 2. Bulk offboarding scope → Task 3. Dead-type retirement (types only; table→#6) → Task 4. API surface (gated) → Task 5. Client → Task 6. CLI (UUID recipients) → Task 7. E2E visibility assertion → Task 8. Cogmap-homed exclusion is enforced structurally: every auth + scope query joins `anchor_table='kb_contexts'`, so cogmap-homed resources never match.
+- Event-sourced owner change → Task 1. Owner + constrained-admin auth → Task 2. Bulk offboarding scope → Task 3. Dead-type retirement (types only; table→#6) → Task 4. API surface (gated) → Task 5. Client → Task 6. CLI (UUID recipients) → Task 7. E2E visibility assertion → Task 8. Cogmap-homed exclusion: the **admin path** and **bulk scope** exclude it structurally (their queries join `anchor_table='kb_contexts'`), but the **owner path** and the raw write primitive do not — so it is closed explicitly by (a) a service guard in `reassign_resource` (rejects non-`kb_contexts` homes with `BadRequest`, covering the owner path) and (b) a `RAISE EXCEPTION` backstop in the `resource_reassign` SQL fn. Test: `cannot_reassign_cogmap_homed_resource_even_as_owner` (Task 2).

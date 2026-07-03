@@ -40,7 +40,11 @@ resource's owner:
 - **Cogmap-homed resources.** Reassignment touches **context-homed** resources only. A
   resource homed in a cogmap is a map interior, governed by join/telos, not by personal
   ownership. This is the team↔cogmap boundary: reassignment never re-owns a cogmap's
-  interior.
+  interior. **Enforcement:** the admin path + bulk scope exclude it structurally (their
+  queries require an `anchor_table='kb_contexts'` join); the owner path and the write
+  primitive do not, so it is closed explicitly — a `reassign_service` guard rejects any
+  non-`kb_contexts` home with `BadRequest`, and the `resource_reassign` SQL fn `RAISE`s as
+  a backstop for any future caller of the writes layer.
 
 ## Core primitive: in-place, event-sourced owner change
 
