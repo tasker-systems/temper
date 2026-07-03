@@ -9,8 +9,10 @@ use super::team::TeamRole;
 /// Maps directly to the `invitation_status` Postgres enum.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, serde::Serialize, serde::Deserialize)]
 #[sqlx(type_name = "invitation_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum InvitationStatus {
     Pending,
     Accepted,
@@ -32,7 +34,8 @@ pub enum InvitationStatus {
 /// - Acceptance is idempotent
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
-#[derive(Debug, Clone, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, FromRow, serde::Serialize, serde::Deserialize)]
 pub struct TeamInvitation {
     pub id: Uuid,
     pub team_id: Uuid,
@@ -51,6 +54,7 @@ pub struct TeamInvitation {
 /// not invited).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CreateInvitationRequest {
     pub invited_email: String,
@@ -61,6 +65,7 @@ pub struct CreateInvitationRequest {
 /// just joined and at what role.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AcceptInvitationResponse {
     pub team_id: Uuid,
