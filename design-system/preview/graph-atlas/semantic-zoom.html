@@ -1,0 +1,110 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Graph Atlas — Semantic Zoom (three tiers of detail)</title>
+<link rel="stylesheet" href="../_shared.css">
+<style>
+  body { padding: 26px 28px; }
+  h2 { font-family: var(--serif); font-weight: 600; font-size: 22px; margin: 0 0 6px; color: var(--parchment); }
+  .subtitle { font-family: var(--serif); font-size: 14px; color: var(--chalk); margin: 0 0 20px; line-height: 1.5; }
+  .subtitle b, .subtitle i { color: var(--parchment); }
+  .z-wrap { max-width: 1040px; margin: 0 auto; }
+  .z-row { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin: 8px 0 20px; }
+  .z-panel { border:1px solid rgba(128,128,128,.28); border-radius:12px; overflow:hidden; background:#1b1e26; }
+  .z-panel .cap { font:600 11px/1 "JetBrains Mono",monospace; letter-spacing:.05em; padding:10px 12px; color:#c9ced9; border-bottom:1px solid #2c3140; display:flex; justify-content:space-between;}
+  .z-panel .cap .z { color:#7d8496; font-weight:400; }
+  svg { display:block; width:100%; height:auto; }
+  .z-note { font:12px/1.5 "JetBrains Mono",monospace; opacity:.8; }
+  .z-note b { color:#e8b673; }
+</style>
+
+<div class="z-wrap">
+  <h2>Semantic zoom — one canvas, three tiers of detail</h2>
+  <p class="subtitle">Same team scope, zoomed in step by step. Detail is revealed procedurally beneath aggregates; nothing renders the full 100k graph. Sparsity-aware: where no region has materialized, you see salient nodes directly instead of a blank.</p>
+
+  <div class="z-row">
+    <!-- TIER 0 : PANORAMA -->
+    <div class="z-panel">
+      <div class="cap"><span>0 · TEAM PANORAMA</span><span class="z">zoom &lt; 0.4</span></div>
+      <svg viewBox="0 0 340 300">
+        <rect width="340" height="300" fill="#1b1e26"/>
+        <!-- team-DAG zones (enterable) -->
+        <rect x="18" y="30" width="150" height="120" rx="10" fill="#6fa8c7" fill-opacity="0.07" stroke="#6fa8c7" stroke-opacity="0.5" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="28" y="48" fill="#9fc4d6" font-size="9" font-weight="600" font-family="ui-sans-serif">▸ squad-a  ⏎ enter</text>
+        <text x="28" y="60" fill="#5f7686" font-size="8" font-family="ui-sans-serif">142 nodes · 3 maps</text>
+        <ellipse cx="70" cy="100" rx="30" ry="22" fill="#e8b673" fill-opacity="0.13" stroke="#e8b673" stroke-opacity="0.4" stroke-dasharray="4 3"/>
+        <ellipse cx="128" cy="112" rx="22" ry="18" fill="#e8b673" fill-opacity="0.10" stroke="#e8b673" stroke-opacity="0.3" stroke-dasharray="4 3"/>
+
+        <rect x="182" y="30" width="140" height="90" rx="10" fill="#6fa8c7" fill-opacity="0.07" stroke="#6fa8c7" stroke-opacity="0.5" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="192" y="48" fill="#9fc4d6" font-size="9" font-weight="600" font-family="ui-sans-serif">▸ squad-b  ⏎ enter</text>
+        <text x="192" y="60" fill="#5f7686" font-size="8" font-family="ui-sans-serif">67 nodes</text>
+        <ellipse cx="250" cy="90" rx="26" ry="18" fill="#e8b673" fill-opacity="0.10" stroke="#e8b673" stroke-opacity="0.3" stroke-dasharray="4 3"/>
+
+        <!-- this scope's own territories -->
+        <ellipse cx="90" cy="215" rx="52" ry="34" fill="#e8b673" fill-opacity="0.13" stroke="#e8b673" stroke-opacity="0.45" stroke-dasharray="5 4"/>
+        <text x="90" y="217" text-anchor="middle" fill="#e8b673" font-size="9" font-weight="600" letter-spacing="1">STEWARD ARCH</text>
+        <text x="90" y="230" text-anchor="middle" fill="#a98a52" font-size="7">region · 142</text>
+
+        <!-- sparse context: no region, salient nodes shown directly -->
+        <rect x="170" y="150" width="152" height="120" rx="10" fill="#6fa8c7" fill-opacity="0.05" stroke="#6fa8c7" stroke-opacity="0.35" stroke-width="1"/>
+        <text x="180" y="168" fill="#7fa6b8" font-size="8" font-family="ui-sans-serif">tasker ctx · no map yet</text>
+        <circle cx="205" cy="200" r="4" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2"/><text x="214" y="203" fill="#9fb6c2" font-size="8" font-family="ui-sans-serif">retry policy</text>
+        <circle cx="215" cy="235" r="3.5" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2"/><text x="224" y="238" fill="#9fb6c2" font-size="8" font-family="ui-sans-serif">step handler</text>
+        <text x="180" y="258" fill="#556" font-size="7.5" font-style="italic" font-family="ui-sans-serif">salient nodes (sparsity fallback)</text>
+      </svg>
+    </div>
+
+    <!-- TIER 1 : TERRITORY -->
+    <div class="z-panel">
+      <div class="cap"><span>1 · TERRITORY</span><span class="z">0.4 – 1.2</span></div>
+      <svg viewBox="0 0 340 300">
+        <rect width="340" height="300" fill="#1b1e26"/>
+        <path d="M30,50 Q300,30 305,150 Q300,270 170,265 Q40,250 35,150 Z" fill="#e8b673" fill-opacity="0.07" stroke="#e8b673" stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="170" y="42" text-anchor="middle" fill="#e8b673" font-size="10" font-weight="600" letter-spacing="2">STEWARD ARCHITECTURE</text>
+        <!-- sub-clusters resolve -->
+        <ellipse cx="110" cy="130" rx="48" ry="38" fill="#e8b673" fill-opacity="0.08" stroke="#e8b673" stroke-opacity="0.3" stroke-dasharray="4 3"/>
+        <ellipse cx="230" cy="180" rx="44" ry="36" fill="#e8b673" fill-opacity="0.08" stroke="#e8b673" stroke-opacity="0.3" stroke-dasharray="4 3"/>
+        <!-- high-salience nodes named, faint edges -->
+        <g stroke="#8b93a5" stroke-width="1" opacity="0.6">
+          <line x1="110" y1="120" x2="95" y2="150"/><line x1="110" y1="120" x2="230" y2="170"/>
+          <line x1="230" y1="170" x2="245" y2="200"/>
+        </g>
+        <g font-family="ui-sans-serif" font-size="9">
+          <circle cx="110" cy="120" r="6" fill="#e8b673"/><text x="120" y="123" fill="#e9d9bd">steward arch</text>
+          <circle cx="95" cy="150" r="4" fill="#e8b673"/><text x="103" y="153" fill="#c9b98d" font-size="8">act envelope</text>
+          <circle cx="230" cy="170" r="5" fill="#e8b673"/><text x="239" y="173" fill="#e9d9bd">threading</text>
+          <circle cx="245" cy="200" r="4" fill="#b98bd6"/><text x="253" y="203" fill="#dcc6ea" font-size="8">why invariant?</text>
+        </g>
+        <text x="170" y="285" text-anchor="middle" fill="#667" font-size="8" font-style="italic" font-family="ui-sans-serif">clusters + salient nodes · edges thin</text>
+      </svg>
+    </div>
+
+    <!-- TIER 2 : NEIGHBORHOOD -->
+    <div class="z-panel">
+      <div class="cap"><span>2 · NEIGHBORHOOD</span><span class="z">&gt; 1.2</span></div>
+      <svg viewBox="0 0 340 300">
+        <rect width="340" height="300" fill="#1b1e26"/>
+        <path d="M40,60 Q290,40 295,160 Q285,255 160,255 Q50,245 45,150 Z" fill="#e8b673" fill-opacity="0.06" stroke="#e8b673" stroke-opacity="0.35" stroke-dasharray="6 4"/>
+        <g stroke-linecap="round" fill="none">
+          <line x1="130" y1="120" x2="90" y2="170" stroke="#e8b673" stroke-width="3" opacity="0.85"/>
+          <line x1="130" y1="120" x2="200" y2="100" stroke="#8b93a5" stroke-width="1"/>
+          <line x1="200" y1="100" x2="240" y2="160" stroke="#8b93a5" stroke-width="1.2"/>
+          <line x1="130" y1="120" x2="80" y2="215" stroke="#5f6b86" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#az)"/>
+          <line x1="240" y1="160" x2="210" y2="215" stroke="#d98a8a" stroke-width="1.5"/>
+        </g>
+        <defs><marker id="az" markerWidth="7" markerHeight="7" refX="5" refY="2.5" orient="auto"><path d="M0,0 L5,2.5 L0,5 Z" fill="#5f6b86"/></marker></defs>
+        <g font-family="ui-sans-serif" font-size="9">
+          <circle cx="130" cy="120" r="8" fill="#e8b673"/><rect x="141" y="111" width="96" height="17" rx="8" fill="#3a3324"/><text x="149" y="123" fill="#f4e3c8" font-weight="600" font-size="9">steward arch</text>
+          <circle cx="90" cy="170" r="5" fill="#e8b673"/><rect x="99" y="162" width="82" height="15" rx="7" fill="#2b2a26"/><text x="106" y="173" fill="#e9d9bd" font-size="8">authorship thread</text>
+          <circle cx="200" cy="100" r="5" fill="#e8b673"/><rect x="209" y="92" width="66" height="15" rx="7" fill="#2b2a26"/><text x="216" y="103" fill="#e9d9bd" font-size="8">act envelope</text>
+          <circle cx="240" cy="160" r="5" fill="#e8b673"/><rect x="249" y="152" width="70" height="15" rx="7" fill="#2b2a26"/><text x="256" y="163" fill="#e9d9bd" font-size="8">confidence band</text>
+          <circle cx="80" cy="215" r="5" fill="#1b1e26" stroke="#6fa8c7" stroke-width="2.5"/><rect x="90" y="207" width="86" height="15" rx="7" fill="#232733"/><text x="97" y="218" fill="#c7d4dd" font-size="8">T3 spec ⟵derived</text>
+          <circle cx="210" cy="215" r="4.5" fill="#b98bd6"/><rect x="219" y="208" width="86" height="14" rx="7" fill="#2c2635"/><text x="226" y="218" fill="#dcc6ea" font-size="8">why invariant?</text>
+        </g>
+        <text x="170" y="288" text-anchor="middle" fill="#667" font-size="8" font-style="italic" font-family="ui-sans-serif">full nodes + edges · force-directed · click → trail rail</text>
+      </svg>
+    </div>
+  </div>
+
+  <p class="z-note">Left→right = zooming in. <b>Tier 0</b> draws only aggregates: team-DAG <b>zones</b> (enterable, membership-gated), region <b>territories</b>, and — where a context/cogmap has no materialized region — its <b>salient nodes directly</b> (never blank). <b>Tier 1</b> resolves a territory into sub-clusters + named salient nodes with thin edges. <b>Tier 2</b> is the real force-directed neighborhood: full chips, full edge encoding, region hull overlay, per-element trail on click. Each tier is a different <b>read</b> — cheap aggregate → territory slice → viewport neighborhood — so payload stays bounded no matter the org size.</p>
+</div>
+
+</body></html>

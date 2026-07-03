@@ -5,6 +5,7 @@
 **Task:** Rethink temper-ui graph visualization (`019f25fc-b786-7771-82ff-ee8df0e005a8`)
 **Goal:** _pending — created after spec review_
 **Mode / effort:** plan / large (this deliverable is the design + roadmap, not code)
+**Visual targets:** [`design-system/preview/graph-atlas/`](../../../design-system/preview/graph-atlas/) — `visual-direction.html` (Atlas ✓ vs Constellation) and `semantic-zoom.html` (the three tiers). Open in a browser; these are the reference mockups this spec aims at.
 
 ## Context
 
@@ -260,4 +261,5 @@ the UI.
   needs it implies.
 - ✅ Concrete enough that build tasks fall out (Chunks A–D, five reads, wire-type list).
 - ✅ At least one visual direction explored — two, in fact (Atlas chosen over Constellation),
-  plus a semantic-zoom triptych, captured during the brainstorm.
+  plus a semantic-zoom triptych, captured as committed reference mockups under
+  [`design-system/preview/graph-atlas/`](../../../design-system/preview/graph-atlas/).
