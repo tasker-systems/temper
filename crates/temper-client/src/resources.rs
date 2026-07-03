@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
+use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_workflow::types::graph::GraphEdgeRow;
 use temper_workflow::types::managed_meta::{
     MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
@@ -94,6 +96,29 @@ impl<'a> ResourceClient<'a> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}");
         let req = self.http.delete(&path).query(act);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/resources/{id}/grants — mint/update a capability grant on the resource
+    /// (system-admin, a can_grant holder, OR the resource owner). `granted: false` ⇒ an
+    /// existing grant was updated in place.
+    pub async fn grant(&self, id: Uuid, body: &ResourceGrantBody) -> Result<GrantOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/grants");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/resources/{id}/grants — revoke a capability grant (no-op safe).
+    /// `revoked: false` ⇒ no matching grant existed.
+    pub async fn revoke(&self, id: Uuid, body: &ResourceRevokeBody) -> Result<RevokeOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/grants");
+        let req = self.http.delete(&path).json(body);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
             .await
