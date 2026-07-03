@@ -44,36 +44,43 @@ run() {
 prof() { yq -r "$1 // \"\"" "$PROFILE"; }
 
 # ── Profile values ───────────────────────────────────────────────────────────────────────────────
-# Read now; consumed as Tasks B3 (provision), B4 (apply), and B5 (map-group/verify) fill in the step
-# bodies below. shellcheck can't see that forward reference, so SC2034 is disabled per-line until
-# each var gains a real use.
 IDP_KEY="$(prof '.idp.key')";           [ -n "$IDP_KEY" ] || die "profile missing .idp.key"
 INSTANCE_URL="$(prof '.idp.instance_url')"; [ -n "$INSTANCE_URL" ] || die "profile missing .idp.instance_url"
-# shellcheck disable=SC2034
 API_ORIGIN="$(prof '.idp.api_origin')"
-# shellcheck disable=SC2034
 CERT_FILE="$(prof '.idp.cert_file')"
-# shellcheck disable=SC2034
 SSO_URL="$(prof '.idp.sso_url')"
-# shellcheck disable=SC2034
 ENTITY_ID="$(prof '.idp.entity_id')"
-# shellcheck disable=SC2034
 NAMEID="$(prof '.idp.nameid_format')"
-# shellcheck disable=SC2034
 EMAIL_ATTR="$(prof '.idp.email_attr')"
-# shellcheck disable=SC2034
 STABLE_ID_ATTR="$(prof '.idp.stable_id_attr')"
-# shellcheck disable=SC2034
 GROUPS_ATTR="$(prof '.idp.groups_attr')"
-# shellcheck disable=SC2034
 KID="$(prof '.idp.kid')"
-# shellcheck disable=SC2034
 ENV_OUT="$(prof '.env_out')"
-# shellcheck disable=SC2034
 SQL_OUT="$(prof '.sql_out')"
 
 # ── Step 3 — provision (emit env + hold kb_saml_idp SQL) ───────────────────────────────────────────
-info "Step 3 — provision (emit env bundle + kb_saml_idp SQL)  [TODO: Task B3]"
+info "Step 3 — provision (emit env bundle → ${ENV_OUT}, kb_saml_idp SQL → ${SQL_OUT})"
+prov_args=(admin saml provision --no-interactive
+  --instance-url "$INSTANCE_URL"
+  --idp-key "$IDP_KEY"
+  --idp-cert-file "$CERT_FILE"
+  --idp-sso-url "$SSO_URL"
+  --idp-entity-id "$ENTITY_ID"
+  --nameid-format "$NAMEID"
+  --email-attr "$EMAIL_ATTR"
+  --stable-id-attr "$STABLE_ID_ATTR"
+  --env-out "$ENV_OUT"
+  --sql-out "$SQL_OUT")
+[ -n "$API_ORIGIN" ]   && prov_args+=(--api-origin "$API_ORIGIN")
+[ -n "$GROUPS_ATTR" ]  && prov_args+=(--groups-attr "$GROUPS_ATTR")
+[ -n "$KID" ]          && prov_args+=(--kid "$KID")
+# Repeatable client allowlist:
+client_count="$(yq -r '.clients | length' "$PROFILE")"
+i=0; while [ "$i" -lt "$client_count" ]; do
+  prov_args+=(--client "$(yq -r ".clients[$i]" "$PROFILE")"); i=$((i + 1))
+done
+run temper "${prov_args[@]}"
+info "  env bundle + idp SQL emitted — set the env on api+mcp (timeline step 4) before deploy."
 
 # ── Step 6 — apply the kb_saml_idp row (needs --apply-db) ──────────────────────────────────────────
 if [ "$APPLY_DB" -eq 1 ]; then
