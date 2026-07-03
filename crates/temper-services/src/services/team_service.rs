@@ -399,7 +399,7 @@ pub async fn change_role(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-db"))]
 mod lifecycle_tests {
     use super::*;
     use sqlx::PgPool;
