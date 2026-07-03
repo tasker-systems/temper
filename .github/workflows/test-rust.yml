@@ -207,10 +207,16 @@ jobs:
 
       - name: Run ingest pipeline tests
         # temper-api links ort unconditionally via temper-substrate →
-        # temper-ingest(embed), so the test-db tier already exercises the
-        # server-side embed path — no extra api feature needed.
+        # temper-ingest(embed), so its embed-exercising tests run here (ONNX +
+        # Postgres present). `test-embed` is REQUIRED, not optional: the
+        # server-embed fallback test in resource_chunks_packed_test.rs is
+        # `#[cfg(feature = "test-embed")]`, so a test-db-only run compiles it
+        # OUT and never exercises the `chunks_packed: None` → server-embed path
+        # that every MCP create relies on. This is the only CI job that runs
+        # temper-api test-embed tests, so gating it here is what keeps that path
+        # (and any future temper-api test-embed test) from rotting silently.
         run: |
-          cargo nextest run -p temper-api --features "test-db" --locked --test-threads 1 --no-fail-fast
+          cargo nextest run -p temper-api --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast
           cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1 --no-fail-fast
 
       - name: Run CLI-side embed pipeline tests
