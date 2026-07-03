@@ -2,11 +2,25 @@
 import type { TeamRole } from "./team";
 
 /**
+ * Response from `POST /api/invitations/{token}/accept` — the team the caller
+ * just joined and at what role.
+ */
+export type AcceptInvitationResponse = { team_id: string, team_slug: string, role: TeamRole, };
+
+/**
+ * Request body for `POST /api/teams/{id}/invite`.
+ *
+ * `role` cannot be `Owner` — the service rejects it (ownership is transferred,
+ * not invited).
+ */
+export type CreateInvitationRequest = { invited_email: string, role: TeamRole, };
+
+/**
  * Invitation status — lifecycle of a team invitation.
  *
  * Maps directly to the `invitation_status` Postgres enum.
  */
-export type InvitationStatus = "Pending" | "Accepted" | "Declined" | "Expired";
+export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
 
 /**
  * A pending or resolved invitation to join a team.

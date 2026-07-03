@@ -5,6 +5,9 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use temper_core::types::invitation::{
+    AcceptInvitationResponse, CreateInvitationRequest, TeamInvitation,
+};
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
     TeamUpdateRequest,
@@ -118,6 +121,53 @@ impl<'a> TeamsClient<'a> {
         let req = self.http.delete(&path);
         self.http
             .send(&Method::DELETE, &path, req, Some(&token))
+            .await?;
+        Ok(())
+    }
+
+    /// POST /api/teams/{id}/invite — create a pending invitation.
+    pub async fn invite(
+        &self,
+        team_id: Uuid,
+        body: &CreateInvitationRequest,
+    ) -> Result<TeamInvitation> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}/invite");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/teams/{id}/invitations — list pending invitations.
+    pub async fn list_invitations(&self, team_id: Uuid) -> Result<Vec<TeamInvitation>> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}/invitations");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/invitations/{token}/accept — redeem an invitation token.
+    pub async fn accept_invitation(&self, invite_token: &str) -> Result<AcceptInvitationResponse> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/invitations/{invite_token}/accept");
+        let req = self.http.post(&path);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/invitations/{token}/decline — decline an invitation token.
+    ///
+    /// Returns `()` on a 204; `send` errors on any non-2xx.
+    pub async fn decline_invitation(&self, invite_token: &str) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/invitations/{invite_token}/decline");
+        let req = self.http.post(&path);
+        self.http
+            .send(&Method::POST, &path, req, Some(&token))
             .await?;
         Ok(())
     }

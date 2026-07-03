@@ -75,7 +75,9 @@ pub use graph_territory::{
 };
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
-pub use invitation::{InvitationStatus, TeamInvitation};
+pub use invitation::{
+    AcceptInvitationResponse, CreateInvitationRequest, InvitationStatus, TeamInvitation,
+};
 pub use materialize::{
     MaterializeAck, MaterializeDelta, MaterializeDeltaInput, MaterializeRequest,
     MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,

@@ -1,15 +1,23 @@
-//! `temper auth` subcommands: login, logout, status, token.
+//! `temper auth` subcommands: login, logout, status, token, plus the system
+//! access gate (request-access / withdraw-request).
 //!
 //! All subcommands accept `--format json | toon` (auto-detected from TTY
 //! when omitted). `login`, `logout`, and `token` are inherently disk-mode
 //! operations — they persist credentials to `~/.config/temper/auth.json`.
 //! Cloud sessions receive tokens via `TEMPER_TOKEN` and don't invoke these.
+//!
+//! The system access gate lives here (not under `temper team`) because it is an
+//! entitlement concern — "am I let into the system at all?" — not a
+//! collaboration one. The gating *team* is only its implementation substrate.
 
-use temper_client::auth::{DiskTokenStore, TokenStore};
+use temper_client::auth::{AuthStatus, DiskTokenStore, TokenStore};
+use temper_client::TemperClient;
+use temper_core::types::access_gate::{AccessMode, JoinRequestStatus};
 
 use crate::actions::runtime;
 use crate::error::Result;
 use crate::format::OutputFormat;
+use crate::output;
 
 /// Confirmation struct emitted by action commands (login, logout).
 ///
@@ -203,14 +211,162 @@ fn print_export_warning() {
 }
 
 /// Print the current auth status.
+/// System-access summary folded into `auth status`.
+#[derive(Debug, serde::Serialize)]
+struct SystemAccessReport {
+    /// `granted` | `pending` | `none` | `unknown`.
+    state: &'static str,
+    /// Human context (e.g. "open access", "requested 2026-07-01"), when useful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+/// Combined `auth status` payload: the local auth state plus, when
+/// authenticated, the system-access entitlement. `AuthStatus` is flattened so
+/// the top-level shape (`authenticated`, `provider`, …) is preserved and
+/// `system_access` is simply added.
+#[derive(Debug, serde::Serialize)]
+struct AuthStatusReport {
+    #[serde(flatten)]
+    auth: AuthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_access: Option<SystemAccessReport>,
+}
+
+/// Resolve the caller's system-access state. Non-fatal: any server error
+/// degrades to `unknown` so `auth status` still reports the local auth state
+/// offline.
+async fn resolve_system_access(client: &TemperClient) -> SystemAccessReport {
+    let settings = match client.access().get_settings().await {
+        Ok(s) => s,
+        Err(_) => {
+            return SystemAccessReport {
+                state: "unknown",
+                detail: Some("could not reach server".to_string()),
+            };
+        }
+    };
+
+    // Open mode grants everyone system access; no request needed.
+    if matches!(
+        AccessMode::from_db_str(&settings.access_mode),
+        Some(AccessMode::Open)
+    ) {
+        return SystemAccessReport {
+            state: "granted",
+            detail: Some("open access".to_string()),
+        };
+    }
+
+    // invite_only (or unrecognized): the join request carries the state.
+    match client.access().get_own_request().await {
+        Ok(Some(req)) => match req.status {
+            JoinRequestStatus::Approved => SystemAccessReport {
+                state: "granted",
+                detail: None,
+            },
+            JoinRequestStatus::Pending => SystemAccessReport {
+                state: "pending",
+                detail: Some(format!("requested {}", req.created.format("%Y-%m-%d"))),
+            },
+            JoinRequestStatus::Rejected | JoinRequestStatus::Withdrawn => SystemAccessReport {
+                state: "none",
+                detail: None,
+            },
+        },
+        Ok(None) => SystemAccessReport {
+            state: "none",
+            detail: None,
+        },
+        Err(_) => SystemAccessReport {
+            state: "unknown",
+            detail: Some("could not reach server".to_string()),
+        },
+    }
+}
+
 pub fn status(fmt: OutputFormat) -> Result<()> {
     runtime::with_client(move |client| {
         Box::pin(async move {
-            let status = client
+            let auth = client
                 .auth_status()
                 .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            let rendered = crate::format::render(&status, fmt)?;
+            // System access requires the server; only consult it when logged in.
+            let system_access = if auth.authenticated {
+                Some(resolve_system_access(client).await)
+            } else {
+                None
+            };
+            let report = AuthStatusReport {
+                auth,
+                system_access,
+            };
+            let rendered = crate::format::render(&report, fmt)?;
             println!("{rendered}");
+            Ok(())
+        })
+    })
+}
+
+/// Request system access (the invite_only gate). Reviewed by an admin.
+pub fn request_access(message: Option<&str>) -> Result<()> {
+    let message = message.map(|s| s.to_string());
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            match client
+                .access()
+                .create_request(message.as_deref(), "cli", None)
+                .await
+            {
+                Ok(result) => {
+                    output::success("Access request submitted.");
+                    output::plain("  You'll gain access once an admin approves your request.");
+                    output::hint("  Run `temper auth status` to check.");
+                    output::blank();
+                    output::dim(format!("  Request ID: {}", result.id));
+                }
+                Err(temper_client::error::ClientError::Conflict { .. }) => {
+                    output::warning("You already have a pending request.");
+                    output::hint("  Run `temper auth status` to check its status.");
+                }
+                Err(e) => return Err(crate::commands::client_err(e)),
+            }
+            Ok(())
+        })
+    })
+}
+
+/// Withdraw a pending system-access request.
+pub fn withdraw_request() -> Result<()> {
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            let request = client
+                .access()
+                .get_own_request()
+                .await
+                .map_err(crate::commands::client_err)?;
+
+            match request {
+                None => {
+                    output::plain("Nothing to withdraw — you don't have a pending request.");
+                }
+                Some(req) => match req.status {
+                    JoinRequestStatus::Pending => {
+                        client
+                            .access()
+                            .withdraw_request()
+                            .await
+                            .map_err(crate::commands::client_err)?;
+                        output::success("Request withdrawn.");
+                    }
+                    JoinRequestStatus::Approved => {
+                        output::plain("You already have system access.");
+                    }
+                    _ => {
+                        output::plain("Nothing to withdraw — no active request.");
+                    }
+                },
+            }
             Ok(())
         })
     })

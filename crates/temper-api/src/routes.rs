@@ -36,6 +36,14 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::access::get_own_request).delete(handlers::access::withdraw_request),
         )
         .route("/api/access/settings", get(handlers::access::get_settings))
+        .route(
+            "/api/invitations/{token}/accept",
+            post(handlers::invitations::accept),
+        )
+        .route(
+            "/api/invitations/{token}/decline",
+            post(handlers::invitations::decline),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -107,6 +115,14 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::teams::list).post(handlers::teams::create),
         )
         .route("/api/teams/{id}/members", post(handlers::teams::add_member))
+        .route(
+            "/api/teams/{id}/invite",
+            post(handlers::invitations::create),
+        )
+        .route(
+            "/api/teams/{id}/invitations",
+            get(handlers::invitations::list),
+        )
         .route(
             "/api/teams/{id}",
             get(handlers::teams::detail)

@@ -59,6 +59,10 @@ use temper_workflow::types::resource::{
         crate::handlers::invocations::list,
         crate::handlers::steward::delta,
         crate::handlers::steward::advance,
+        crate::handlers::invitations::create,
+        crate::handlers::invitations::list,
+        crate::handlers::invitations::accept,
+        crate::handlers::invitations::decline,
     ),
     components(schemas(
         HealthResponse,
@@ -134,6 +138,10 @@ use temper_workflow::types::resource::{
         temper_core::types::steward::IngestDelta,
         temper_core::types::steward::AdvanceWatermarkRequest,
         temper_core::types::steward::AdvanceWatermarkAck,
+        temper_core::types::invitation::TeamInvitation,
+        temper_core::types::invitation::InvitationStatus,
+        temper_core::types::invitation::CreateInvitationRequest,
+        temper_core::types::invitation::AcceptInvitationResponse,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -148,6 +156,7 @@ use temper_workflow::types::resource::{
         (name = "Facets", description = "Typed facet property writes (facet_set)"),
         (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
         (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
+        (name = "Invitations", description = "Team invitations (invite/list/accept/decline)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
     ),
     info(
@@ -209,6 +218,10 @@ mod tests {
         assert!(json.contains("/api/invocations"));
         assert!(json.contains("/api/invocations/{id}"));
         assert!(json.contains("/api/invocations/{id}/close"));
+        assert!(json.contains("/api/teams/{id}/invite"));
+        assert!(json.contains("/api/teams/{id}/invitations"));
+        assert!(json.contains("/api/invitations/{token}/accept"));
+        assert!(json.contains("/api/invitations/{token}/decline"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));

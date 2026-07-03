@@ -563,27 +563,43 @@ pub enum AuthAction {
     /// stderr. Pipe into a cloud session's secret manager as `TEMPER_TOKEN`.
     /// Token is ~24h lifetime with no early-revoke — re-export to renew.
     ExportToken,
+    /// Request system access (the invite_only gate). Reviewed by an admin.
+    RequestAccess {
+        /// Message for the admin reviewing your request.
+        #[arg(long)]
+        message: Option<String>,
+    },
+    /// Withdraw your pending system-access request.
+    WithdrawRequest,
 }
 
 #[derive(Subcommand)]
 pub enum TeamAction {
-    /// Request to join a team (defaults to system access)
+    /// Accept a team invitation by its token.
     Join {
-        /// Team slug (default: system gating team)
-        #[arg(long)]
-        team: Option<String>,
-        /// Message for the admin reviewing your request
-        #[arg(long)]
-        message: Option<String>,
+        /// Invitation token (from `temper team invite`).
+        token: String,
     },
-    /// Check your request or membership status
-    Status {
-        /// Team slug (default: system gating team)
+    /// Invite an email to a team (owner/maintainer).
+    Invite {
+        /// Team slug (optionally `+`-prefixed) or UUID.
+        team: String,
+        /// Email address to invite.
+        email: String,
+        /// Role to grant on acceptance: maintainer | member | watcher.
         #[arg(long)]
-        team: Option<String>,
+        role: String,
     },
-    /// Withdraw your pending join request.
-    WithdrawRequest,
+    /// Decline a team invitation by its token.
+    Decline {
+        /// Invitation token.
+        token: String,
+    },
+    /// List pending invitations for a team (owner/maintainer).
+    Invitations {
+        /// Team slug (optionally `+`-prefixed) or UUID.
+        team: String,
+    },
     /// Show a team's detail and member roster
     Show {
         /// Team slug (optionally `+`-prefixed) or UUID
