@@ -8,7 +8,7 @@
 //! `app.reqwest_client`. The MCP surface is driven by constructing a
 //! `TemperMcpService` over the same test pool and calling the production gate
 //! `ensure_profile_from_parts` with hand-built request `Parts` carrying
-//! `McpClaims` (mirroring the construction block in `act_authorship_mcp_e2e.rs`,
+//! `RawJwtClaims` (mirroring the construction block in `act_authorship_mcp_e2e.rs`,
 //! minus the profile-cache seed — here the gate call is the thing under test).
 
 mod common;
@@ -42,15 +42,20 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
     temper_mcp::service::TemperMcpService::new(state)
 }
 
-/// Build request `Parts` carrying `McpClaims` for `sub`, to drive the MCP
+/// Build request `Parts` carrying `RawJwtClaims` for `sub`, to drive the MCP
 /// surface's production gate. `exp: 0` is fine — the JWT was already validated
 /// by middleware in prod; here we inject claims directly and
 /// `ensure_profile_from_parts` does not re-check `exp`.
 fn mcp_parts(sub: &str) -> axum::http::request::Parts {
     axum::http::Request::builder()
-        .extension(temper_mcp::middleware::McpClaims {
+        .extension(temper_services::auth::RawJwtClaims {
             sub: sub.to_string(),
+            email: None,
+            email_verified: None,
+            azp: None,
+            gty: None,
             exp: 0,
+            iat: 0,
         })
         .body(())
         .expect("build request")
