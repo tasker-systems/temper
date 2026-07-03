@@ -101,20 +101,25 @@ vercel connect create https://temperkb.io/mcp --name steward
   (its Vercel OIDC), not by a user at the CLI. Use `--subject user --yes` to smoke-test the
   connector interactively.
 
-The connection (`agent/connections/temper.ts`) reads `TEMPER_CONNECT_CONNECTOR` and, when set,
-authenticates via the `connect` helper — falling back to `TEMPER_TOKEN` only when the connector
-env is absent (local dev).
+The connection (`agent/connections/temper.ts`) authenticates **machine-identity-first**: when
+`TEMPER_M2M_CLIENT_ID` is set it mints its own token (`mintM2mToken`), else it falls back to a
+Vercel Connect connector (`TEMPER_CONNECT_CONNECTOR`), else a static `TEMPER_TOKEN` (local dev).
 
-### Status (2026-07-02): `app` principal needs M2M, not yet available
+### Status (2026-07-03): `app` principal via direct M2M mint — the Connect app-path is a dead end here
 
-The **`app`** path below is the intended design, but it is **currently blocked**: an app
-principal can only obtain a token via the OAuth `client_credentials` grant, and temper-mcp's
-OAuth server advertises only `authorization_code` + `refresh_token`
-(`/.well-known/oauth-authorization-server`). So the deployed connector cannot mint an app token
-and the agent never reaches temper-mcp. Adding machine-to-machine (`client_credentials`) support
-is tracked as part of the temper-services auth-seam task (`019f22f9`). Until it lands, use the
-`authorization_code` + `refresh_token` bridge (a dedicated steward login) described under `user`
-below. The rest of this guide — link, connector registration, env, deploy, crons — is validated.
+Auth-seam Stage 4 shipped (`normalize_machine` + agent-profile provisioning + the
+`client_credentials` advertisement). But on the **Auth0-fronted** instance the Vercel Connect
+`app` path **cannot** mint a token: Auth0 issues `client_credentials` only for a registered
+**M2M application**, and the Connect connector has no Auth0 M2M app behind it — its dynamic
+registration does not create one (confirmed: the connector produces no app in `auth0 apps
+list`). Advertising the grant is necessary but not sufficient.
+
+So the steward mints its own token **directly**: a dedicated Auth0 M2M application (`Temper
+Steward M2M`), and `agent/connections/temper.ts` performs the `client_credentials` grant itself
+(`mintM2mToken`, keyed on the `TEMPER_M2M_*` env). This is the distinct machine principal the
+design wants, without depending on Connect. Provision the M2M app + audience grant once via the
+Auth0 CLI — see the [operator runbook](../auth/machine-token-contract.md#operator-runbook-provisioning-an-auth0-m2m-agent).
+The `authorization_code + refresh_token` bridge under `user` below remains an escape hatch.
 
 ### Which subject: `app` vs `user`
 
@@ -146,8 +151,12 @@ the build reads them at discovery time and fails fast if a required one is missi
 | `TEMPER_MCP_URL` | yes | The temper-mcp endpoint, e.g. `https://temperkb.io/mcp`. The agent's sole seam to Temper. One agent dir points at temperkb.io or a self-hosted instance by this value alone. |
 | `TEMPER_API_URL` | yes | The temper REST base, e.g. `https://temperkb.io`. Distinct from `TEMPER_MCP_URL`; used by the region-materialize schedule's direct POST. |
 | `TEMPER_SELF_COGMAP_ID` | yes | The cognitive map this agent tends, by id (minted at genesis). See the design note below. |
-| `TEMPER_CONNECT_CONNECTOR` | prod | The Vercel Connect connector **id** for temper-mcp — the `mcp.<host>/<name>` string printed by `vercel connect create` (e.g. `mcp.temperkb.io/steward`). See [Registering the temper-mcp connector](#registering-the-temper-mcp-connector-vercel-connect). When set, the connection authenticates via Connect (app subject) — no secret in code. When unset, it falls back to `TEMPER_TOKEN`. |
-| `TEMPER_TOKEN` | dev only | An already-OAuth-obtained temper token. Drives `eve dev` and the pre-connector boot path. Not for production — use the Connect connector instead. |
+| `TEMPER_M2M_CLIENT_ID` | prod | Auth0 M2M app client id. **When set, the connection mints its own `client_credentials` token (the app principal)** — the production path on the Auth0-fronted instance. Takes precedence over `TEMPER_CONNECT_CONNECTOR`. |
+| `TEMPER_M2M_CLIENT_SECRET` | prod | The M2M app client secret. A Vercel env var only — never in code, never seen by the model. |
+| `TEMPER_M2M_TOKEN_URL` | prod | The issuer's token endpoint, e.g. `https://<tenant>.auth0.com/oauth/token`. |
+| `TEMPER_M2M_AUDIENCE` | prod | The API audience the minted token targets, e.g. `https://temperkb.io/api` (== the mcp audience). |
+| `TEMPER_CONNECT_CONNECTOR` | fallback | Vercel Connect connector id (`vercel connect create`). Used only when `TEMPER_M2M_CLIENT_ID` is unset. **On the Auth0-fronted instance this cannot mint an app token** (see Status above) — the M2M vars are the real path. |
+| `TEMPER_TOKEN` | dev only | An already-OAuth-obtained temper token. Drives `eve dev`. Not for production. |
 | `TEMPER_MCP_AUDIENCE` | optional | Only when the token audience varies by target and is not discovery-derived. |
 
 ### AI Gateway credential
