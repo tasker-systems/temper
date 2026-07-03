@@ -265,17 +265,6 @@ pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> Api
     })
 }
 
-/// Count the `owner`-role members of a team.
-async fn count_owners(pool: &PgPool, team_id: Uuid) -> ApiResult<i64> {
-    let n = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM kb_team_members WHERE team_id = $1 AND role = 'owner'",
-        team_id,
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(n.unwrap_or(0))
-}
-
 /// Load a member's role + provenance, if the row exists.
 async fn load_member(
     pool: &PgPool,
@@ -311,7 +300,7 @@ pub async fn remove_member(
         }
     }
 
-    let (target_role, source) = load_member(pool, team_id, target)
+    let (_target_role, source) = load_member(pool, team_id, target)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -321,20 +310,31 @@ pub async fn remove_member(
                 .to_string(),
         ));
     }
-    if matches!(target_role, TeamRole::Owner) && count_owners(pool, team_id).await? == 1 {
-        return Err(ApiError::Conflict(
-            "cannot remove the last owner; transfer ownership or promote another member first"
-                .to_string(),
-        ));
-    }
 
-    sqlx::query!(
-        "DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+    // Last-owner guard folded into the DELETE so the count and the delete are one
+    // atomic statement — two concurrent removals cannot both pass a separate count
+    // check and orphan the team. The row is known to exist and be non-idp (checked
+    // above), so `rows_affected() == 0` here means the guard blocked a last-owner
+    // removal.
+    let result = sqlx::query!(
+        r#"DELETE FROM kb_team_members
+            WHERE team_id = $1 AND profile_id = $2
+              AND NOT (
+                  role = 'owner'
+                  AND (SELECT COUNT(*) FROM kb_team_members
+                         WHERE team_id = $1 AND role = 'owner') = 1
+              )"#,
         team_id,
         target,
     )
     .execute(pool)
     .await?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::Conflict(
+            "cannot remove the last owner; transfer ownership or promote another member first"
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -360,7 +360,7 @@ pub async fn change_role(
         ));
     }
 
-    let (current_role, source) = load_member(pool, team_id, target)
+    let (_current_role, source) = load_member(pool, team_id, target)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -370,25 +370,33 @@ pub async fn change_role(
                 .to_string(),
         ));
     }
-    if matches!(current_role, TeamRole::Owner) && count_owners(pool, team_id).await? == 1 {
-        return Err(ApiError::Conflict(
-            "cannot remove the last owner; transfer ownership or promote another member first"
-                .to_string(),
-        ));
-    }
 
+    // Demote-last-owner guard folded into the UPDATE for the same atomicity reason as
+    // `remove_member`. `new_role` is already known to be non-owner (checked above), so
+    // any update to a sole owner is a demotion and the guard blocks it — a `None`
+    // result means the last-owner guard fired.
     let row = sqlx::query_as!(
         TeamMemberRow,
         r#"UPDATE kb_team_members SET role = $3
             WHERE team_id = $1 AND profile_id = $2
+              AND NOT (
+                  role = 'owner'
+                  AND (SELECT COUNT(*) FROM kb_team_members
+                         WHERE team_id = $1 AND role = 'owner') = 1
+              )
         RETURNING team_id, profile_id, role AS "role: TeamRole", created"#,
         team_id,
         target,
         new_role as TeamRole,
     )
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(row)
+    row.ok_or_else(|| {
+        ApiError::Conflict(
+            "cannot demote the last owner; transfer ownership or promote another member first"
+                .to_string(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -580,5 +588,82 @@ mod lifecycle_tests {
         let denied =
             change_role(&pool, ProfileId::from(owner), team, ghost, TeamRole::Member).await;
         assert!(matches!(denied, Err(ApiError::NotFound)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_change_role_of_idp_row(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let idp = mk_profile(&pool, "idp").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, idp, "member", "idp").await;
+
+        let denied = change_role(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            idp,
+            TeamRole::Maintainer,
+        )
+        .await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_can_remove_a_member(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let maintainer = mk_profile(&pool, "maintainer").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, maintainer, "maintainer", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        // A maintainer (not just an owner) may manage membership.
+        remove_member(&pool, ProfileId::from(maintainer), team, member)
+            .await
+            .unwrap();
+        let detail = team_detail(&pool, ProfileId::from(owner), team)
+            .await
+            .unwrap();
+        assert_eq!(detail.members.len(), 2);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn team_detail_visible_to_system_admin_non_member(pool: PgPool) {
+        let admin = mk_profile(&pool, "admin").await;
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        // Make `admin` a system admin: OWNER of the `temper-system` gating team (born of
+        // migration 20260625000001) with `gating_team_slug` pointed at it — the same
+        // admin-minting idiom as `context_service`'s test seed. `admin` is NOT a member
+        // of `acme`, so this exercises the `is_system_admin` branch of the read gate.
+        let sys: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner'",
+        )
+        .bind(sys)
+        .bind(admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detail = team_detail(&pool, ProfileId::from(admin), team)
+            .await
+            .unwrap();
+        assert_eq!(detail.slug, "acme");
+        assert_eq!(detail.members.len(), 1);
     }
 }
