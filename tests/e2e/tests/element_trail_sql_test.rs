@@ -102,6 +102,8 @@ async fn insert_event(
 async fn insert_edge(
     pool: &sqlx::PgPool,
     id: Uuid,
+    source: Uuid,
+    target: Uuid,
     home_anchor_table: &str,
     home_anchor_id: Uuid,
     asserted_by_event_id: Uuid,
@@ -115,8 +117,8 @@ async fn insert_edge(
                  $4, $5, $6, $6, $7)",
     )
     .bind(id)
-    .bind(Uuid::now_v7())
-    .bind(Uuid::now_v7())
+    .bind(source)
+    .bind(target)
     .bind(home_anchor_table)
     .bind(home_anchor_id)
     .bind(asserted_by_event_id)
@@ -180,6 +182,13 @@ async fn edge_trail_keys_on_edge_id_and_survives_fold(pool: sqlx::PgPool) {
     let entity = mk_entity(&pool, profile, "ett-entity").await;
     let context = mk_owned_context(&pool, profile, "ett-context").await;
 
+    // Real, visible endpoints homed in the profile-owned context — the edge trail
+    // now enforces endpoint_readable_by_profile(source/target) in addition to the home.
+    let src = create_resource(&pool, "edge-src", "temper://ett/src").await;
+    let tgt = create_resource(&pool, "edge-tgt", "temper://ett/tgt").await;
+    home_resource(&pool, src, context, profile).await;
+    home_resource(&pool, tgt, context, profile).await;
+
     let edge_id = Uuid::now_v7();
 
     let assert_event = insert_event(
@@ -190,7 +199,17 @@ async fn edge_trail_keys_on_edge_id_and_survives_fold(pool: sqlx::PgPool) {
         json!({}),
     )
     .await;
-    insert_edge(&pool, edge_id, "kb_contexts", context, assert_event, false).await;
+    insert_edge(
+        &pool,
+        edge_id,
+        src,
+        tgt,
+        "kb_contexts",
+        context,
+        assert_event,
+        false,
+    )
+    .await;
 
     let reweight_event = insert_event(
         &pool,
@@ -313,5 +332,51 @@ async fn node_trail_unions_three_key_shapes_and_gates_by_visibility(pool: sqlx::
     assert!(
         rows_not_visible.is_empty(),
         "a resource not visible to the caller yields no trail: {rows_not_visible:?}"
+    );
+}
+
+/// Security regression: the edge trail is denied when an ENDPOINT is not visible,
+/// even if the edge's home anchor IS readable. `element_trail_edge` must enforce
+/// `endpoint_readable_by_profile(source)` AND `(target)`, not just the home anchor —
+/// otherwise it leaks the existence + provenance of a relationship touching a
+/// private resource.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn edge_trail_denied_when_an_endpoint_is_private(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "ett-deny").await;
+    let entity = mk_entity(&pool, profile, "ett-deny-entity").await;
+    let context = mk_owned_context(&pool, profile, "ett-deny-ctx").await;
+
+    // Source is visible (homed in the profile-owned context); target is NOT
+    // (no home/grant tying it to the profile).
+    let visible = create_resource(&pool, "visible endpoint", "temper://ett/vis").await;
+    home_resource(&pool, visible, context, profile).await;
+    let private = create_resource(&pool, "private endpoint", "temper://ett/priv").await;
+
+    let edge_id = Uuid::now_v7();
+    let assert_event = insert_event(
+        &pool,
+        "relationship_asserted",
+        entity,
+        json!({"edge_id": edge_id, "weight": 1.0}),
+        json!({}),
+    )
+    .await;
+    // Home readable, source visible, target private.
+    insert_edge(
+        &pool,
+        edge_id,
+        visible,
+        private,
+        "kb_contexts",
+        context,
+        assert_event,
+        false,
+    )
+    .await;
+
+    let rows = element_trail_edge(&pool, profile, edge_id).await;
+    assert!(
+        rows.is_empty(),
+        "edge trail denied when an endpoint is private, despite a readable home: {rows:?}"
     );
 }

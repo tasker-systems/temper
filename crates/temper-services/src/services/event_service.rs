@@ -37,51 +37,76 @@ pub async fn latest_event_id_for_context(
     Ok(id)
 }
 
+/// One row from an element-trail SQL function (`element_trail_edge`/`_node`).
+/// Both functions share this exact column set.
+struct ElementEventRow {
+    event_id: Uuid,
+    kind: String,
+    actor_entity_id: Uuid,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+    metadata: serde_json::Value,
+}
+
 /// R5 element event-trail: the time-ordered history of events for a single node
-/// (resource) or edge. Visibility is gated inside the SQL functions
-/// (`anchor_readable_by_profile` for edges, `resources_visible_to` for nodes) — an
+/// (resource) or edge. Visibility is gated inside the SQL functions — edges enforce
+/// `anchor_readable_by_profile(home)` AND `endpoint_readable_by_profile(source/target)`
+/// (the full `edges_visible_to` predicate minus the folded filter, so a folded edge
+/// still shows its trail); nodes gate via `resources_visible_to`. An
 /// unreadable/nonexistent element yields an empty trail rather than an error.
+///
+/// The two element kinds dispatch to two SEPARATE static `query_as!` calls (not one
+/// query with an interpolated function name): each query is compile-time-checked
+/// against the schema and its visibility gate is greppable at the call site.
 pub async fn element_trail(
     pool: &PgPool,
     profile_id: ProfileId,
     kind: ElementKind,
     element_id: Uuid,
 ) -> ApiResult<EventTrail> {
-    let fn_name = match kind {
-        ElementKind::Edge => "element_trail_edge",
-        ElementKind::Node => "element_trail_node",
+    let rows = match kind {
+        ElementKind::Edge => {
+            sqlx::query_as!(
+                ElementEventRow,
+                r#"SELECT event_id AS "event_id!", kind AS "kind!",
+                          actor_entity_id AS "actor_entity_id!",
+                          occurred_at AS "occurred_at!", metadata AS "metadata!"
+                     FROM element_trail_edge($1, $2)"#,
+                *profile_id,
+                element_id,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        ElementKind::Node => {
+            sqlx::query_as!(
+                ElementEventRow,
+                r#"SELECT event_id AS "event_id!", kind AS "kind!",
+                          actor_entity_id AS "actor_entity_id!",
+                          occurred_at AS "occurred_at!", metadata AS "metadata!"
+                     FROM element_trail_node($1, $2)"#,
+                *profile_id,
+                element_id,
+            )
+            .fetch_all(pool)
+            .await?
+        }
     };
-    let rows = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            Uuid,
-            chrono::DateTime<chrono::Utc>,
-            serde_json::Value,
-        ),
-    >(&format!(
-        "SELECT event_id, kind, actor_entity_id, occurred_at, metadata FROM {fn_name}($1, $2)"
-    ))
-    .bind(profile_id.as_uuid())
-    .bind(element_id)
-    .fetch_all(pool)
-    .await?;
 
     let events = rows
         .into_iter()
-        .map(|(event_id, kind, actor_entity_id, occurred_at, metadata)| {
+        .map(|row| {
             // metadata is AgentAuthorship-shaped for agent acts, {} for system acts.
             // The band is the bare lowercase string under `confidence` (NOT `confidence_band`).
-            let confidence = metadata
+            let confidence = row
+                .metadata
                 .get("confidence")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             ElementEvent {
-                event_id,
-                kind,
-                actor_entity_id,
-                occurred_at: occurred_at.to_rfc3339(),
+                event_id: row.event_id,
+                kind: row.kind,
+                actor_entity_id: row.actor_entity_id,
+                occurred_at: row.occurred_at.to_rfc3339(),
                 confidence,
             }
         })

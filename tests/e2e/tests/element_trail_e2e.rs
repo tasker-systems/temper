@@ -73,9 +73,36 @@ async fn insert_event_with_metadata(
     .expect("insert event")
 }
 
+async fn create_resource(pool: &sqlx::PgPool, title: &str, origin: &str) -> Uuid {
+    sqlx::query_scalar("INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $2) RETURNING id")
+        .bind(title)
+        .bind(origin)
+        .fetch_one(pool)
+        .await
+        .expect("insert resource")
+}
+
+/// Home a resource to a `kb_contexts` anchor owned/originated by `profile` — the
+/// branch `resources_visible_to` reads for direct ownership.
+async fn home_resource(pool: &sqlx::PgPool, resource: Uuid, context: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+             (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(resource)
+    .bind(context)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("home resource");
+}
+
 async fn insert_edge(
     pool: &sqlx::PgPool,
     id: Uuid,
+    source: Uuid,
+    target: Uuid,
     home_anchor_id: Uuid,
     asserted_by_event_id: Uuid,
 ) {
@@ -87,8 +114,8 @@ async fn insert_edge(
                  'kb_contexts', $4, $5, $5)",
     )
     .bind(id)
-    .bind(Uuid::now_v7())
-    .bind(Uuid::now_v7())
+    .bind(source)
+    .bind(target)
     .bind(home_anchor_id)
     .bind(asserted_by_event_id)
     .execute(pool)
@@ -119,6 +146,13 @@ async fn edge_trail_returns_ordered_events_and_rejects_bad_kind(pool: sqlx::PgPo
     let entity = mk_entity(&pool, member, "ete-entity").await;
     let context = mk_owned_context(&pool, member, "ete-context").await;
 
+    // Real, visible endpoints homed in the member-owned context — the edge trail
+    // enforces endpoint_readable_by_profile(source/target) as well as the home.
+    let src = create_resource(&pool, "ete-src", "temper://ete/src").await;
+    let tgt = create_resource(&pool, "ete-tgt", "temper://ete/tgt").await;
+    home_resource(&pool, src, context, member).await;
+    home_resource(&pool, tgt, context, member).await;
+
     let edge_id = Uuid::now_v7();
     let assert_event = insert_event(
         &pool,
@@ -127,7 +161,7 @@ async fn edge_trail_returns_ordered_events_and_rejects_bad_kind(pool: sqlx::PgPo
         serde_json::json!({"edge_id": edge_id, "weight": 1.0}),
     )
     .await;
-    insert_edge(&pool, edge_id, context, assert_event).await;
+    insert_edge(&pool, edge_id, src, tgt, context, assert_event).await;
 
     // Carries a confidence band in metadata — exercises the `metadata->>'confidence'`
     // extraction into `ElementEvent.confidence` (M5: otherwise never exercised).

@@ -160,6 +160,10 @@ async fn traverse_scoped_respects_depth_and_edge_kind_filter(pool: sqlx::PgPool)
     add_member(&pool, team, profile).await;
     let event = any_event(&pool).await;
 
+    // Edges are homed in a real team-owned context the member can read, so they
+    // pass graph_traverse_scoped's anchor_readable_by_profile gate.
+    let ctx = create_team_context(&pool, team, "gas-ctx").await;
+
     let r1 = create_resource(&pool, "seed", "temper://gas/r1").await;
     let r2 = create_resource(&pool, "hop-1", "temper://gas/r2").await;
     let r3 = create_resource(&pool, "hop-2", "temper://gas/r3").await;
@@ -170,9 +174,9 @@ async fn traverse_scoped_respects_depth_and_edge_kind_filter(pool: sqlx::PgPool)
 
     // r1 --contains--> r2 --leads_to--> r3   (both included kinds)
     // r1 --near--> r4                        (excluded kind for the filtered call)
-    assert_edge(&pool, r1, r2, "contains", "kb_contexts", Uuid::nil(), event).await;
-    assert_edge(&pool, r2, r3, "leads_to", "kb_contexts", Uuid::nil(), event).await;
-    assert_edge(&pool, r1, r4, "near", "kb_contexts", Uuid::nil(), event).await;
+    assert_edge(&pool, r1, r2, "contains", "kb_contexts", ctx, event).await;
+    assert_edge(&pool, r2, r3, "leads_to", "kb_contexts", ctx, event).await;
+    assert_edge(&pool, r1, r4, "near", "kb_contexts", ctx, event).await;
 
     // Depth 1, filtered to `contains` only: just r1->r2.
     let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
@@ -310,6 +314,8 @@ async fn traverse_scoped_dedupes_edge_reached_at_multiple_depths(pool: sqlx::PgP
     add_member(&pool, team, profile).await;
     let event = any_event(&pool).await;
 
+    let ctx = create_team_context(&pool, team, "gas-multi-ctx").await;
+
     let a = create_resource(&pool, "a", "temper://gas/a").await;
     let b = create_resource(&pool, "b", "temper://gas/b").await;
     let c = create_resource(&pool, "c", "temper://gas/c").await;
@@ -320,8 +326,8 @@ async fn traverse_scoped_dedupes_edge_reached_at_multiple_depths(pool: sqlx::PgP
     // a --contains--> b   (reachable directly from seed a at depth 1)
     // c --contains--> a   (reachable directly from seed c at depth 1)
     // So a->b is ALSO reachable via c->a->b at depth 2 — the same edge at two depths.
-    assert_edge(&pool, a, b, "contains", "kb_contexts", Uuid::nil(), event).await;
-    assert_edge(&pool, c, a, "contains", "kb_contexts", Uuid::nil(), event).await;
+    assert_edge(&pool, a, b, "contains", "kb_contexts", ctx, event).await;
+    assert_edge(&pool, c, a, "contains", "kb_contexts", ctx, event).await;
 
     let rows: Vec<(Uuid, Uuid, EdgeKind)> = sqlx::query_as(
         "SELECT source_id, target_id, edge_kind FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
@@ -350,5 +356,46 @@ async fn traverse_scoped_dedupes_edge_reached_at_multiple_depths(pool: sqlx::PgP
     assert_eq!(
         seen, expected,
         "each edge appears exactly once, regardless of how many depths reach it"
+    );
+}
+
+/// Security regression: `graph_traverse_scoped` must NOT walk an edge whose own
+/// home anchor is unreadable to the profile, even when BOTH endpoints are in the
+/// team scope. The full `edges_visible_to` gate requires
+/// `anchor_readable_by_profile(home)` — not just endpoint visibility. This is the
+/// "private edge between two public resources" leak; guard it directly.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn traverse_scoped_excludes_edge_with_unreadable_home(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "gas-deny").await;
+    let team = create_team(&pool, "gas-deny-team").await;
+    add_member(&pool, team, profile).await;
+    let event = any_event(&pool).await;
+
+    let s = create_resource(&pool, "src", "temper://gas/deny-s").await;
+    let t = create_resource(&pool, "tgt", "temper://gas/deny-t").await;
+    // Both endpoints ARE in the team scope — so ONLY the home-anchor gate can exclude the edge.
+    grant_read_to_team(&pool, s, team, profile).await;
+    grant_read_to_team(&pool, t, team, profile).await;
+
+    // Homed in a cogmap the profile cannot read (random id, joined to none of the
+    // profile's teams) → anchor_readable_by_profile is false.
+    let private_home = Uuid::now_v7();
+    assert_edge(&pool, s, t, "contains", "kb_cogmaps", private_home, event).await;
+
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT source_id, target_id FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
+    )
+    .bind(profile)
+    .bind(team)
+    .bind(vec![s])
+    .bind(2_i32)
+    .bind(Vec::<EdgeKind>::new())
+    .fetch_all(&pool)
+    .await
+    .expect("traverse with an unreadable-home edge");
+
+    assert!(
+        rows.is_empty(),
+        "edge homed in an unreadable anchor is excluded despite visible endpoints: {rows:?}"
     );
 }
