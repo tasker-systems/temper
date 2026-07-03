@@ -7,7 +7,6 @@
 //! All enum types derive `Debug, Clone, Copy, PartialEq, Eq, sqlx::Type`
 //! (Postgres enums) or add `Serialize, Deserialize` (API enums).
 
-pub mod access;
 pub mod access_gate;
 pub mod admin;
 pub mod api;
@@ -48,7 +47,6 @@ pub mod upload;
 pub mod vault;
 pub mod vault_config;
 
-pub use access::{AccessLevel, AccessScoped, TeamResource};
 pub use access_gate::{
     Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
     SystemSettings,
@@ -92,8 +90,8 @@ pub use steward::{
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,
 };
 pub use team::{
-    AddMemberRequest, ChangeRoleRequest, Team, TeamCreateRequest, TeamDetail, TeamMember,
-    TeamMemberDetail, TeamMemberRow, TeamMemberSource, TeamRole, TeamRow,
+    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail,
+    TeamMemberRow, TeamMemberSource, TeamRole, TeamRow,
 };
 pub use upload::{UploadProcessingStatus, UploadResponse};
 pub use vault::{IngestionSource, ResourceFrontmatter, VaultAddResult};

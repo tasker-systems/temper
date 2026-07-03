@@ -22,46 +22,6 @@ pub enum TeamRole {
     Watcher,
 }
 
-/// A team — the unit of collaboration in temper.
-///
-/// Teams are fully owned by temper, not delegated to the auth provider.
-/// This means the team model survives auth provider swaps. A team must
-/// always have exactly one owner. Soft-deleted via `is_active = false`.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
-#[derive(Debug, Clone, FromRow)]
-pub struct Team {
-    pub id: Uuid,
-    pub name: String,
-    pub slug: String,
-    pub description: Option<String>,
-    pub metadata: serde_json::Value,
-    pub created_by_profile_id: Uuid,
-    pub is_active: bool,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-}
-
-/// A profile's membership in a team with a specific role.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
-#[derive(Debug, Clone, FromRow)]
-pub struct TeamMember {
-    pub id: Uuid,
-    pub team_id: Uuid,
-    pub profile_id: Uuid,
-    pub role: TeamRole,
-    pub joined_at: DateTime<Utc>,
-    pub invited_by_profile_id: Option<Uuid>,
-}
-
-// ---------------------------------------------------------------------------
-// Wire types — these match the REAL substrate columns (`kb_teams`,
-// `kb_team_members`). The legacy `Team`/`TeamMember` structs above predate the
-// WS6 collapse and describe columns that no longer exist; they are unused (dead)
-// and must NOT be used for queries. Use the `*Row`/`*Request` types below.
-// ---------------------------------------------------------------------------
-
 /// Response row for team endpoints — matches the real `kb_teams` columns.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]

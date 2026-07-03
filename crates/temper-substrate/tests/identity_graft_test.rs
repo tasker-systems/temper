@@ -2,11 +2,14 @@
 //! WS6 collapse: the grafted identity/infra layer resolves against the substrate.
 //!
 //! Task A folds the operational identity/auth/infra layer into the artifact — `kb_profiles` gains
-//! `email`/`preferences`, the 3 infra enums (`join_request_status`/`invitation_status`/
-//! `transfer_status`) and the 7 infra tables land in `01_schema.sql`, and `has_system_access` /
+//! `email`/`preferences`, the infra enums (`join_request_status`/`invitation_status`) and the infra
+//! tables land in `01_schema.sql`, and `has_system_access` /
 //! `is_system_admin` land in `02_functions.sql` (the legacy `kb_teams.is_active` predicate dropped —
 //! that column does not exist in the substrate). These are additive: nothing references them until the
 //! surface ports land (Tasks B–E); the legacy `public` copies are untouched.
+//!
+//! (`transfer_status`/`kb_transfers` — the dead offer/accept ownership-transfer path, superseded by
+//! in-place reassignment — were retired in 20260704000002, so they are no longer in the graft set.)
 //!
 //! Each test runs on an ephemeral `public`-schema database via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`.
 
@@ -14,7 +17,7 @@ mod common;
 
 /// Seed a clean artifact (01+02), the singleton `kb_system_settings (access_mode='open')`, and one
 /// profile; assert the two grafted system-access functions evaluate (open mode grants any profile),
-/// `kb_profiles` carries `email`/`preferences`, and each of the 7 grafted infra tables is queryable.
+/// `kb_profiles` carries `email`/`preferences`, and each of the 6 grafted infra tables is queryable.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn identity_graft_resolves(pool: sqlx::PgPool) {
     // Reset to clean 01+02 baseline — L0 kernel migration seeds kb_system_settings(id=1).
@@ -47,13 +50,12 @@ async fn identity_graft_resolves(pool: sqlx::PgPool) {
         .await
         .expect("kb_profiles.email/preferences resolve");
 
-    // Each of the 7 grafted infra tables is queryable.
+    // Each of the 6 grafted infra tables is queryable.
     for table in [
         "kb_profile_auth_links",
         "kb_system_settings",
         "kb_join_requests",
         "kb_team_invitations",
-        "kb_transfers",
         "kb_blob_files",
         "kb_ingestion_records",
     ] {
