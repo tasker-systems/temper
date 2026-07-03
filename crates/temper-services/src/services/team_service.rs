@@ -265,6 +265,79 @@ pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> Api
     })
 }
 
+/// Count the `owner`-role members of a team.
+async fn count_owners(pool: &PgPool, team_id: Uuid) -> ApiResult<i64> {
+    let n = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM kb_team_members WHERE team_id = $1 AND role = 'owner'",
+        team_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n.unwrap_or(0))
+}
+
+/// Load a member's role + provenance, if the row exists.
+async fn load_member(
+    pool: &PgPool,
+    team_id: Uuid,
+    profile: Uuid,
+) -> ApiResult<Option<(TeamRole, TeamMemberSource)>> {
+    let row = sqlx::query!(
+        r#"SELECT role AS "role: TeamRole", source AS "source: TeamMemberSource"
+             FROM kb_team_members WHERE team_id = $1 AND profile_id = $2"#,
+        team_id,
+        profile,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.role, r.source)))
+}
+
+/// Remove a member from a team. Owner/maintainer may remove others; any member
+/// may remove themselves (self-leave). Refuses SAML-provisioned rows and refuses
+/// to remove the last owner.
+pub async fn remove_member(
+    pool: &PgPool,
+    caller: ProfileId,
+    team_id: Uuid,
+    target: Uuid,
+) -> ApiResult<()> {
+    // Auth before writes: manager, or self-leave.
+    let is_self = *caller == target;
+    if !is_self {
+        match role_on_team(pool, team_id, caller).await? {
+            Some(role) if can_manage(role) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
+    }
+
+    let (target_role, source) = load_member(pool, team_id, target)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if matches!(source, TeamMemberSource::Idp) {
+        return Err(ApiError::Conflict(
+            "this membership is provisioned by SAML; change it via the identity provider"
+                .to_string(),
+        ));
+    }
+    if matches!(target_role, TeamRole::Owner) && count_owners(pool, team_id).await? == 1 {
+        return Err(ApiError::Conflict(
+            "cannot remove the last owner; transfer ownership or promote another member first"
+                .to_string(),
+        ));
+    }
+
+    sqlx::query!(
+        "DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+        team_id,
+        target,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
@@ -334,5 +407,63 @@ mod lifecycle_tests {
 
         let denied = team_detail(&pool, ProfileId::from(outsider), team).await;
         assert!(matches!(denied, Err(ApiError::NotFound)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_removes_member(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        remove_member(&pool, ProfileId::from(owner), team, member)
+            .await
+            .unwrap();
+        let detail = team_detail(&pool, ProfileId::from(owner), team)
+            .await
+            .unwrap();
+        assert_eq!(detail.members.len(), 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn member_can_self_leave_but_not_remove_others(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let a = mk_profile(&pool, "a").await;
+        let b = mk_profile(&pool, "b").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, a, "member", "native").await;
+        add(&pool, team, b, "member", "native").await;
+
+        // a removing b → Forbidden.
+        let denied = remove_member(&pool, ProfileId::from(a), team, b).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)));
+        // a removing a (self-leave) → ok.
+        remove_member(&pool, ProfileId::from(a), team, a)
+            .await
+            .unwrap();
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_remove_last_owner(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let denied = remove_member(&pool, ProfileId::from(owner), team, owner).await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_remove_idp_row(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let idp = mk_profile(&pool, "idp").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, idp, "member", "idp").await;
+
+        let denied = remove_member(&pool, ProfileId::from(owner), team, idp).await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))));
     }
 }
