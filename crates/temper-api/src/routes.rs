@@ -121,6 +121,10 @@ pub fn create_app(state: AppState) -> Router {
             "/api/teams/{id}/members/{profile_id}",
             delete(handlers::teams::remove_member).patch(handlers::teams::change_role),
         )
+        .route(
+            "/api/teams/{id}/graph-scope",
+            get(handlers::teams::graph_scope),
+        )
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route(

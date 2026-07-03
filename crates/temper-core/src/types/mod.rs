@@ -22,6 +22,7 @@ pub mod device;
 pub mod event;
 pub mod facet_requests;
 pub mod graph;
+pub mod graph_scope;
 pub mod home;
 pub mod ids;
 pub mod ingest;
@@ -62,6 +63,7 @@ pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
+pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{
