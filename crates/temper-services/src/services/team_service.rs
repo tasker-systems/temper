@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
+use temper_core::types::graph_scope::{TeamRef, TeamScopeView, TeamZone};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{
     AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
@@ -483,6 +484,82 @@ pub async fn change_role(
             "cannot demote the last owner; transfer ownership or promote another member first"
                 .to_string(),
         )
+    })
+}
+
+/// R1 team-graph-scope read: the scope team, its reachable ancestors, and the
+/// child-team zones the profile may enter. Deny-as-absence (404) when the profile
+/// cannot view the team (not a member of the team or any of its descendants).
+pub async fn graph_scope(
+    pool: &sqlx::PgPool,
+    profile_id: ProfileId,
+    team_id: uuid::Uuid,
+) -> ApiResult<TeamScopeView> {
+    // Access gate: the profile must be a member of the team or a descendant (upward read).
+    let viewable: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM team_descendants($1) d
+            JOIN kb_team_members tm ON tm.team_id = d.team_id AND tm.profile_id = $2
+        )",
+    )
+    .bind(team_id)
+    .bind(*profile_id)
+    .fetch_one(pool)
+    .await?;
+    if !viewable {
+        return Err(ApiError::NotFound);
+    }
+
+    // The scope team itself.
+    let team: TeamRef = sqlx::query_as::<_, (uuid::Uuid, String, String)>(
+        "SELECT id, slug, name FROM kb_teams WHERE id = $1",
+    )
+    .bind(team_id)
+    .fetch_optional(pool)
+    .await?
+    .map(|(id, slug, name)| TeamRef { id, slug, name })
+    .ok_or(ApiError::NotFound)?;
+
+    // Reachable ancestors (up-set, excluding self).
+    let ancestors: Vec<TeamRef> = sqlx::query_as::<_, (uuid::Uuid, String, String)>(
+        "SELECT t.id, t.slug, t.name
+           FROM team_ancestors($1) a
+           JOIN kb_teams t ON t.id = a.team_id
+          WHERE a.team_id <> $1
+          ORDER BY t.name",
+    )
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, slug, name)| TeamRef { id, slug, name })
+    .collect();
+
+    // Enterable child zones + size hint (count of resources in the child's scope).
+    let zones: Vec<TeamZone> = sqlx::query_as::<_, (uuid::Uuid, String, String, i64)>(
+        "SELECT t.id, t.slug, t.name,
+                (SELECT count(*) FROM resources_in_team_scope($2, t.id)) AS resource_count
+           FROM team_child_zones($2, $1) z
+           JOIN kb_teams t ON t.id = z.team_id
+          ORDER BY t.name",
+    )
+    .bind(team_id)
+    .bind(*profile_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, slug, name, resource_count)| TeamZone {
+        id,
+        slug,
+        name,
+        resource_count,
+    })
+    .collect();
+
+    Ok(TeamScopeView {
+        team,
+        ancestors,
+        zones,
     })
 }
 
