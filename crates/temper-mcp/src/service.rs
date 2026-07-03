@@ -61,6 +61,7 @@ impl TemperMcpService {
     /// email; the profile service resolves it from cached auth links downstream.
     fn claims_from(&self, claims: &McpClaims) -> AuthClaims {
         AuthClaims {
+            principal_kind: temper_core::types::PrincipalKind::Human,
             provider: self.api_state.config.auth_provider_name.clone(),
             external_user_id: claims.sub.clone(),
             email: String::new(),

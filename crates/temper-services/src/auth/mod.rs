@@ -100,6 +100,7 @@ mod tests {
     // Helper: build AuthClaims for a synthetic principal.
     fn claims(sub: &str, email: &str) -> AuthClaims {
         AuthClaims {
+            principal_kind: temper_core::types::PrincipalKind::Human,
             provider: "test-provider".to_string(),
             external_user_id: sub.to_string(),
             email: email.to_string(),

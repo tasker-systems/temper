@@ -89,6 +89,7 @@ pub async fn require_auth(
         resolve_email_from_claims(&state, &token_data.claims, &token).await?;
 
     let claims = AuthClaims {
+        principal_kind: temper_core::types::PrincipalKind::Human,
         provider: state.config.auth_provider_name.clone(),
         external_user_id: token_data.claims.sub,
         email,

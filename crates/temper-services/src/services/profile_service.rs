@@ -362,6 +362,7 @@ pub async fn list_auth_links(
 mod tests {
     use super::*;
     use sqlx::PgPool;
+    use temper_core::types::PrincipalKind;
 
     #[test]
     fn oversized_preferences_rejected() {
@@ -401,6 +402,7 @@ mod tests {
     async fn generate_handle_handles_collision(pool: PgPool) {
         // Create a profile that will own the "collider" handle
         let claims = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "test".to_string(),
             external_user_id: "slug-collision-1".to_string(),
             email: "collider@example.com".to_string(),
@@ -419,6 +421,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn verified_email_reconciles_to_existing_profile(pool: PgPool) {
         let claims_a = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "provider_a".to_string(),
             external_user_id: "user-recon-verified-a".to_string(),
             email: "recon-verified@example.com".to_string(),
@@ -429,6 +432,7 @@ mod tests {
         let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
 
         let claims_b = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "provider_b".to_string(),
             external_user_id: "user-recon-verified-b".to_string(),
             email: "recon-verified@example.com".to_string(),
@@ -447,6 +451,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn unverified_email_creates_separate_profile(pool: PgPool) {
         let claims_a = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "provider_a".to_string(),
             external_user_id: "user-recon-unverified-a".to_string(),
             email: "recon-unverified@example.com".to_string(),
@@ -457,6 +462,7 @@ mod tests {
         let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
 
         let claims_b = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "provider_b".to_string(),
             external_user_id: "user-recon-unverified-b".to_string(),
             email: "recon-unverified@example.com".to_string(),
@@ -475,6 +481,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn missing_email_verified_creates_separate_profile(pool: PgPool) {
         let claims_a = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "provider_a".to_string(),
             external_user_id: "user-recon-none-a".to_string(),
             email: "recon-none@example.com".to_string(),
@@ -485,6 +492,7 @@ mod tests {
         let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
 
         let claims_b = AuthClaims {
+            principal_kind: PrincipalKind::Human,
             provider: "provider_b".to_string(),
             external_user_id: "user-recon-none-b".to_string(),
             email: "recon-none@example.com".to_string(),

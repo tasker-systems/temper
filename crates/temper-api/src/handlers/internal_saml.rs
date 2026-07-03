@@ -20,6 +20,7 @@ pub async fn reconcile(
     // Identity provider string is authoritative from server config, NOT the payload — this MUST
     // match middleware/auth.rs so the resolved profile is the same one the minted token resolves to.
     let claims = AuthClaims {
+        principal_kind: temper_core::types::PrincipalKind::Human,
         provider: state.config.auth_provider_name.clone(),
         external_user_id: req.external_user_id.clone(),
         email: req.email.clone(),
