@@ -1,6 +1,7 @@
 //! Internal SAML membership-reconcile endpoint. Called server-to-server by the co-deployed
 //! Authorization Server after it validates an assertion, BEFORE it mints the token. Gated by
-//! `require_internal_secret` (not JWT). See the Phase 2 design spec §7.2.
+//! `require_internal_signature` (HMAC over the body, not JWT). See the Phase 2 design spec §7.2
+//! and docs/auth/reconcile-channel.md.
 
 use axum::extract::State;
 use axum::http::StatusCode;

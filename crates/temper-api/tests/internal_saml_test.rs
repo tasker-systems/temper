@@ -1,14 +1,42 @@
 #![cfg(feature = "test-db")]
 //! HTTP-layer integration tests for the internal SAML reconcile endpoint.
-//! The endpoint is gated by a shared secret (not JWT). We build the app with a known
-//! `internal_reconcile_secret` and `auth_provider_name = "saml:acme"` so the JIT'd profile's
-//! auth link matches what the minted token would later resolve to.
+//! The endpoint is gated by an HMAC signature over the body (not JWT). We build the app with a
+//! known `internal_reconcile_secret` and `auth_provider_name = "saml:acme"` so the JIT'd profile's
+//! auth link matches what the minted token would later resolve to. Requests are signed exactly as
+//! the TS Authorization Server signs them (`temper_core::internal_sig`).
 
 mod common;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use reqwest::RequestBuilder;
 use sqlx::PgPool;
+use temper_core::internal_sig::{sign, SIGNATURE_HEADER, TIMESTAMP_HEADER};
 use temper_core::types::ReconcileRequest;
 use uuid::Uuid;
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+/// Build a POST carrying a body string signed at `timestamp` with `secret`. The signed bytes
+/// are exactly the bytes sent, matching the raw-body discipline the AS uses.
+fn signed_post(
+    builder: RequestBuilder,
+    secret: &str,
+    timestamp: i64,
+    body: &str,
+) -> RequestBuilder {
+    let signature = sign(secret.as_bytes(), timestamp, body.as_bytes());
+    builder
+        .header("content-type", "application/json")
+        .header(TIMESTAMP_HEADER, timestamp.to_string())
+        .header(SIGNATURE_HEADER, signature)
+        .body(body.to_string())
+}
 
 /// Seed an active IdP 'acme', a team, and a mapping engineering -> team (member). Returns team_id.
 async fn seed(pool: &PgPool) -> Uuid {
@@ -57,18 +85,20 @@ async fn reconcile_endpoint_provisions_idp_membership(pool: PgPool) {
     })
     .await;
 
-    let resp = app
-        .client
-        .post(app.url("/internal/saml/reconcile"))
-        .header("X-Temper-Internal-Secret", "s3cr3t")
-        .json(&reconcile_body())
-        .send()
-        .await
-        .expect("request failed");
+    let body = serde_json::to_string(&reconcile_body()).unwrap();
+    let resp = signed_post(
+        app.client.post(app.url("/internal/saml/reconcile")),
+        "s3cr3t",
+        now_secs(),
+        &body,
+    )
+    .send()
+    .await
+    .expect("request failed");
     assert_eq!(
         resp.status().as_u16(),
         204,
-        "correct secret should return 204; body: {}",
+        "valid signature should return 204; body: {}",
         resp.text().await.unwrap_or_default()
     );
 
@@ -94,6 +124,20 @@ async fn reconcile_endpoint_provisions_idp_membership(pool: PgPool) {
     assert_eq!(source, "idp");
 }
 
+async fn assert_rejected_and_no_provisioning(pool: &PgPool, builder: RequestBuilder) {
+    let resp = builder.send().await.expect("request failed");
+    assert_eq!(resp.status().as_u16(), 401);
+
+    // No profile/link/membership was created.
+    let links: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider_user_id = 'nid-1'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(links, 0);
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn reconcile_endpoint_rejects_wrong_secret(pool: PgPool) {
     seed(&pool).await;
@@ -103,22 +147,61 @@ async fn reconcile_endpoint_rejects_wrong_secret(pool: PgPool) {
     })
     .await;
 
-    let resp = app
+    // Signed with the wrong secret — a valid-looking signature that won't verify.
+    let body = serde_json::to_string(&reconcile_body()).unwrap();
+    let builder = signed_post(
+        app.client.post(app.url("/internal/saml/reconcile")),
+        "wrong-secret",
+        now_secs(),
+        &body,
+    );
+    assert_rejected_and_no_provisioning(&pool, builder).await;
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_rejects_stale_timestamp(pool: PgPool) {
+    seed(&pool).await;
+    let app = common::setup_test_app_with_config(pool.clone(), |c| {
+        c.auth_provider_name = "saml:acme".to_string();
+        c.internal_reconcile_secret = Some("s3cr3t".to_string());
+    })
+    .await;
+
+    // Correctly signed, but the timestamp is an hour old — well past the freshness window.
+    let body = serde_json::to_string(&reconcile_body()).unwrap();
+    let builder = signed_post(
+        app.client.post(app.url("/internal/saml/reconcile")),
+        "s3cr3t",
+        now_secs() - 3600,
+        &body,
+    );
+    assert_rejected_and_no_provisioning(&pool, builder).await;
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_rejects_tampered_body(pool: PgPool) {
+    seed(&pool).await;
+    let app = common::setup_test_app_with_config(pool.clone(), |c| {
+        c.auth_provider_name = "saml:acme".to_string();
+        c.internal_reconcile_secret = Some("s3cr3t".to_string());
+    })
+    .await;
+
+    // Sign the honest body, then send a different body under that signature.
+    let signed_body = serde_json::to_string(&reconcile_body()).unwrap();
+    let timestamp = now_secs();
+    let signature = sign("s3cr3t".as_bytes(), timestamp, signed_body.as_bytes());
+    let tampered = serde_json::to_string(&ReconcileRequest {
+        groups: vec!["temper-admins".to_string()],
+        ..reconcile_body()
+    })
+    .unwrap();
+    let builder = app
         .client
         .post(app.url("/internal/saml/reconcile"))
-        .header("X-Temper-Internal-Secret", "wrong")
-        .json(&reconcile_body())
-        .send()
-        .await
-        .expect("request failed");
-    assert_eq!(resp.status().as_u16(), 401);
-
-    // No profile/link/membership was created.
-    let links: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider_user_id = 'nid-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(links, 0);
+        .header("content-type", "application/json")
+        .header(TIMESTAMP_HEADER, timestamp.to_string())
+        .header(SIGNATURE_HEADER, signature)
+        .body(tampered);
+    assert_rejected_and_no_provisioning(&pool, builder).await;
 }

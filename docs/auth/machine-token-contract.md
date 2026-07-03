@@ -94,4 +94,3 @@ that human and conflates authorship.
 Spec:
 [../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md](../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md)
 (Stage 4). Auth0 M2M app provisioning is an operator/console runbook step outside the repo.
-</content>

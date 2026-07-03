@@ -82,4 +82,3 @@ email; it takes an `AuthClaims` and owns resolve + the gates.
 - **AS↔API shared values must agree.** `AS_AUDIENCE == AUTH_AUDIENCE` and
   `AS_ISSUER == AUTH_ISSUER`; `temper admin saml provision` keeps them consistent by
   construction. Details in [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md).
-</content>

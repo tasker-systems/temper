@@ -100,5 +100,3 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
   runbook; *this* area is the security model it implements.
 - **Design spec** the seam was built from:
   [../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md](../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md).
-</content>
-</invoke>

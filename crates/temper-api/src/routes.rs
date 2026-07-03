@@ -190,7 +190,7 @@ pub fn create_app(state: AppState) -> Router {
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            crate::middleware::internal_auth::require_internal_secret,
+            crate::middleware::internal_auth::require_internal_signature,
         ));
 
     let cors = cors_layer(&state);
