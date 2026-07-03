@@ -12,16 +12,6 @@ use temper_core::types::{AuthClaims, AuthenticatedProfile};
 use temper_services::error::ApiError;
 use temper_services::state::AppState;
 
-/// Internal JWT claim structure for deserialization.
-#[derive(Debug, Deserialize)]
-struct JwtClaims {
-    sub: String,
-    email: Option<String>,
-    email_verified: Option<bool>,
-    exp: i64,
-    iat: i64,
-}
-
 /// Newtype carrying the value of the `X-Temper-Device-Id` request header.
 #[derive(Debug, Clone)]
 pub struct DeviceId(pub String);
@@ -77,25 +67,29 @@ pub async fn require_auth(
     let audience = state.config.auth_audience.as_deref();
     let validation = state.jwks_store.validation(issuer, audience, vk.algorithm);
 
-    let token_data: TokenData<JwtClaims> = decode(&token, &vk.key, &validation).map_err(|e| {
-        tracing::debug!("JWT verification failed: {e}");
-        ApiError::Unauthorized("Invalid or expired token".to_string())
-    })?;
+    let token_data: TokenData<temper_services::auth::RawJwtClaims> =
+        decode(&token, &vk.key, &validation).map_err(|e| {
+            tracing::debug!("JWT verification failed: {e}");
+            ApiError::Unauthorized("Invalid or expired token".to_string())
+        })?;
+    let raw = token_data.claims;
 
-    // 4. Resolve email — present in token claims (custom Auth0 Action),
-    //    cached in kb_profile_auth_links from a prior login, or fetched
-    //    from the OIDC /userinfo endpoint as a last resort.
-    let (email, email_verified) =
-        resolve_email_from_claims(&state, &token_data.claims, &token).await?;
-
-    let claims = AuthClaims {
-        principal_kind: temper_core::types::PrincipalKind::Human,
-        provider: state.config.auth_provider_name.clone(),
-        external_user_id: token_data.claims.sub,
-        email,
-        email_verified,
-        exp: token_data.claims.exp,
-        iat: token_data.claims.iat,
+    // 4. Normalize. A machine (`client_credentials`) token resolves entirely from
+    //    the shared seam — no email. A human token still resolves its email
+    //    (token claim → cached link → OIDC /userinfo) before building claims.
+    let claims = if let Some(machine) = temper_services::auth::normalize_machine(&raw) {
+        machine
+    } else {
+        let (email, email_verified) = resolve_email_from_claims(&state, &raw, &token).await?;
+        AuthClaims {
+            principal_kind: temper_core::types::PrincipalKind::Human,
+            provider: state.config.auth_provider_name.clone(),
+            external_user_id: raw.sub.clone(),
+            email,
+            email_verified,
+            exp: raw.exp,
+            iat: raw.iat,
+        }
     };
 
     // 5. Resolve + deactivation gate via the shared seam (Level 1). The gate
@@ -146,7 +140,7 @@ pub async fn require_auth(
 /// surfaced as [`ApiError::Unauthorized`].
 async fn resolve_email_from_claims(
     state: &AppState,
-    claims: &JwtClaims,
+    claims: &temper_services::auth::RawJwtClaims,
     token: &str,
 ) -> Result<(String, Option<bool>), ApiError> {
     if let Some(email) = &claims.email {
