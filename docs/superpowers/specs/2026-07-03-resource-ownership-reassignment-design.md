@@ -118,21 +118,33 @@ new owner. Additions, all mirroring the `resource_rehomed` precedent:
   The migration is purely additive (two new functions), so it is safe under
   additive-only-on-`main` auto-deploy.
 
-### Layering (writes route through the Backend trait)
+### Layering (service-direct, event via the writes layer)
 
-Per the persistence-layer rule, surfaces never touch persistence directly for writes:
+Reassignment is a **team-role-authorized administrative** write. Its authorization is
+identical in shape to `invitation_service` / `team_service` (`role_on_team` /
+`can_manage`), and those team-domain services are **service-direct** — handlers call
+the service directly; the service composes persistence — an established carve-out from
+the Backend-trait dispatch that the cognitive resource-CRUD surface uses. Reassignment
+follows that precedent, and satisfies "event like everything else" by routing its write
+through the substrate **writes layer** (which fires the event), not by inflating the
+`Backend` trait with a bespoke-auth op.
 
-- `temper-workflow::operations`: `Backend::reassign_resource(params)` trait method +
-  a `ReassignResource` operations command — the **single**-resource write.
-- `temper-services::backend::DbBackend`: impl calls a new
-  `temper-substrate::write::reassign_resource_with(...)` which invokes the
-  `resource_reassign` SQL fn (append + project).
-- A **reassign service** in `temper-services` owns authorization (below) and enforces it
-  *before* any write — auth-before-writes. The **single** endpoint's handler calls this
-  service, which auth-checks then dispatches the `ReassignResource` backend op. The
-  **bulk** endpoint's handler calls a bulk service function that does the service-direct
-  scope read (the owned-AND-context-shared set) + auth, then applies each resource's
-  reassignment through the same write path inside **one transaction**.
+- **`temper-services::services::reassign_service`** (new, mirrors `invitation_service`):
+  - owns authorization (below) and enforces it *before* any write (auth-before-writes);
+  - resolves the acting emitter via `writes::resolve_emitter(pool, caller_profile,
+    "web")` (the API surface marker — the entry point is always temper-api);
+  - **single:** `reassign_resource(pool, caller, resource_id, to_profile_id)` — auth,
+    idempotency no-op check (current owner already `to`?), then
+    `writes::reassign_resource_with(pool, resource, from, to, emitter, act)`.
+  - **bulk:** `reassign_team_resources(pool, caller, team_id, from, to)` — auth +
+    service-direct scope read (owned-AND-context-shared set), then one transaction
+    looping `writes::reassign_resource_in_tx(&mut tx, …)` per resource.
+- **`temper-substrate::writes`** (new fns, mirroring `update_resource_with` /
+  `delete_resource_with` + their `_in_tx` variants): `reassign_resource_with` /
+  `reassign_resource_in_tx`, each firing `SeedAction::ResourceReassign` via `fire_with`,
+  which invokes the `resource_reassign` SQL fn (append + project).
+- Handlers (`temper-api`) are thin: extract `AuthUser`, call the service, return the row
+  — exactly the `handlers/invitations.rs` shape. No `Backend` trait change.
 
 ## Authorization
 
