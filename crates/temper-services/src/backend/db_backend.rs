@@ -1124,10 +1124,15 @@ impl Backend for DbBackend {
 
         let tgt_next = uuid::Uuid::from(cmd.target);
 
-        // The edge homes in the source's substrate context (its home anchor).
-        let home_next: uuid::Uuid = sqlx::query_scalar(
-            "SELECT anchor_id FROM kb_resource_homes \
-             WHERE resource_id=$1 AND anchor_table='kb_contexts'",
+        // The edge homes wherever its SOURCE resource is homed — a context for ordinary resources,
+        // or the cognitive map itself for cogmap-homed nodes (a steward's authored-4 nodes). Read the
+        // source's home anchor WITHOUT assuming a context: an earlier `anchor_table='kb_contexts'`
+        // filter returned zero rows for cogmap-homed sources, so every steward edge assert failed with
+        // "no rows returned by a query that expected to return at least one row".
+        let (home_id, home_table): (uuid::Uuid, String) = sqlx::query_as(
+            "SELECT anchor_id, anchor_table FROM kb_resource_homes \
+             WHERE resource_id=$1 AND anchor_table IN ('kb_contexts', 'kb_cogmaps') \
+             LIMIT 1",
         )
         .bind(src_next)
         .fetch_one(&self.pool)
@@ -1146,22 +1151,45 @@ impl Backend for DbBackend {
             invocation: cmd.act.invocation,
             authorship: cmd.act.authorship,
         };
-        let edge = writes::assert_relationship_with(
-            &self.pool,
-            writes::AssertParams {
-                src: ResourceId::from(src_next),
-                tgt: ResourceId::from(tgt_next),
-                kind: map_edge_kind(cmd.edge_kind),
-                polarity: map_polarity(cmd.polarity),
-                label,
-                weight: cmd.weight,
-                home: ContextId::from(home_next),
-                emitter,
-            },
-            act_ctx,
-        )
-        .await
-        .map_err(api_err)?;
+        let src = ResourceId::from(src_next);
+        let tgt = ResourceId::from(tgt_next);
+        let kind = map_edge_kind(cmd.edge_kind);
+        let polarity = map_polarity(cmd.polarity);
+        let edge = if home_table == "kb_cogmaps" {
+            writes::assert_kernel_edge_with(
+                &self.pool,
+                writes::KernelEdgeParams {
+                    cogmap: CogmapId::from(home_id),
+                    src,
+                    tgt,
+                    kind,
+                    polarity,
+                    label,
+                    weight: cmd.weight,
+                    emitter,
+                },
+                act_ctx,
+            )
+            .await
+            .map_err(api_err)?
+        } else {
+            writes::assert_relationship_with(
+                &self.pool,
+                writes::AssertParams {
+                    src,
+                    tgt,
+                    kind,
+                    polarity,
+                    label,
+                    weight: cmd.weight,
+                    home: ContextId::from(home_id),
+                    emitter,
+                },
+                act_ctx,
+            )
+            .await
+            .map_err(api_err)?
+        };
         Ok(CommandOutput::new(temper_core::types::ids::EdgeId::from(
             edge.uuid(),
         )))

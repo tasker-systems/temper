@@ -180,6 +180,13 @@ cd packages/agent-workflows/steward
 eve deploy            # rides the existing .vercel link; no eve picker
 ```
 
+> **Deploy is manual — the steward does NOT auto-deploy on monorepo merge.** `steward-agent` is its
+> own Vercel project; merging the monorepo `main` ships nothing here. You must `eve deploy` from the
+> agent directory (or wire GitHub auto-deploy against the `packages/agent-workflows/steward` root).
+> **Vercel env changes also require a redeploy to take effect** — setting a new `TEMPER_M2M_*` value in
+> the dashboard does nothing until the next `eve deploy`. Skipping this runs the cron against stale code
+> or stale env — a confusing tick that looks like a code bug but is a deploy gap.
+
 On the first cron tick the agent authenticates to temper-mcp; temper-mcp resolves its `sub` to
 a **new, empty profile** (`resolve_from_claims`). That tick does no useful work yet (no reach,
 no cogmap write grant), but the profile now exists.
@@ -215,6 +222,45 @@ temper cogmap grant <cogmap-ref> --to-profile <steward-profile-id> --write
 - **Execution** (Vercel → *Observability → Cron Jobs* / *Logs*): a tick that clears the ingest
   threshold produces a **closed invocation envelope** with correlated mutation events, authored
   by the steward's own profile; a tick under threshold opens and closes with a no-op outcome.
+
+## Observing a tick — the DB is the source of truth, not the logs
+
+**eve markdown task-mode discards the agent's own output.** The model's reasoning and tool results
+never reach Vercel logs, so logs cannot tell you what a tick *did*. The temper DB is the source of
+truth: the **invocation envelope** (`kb_invocations` — status / outcome / `closed_at`) and its
+**acts** (`kb_events` joined on `invocation_id`). Read them with the MCP tools `invocation_show
+<id>` (envelope + acts + outcome payload) and `invocation_list --status open` (any orphaned
+envelopes), or over psql.
+
+Three things that read as bugs but aren't:
+
+- **Ticks are long — an open envelope with a null outcome mid-run is NORMAL, not a stall.** A tick
+  that clears the threshold on a large delta runs for **many minutes** (the first prod tick ran ~11
+  minutes: opened `01:47:34`, closed `01:58:38`, 17 nodes + 17 facets). If you query the DB partway
+  through, you see an `open` invocation with no outcome and (depending on timing) few or no acts yet
+  — that is a tick *in progress*, not a hang. Only suspect a real stall when the envelope stays
+  `open` **past the function's max execution duration** AND no new acts are landing. Confirm with
+  `invocation_show` (is `closed_at` set? are acts still accruing?) and `invocation_list --status
+  open` — don't conclude from a single mid-run snapshot.
+
+- **An orphaned open invocation** (still `open` well after the function could have run) means a tick
+  died mid-loop — a function timeout, or the model stopping after a tool call without reaching
+  `invocation_close`. It is harmless cruft (append-only), but it is a signal worth checking.
+
+- **A pre-grant tick's `steward_ingest_delta: cognitive map not found` is an access-scoped
+  not-found, NOT an auth failure.** Auth succeeding while read reach is missing surfaces as "not
+  found," not `401`. If you see it *before* the profile has been granted reach (Phase 2), that is
+  expected — auth works, the corpus just isn't readable yet. Don't chase it as a token bug.
+
+> **Known-fixed defect (edges).** The first prod tick authored 17 nodes but **0 edges**:
+> `assert_relationship` failed for every cogmap-homed source with *"no rows returned by a query that
+> expected to return at least one row."* The edge-home lookup in `DbBackend::assert_relationship`
+> hard-filtered `anchor_table='kb_contexts'`, but a steward's authored-4 nodes are **cogmap-homed**,
+> so the lookup returned zero rows. Fixed: the backend now reads the source's home anchor without
+> assuming a context and homes the edge to the map (the `assert_kernel_edge` path). **This fix must
+> be deployed to the temper-mcp/temper-api target before the steward's edges will land**; the next
+> tick after deploy should retrofit `derived_from` + inter-node edges onto any nodes authored
+> edgeless in the interim.
 
 ## Design note — `TEMPER_SELF_COGMAP_ID` is an MVP binding
 
