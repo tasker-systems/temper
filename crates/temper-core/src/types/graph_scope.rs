@@ -28,7 +28,7 @@ pub struct TeamZone {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
-    pub resource_count: i64,
+    pub resource_count: i32,
 }
 
 /// The team-scoped navigation frame for the graph view: the scope team, its reachable

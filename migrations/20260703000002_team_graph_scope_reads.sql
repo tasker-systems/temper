@@ -69,10 +69,15 @@ RETURNS TABLE(resource_id uuid) LANGUAGE sql STABLE AS $$
         JOIN kb_resource_homes h
           ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
         UNION
-        -- resources homed in a context OWNED by a scope team
+        -- resources homed in a context OWNED by a scope team.
+        -- Team-owned context is FLAT in the visibility model (only DIRECT members of the
+        -- owning team see it — never ancestor-expanded), so this branch self-gates on
+        -- membership rather than relying on the trailing intersection. It stays scope-bounded
+        -- (owner ∈ scope_teams) so an owned context outside T's scope is not counted.
         SELECT h.resource_id
         FROM kb_contexts c
         JOIN scope_teams st ON c.owner_table = 'kb_teams' AND c.owner_id = st.team_id
+        JOIN kb_team_members tm ON tm.team_id = c.owner_id AND tm.profile_id = p_profile
         JOIN kb_resource_homes h
           ON h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id
         UNION

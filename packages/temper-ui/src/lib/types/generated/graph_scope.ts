@@ -17,4 +17,4 @@ export type TeamScopeView = { team: TeamRef, ancestors: Array<TeamRef>, zones: A
  * `resource_count` is the number of resources the profile would see within the child's
  * scope (child + its ancestors), i.e. `count(resources_in_team_scope(profile, child))`.
  */
-export type TeamZone = { id: string, slug: string, name: string, resource_count: bigint, };
+export type TeamZone = { id: string, slug: string, name: string, resource_count: number, };

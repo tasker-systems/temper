@@ -765,3 +765,21 @@ git commit -m "feat(graph): R1 GET /api/teams/{id}/graph-scope endpoint + e2e ac
 - **Controller runs the DB/e2e tiers**, not the implementer subagent (background cargo stalls implementers): the implementer writes code + the focused test; the controller runs `cargo build -p temper-cli --bin temper` (nextest rebuilds the lib, not the bin) then `cargo make test-e2e`, plus the full `cargo make check`, and commits. (`feedback_sdd_subagents_stall_on_backgrounded_cargo`, `feedback_nextest_does_not_rebuild_spawned_temper_bin`, `feedback_implementer_subagents_must_run_fmt`.)
 - **Zone-count semantics** (`resource_count` = ancestor-inclusive scope count) is a deliberate v1 choice ("what you'd see on entering"); revisit if it reads as double-counting (goal open question).
 - **No `.sqlx` regeneration** this chunk (runtime queries only). If a future change converts any of these to `query!`/`query_as!` macros, run `cargo make prepare-e2e`.
+
+---
+
+## Post-review amendments (final whole-branch review, 2026-07-03)
+
+Verdicts: spec-compliance **PASS**, code-quality **Good** (`.superpowers/sdd/final-review.md`).
+Applied before merge:
+- **I1 (Important):** `resources_in_team_scope`'s team-owned-context branch now self-gates on
+  direct membership (`JOIN kb_team_members … profile_id = p_profile`) instead of relying on the
+  trailing `resources_visible_to` intersection — matches the model's flat treatment of team-owned
+  contexts and removes the latent-leak / dead-breadth reliance. Observably identical output (no
+  leak shipped either way), so no black-box test distinguishes it; existing tests still green.
+- **M2 (Minor):** e2e test now grants a resource to squad-a and asserts its zone `resource_count == 1`.
+- **M4 (Minor):** `TeamZone.resource_count` is `i32` (SQL `count(*)::int`) → TS `number` (matches
+  `CogmapRegionRow.member_count`), instead of `i64`→`bigint`.
+- **M5 (Minor):** commented the defensive `.ok_or(NotFound)` on the team fetch.
+- **M3 (Minor):** ancestor-inclusive zone-count semantics accepted as documented v1 choice
+  (goal open question — a child-local count is a possible later refinement).

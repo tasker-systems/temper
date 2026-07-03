@@ -86,6 +86,25 @@ async fn scope_shows_reachable_zones_and_denies_outsiders(pool: sqlx::PgPool) {
     link_parent(&pool, eng, squad_b).await;
     add_member(&pool, squad_a, member).await;
 
+    // Grant one resource to squad-a so its zone reports a nonzero size hint.
+    let sq_res: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ('sq doc','temper://e2e/sq') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_resources', $1, 'kb_teams', $2, true, $3)",
+    )
+    .bind(sq_res)
+    .bind(squad_a)
+    .bind(member)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     // The member can view engineering (upward access from squad-a).
     let (status, body) = graph_scope(&app, &app.token, eng).await;
     assert_eq!(
@@ -107,6 +126,16 @@ async fn scope_shows_reachable_zones_and_denies_outsiders(pool: sqlx::PgPool) {
     assert!(
         !zone_slugs.contains(&"e2e-squad-b"),
         "squad-b (not a member) is not shown"
+    );
+    let squad_a_zone = body["zones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|z| z["slug"] == "e2e-squad-a")
+        .expect("squad-a zone present");
+    assert_eq!(
+        squad_a_zone["resource_count"], 1,
+        "squad-a zone size hint reflects its one granted resource"
     );
 
     // An outsider (member of nothing under eng) is denied — deny-as-absence.

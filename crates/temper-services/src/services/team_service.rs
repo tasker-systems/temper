@@ -510,7 +510,8 @@ pub async fn graph_scope(
         return Err(ApiError::NotFound);
     }
 
-    // The scope team itself.
+    // The scope team itself. (The viewable gate above already implies a member row —
+    // hence the team — exists; the ok_or is defensive belt-and-suspenders.)
     let team: TeamRef = sqlx::query_as::<_, (uuid::Uuid, String, String)>(
         "SELECT id, slug, name FROM kb_teams WHERE id = $1",
     )
@@ -536,9 +537,9 @@ pub async fn graph_scope(
     .collect();
 
     // Enterable child zones + size hint (count of resources in the child's scope).
-    let zones: Vec<TeamZone> = sqlx::query_as::<_, (uuid::Uuid, String, String, i64)>(
+    let zones: Vec<TeamZone> = sqlx::query_as::<_, (uuid::Uuid, String, String, i32)>(
         "SELECT t.id, t.slug, t.name,
-                (SELECT count(*) FROM resources_in_team_scope($2, t.id)) AS resource_count
+                (SELECT count(*) FROM resources_in_team_scope($2, t.id))::int AS resource_count
            FROM team_child_zones($2, $1) z
            JOIN kb_teams t ON t.id = z.team_id
           ORDER BY t.name",
