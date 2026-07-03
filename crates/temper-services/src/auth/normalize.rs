@@ -121,4 +121,26 @@ mod tests {
             normalize_machine(&raw(None, Some("abc123"), "auth0|user", Some("u@x.test"))).is_none()
         );
     }
+
+    /// Known-answer test pinning the *real* claim shape Auth0 mints for a
+    /// `client_credentials` grant. Captured from a live token minted by the
+    /// `Temper Steward M2M` app on `temperkb.us.auth0.com` (auth seam Stage 4
+    /// validation, 2026-07-02). Guards against Auth0 silently changing its M2M
+    /// token format under us.
+    #[test]
+    fn real_auth0_m2m_token_shape_is_detected() {
+        let raw = RawJwtClaims {
+            sub: "y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu@clients".to_string(),
+            email: None,
+            email_verified: None,
+            azp: Some("y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu".to_string()),
+            gty: Some("client-credentials".to_string()),
+            exp: 1_783_126_372,
+            iat: 1_783_039_972,
+        };
+        let c = normalize_machine(&raw).expect("real Auth0 M2M token must be detected as machine");
+        assert_eq!(c.principal_kind, PrincipalKind::Machine);
+        assert_eq!(c.provider, "auth0-m2m");
+        assert_eq!(c.external_user_id, "y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu");
+    }
 }

@@ -128,12 +128,19 @@ let claims = match auth::detect_machine(&raw) {
 
 ## Follow-ups (operator / console — not code)
 
-- Provision the Auth0 **M2M application** authorized for the **mcp audience** (`MCP_AUDIENCE`)
-  — the steward hits MCP, so the M2M app targets the mcp audience, not the API audience.
-- Once provisioned: obtain a **real M2M token** and validate `detect_machine` against it —
-  confirms the `azp`/`gty`/`sub` assumptions in decisions (2)/(3). (Deferred real-token gate.)
-- Grant the agent's client-id profile team membership + `cogmap grant --write` so the deployed
-  steward passes the gate on temperkb.io.
+- ✅ **DONE (2026-07-02):** Provisioned the Auth0 **M2M application** `Temper Steward M2M`
+  (client_id `y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu`) on `temperkb.us.auth0.com`, authorized via a
+  client-grant for the `temper-api` audience `https://temperkb.io/api` — which is also the mcp
+  audience (no separate `MCP_AUDIENCE` API is registered, so it resolves to this identifier).
+  The client secret must be set as the steward's Vercel env var; rotate with
+  `auth0 apps rotate-secret <client_id>` if desired.
+- ✅ **DONE (2026-07-02):** Validated `normalize_machine` against a **real M2M token** minted
+  from that app. The `azp`/`gty`/`sub`/no-email shape matched decisions (2)/(3) exactly; pinned
+  as a KAT in `normalize.rs::real_auth0_m2m_token_shape_is_detected`.
+- **PENDING:** Grant the agent's provisioned profile (link `(auth0-m2m,
+  y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu)`) team membership + `cogmap grant --write` so the deployed
+  steward passes the system-access gate on temperkb.io. Happens after the steward first
+  connects and its profile auto-provisions (or pre-create the grant).
 - **4c** (self-hosted Temper AS `client_credentials` grant + machine `MintedClaims` variant,
   ideally a ts-rs-shared machine-claim type) remains deferred until a self-hosted instance
   wants agents.
