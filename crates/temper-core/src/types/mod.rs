@@ -19,10 +19,13 @@ pub mod config;
 pub mod conflict;
 pub mod context;
 pub mod device;
+pub mod element_trail;
 pub mod event;
 pub mod facet_requests;
 pub mod graph;
+pub mod graph_atlas;
 pub mod graph_scope;
+pub mod graph_territory;
 pub mod home;
 pub mod ids;
 pub mod ingest;
@@ -61,9 +64,15 @@ pub use config::{
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use device::DeviceSyncState;
+pub use element_trail::{ElementEvent, ElementKind, EventTrail};
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
+pub use graph_atlas::{AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest};
 pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
+pub use graph_territory::{
+    Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
+    TerritorySlice,
+};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{

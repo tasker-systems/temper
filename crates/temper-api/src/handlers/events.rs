@@ -4,8 +4,9 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::types::api::EventCursorResponse;
+use temper_core::types::element_trail::{ElementKind, EventTrail};
 use temper_core::types::ids::{ContextId, ProfileId};
-use temper_services::error::{ApiResult, ErrorBody};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::event_service;
 use temper_services::state::AppState;
 
@@ -34,4 +35,43 @@ pub async fn cursor(
     )
     .await?;
     Ok(Json(EventCursorResponse { latest_event_id }))
+}
+
+/// GET /api/graph/elements/{kind}/{id}/trail — R5 element event-trail. kind ∈ {node, edge}.
+#[utoipa::path(
+    get,
+    path = "/api/graph/elements/{kind}/{id}/trail",
+    tag = "Events",
+    params(
+        ("kind" = String, Path, description = "node | edge"),
+        ("id" = Uuid, Path, description = "resource id (node) or edge id")
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Event trail", body = EventTrail),
+        (status = 400, description = "Unknown element kind")
+    )
+)]
+pub async fn element_trail(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((kind, id)): Path<(String, Uuid)>,
+) -> ApiResult<Json<EventTrail>> {
+    let element_kind = match kind.as_str() {
+        "node" => ElementKind::Node,
+        "edge" => ElementKind::Edge,
+        _ => {
+            return Err(ApiError::BadRequest(
+                "element kind must be 'node' or 'edge'".into(),
+            ))
+        }
+    };
+    event_service::element_trail(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        element_kind,
+        id,
+    )
+    .await
+    .map(Json)
 }

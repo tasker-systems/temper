@@ -11,7 +11,14 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_core::types::ids::ResourceId;
+use temper_core::types::graph_atlas::{
+    AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
+};
+use temper_core::types::graph_territory::{
+    Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
+    TerritorySlice,
+};
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
 use temper_workflow::types::graph::{is_aggregator, GraphEdge, GraphNode, SubgraphResponse};
 
@@ -232,6 +239,261 @@ async fn fetch_subgraph_edges(pool: &PgPool, node_ids: &[Uuid]) -> ApiResult<Vec
         .collect();
 
     Ok(edges)
+}
+
+/// R4 — team-scoped parameterized neighborhood slice. Service-direct read.
+///
+/// Composes `graph_traverse_scoped` (team-clamped, edge-kind-filtered BFS) with
+/// `graph_atlas_nodes` (node projection over the same team scope) to build the
+/// induced Atlas subgraph. Deny-as-absence (404) when the profile cannot view
+/// the team (not a member of it or a descendant) — mirrors `team_service::graph_scope`.
+pub async fn neighborhood_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    team_id: Uuid,
+    req: SliceRequest,
+) -> ApiResult<AtlasSubgraph> {
+    if req.seeds.is_empty() {
+        return Err(ApiError::BadRequest("seeds must be non-empty".into()));
+    }
+    // Deny-as-absence: profile must read the team (member of it or a descendant).
+    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_one(pool)
+        .await?;
+    if !viewable {
+        return Err(ApiError::NotFound);
+    }
+
+    let depth = req.depth.min(MAX_DEPTH) as i32;
+
+    // Walk: returns the edges of the induced subgraph. EdgeKind/Polarity decode
+    // natively via their `sqlx::Type` derive (same mechanism as fetch_subgraph_edges
+    // above), so req.edge_kinds binds directly as an `edge_kind[]` array param —
+    // no `::text` cast round-trip.
+    let walked = sqlx::query_as::<_, (Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
+        "SELECT source_id, target_id, edge_kind, polarity, label, weight \
+         FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(&req.seeds)
+    .bind(depth)
+    .bind(&req.edge_kinds)
+    .fetch_all(pool)
+    .await?;
+
+    let edges: Vec<AtlasEdge> = walked
+        .iter()
+        .map(
+            |(source, target, edge_kind, polarity, label, weight)| AtlasEdge {
+                source: *source,
+                target: *target,
+                edge_kind: *edge_kind,
+                polarity: *polarity,
+                label: label.clone(),
+                weight: *weight,
+            },
+        )
+        .collect();
+
+    // Node id set = seeds ∪ all walked endpoints.
+    let mut node_ids: Vec<Uuid> = req.seeds.clone();
+    for (s, t, ..) in &walked {
+        node_ids.push(*s);
+        node_ids.push(*t);
+    }
+
+    let nodes: Vec<AtlasNode> = sqlx::query_as::<_, (Uuid, String, Option<String>, String, i32)>(
+        "SELECT id, title, doc_type, home, degree FROM graph_atlas_nodes($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(&node_ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, title, doc_type, home, degree)| AtlasNode {
+        id,
+        title,
+        doc_type,
+        home: if home == "cogmap" {
+            NodeHome::Cogmap
+        } else {
+            NodeHome::Context
+        },
+        degree,
+        salience: None, // neighborhood-tier salience deferred (no per-node source yet)
+    })
+    .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
+}
+
+/// R2 — Tier-0 territory overview for a team scope. Service-direct read.
+pub async fn territory_overview(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    team_id: Uuid,
+    lens_id: Option<Uuid>,
+) -> ApiResult<TerritoryOverview> {
+    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_one(pool)
+        .await?;
+    if !viewable {
+        return Err(ApiError::NotFound);
+    }
+
+    // Default lens = the global 'telos-default' (cogmap_id IS NULL).
+    let lens: Uuid = match lens_id {
+        Some(l) => l,
+        None => sqlx::query_scalar(
+            "SELECT id FROM kb_cogmap_lenses WHERE name = 'telos-default' AND cogmap_id IS NULL LIMIT 1",
+        )
+        .fetch_one(pool)
+        .await?,
+    };
+
+    let mut territories: Vec<Territory> = Vec::new();
+
+    let regions = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64)>(
+        "SELECT region_id, cogmap_id, label, member_count, salience FROM graph_region_territories($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(lens)
+    .fetch_all(pool)
+    .await?;
+    for (region_id, cogmap_id, label, member_count, salience) in regions {
+        territories.push(Territory {
+            id: region_id,
+            kind: TerritoryKind::Region,
+            label,
+            member_count,
+            salience: Some(salience),
+            anchor_id: cogmap_id,
+        });
+    }
+
+    let contexts = sqlx::query_as::<_, (Uuid, String, i32)>(
+        "SELECT context_id, label, member_count FROM graph_context_territories($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?;
+    for (context_id, label, member_count) in contexts {
+        territories.push(Territory {
+            id: context_id,
+            kind: TerritoryKind::Context,
+            label: Some(label),
+            member_count,
+            salience: None,
+            anchor_id: context_id,
+        });
+    }
+
+    const ORPHAN_LIMIT: usize = 50;
+    let orphan_nodes: Vec<OrphanNode> =
+        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid)>(
+            "SELECT id, title, doc_type, degree, anchor_id FROM graph_orphan_salient_nodes($1, $2)",
+        )
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .take(ORPHAN_LIMIT)
+        .map(|(id, title, doc_type, degree, anchor_id)| OrphanNode {
+            id,
+            title,
+            doc_type,
+            degree,
+            anchor_id,
+        })
+        .collect();
+
+    let bridges: Vec<Bridge> = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
+        "SELECT source_territory, target_territory, edge_count FROM graph_territory_bridges($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(source_territory, target_territory, edge_count)| Bridge {
+        source_territory,
+        target_territory,
+        edge_count,
+    })
+    .collect();
+
+    Ok(TerritoryOverview {
+        territories,
+        orphan_nodes,
+        bridges,
+    })
+}
+
+/// R3 Tier-1 territory drill-in: a region's components plus its
+/// visibility-scoped interior members. Deny-as-absence — the region must
+/// exist, be unfolded, and be readable by the caller, else `NotFound`.
+pub async fn territory_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    region_id: Uuid,
+) -> ApiResult<TerritorySlice> {
+    let readable: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM kb_cogmap_regions reg \
+         WHERE reg.id = $1 AND NOT reg.is_folded \
+           AND cogmap_readable_by_profile($2, reg.cogmap_id))",
+    )
+    .bind(region_id)
+    .bind(profile_id.as_uuid())
+    .fetch_one(pool)
+    .await?;
+    if !readable {
+        return Err(ApiError::NotFound);
+    }
+
+    let components: Vec<Component> = sqlx::query_as::<_, (Uuid, i32)>(
+        "SELECT component_id, member_count FROM graph_region_components($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(region_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, member_count)| Component { id, member_count })
+    .collect();
+
+    const MEMBER_LIMIT: usize = 100;
+    let members: Vec<RegionMember> =
+        sqlx::query_as::<_, (Uuid, String, Option<String>, Option<f64>)>(
+            "SELECT id, title, doc_type, affinity FROM graph_region_members($1, $2)",
+        )
+        .bind(profile_id.as_uuid())
+        .bind(region_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .take(MEMBER_LIMIT)
+        .map(|(id, title, doc_type, affinity)| RegionMember {
+            id,
+            title,
+            doc_type,
+            affinity,
+        })
+        .collect();
+
+    Ok(TerritorySlice {
+        region_id,
+        components,
+        members,
+    })
 }
 
 #[cfg(test)]

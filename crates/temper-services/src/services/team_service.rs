@@ -496,16 +496,11 @@ pub async fn graph_scope(
     team_id: uuid::Uuid,
 ) -> ApiResult<TeamScopeView> {
     // Access gate: the profile must be a member of the team or a descendant (upward read).
-    let viewable: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM team_descendants($1) d
-            JOIN kb_team_members tm ON tm.team_id = d.team_id AND tm.profile_id = $2
-        )",
-    )
-    .bind(team_id)
-    .bind(*profile_id)
-    .fetch_one(pool)
-    .await?;
+    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
+        .bind(*profile_id)
+        .bind(team_id)
+        .fetch_one(pool)
+        .await?;
     if !viewable {
         return Err(ApiError::NotFound);
     }

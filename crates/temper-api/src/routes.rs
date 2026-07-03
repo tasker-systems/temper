@@ -86,6 +86,18 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/facets", post(handlers::facets::set_facet))
         .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
+            "/api/teams/{id}/graph/slice",
+            post(handlers::graph::neighborhood_slice),
+        )
+        .route(
+            "/api/teams/{id}/graph/territories",
+            get(handlers::graph::territory_overview),
+        )
+        .route(
+            "/api/graph/regions/{region_id}/slice",
+            get(handlers::graph::territory_slice),
+        )
+        .route(
             "/api/resources/{id}/meta",
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
         )
@@ -192,6 +204,10 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),
+        )
+        .route(
+            "/api/graph/elements/{kind}/{id}/trail",
+            get(handlers::events::element_trail),
         )
         .route("/api/search", post(handlers::search::search))
         .route(
