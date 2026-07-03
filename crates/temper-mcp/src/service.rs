@@ -369,6 +369,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Grant a capability on a resource to a profile or team (system-admin, a can_grant holder, OR the resource owner). Pass the resource by ref, exactly one principal (to_profile or to_team by UUID), and capability flags (read/write/grant; read is implied by write/grant)."
+    )]
+    async fn resource_grant(
+        &self,
+        Parameters(input): Parameters<tools::resources::ResourceGrantInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::resource_grant(self, input).await
+    }
+
+    #[tool(
+        description = "Revoke a capability grant on a resource (system-admin, a can_grant holder, or the resource owner). No-op safe. Pass the resource by ref and exactly one principal (from_profile or from_team by UUID)."
+    )]
+    async fn resource_revoke(
+        &self,
+        Parameters(input): Parameters<tools::resources::ResourceRevokeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::resource_revoke(self, input).await
+    }
+
+    #[tool(
         description = "Read a cognitive map's surface tier: its materialized regions (salience, cohesion, label, member count) under an optional lens. Pass the map by ref."
     )]
     async fn cogmap_shape(

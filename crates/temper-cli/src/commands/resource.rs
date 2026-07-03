@@ -631,6 +631,86 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
 /// Auth is enforced server-side (current owner, or a team admin with reach over
 /// the resource + target). The recipient is a bare profile UUID, matching the
 /// `team` member commands.
+/// `temper resource grant <ref> --to-profile|--to-team <ref> [--read] [--write] [--grant]`.
+#[allow(clippy::too_many_arguments)]
+pub fn grant(
+    r#ref: &str,
+    to_profile: Option<uuid::Uuid>,
+    to_team: Option<String>,
+    read: bool,
+    write: bool,
+    grant_cap: bool,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let resource_id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r#ref)?);
+    // A team ref is a decorated ref (UUID or `slug-<uuid>`); parse_ref keeps the trailing
+    // UUID and ignores the slug half — no slug-uniqueness lookup needed.
+    let to_team_id = to_team
+        .as_deref()
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()?
+        .map(uuid::Uuid::from);
+    let principal = crate::actions::cogmap::resolve_principal(to_profile, to_team_id)?;
+
+    let body = temper_core::types::resource_grant::ResourceGrantBody {
+        principal_table: principal.table,
+        principal_id: principal.id,
+        can_read: read || write || grant_cap,
+        can_write: write,
+        can_delete: false,
+        can_grant: grant_cap,
+    };
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .grant(resource_id, &body)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `temper resource revoke <ref> --from-profile|--from-team <ref>`.
+pub fn revoke(
+    r#ref: &str,
+    from_profile: Option<uuid::Uuid>,
+    from_team: Option<String>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let resource_id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r#ref)?);
+    let from_team_id = from_team
+        .as_deref()
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()?
+        .map(uuid::Uuid::from);
+    let principal = crate::actions::cogmap::resolve_principal(from_profile, from_team_id)?;
+
+    let body = temper_core::types::resource_grant::ResourceRevokeBody {
+        principal_table: principal.table,
+        principal_id: principal.id,
+    };
+
+    let outcome = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .revoke(resource_id, &body)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
 pub fn reassign(r#ref: &str, to: &str, fmt: crate::format::OutputFormat) -> Result<()> {
     let id = temper_workflow::operations::parse_ref(r#ref)?;
     let to_profile_id = uuid::Uuid::parse_str(to.trim())

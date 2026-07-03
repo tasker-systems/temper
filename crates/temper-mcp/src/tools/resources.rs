@@ -8,9 +8,12 @@ use uuid::Uuid;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
+use temper_core::types::cognitive_maps::{GrantCapabilityRequest, RevokeCapabilityRequest};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_services::backend::{substrate_read, DbBackend};
+use temper_services::error::ApiError;
+use temper_services::services::access_service;
 use temper_services::services::context_service::resolve_context_ref;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
@@ -794,6 +797,152 @@ pub async fn delete_resource(
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&response),
     )]))
+}
+
+// ── resource_grant / resource_revoke (service-direct) ──────────────
+//
+// Per-resource capability grants over `kb_access_grants`, mirroring the cogmap grant tool.
+// Service-direct (admin events): gated by `is_system_admin OR can(...,'grant',...)` — which,
+// via the owner-grant seam, includes the resource owner. NOT routed through DbBackend.
+
+/// MCP input for resource_grant. `resource` is a ref; exactly one of `to_profile`/`to_team`
+/// (raw UUID) names the principal. At least one capability must be set (read implied by write/grant).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResourceGrantInput {
+    /// The resource, by ref (UUID or `slug-<uuid>`).
+    pub resource: String,
+    /// Grant to this profile (UUID). Mutually exclusive with `to_team`.
+    #[serde(default)]
+    pub to_profile: Option<Uuid>,
+    /// Grant to this team (UUID). Mutually exclusive with `to_profile`.
+    #[serde(default)]
+    pub to_team: Option<Uuid>,
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default)]
+    pub write: bool,
+    #[serde(default)]
+    pub grant: bool,
+}
+
+/// MCP input for resource_revoke. `resource` is a ref; exactly one of `from_profile`/`from_team`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResourceRevokeInput {
+    pub resource: String,
+    #[serde(default)]
+    pub from_profile: Option<Uuid>,
+    #[serde(default)]
+    pub from_team: Option<Uuid>,
+}
+
+/// Resolve exactly one of (profile, team) into `(principal_table, principal_id)`.
+fn resolve_grant_principal(
+    profile: Option<Uuid>,
+    team: Option<Uuid>,
+) -> Result<(String, Uuid), rmcp::ErrorData> {
+    match (profile, team) {
+        (Some(p), None) => Ok(("kb_profiles".to_string(), p)),
+        (None, Some(t)) => Ok(("kb_teams".to_string(), t)),
+        (Some(_), Some(_)) => Err(rmcp::ErrorData::invalid_params(
+            "supply exactly one principal, not both a profile and a team".to_string(),
+            None,
+        )),
+        (None, None) => Err(rmcp::ErrorData::invalid_params(
+            "no principal — supply exactly one of a profile or a team".to_string(),
+            None,
+        )),
+    }
+}
+
+fn map_grant_error(context: &str, err: ApiError) -> rmcp::ErrorData {
+    match err {
+        ApiError::Forbidden => rmcp::ErrorData::invalid_params(
+            format!("{context}: caller may not administer grants on this resource"),
+            None,
+        ),
+        other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
+    }
+}
+
+/// Grant a capability on a resource. SERVICE-DIRECT, gated by `is_system_admin OR can_grant OR
+/// owner`. `read` forced on when `write`/`grant` is set.
+pub async fn resource_grant(
+    svc: &TemperMcpService,
+    input: ResourceGrantInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let resource_id = uuid::Uuid::from(
+        temper_workflow::operations::parse_ref(&input.resource)
+            .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad resource ref: {e}"), None))?,
+    );
+    let (principal_table, principal_id) = resolve_grant_principal(input.to_profile, input.to_team)?;
+    if !(input.read || input.write || input.grant) {
+        return Err(rmcp::ErrorData::invalid_params(
+            "no capability selected — set at least one of read/write/grant".to_string(),
+            None,
+        ));
+    }
+    let req = GrantCapabilityRequest {
+        subject_table: "kb_resources".to_string(),
+        subject_id: resource_id,
+        principal_table,
+        principal_id,
+        can_read: input.read || input.write || input.grant,
+        can_write: input.write,
+        can_delete: false,
+        can_grant: input.grant,
+    };
+    let outcome =
+        access_service::grant_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
+            .await
+            .map_err(|e| map_grant_error("resource_grant", e))?;
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// Revoke a capability grant on a resource. SERVICE-DIRECT, admin/can_grant/owner-gated. No-op safe.
+pub async fn resource_revoke(
+    svc: &TemperMcpService,
+    input: ResourceRevokeInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let resource_id = uuid::Uuid::from(
+        temper_workflow::operations::parse_ref(&input.resource)
+            .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad resource ref: {e}"), None))?,
+    );
+    let (principal_table, principal_id) =
+        resolve_grant_principal(input.from_profile, input.from_team)?;
+    let req = RevokeCapabilityRequest {
+        subject_table: "kb_resources".to_string(),
+        subject_id: resource_id,
+        principal_table,
+        principal_id,
+    };
+    let outcome =
+        access_service::revoke_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
+            .await
+            .map_err(|e| map_grant_error("resource_revoke", e))?;
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+
+    #[test]
+    fn resource_grant_input_deserializes() {
+        let id = Uuid::now_v7();
+        let raw = serde_json::json!({ "resource": "r", "to_team": id.to_string(), "write": true });
+        let input: ResourceGrantInput = serde_json::from_value(raw).unwrap();
+        assert_eq!(input.to_team, Some(id));
+        assert!(input.write);
+        assert!(!input.grant);
+    }
 }
 
 #[cfg(test)]

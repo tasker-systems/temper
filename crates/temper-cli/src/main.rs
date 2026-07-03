@@ -279,6 +279,32 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 ResourceAction::Reassign { r#ref, to } => {
                     temper_cli::commands::resource::reassign(&r#ref, &to, output_format)
                 }
+                ResourceAction::Grant {
+                    r#ref,
+                    to_profile,
+                    to_team,
+                    read,
+                    write,
+                    grant,
+                } => temper_cli::commands::resource::grant(
+                    &r#ref,
+                    to_profile,
+                    to_team,
+                    read,
+                    write,
+                    grant,
+                    output_format,
+                ),
+                ResourceAction::Revoke {
+                    r#ref,
+                    from_profile,
+                    from_team,
+                } => temper_cli::commands::resource::revoke(
+                    &r#ref,
+                    from_profile,
+                    from_team,
+                    output_format,
+                ),
                 ResourceAction::Facet {
                     r#ref,
                     values,

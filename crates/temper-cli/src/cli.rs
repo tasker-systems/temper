@@ -495,6 +495,40 @@ pub enum ResourceAction {
         #[arg(long)]
         to: String,
     },
+    /// Grant a capability on a resource to a profile or team (system-admin, a can_grant
+    /// holder, or the resource owner).
+    Grant {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Grant to this profile (UUID). Mutually exclusive with `--to-team`.
+        #[arg(long = "to-profile")]
+        to_profile: Option<uuid::Uuid>,
+        /// Grant to this team (a UUID or decorated `slug-<uuid>` ref). Mutually exclusive
+        /// with `--to-profile`.
+        #[arg(long = "to-team")]
+        to_team: Option<String>,
+        /// Grant read.
+        #[arg(long)]
+        read: bool,
+        /// Grant write (implies read).
+        #[arg(long)]
+        write: bool,
+        /// Grant delegated-grant authority (implies read).
+        #[arg(long)]
+        grant: bool,
+    },
+    /// Revoke a capability grant on a resource (system-admin, a can_grant holder, or the owner).
+    Revoke {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+        r#ref: String,
+        /// Revoke this profile's grant (UUID). Mutually exclusive with `--from-team`.
+        #[arg(long = "from-profile")]
+        from_profile: Option<uuid::Uuid>,
+        /// Revoke this team's grant (a UUID or decorated `slug-<uuid>` ref). Mutually
+        /// exclusive with `--from-profile`.
+        #[arg(long = "from-team")]
+        from_team: Option<String>,
+    },
     /// Set a facet property on a resource (cloud-mode-only API write).
     ///
     /// Sends a `POST /api/facets` request via `temper-client`.
