@@ -341,7 +341,46 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::commands::team::join(message.as_deref())
             }
             TeamAction::Status { team: _ } => temper_cli::commands::team::status(),
-            TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
+            TeamAction::WithdrawRequest => temper_cli::commands::team::withdraw_request(),
+            TeamAction::Show { team } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::show_remote(client, &team, output_format).await
+                })
+            }),
+            TeamAction::Leave { team } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::leave_remote(client, &team, output_format).await
+                })
+            }),
+            TeamAction::RemoveMember { team, profile } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::remove_member_remote(
+                            client,
+                            &team,
+                            &profile,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            TeamAction::SetRole {
+                team,
+                profile,
+                role,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::set_role_remote(
+                        client,
+                        &team,
+                        &profile,
+                        &role,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
             TeamAction::Create {
                 slug,
                 name,

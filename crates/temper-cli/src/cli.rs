@@ -582,11 +582,34 @@ pub enum TeamAction {
         #[arg(long)]
         team: Option<String>,
     },
-    /// Withdraw a pending request or leave a team
+    /// Withdraw your pending join request.
+    WithdrawRequest,
+    /// Show a team's detail and member roster
+    Show {
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+    },
+    /// Leave a team you are a member of (removes your membership)
     Leave {
-        /// Team slug (default: system gating team)
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+    },
+    /// Remove a member from a team (owner/maintainer)
+    RemoveMember {
+        /// Team slug or UUID
+        team: String,
+        /// Member profile UUID
+        profile: String,
+    },
+    /// Change a member's role (owner/maintainer)
+    SetRole {
+        /// Team slug or UUID
+        team: String,
+        /// Member profile UUID
+        profile: String,
+        /// New role: maintainer | member | watcher
         #[arg(long)]
-        team: Option<String>,
+        role: String,
     },
     /// Create a team (you become its owner)
     Create {
