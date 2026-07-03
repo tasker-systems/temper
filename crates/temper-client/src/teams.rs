@@ -7,6 +7,7 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+    TeamUpdateRequest,
 };
 
 /// Sub-client for team lifecycle operations (create / add-member / list /
@@ -66,6 +67,30 @@ impl<'a> TeamsClient<'a> {
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
             .await
+    }
+
+    /// PATCH /api/teams/{id} — update team metadata (name/description).
+    pub async fn update(&self, team_id: Uuid, body: &TeamUpdateRequest) -> Result<TeamRow> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}");
+        let req = self.http.patch(&path).json(body);
+        self.http
+            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/teams/{id} — soft-delete a team (owner only).
+    ///
+    /// Returns `()` on a 204; `send` errors on any non-2xx (403/404/409), so
+    /// callers surface the guard failures without decoding a body.
+    pub async fn delete(&self, team_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/teams/{team_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send(&Method::DELETE, &path, req, Some(&token))
+            .await?;
+        Ok(())
     }
 
     /// PATCH /api/teams/{id}/members/{profile_id} — change a member's role.

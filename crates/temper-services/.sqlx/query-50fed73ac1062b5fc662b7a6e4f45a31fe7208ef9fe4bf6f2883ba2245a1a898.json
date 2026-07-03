@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, name, created,\n                  auto_join_role AS \"auto_join_role: TeamRole\"\n             FROM kb_teams WHERE id = $1",
+  "query": "SELECT id, slug, name, description, created,\n                  auto_join_role AS \"auto_join_role: TeamRole\"\n             FROM kb_teams WHERE id = $1 AND is_active",
   "describe": {
     "columns": [
       {
@@ -20,11 +20,16 @@
       },
       {
         "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
         "name": "created",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "auto_join_role: TeamRole",
         "type_info": {
           "Custom": {
@@ -50,9 +55,10 @@
       false,
       false,
       false,
+      true,
       false,
       true
     ]
   },
-  "hash": "f7a6a8a75d0d91dd6a9564e59d81903c8fb668f895b743cb718722eed03686fd"
+  "hash": "50fed73ac1062b5fc662b7a6e4f45a31fe7208ef9fe4bf6f2883ba2245a1a898"
 }

@@ -11,6 +11,7 @@ use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+    TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
@@ -100,6 +101,57 @@ pub async fn detail(
     team_service::team_detail(&state.pool, ProfileId::from(auth.0.profile.id), team_id)
         .await
         .map(Json)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/teams/{id}",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    request_body = TeamUpdateRequest,
+    responses(
+        (status = 200, description = "Team metadata updated", body = TeamRow),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 404, description = "Team not found or soft-deleted"),
+    )
+)]
+pub async fn update(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<TeamUpdateRequest>,
+) -> ApiResult<Json<TeamRow>> {
+    team_service::update_team(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        team_id,
+        &body,
+    )
+    .await
+    .map(Json)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/teams/{id}",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Team soft-deleted"),
+        (status = 403, description = "Forbidden (caller is not the owner)"),
+        (status = 404, description = "Team not found or already soft-deleted"),
+        (status = 409, description = "Cannot delete the temper-system root team"),
+    )
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    team_service::delete_team(&state.pool, ProfileId::from(auth.0.profile.id), team_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(

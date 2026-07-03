@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.slug, t.name, t.created,\n               t.auto_join_role AS \"auto_join_role: TeamRole\"\n          FROM kb_teams t\n          JOIN kb_team_members tm ON tm.team_id = t.id\n         WHERE tm.profile_id = $1\n         ORDER BY t.name\n        ",
+  "query": "\n        UPDATE kb_teams\n           SET name = COALESCE($2, name),\n               description = COALESCE($3, description)\n         WHERE id = $1 AND is_active\n        RETURNING id, slug, name, description, created,\n                  auto_join_role AS \"auto_join_role: TeamRole\"\n        ",
   "describe": {
     "columns": [
       {
@@ -20,11 +20,16 @@
       },
       {
         "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
         "name": "created",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "auto_join_role: TeamRole",
         "type_info": {
           "Custom": {
@@ -43,16 +48,19 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
       false,
       false,
       false,
+      true,
       false,
       true
     ]
   },
-  "hash": "a4ea03caf94eabbfd039eb2b7725137c082fb8fd08d3f19502367a178664c69b"
+  "hash": "71763a7321493a7a3e96f342dc8e25306e82d8c2dc266e54fa59dfc0609485d8"
 }

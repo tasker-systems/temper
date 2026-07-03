@@ -611,6 +611,22 @@ pub enum TeamAction {
         #[arg(long)]
         role: String,
     },
+    /// Update a team's metadata (owner/maintainer)
+    Update {
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+        /// New display name
+        #[arg(long)]
+        name: Option<String>,
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Soft-delete a team (owner only)
+    Delete {
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+    },
     /// Create a team (you become its owner)
     Create {
         /// Globally-unique team slug
