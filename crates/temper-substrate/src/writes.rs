@@ -580,8 +580,20 @@ pub struct KernelEdgeParams<'a> {
 }
 
 pub async fn assert_kernel_edge(pool: &PgPool, p: KernelEdgeParams<'_>) -> Result<EdgeId> {
+    assert_kernel_edge_with(pool, p, EventContext::default()).await
+}
+
+/// [`assert_kernel_edge`] under an explicit [`EventContext`] — the authored `relationship_asserted`
+/// act carries the caller's authorship + invocation correlator. This is the pool-level ctx variant
+/// `DbBackend::assert_relationship` dispatches to when the source resource is **cogmap-homed** (a
+/// steward's authored-4 node), homing the edge to the map rather than a context.
+pub async fn assert_kernel_edge_with(
+    pool: &PgPool,
+    p: KernelEdgeParams<'_>,
+    ctx: EventContext,
+) -> Result<EdgeId> {
     let mut tx = begin_scoped(pool).await?;
-    let edge = assert_kernel_edge_in_tx(&mut tx, p, EventContext::default()).await?;
+    let edge = assert_kernel_edge_in_tx(&mut tx, p, ctx).await?;
     tx.commit().await?;
     Ok(edge)
 }
