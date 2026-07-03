@@ -11,7 +11,10 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_core::types::ids::ResourceId;
+use temper_core::types::graph_atlas::{
+    AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
+};
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
 use temper_workflow::types::graph::{is_aggregator, GraphEdge, GraphNode, SubgraphResponse};
 
@@ -232,6 +235,99 @@ async fn fetch_subgraph_edges(pool: &PgPool, node_ids: &[Uuid]) -> ApiResult<Vec
         .collect();
 
     Ok(edges)
+}
+
+/// R4 — team-scoped parameterized neighborhood slice. Service-direct read.
+///
+/// Composes `graph_traverse_scoped` (team-clamped, edge-kind-filtered BFS) with
+/// `graph_atlas_nodes` (node projection over the same team scope) to build the
+/// induced Atlas subgraph. Deny-as-absence (404) when the profile cannot view
+/// the team (not a member of it or a descendant) — mirrors `team_service::graph_scope`.
+pub async fn neighborhood_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    team_id: Uuid,
+    req: SliceRequest,
+) -> ApiResult<AtlasSubgraph> {
+    if req.seeds.is_empty() {
+        return Err(ApiError::BadRequest("seeds must be non-empty".into()));
+    }
+    // Deny-as-absence: profile must read the team (member of it or a descendant).
+    let viewable: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_descendants($1) d \
+         JOIN kb_team_members tm ON tm.team_id = d.team_id AND tm.profile_id = $2)",
+    )
+    .bind(team_id)
+    .bind(profile_id.as_uuid())
+    .fetch_one(pool)
+    .await?;
+    if !viewable {
+        return Err(ApiError::NotFound);
+    }
+
+    let depth = req.depth.min(MAX_DEPTH) as i32;
+
+    // Walk: returns the edges of the induced subgraph. EdgeKind/Polarity decode
+    // natively via their `sqlx::Type` derive (same mechanism as fetch_subgraph_edges
+    // above), so req.edge_kinds binds directly as an `edge_kind[]` array param —
+    // no `::text` cast round-trip.
+    let walked = sqlx::query_as::<_, (Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64, i32)>(
+        "SELECT source_id, target_id, edge_kind, polarity, label, weight, depth \
+         FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(&req.seeds)
+    .bind(depth)
+    .bind(&req.edge_kinds)
+    .fetch_all(pool)
+    .await?;
+
+    let edges: Vec<AtlasEdge> = walked
+        .iter()
+        .map(
+            |(source, target, edge_kind, polarity, label, weight, _depth)| AtlasEdge {
+                source: *source,
+                target: *target,
+                edge_kind: *edge_kind,
+                polarity: *polarity,
+                label: label.clone(),
+                weight: *weight,
+            },
+        )
+        .collect();
+
+    // Node id set = seeds ∪ all walked endpoints.
+    let mut node_ids: Vec<Uuid> = req.seeds.clone();
+    for (s, t, ..) in &walked {
+        node_ids.push(*s);
+        node_ids.push(*t);
+    }
+
+    let nodes: Vec<AtlasNode> = sqlx::query_as::<_, (Uuid, String, Option<String>, String, i32)>(
+        "SELECT id, title, doc_type, home, degree FROM graph_atlas_nodes($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(&node_ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, title, doc_type, home, degree)| AtlasNode {
+        id,
+        title,
+        doc_type,
+        home: if home == "cogmap" {
+            NodeHome::Cogmap
+        } else {
+            NodeHome::Context
+        },
+        degree,
+        salience: None, // neighborhood-tier salience deferred (no per-node source yet)
+    })
+    .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
 }
 
 #[cfg(test)]

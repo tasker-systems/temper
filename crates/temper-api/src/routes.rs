@@ -74,6 +74,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/facets", post(handlers::facets::set_facet))
         .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
+            "/api/teams/{id}/graph/slice",
+            post(handlers::graph::neighborhood_slice),
+        )
+        .route(
             "/api/resources/{id}/meta",
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
         )

@@ -1,15 +1,19 @@
 //! Knowledge-graph subgraph handler — serves `GET /api/graph/subgraph`.
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
+use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_service::resolve_context_ref;
-use temper_services::services::graph_service::{aggregator_subgraph, AggregatorSubgraphParams};
+use temper_services::services::graph_service::{
+    self, aggregator_subgraph, AggregatorSubgraphParams,
+};
 use temper_services::state::AppState;
 use temper_workflow::frontmatter::document::DocType;
 use temper_workflow::types::graph::SubgraphResponse;
@@ -59,4 +63,34 @@ pub async fn get_subgraph(
     .await?;
 
     Ok(Json(response))
+}
+
+/// POST /api/teams/{id}/graph/slice — R4 team-scoped parameterized neighborhood slice.
+#[utoipa::path(
+    post,
+    path = "/api/teams/{id}/graph/slice",
+    tag = "Graph",
+    params(("id" = Uuid, Path, description = "Team id to scope the slice to")),
+    request_body = SliceRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Neighborhood slice", body = AtlasSubgraph),
+        (status = 400, description = "Empty seed set"),
+        (status = 404, description = "Team not viewable by this profile")
+    )
+)]
+pub async fn neighborhood_slice(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(req): Json<SliceRequest>,
+) -> ApiResult<Json<AtlasSubgraph>> {
+    graph_service::neighborhood_slice(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        team_id,
+        req,
+    )
+    .await
+    .map(Json)
 }
