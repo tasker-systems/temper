@@ -10,16 +10,23 @@ description: Use when tending the team self-cognition map — choosing a node's 
 delta = temper__steward_ingest_delta(cogmap, threshold)   # skip if under threshold
 inv   = temper__invocation_open(cogmap, trigger="scheduled")
 telos = temper__cogmap_read_charter(cogmap)               # orient
+
+# act = { invocation_id: inv.id, reasoning: "<why>", confidence: <band> }
+# EVERY authored-4 call below carries `act`. No exceptions — see Authorship.
+
 for source in delta.new_or_changed:
   existing = temper__search(cogmap, source)               # dedup
   if materially_changed(source, existing):                # your judgment (below)
-    temper__fold_relationship(existing.derived_from); existing = none
+    temper__fold_relationship(existing.derived_from, act)
+    existing = none
   if not existing:
-    node = temper__create_resource(cogmap=cogmap, type=<label>, authorship=…)
-    temper__assert_relationship(node -> source, label="derived_from", kind="express")
+    node = temper__create_resource(cogmap=cogmap, type=<label>, act)
+    temper__assert_relationship(node -> source, label="derived_from", kind="express", act)
     for rel in inter_node_relationships(node):
-      temper__assert_relationship(node -> other, kind, polarity, label, weight)
-    for f in facets(node): temper__facet_set(node, f)
+      temper__assert_relationship(node -> other, kind, polarity, label, weight, act)
+    for f in facets(node): temper__facet_set(node, f, act)
+
+# Before closing, self-check: every act this tick carried invocation_id + confidence.
 temper__steward_advance_watermark(cogmap, delta.max_event_id)
 temper__invocation_close(inv, outcome)
 ```
@@ -74,9 +81,36 @@ reworded sentence. When materially changed: **fold** the stale node's `derived_f
 edge and create a fresh node. Never edit the node's blocks in place. When in doubt,
 prefer leaving the node and lowering your confidence over churning a fold.
 
-## Authorship
+## Authorship — a hard invariant on every authored act
 
-Every act carries your authorship on the wire: `confidence` (tentative / probable /
-confident) and `reasoning`. Reasoning is **required** on create, edge, and fold;
-optional on facets. The `invocation_id` from `invocation_open` correlates the run.
-Close with an outcome summarizing nodes / edges / facets / folds.
+Every one of the authored-4 — `create_resource`, `assert_relationship`,
+`facet_set`, `fold_relationship` — **MUST** carry the act envelope. This is not
+per-call discretionary; a node or edge without it is real but *orphaned*.
+
+- **`invocation_id`** — the id returned by `invocation_open`. This is what
+  correlates the act to the run. **Drop it and the act does not appear under
+  `invocation_show`** — the map's nodes/edges become uncorrelated to the tick that
+  authored them, breaking the accountability chain. Carry it on *every* call.
+- **`confidence`** — `tentative` / `probable` / `confident`. Required whenever any
+  other authorship field is set — it is the gate for the whole envelope.
+- **`reasoning`** — one line on *why* this act: which source it distills, why this
+  label, why this edge. Required on create / edge / fold; set it on facets too.
+
+Same envelope on every call — not just `create`:
+
+    temper__assert_relationship(source, target, edge_kind, polarity, label, weight,
+        invocation_id=inv.id, confidence="confident",
+        reasoning="derived_from: this node distills source 019f…")
+
+    temper__facet_set(resource, values,
+        invocation_id=inv.id, confidence="confident",
+        reasoning="marks the map's own question node resolved")
+
+    temper__fold_relationship(edge_handle,
+        invocation_id=inv.id, confidence="probable",
+        reasoning="source materially changed; folding the stale derived_from")
+
+**Before `invocation_close`, self-check:** every act you emitted this tick carried
+`invocation_id` and `confidence`. If you authored a node, edge, or facet without
+them, you broke the accountability chain — the acts exist but nothing ties them to
+this run. Close with an outcome summarizing nodes / edges / facets / folds.
