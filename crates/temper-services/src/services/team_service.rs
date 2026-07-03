@@ -338,6 +338,59 @@ pub async fn remove_member(
     Ok(())
 }
 
+/// Change an existing member's role. Owner/maintainer only. Cannot create a
+/// member (404 if absent), cannot grant `owner` (ownership is transferred, not
+/// granted), refuses SAML rows, and refuses to demote the last owner.
+pub async fn change_role(
+    pool: &PgPool,
+    caller: ProfileId,
+    team_id: Uuid,
+    target: Uuid,
+    new_role: TeamRole,
+) -> ApiResult<TeamMemberRow> {
+    // Auth before writes.
+    match role_on_team(pool, team_id, caller).await? {
+        Some(role) if can_manage(role) => {}
+        _ => return Err(ApiError::Forbidden),
+    }
+
+    if matches!(new_role, TeamRole::Owner) {
+        return Err(ApiError::BadRequest(
+            "cannot grant owner via role change; use ownership transfer".to_string(),
+        ));
+    }
+
+    let (current_role, source) = load_member(pool, team_id, target)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if matches!(source, TeamMemberSource::Idp) {
+        return Err(ApiError::Conflict(
+            "this membership is provisioned by SAML; change it via the identity provider"
+                .to_string(),
+        ));
+    }
+    if matches!(current_role, TeamRole::Owner) && count_owners(pool, team_id).await? == 1 {
+        return Err(ApiError::Conflict(
+            "cannot remove the last owner; transfer ownership or promote another member first"
+                .to_string(),
+        ));
+    }
+
+    let row = sqlx::query_as!(
+        TeamMemberRow,
+        r#"UPDATE kb_team_members SET role = $3
+            WHERE team_id = $1 AND profile_id = $2
+        RETURNING team_id, profile_id, role AS "role: TeamRole", created"#,
+        team_id,
+        target,
+        new_role as TeamRole,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
@@ -465,5 +518,67 @@ mod lifecycle_tests {
 
         let denied = remove_member(&pool, ProfileId::from(owner), team, idp).await;
         assert!(matches!(denied, Err(ApiError::Conflict(_))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_changes_member_role(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        let row = change_role(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            member,
+            TeamRole::Maintainer,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(row.role, TeamRole::Maintainer));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_grant_owner_via_role_change(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        let denied =
+            change_role(&pool, ProfileId::from(owner), team, member, TeamRole::Owner).await;
+        assert!(matches!(denied, Err(ApiError::BadRequest(_))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cannot_demote_last_owner(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let denied = change_role(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            owner,
+            TeamRole::Maintainer,
+        )
+        .await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn change_role_on_nonmember_is_not_found(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let ghost = mk_profile(&pool, "ghost").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let denied =
+            change_role(&pool, ProfileId::from(owner), team, ghost, TeamRole::Member).await;
+        assert!(matches!(denied, Err(ApiError::NotFound)));
     }
 }
