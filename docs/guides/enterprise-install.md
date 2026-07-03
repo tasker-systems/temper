@@ -208,7 +208,7 @@ install; read this before step 8.
 > **`AS_CLIENTS` unset rejects every `/oauth/authorize` call (fail-closed); `INTERNAL_RECONCILE_SECRET`
 > unset silently disables group provisioning while auth still works.** The first fails loud, the
 > second doesn't — nothing errors, groups just never sync, so verify reconcile explicitly rather
-> than trusting a clean login ([self-hosting-saml.md:195](./self-hosting-saml.md#authorization-server-temper-cloud-the-api-deployment),
+> than trusting a clean login ([self-hosting-saml.md:195](./self-hosting-saml.md#authorization-server-temper-cloud--the-api-deployment),
 > [self-hosting-saml.md:230-233](./self-hosting-saml.md#group-provisioning-phase-2)).
 >
 > **`cogmap create` / `cogmap reconcile` require an `embed`-feature `temper` binary.** A

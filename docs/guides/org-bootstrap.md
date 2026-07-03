@@ -18,6 +18,10 @@ which loops these same commands from a declarative
 [`install-profile.yaml`](../../schema-artifact/install-profile.yaml). Run it by hand
 to understand it; run the applier to repeat it.
 
+> **Doing a full ground-up enterprise install?** This guide is one phase — the SAML bracket
+> note below covers *this guide's* relationship to SAML setup specifically. For the single
+> end-to-end sequence (deploy → SAML → org → agents) see [enterprise-install.md](./enterprise-install.md).
+
 ## Why a blank install isn't yet a usable org
 
 Resource **writes into** a team context already work end-to-end — a team member can

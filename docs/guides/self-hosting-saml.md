@@ -9,6 +9,9 @@ EdDSA-signed Temper JWT that `temper-api` trusts.
 Use this when your organization's IdP speaks SAML 2.0 (e.g. Okta, Entra ID, PingFederate, Shibboleth)
 and you want a native SP integration rather than an OIDC bridge.
 
+> **Doing a full ground-up enterprise install?** This guide is one phase. For the single
+> end-to-end sequence (deploy → SAML → org → agents) see [enterprise-install.md](./enterprise-install.md).
+
 > **This guide is the operator runbook.** For the *security model* it implements — how
 > tokens are verified, the two-level authorization seam, the reconcile channel's trust
 > model, and profile deactivation as an authn lever — see [../auth/](../auth/README.md),
