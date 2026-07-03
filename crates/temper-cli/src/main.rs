@@ -489,6 +489,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     if from_seen {
                         temper_cli::commands::admin_saml::from_seen(&idp_key)
                     } else {
+                        // clap `required_unless_present = "from_seen"` guarantees both are
+                        // Some in this branch; unwrap defensively rather than panic.
+                        let (Some(group), Some(team)) = (group, team) else {
+                            return Err(temper_cli::error::TemperError::Config(
+                                "map-group requires <group> and <team> unless --from-seen is set"
+                                    .into(),
+                            ));
+                        };
                         temper_cli::actions::runtime::with_client(|client| {
                             Box::pin(async move {
                                 temper_cli::commands::admin_saml::map_group(

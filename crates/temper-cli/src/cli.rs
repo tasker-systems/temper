@@ -719,10 +719,12 @@ pub enum AdminSamlAction {
     MapGroup {
         #[arg(long)]
         idp_key: String,
-        /// The IdP-asserted group value.
-        group: String,
-        /// Team to map into: a slug (optionally `+`-prefixed) or a UUID.
-        team: String,
+        /// The IdP-asserted group value. Required unless `--from-seen`.
+        #[arg(required_unless_present = "from_seen")]
+        group: Option<String>,
+        /// Team to map into: a slug (optionally `+`-prefixed) or a UUID. Required unless `--from-seen`.
+        #[arg(required_unless_present = "from_seen")]
+        team: Option<String>,
         #[arg(long, default_value = "member")]
         role: String,
         /// Instead of emitting a mapping, list groups the IdP has actually asserted
@@ -1180,6 +1182,89 @@ mod meta_only_flag_tests {
             "list with --meta-only and --fields failed: {:?}",
             m.err()
         );
+    }
+
+    #[test]
+    fn map_group_from_seen_parses_without_group_team() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "temper",
+            "admin",
+            "saml",
+            "map-group",
+            "--idp-key",
+            "acme-okta",
+            "--from-seen",
+        ])
+        .expect("map-group --from-seen must parse without group/team positionals");
+        match cli.command {
+            Commands::Admin {
+                action:
+                    AdminAction::Saml {
+                        action:
+                            AdminSamlAction::MapGroup {
+                                group,
+                                team,
+                                from_seen,
+                                ..
+                            },
+                    },
+            } => {
+                assert!(from_seen);
+                assert_eq!(group, None);
+                assert_eq!(team, None);
+            }
+            _ => panic!("expected Admin::Saml::MapGroup"),
+        }
+    }
+
+    #[test]
+    fn map_group_mapping_form_requires_group_team() {
+        use clap::Parser;
+        // No --from-seen and no positionals → clap must reject.
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "admin",
+                "saml",
+                "map-group",
+                "--idp-key",
+                "acme-okta"
+            ])
+            .is_err(),
+            "map-group without --from-seen must require group and team"
+        );
+        // The mapping form with both positionals still parses.
+        let cli = Cli::try_parse_from([
+            "temper",
+            "admin",
+            "saml",
+            "map-group",
+            "--idp-key",
+            "acme-okta",
+            "engineers",
+            "+platform",
+        ])
+        .expect("map-group with group+team must parse");
+        match cli.command {
+            Commands::Admin {
+                action:
+                    AdminAction::Saml {
+                        action:
+                            AdminSamlAction::MapGroup {
+                                group,
+                                team,
+                                from_seen,
+                                ..
+                            },
+                    },
+            } => {
+                assert!(!from_seen);
+                assert_eq!(group.as_deref(), Some("engineers"));
+                assert_eq!(team.as_deref(), Some("+platform"));
+            }
+            _ => panic!("expected Admin::Saml::MapGroup"),
+        }
     }
 }
 
