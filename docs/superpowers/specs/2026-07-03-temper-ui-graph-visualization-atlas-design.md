@@ -3,7 +3,7 @@
 **Date:** 2026-07-03
 **Status:** Design — approved, pending spec review
 **Task:** Rethink temper-ui graph visualization (`019f25fc-b786-7771-82ff-ee8df0e005a8`)
-**Goal:** _pending — created after spec review_
+**Goal:** `graph-atlas-visualization` (`019f28a1-03f2-7aa1-a367-f6f8db8b0e7f`) — roadmap Chunks A–D
 **Mode / effort:** plan / large (this deliverable is the design + roadmap, not code)
 **Visual targets:** [`design-system/preview/graph-atlas/`](../../../design-system/preview/graph-atlas/) — `visual-direction.html` (Atlas ✓ vs Constellation) and `semantic-zoom.html` (the three tiers). Open in a browser; these are the reference mockups this spec aims at.
 
