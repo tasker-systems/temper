@@ -16,6 +16,9 @@ use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, AuthenticatedProfile};
 
+mod normalize;
+pub use normalize::{normalize_machine, RawJwtClaims, MACHINE_PROVIDER_TAG};
+
 use crate::error::ApiError;
 use crate::services::profile_service;
 
