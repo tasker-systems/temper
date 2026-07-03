@@ -99,12 +99,13 @@ async fn add_member(pool: &sqlx::PgPool, team: Uuid, profile: Uuid) {
         .expect("add member");
 }
 
-/// Team-anchored read grant (the upward-transitive visibility mechanism).
+/// Team-anchored read grant (the upward-transitive visibility mechanism), on the
+/// current kb_access_grants store (subject = resource, principal = team).
 async fn grant_read_to_team(pool: &sqlx::PgPool, resource: Uuid, team: Uuid, granted_by: Uuid) {
     sqlx::query(
-        "INSERT INTO kb_resource_access \
-             (resource_id, anchor_table, anchor_id, can_read, granted_by_profile_id) \
-         VALUES ($1, 'kb_teams', $2, true, $3)",
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_resources', $1, 'kb_teams', $2, true, $3)",
     )
     .bind(resource)
     .bind(team)
@@ -284,11 +285,11 @@ RETURNS TABLE(resource_id uuid) LANGUAGE sql STABLE AS $$
         SELECT a.team_id FROM team_ancestors(p_team) a
     ),
     scoped AS (
-        -- team-anchored read grant on a scope team
-        SELECT ra.resource_id
-        FROM kb_resource_access ra
-        JOIN scope_teams st ON ra.anchor_id = st.team_id
-        WHERE ra.anchor_table = 'kb_teams' AND ra.can_read
+        -- team-anchored resource read-grant on a scope team (kb_access_grants store)
+        SELECT g.subject_id AS resource_id
+        FROM kb_access_grants g
+        JOIN scope_teams st ON g.principal_id = st.team_id
+        WHERE g.subject_table = 'kb_resources' AND g.principal_table = 'kb_teams' AND g.can_read
         UNION
         -- resources homed in a context SHARED to a scope team
         SELECT h.resource_id
@@ -310,6 +311,16 @@ RETURNS TABLE(resource_id uuid) LANGUAGE sql STABLE AS $$
         JOIN scope_teams st ON tc.team_id = st.team_id
         JOIN kb_resource_homes h
           ON h.anchor_table = 'kb_cogmaps' AND h.anchor_id = tc.cogmap_id
+        UNION
+        -- explicit container-grant (D3a): resources homed in a context/cogmap the scope
+        -- team holds a read-grant on (kb_access_grants subject = the home anchor)
+        SELECT h.resource_id
+        FROM kb_resource_homes h
+        JOIN kb_access_grants g
+          ON g.subject_table = h.anchor_table AND g.subject_id = h.anchor_id
+        JOIN scope_teams st ON g.principal_id = st.team_id
+        WHERE h.anchor_table IN ('kb_cogmaps','kb_contexts')
+          AND g.principal_table = 'kb_teams' AND g.can_read
     )
     SELECT s.resource_id
     FROM scoped s
