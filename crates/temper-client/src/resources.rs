@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_workflow::types::graph::GraphEdgeRow;
 use temper_workflow::types::managed_meta::{
     MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
@@ -95,6 +96,16 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.delete(&path).query(act);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/resources/{id}/reassign — reassign a resource's owner/team.
+    pub async fn reassign(&self, id: Uuid, body: &ReassignResourceRequest) -> Result<ReassignAck> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/reassign");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 
