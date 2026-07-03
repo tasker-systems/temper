@@ -84,9 +84,19 @@ info "  env bundle + idp SQL emitted — set the env on api+mcp (timeline step 4
 
 # ── Step 6 — apply the kb_saml_idp row (needs --apply-db) ──────────────────────────────────────────
 if [ "$APPLY_DB" -eq 1 ]; then
-  info "Step 6 — apply kb_saml_idp row (--apply-db set)  [TODO: Task B4]"
+  info "Step 6 — apply kb_saml_idp row (psql ${SQL_OUT})"
+  command -v psql >/dev/null 2>&1 || die "psql not found — required for --apply-db"
+  [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL not set — required for --apply-db"
+  [ -f "$SQL_OUT" ] || die "sql artifact not found: $SQL_OUT (run step 3 first, without --dry-run)"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    # Literal preview text below — the $DATABASE_URL is intentionally not expanded.
+    # shellcheck disable=SC2016
+    printf '   (dry-run) psql "$DATABASE_URL" -f %s\n' "$SQL_OUT"
+  else
+    psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 -f "$SQL_OUT"
+  fi
 else
-  info "Step 6 — apply kb_saml_idp row (skipped — pass --apply-db)  [TODO: Task B4]"
+  info "Step 6 — SKIPPED (apply the emitted ${SQL_OUT} after migrations; re-run with --apply-db, or psql it by hand)"
 fi
 
 # ── Step 11 — map IdP groups to teams (run AFTER teams exist) ──────────────────────────────────────
