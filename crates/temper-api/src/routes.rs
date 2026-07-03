@@ -65,6 +65,10 @@ pub fn create_app(state: AppState) -> Router {
             "/api/resources/{id}/content",
             get(handlers::resources::get_content),
         )
+        .route(
+            "/api/resources/{id}/reassign",
+            post(handlers::reassign::reassign_resource),
+        )
         .route("/api/resources/{id}/edges", get(handlers::edges::list))
         .route("/api/relationships", post(handlers::edges::assert))
         .route(
@@ -110,6 +114,10 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/teams/{id}/invitations",
             get(handlers::invitations::list),
+        )
+        .route(
+            "/api/teams/{id}/reassign",
+            post(handlers::reassign::reassign_team),
         )
         .route(
             "/api/teams/{id}",

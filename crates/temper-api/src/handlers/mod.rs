@@ -12,6 +12,7 @@ pub mod invitations;
 pub mod invocations;
 pub mod meta;
 pub mod profiles;
+pub mod reassign;
 pub mod resources;
 pub mod search;
 pub mod steward;

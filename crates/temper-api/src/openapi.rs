@@ -63,6 +63,8 @@ use temper_workflow::types::resource::{
         crate::handlers::invitations::list,
         crate::handlers::invitations::accept,
         crate::handlers::invitations::decline,
+        crate::handlers::reassign::reassign_resource,
+        crate::handlers::reassign::reassign_team,
     ),
     components(schemas(
         HealthResponse,
@@ -142,6 +144,10 @@ use temper_workflow::types::resource::{
         temper_core::types::invitation::InvitationStatus,
         temper_core::types::invitation::CreateInvitationRequest,
         temper_core::types::invitation::AcceptInvitationResponse,
+        temper_core::types::reassign::ReassignResourceRequest,
+        temper_core::types::reassign::ReassignAck,
+        temper_core::types::reassign::BulkReassignRequest,
+        temper_core::types::reassign::BulkReassignAck,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -157,6 +163,7 @@ use temper_workflow::types::resource::{
         (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
         (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
         (name = "Invitations", description = "Team invitations (invite/list/accept/decline)"),
+        (name = "Reassign", description = "Resource ownership reassignment (single + bulk team-scoped)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
     ),
     info(
@@ -222,6 +229,8 @@ mod tests {
         assert!(json.contains("/api/teams/{id}/invitations"));
         assert!(json.contains("/api/invitations/{token}/accept"));
         assert!(json.contains("/api/invitations/{token}/decline"));
+        assert!(json.contains("/api/resources/{id}/reassign"));
+        assert!(json.contains("/api/teams/{id}/reassign"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));
