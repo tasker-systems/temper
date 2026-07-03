@@ -21,6 +21,7 @@ tracing = "0.1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
 [features]

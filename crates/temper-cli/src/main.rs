@@ -337,11 +337,44 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             temper_cli::commands::warmup::run(&config, context, output_format)
         }
         Commands::Team { action } => match action {
-            TeamAction::Join { team: _, message } => {
-                temper_cli::commands::team::join(message.as_deref())
+            TeamAction::Join { token } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::accept_invitation(client, &token, output_format)
+                        .await
+                })
+            }),
+            TeamAction::Invite { team, email, role } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::invite_remote(
+                            client,
+                            &team,
+                            &email,
+                            &role,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
             }
-            TeamAction::Status { team: _ } => temper_cli::commands::team::status(),
-            TeamAction::WithdrawRequest => temper_cli::commands::team::withdraw_request(),
+            TeamAction::Decline { token } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::decline_invitation(client, &token, output_format)
+                        .await
+                })
+            }),
+            TeamAction::Invitations { team } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::list_invitations_remote(
+                            client,
+                            &team,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             TeamAction::Show { team } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
                     temper_cli::commands::team::show_remote(client, &team, output_format).await
@@ -585,6 +618,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             AuthAction::Logout => temper_cli::commands::auth::logout(output_format),
             AuthAction::Status => temper_cli::commands::auth::status(output_format),
             AuthAction::ExportToken => temper_cli::commands::auth::export_token(),
+            AuthAction::RequestAccess { message } => {
+                temper_cli::commands::auth::request_access(message.as_deref())
+            }
+            AuthAction::WithdrawRequest => temper_cli::commands::auth::withdraw_request(),
         },
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;

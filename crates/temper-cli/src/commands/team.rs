@@ -4,7 +4,6 @@
 use crate::actions::cogmap::resolve_team_id;
 use crate::error::{Result, TemperError};
 use crate::output;
-use temper_core::types::access_gate::JoinRequestStatus;
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamRole, TeamUpdateRequest,
 };
@@ -22,117 +21,72 @@ fn parse_role(s: &str) -> Result<TeamRole> {
     }
 }
 
-/// Submit a join request for a team (defaults to system gating team).
-pub fn join(message: Option<&str>) -> crate::error::Result<()> {
-    let message = message.map(|s| s.to_string());
-    crate::actions::runtime::with_client(|client| {
-        Box::pin(async move {
-            match client
-                .access()
-                .create_request(message.as_deref(), "cli", None)
-                .await
-            {
-                Ok(result) => {
-                    output::success("Access request submitted.");
-                    output::plain("  You'll gain access once an admin approves your request.");
-                    output::hint("  Run `temper team status` to check.");
-                    output::blank();
-                    output::dim(format!("  Request ID: {}", result.id));
-                }
-                Err(temper_client::error::ClientError::Conflict { .. }) => {
-                    output::warning("You already have a pending request.");
-                    output::hint("  Run `temper team status` to check its status.");
-                }
-                Err(e) => return Err(crate::commands::client_err(e)),
-            }
-
-            Ok(())
-        })
-    })
+/// Invite an email to a team (owner/maintainer).
+pub async fn invite_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    email: &str,
+    role: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let req = temper_core::types::invitation::CreateInvitationRequest {
+        invited_email: email.to_owned(),
+        role: parse_role(role)?,
+    };
+    let inv = client
+        .teams()
+        .invite(team_id, &req)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&inv, fmt)?);
+    Ok(())
 }
 
-/// Check the status of the caller's join request.
-pub fn status() -> crate::error::Result<()> {
-    crate::actions::runtime::with_client(|client| {
-        Box::pin(async move {
-            let request = client
-                .access()
-                .get_own_request()
-                .await
-                .map_err(crate::commands::client_err)?;
-
-            match request {
-                None => {
-                    output::plain("You haven't requested access yet.");
-                    output::hint("Run `temper team join` to get started.");
-                }
-                Some(req) => match req.status {
-                    JoinRequestStatus::Pending => {
-                        output::plain(format!(
-                            "Your request is pending review (submitted {}).",
-                            req.created.format("%Y-%m-%d")
-                        ));
-                    }
-                    JoinRequestStatus::Approved => {
-                        let reviewed = req
-                            .reviewed_at
-                            .map(|d| d.format("%Y-%m-%d").to_string())
-                            .unwrap_or_else(|| "unknown date".to_string());
-                        output::success(format!("You have access. Approved on {reviewed}."));
-                    }
-                    JoinRequestStatus::Rejected => {
-                        output::warning("Your previous request was not approved.");
-                        output::hint(
-                            "You can submit a new one with `temper team join --message \"...\"`.",
-                        );
-                    }
-                    JoinRequestStatus::Withdrawn => {
-                        output::plain("You withdrew your request.");
-                        output::hint("Submit a new one with `temper team join --message \"...\"`.");
-                    }
-                },
-            }
-
-            Ok(())
-        })
-    })
+/// Accept a team invitation by its token.
+pub async fn accept_invitation(
+    client: &temper_client::TemperClient,
+    token: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let resp = client
+        .teams()
+        .accept_invitation(token)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&resp, fmt)?);
+    Ok(())
 }
 
-/// Withdraw a pending join request.
-pub fn withdraw_request() -> crate::error::Result<()> {
-    crate::actions::runtime::with_client(|client| {
-        Box::pin(async move {
-            let request = client
-                .access()
-                .get_own_request()
-                .await
-                .map_err(crate::commands::client_err)?;
+/// Decline a team invitation by its token.
+pub async fn decline_invitation(
+    client: &temper_client::TemperClient,
+    token: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    client
+        .teams()
+        .decline_invitation(token)
+        .await
+        .map_err(crate::commands::client_err)?;
+    output::success("Invitation declined.");
+    Ok(())
+}
 
-            match request {
-                None => {
-                    output::plain("Nothing to leave — you don't have a pending request.");
-                }
-                Some(req) => match req.status {
-                    JoinRequestStatus::Pending => {
-                        client
-                            .access()
-                            .withdraw_request()
-                            .await
-                            .map_err(crate::commands::client_err)?;
-                        output::success("Request withdrawn.");
-                    }
-                    JoinRequestStatus::Approved => {
-                        output::plain("To leave a team after approval, contact an admin.");
-                    }
-                    _ => {
-                        output::plain("Nothing to leave — no active request or membership.");
-                    }
-                },
-            }
-
-            Ok(())
-        })
-    })
+/// List pending invitations for a team (owner/maintainer).
+pub async fn list_invitations_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let invitations = client
+        .teams()
+        .list_invitations(team_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&invitations, fmt)?);
+    Ok(())
 }
 
 /// Create a team on the remote server and render the resulting row.
