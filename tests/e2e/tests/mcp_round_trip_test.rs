@@ -909,9 +909,14 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let svc = temper_mcp::service::TemperMcpService::new(state);
 
     let req = axum::http::Request::builder()
-        .extension(temper_mcp::middleware::McpClaims {
+        .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
+            email: None,
+            email_verified: None,
+            azp: None,
+            gty: None,
             exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+            iat: 0,
         })
         .body(())
         .expect("build request");
@@ -1057,9 +1062,14 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let svc = temper_mcp::service::TemperMcpService::new(state);
 
     let req = axum::http::Request::builder()
-        .extension(temper_mcp::middleware::McpClaims {
+        .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
+            email: None,
+            email_verified: None,
+            azp: None,
+            gty: None,
             exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+            iat: 0,
         })
         .body(())
         .expect("build request");

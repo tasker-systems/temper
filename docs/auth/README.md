@@ -24,8 +24,8 @@ gate hand-added to one surface's middleware silently misses the other.
   require_auth (middleware/auth.rs)          require_mcp_auth (middleware.rs)
     · verify JWT (JwksKeyStore)                · verify JWT (same JwksKeyStore)
     · resolve email ladder                     · aud = mcp_audience
-    · aud = auth_audience                      ↓ inject McpClaims
-    ↓ build AuthClaims                        ensure_profile_from_parts (service.rs)
+    · aud = auth_audience                      ↓ inject RawJwtClaims
+    ↓ normalize_machine → AuthClaims          ensure_profile_from_parts (service.rs)
         │                                          │
         └──────────────┐          ┌────────────────┘
                        ▼          ▼
@@ -91,7 +91,8 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
   bounded blast radius.
 - **[machine-token-contract.md](./machine-token-contract.md)** — the issuer /
   resource-server boundary and the single machine-token claim contract both issuers
-  conform to (the Stage 4 unifying artifact for M2M agent principals).
+  conform to (M2M agent principals; Stage 4a+4b shipped). Includes the end-to-end flow and
+  the operator runbook for provisioning an Auth0 M2M agent.
 
 ## Related, elsewhere
 

@@ -21,6 +21,16 @@ pub struct AuthProvider {
     pub user_id_claim: String,
 }
 
+/// Whether the authenticated principal is a human (interactive OAuth) or a
+/// machine (M2M `client_credentials`). The normalizer sets this; the profile
+/// resolver branches on it. A typed discriminant — never a stringly-typed
+/// provider-string match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalKind {
+    Human,
+    Machine,
+}
+
 /// JWT claims extracted from any supported identity provider.
 ///
 /// Parsed during middleware verification. The `external_user_id` is the value
@@ -28,6 +38,8 @@ pub struct AuthProvider {
 /// corresponding `ProfileAuthLink`.
 #[derive(Debug, Clone)]
 pub struct AuthClaims {
+    /// Human (interactive) vs machine (M2M) principal.
+    pub principal_kind: PrincipalKind,
     /// Which provider issued this token
     pub provider: String,
     /// External user ID (value of the configured `user_id_claim`)
