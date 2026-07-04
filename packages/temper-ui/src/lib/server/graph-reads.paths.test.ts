@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	atlasHomePath,
+	atlasSearchPath,
 	cogmapPanoramaPath,
 	neighborhoodSlicePath,
 	regionSlicePath,
@@ -38,5 +39,8 @@ describe('graph API path builders', () => {
 	it('cogmapPanoramaPath', () => {
 		expect(cogmapPanoramaPath('c1')).toBe('/api/graph/cogmaps/c1/panorama');
 		expect(cogmapPanoramaPath('c1', 'l2')).toBe('/api/graph/cogmaps/c1/panorama?lens_id=l2');
+	});
+	it('atlasSearchPath encodes q', () => {
+		expect(atlasSearchPath('t1', 'a b')).toBe('/api/teams/t1/graph/search?q=a%20b&limit=15');
 	});
 });

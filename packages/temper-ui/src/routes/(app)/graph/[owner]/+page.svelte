@@ -2,6 +2,7 @@
 	import type { PageData } from './$types';
 	import AtlasCanvas from '$lib/components/graph/atlas/AtlasCanvas.svelte';
 	import ScopeBar from '$lib/components/graph/atlas/ScopeBar.svelte';
+	import SearchAccelerator from '$lib/components/graph/atlas/SearchAccelerator.svelte';
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
 	import { selectedElement } from '$lib/graph/atlas/nav';
 	import { page } from '$app/stores';
@@ -19,6 +20,9 @@
 
 <div class="atlas-page">
 	<aside class="dock">
+		{#if data.teamId}
+			<SearchAccelerator teamId={data.teamId} />
+		{/if}
 		{#if data.scope}
 			<ScopeBar scope={data.scope} />
 		{:else}
