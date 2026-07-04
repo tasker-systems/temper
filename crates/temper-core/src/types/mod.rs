@@ -68,7 +68,9 @@ pub use device::DeviceSyncState;
 pub use element_trail::{ElementEvent, ElementKind, EventTrail};
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
-pub use graph_atlas::{AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest};
+pub use graph_atlas::{
+    AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
+};
 pub use graph_home::{AtlasHome, HomeCogmap, HomeTeam};
 pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
 pub use graph_territory::{

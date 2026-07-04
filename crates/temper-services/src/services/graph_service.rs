@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
-    AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
+    AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeTeam};
 use temper_core::types::graph_territory::{
@@ -341,6 +341,70 @@ pub async fn neighborhood_slice(
     .collect();
 
     Ok(AtlasSubgraph { nodes, edges })
+}
+
+/// C3 — team-scoped Atlas search. Service-direct read. Deny-as-absence (404)
+/// when the profile cannot view the team. Ranking + visibility inherited from
+/// `unified_search`; hits bounded to `resources_in_team_scope`.
+pub async fn atlas_search(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    team_id: Uuid,
+    query: &str,
+    limit: i64,
+) -> ApiResult<Vec<AtlasSearchHit>> {
+    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(team_id)
+        .fetch_one(pool)
+        .await?;
+    if !viewable {
+        return Err(ApiError::NotFound);
+    }
+
+    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>, Option<Uuid>, f32, f32, f32, f32)>(
+        "SELECT node_id, title, doc_type, home, region_id, combined_score, fts_score, vector_score, graph_score \
+         FROM atlas_search($1, $2, $3, $4)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(team_id)
+    .bind(query)
+    .bind(limit.min(50) as i32)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                node_id,
+                title,
+                doc_type,
+                home,
+                region_id,
+                combined_score,
+                fts_score,
+                vector_score,
+                graph_score,
+            )| {
+                AtlasSearchHit {
+                    node_id,
+                    title,
+                    doc_type,
+                    home: if home.as_deref() == Some("cogmap") {
+                        NodeHome::Cogmap
+                    } else {
+                        NodeHome::Context
+                    },
+                    region_id,
+                    combined_score,
+                    fts_score,
+                    vector_score,
+                    graph_score,
+                }
+            },
+        )
+        .collect())
 }
 
 /// R2 — Tier-0 territory overview for a team scope. Service-direct read.

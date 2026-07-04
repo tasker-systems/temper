@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_atlas::{AtlasSearchHit, AtlasSubgraph, SliceRequest};
 use temper_core::types::graph_home::AtlasHome;
 use temper_core::types::graph_territory::{TerritoryOverview, TerritorySlice};
 use temper_core::types::ids::ProfileId;
@@ -92,6 +92,44 @@ pub async fn neighborhood_slice(
         ProfileId::from(auth.0.profile.id),
         team_id,
         req,
+    )
+    .await
+    .map(Json)
+}
+
+/// Query parameters for `GET /api/teams/{id}/graph/search`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct AtlasSearchQuery {
+    /// The search term (name-locate over the team-scoped visible graph).
+    pub q: String,
+    /// Max hits (default 15, capped 50 server-side).
+    pub limit: Option<i64>,
+}
+
+/// GET /api/teams/{id}/graph/search — C3 SearchAccelerator.
+#[utoipa::path(
+    get,
+    path = "/api/teams/{id}/graph/search",
+    tag = "Graph",
+    params(("id" = Uuid, Path, description = "Team id"), AtlasSearchQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Search hits", body = [AtlasSearchHit]),
+        (status = 404, description = "Team not viewable by this profile")
+    )
+)]
+pub async fn atlas_search(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Query(q): Query<AtlasSearchQuery>,
+) -> ApiResult<Json<Vec<AtlasSearchHit>>> {
+    graph_service::atlas_search(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        team_id,
+        &q.q,
+        q.limit.unwrap_or(15),
     )
     .await
     .map(Json)

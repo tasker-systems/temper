@@ -17,6 +17,14 @@ export type AtlasEdge = { source: string, target: string, edge_kind: EdgeKind, p
 export type AtlasNode = { id: string, title: string, doc_type: string | null, home: NodeHome, degree: number, salience: number | null, };
 
 /**
+ * A team-scoped search hit on the Atlas canvas. `node_id` is `kb_resources.id`
+ * (identical to `AtlasNode.id`, so the UI can drill straight to it). Scores are
+ * the `unified_search` blend, inherited verbatim. `region_id` is a best-affinity
+ * territory hint (may be `None`); the camera jump uses `node_id` alone.
+ */
+export type AtlasSearchHit = { node_id: string, title: string, doc_type: string | null, home: NodeHome, region_id: string | null, combined_score: number, fts_score: number, vector_score: number, graph_score: number, };
+
+/**
  * The response body for an R4 neighborhood slice.
  */
 export type AtlasSubgraph = { nodes: Array<AtlasNode>, edges: Array<AtlasEdge>, };

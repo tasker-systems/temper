@@ -98,6 +98,10 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::graph::territory_overview),
         )
         .route(
+            "/api/teams/{id}/graph/search",
+            get(handlers::graph::atlas_search),
+        )
+        .route(
             "/api/graph/regions/{region_id}/slice",
             get(handlers::graph::territory_slice),
         )
