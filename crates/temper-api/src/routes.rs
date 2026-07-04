@@ -99,6 +99,10 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/api/graph/home", get(handlers::graph::atlas_home))
         .route(
+            "/api/graph/cogmaps/{id}/panorama",
+            get(handlers::graph::cogmap_panorama),
+        )
+        .route(
             "/api/resources/{id}/meta",
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
         )

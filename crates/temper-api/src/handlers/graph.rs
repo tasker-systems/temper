@@ -132,6 +132,41 @@ pub async fn territory_overview(
     .map(Json)
 }
 
+/// Query parameters for `GET /api/graph/cogmaps/{id}/panorama`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct CogmapPanoramaQuery {
+    /// Optional lens override; defaults to the cogmap's primary lens.
+    pub lens_id: Option<Uuid>,
+}
+
+/// GET /api/graph/cogmaps/{id}/panorama — enter-a-cogmap Tier-0 interior.
+#[utoipa::path(
+    get,
+    path = "/api/graph/cogmaps/{id}/panorama",
+    tag = "Graph",
+    params(("id" = Uuid, Path, description = "Cogmap id"), CogmapPanoramaQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Cogmap panorama", body = TerritoryOverview),
+        (status = 404, description = "Cogmap not readable by this profile")
+    )
+)]
+pub async fn cogmap_panorama(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Query(q): Query<CogmapPanoramaQuery>,
+) -> ApiResult<Json<TerritoryOverview>> {
+    graph_service::cogmap_panorama(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        q.lens_id,
+    )
+    .await
+    .map(Json)
+}
+
 /// GET /api/graph/regions/{region_id}/slice — R3 Tier-1 territory drill-in.
 #[utoipa::path(
     get,
