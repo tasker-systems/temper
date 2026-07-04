@@ -8,15 +8,23 @@
 		r: number;
 		kind: Territory['kind'];
 		label: string | null;
+		onEnter?: () => void;
 	}
-	let { x, y, r, kind, label }: Props = $props();
+	let { x, y, r, kind, label, onEnter }: Props = $props();
 
 	// Region = warm-neutral tint; context = cool tint; cogmap = warm tint. Low-opacity
 	// washes with a dashed hull outline, cartographic style.
 	const tint = $derived(TERRITORY_TINTS[kind]);
 </script>
 
-<g class="territory">
+<g
+	class="territory"
+	role={onEnter ? 'button' : undefined}
+	tabindex={onEnter ? 0 : undefined}
+	onclick={onEnter}
+	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
+	style={onEnter ? 'cursor:pointer' : undefined}
+>
 	<circle
 		cx={x}
 		cy={y}
