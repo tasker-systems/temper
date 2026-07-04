@@ -10,7 +10,7 @@ import {
 	parseTeam
 } from './nav';
 
-const url = (qs: string) => new URL(`https://x/vault/@me/graph${qs}`);
+const url = (qs: string) => new URL(`https://x/graph/@me${qs}`);
 
 describe('parseFocus + deriveTier', () => {
 	it('no focus param → none → tier 0', () => {
@@ -63,6 +63,6 @@ describe('URL builders', () => {
 		expect(p.get('team')).toBe('t1');
 	});
 	it('builders return path+query only (relative), preserving the graph pathname', () => {
-		expect(buildScopeUrl(url('?team=old'), 'new').startsWith('/vault/@me/graph?')).toBe(true);
+		expect(buildScopeUrl(url('?team=old'), 'new').startsWith('/graph/@me?')).toBe(true);
 	});
 });
