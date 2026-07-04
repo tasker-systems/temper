@@ -53,10 +53,12 @@ pub struct BlockProvenanceRow {
     pub block_id: Uuid,
     /// Position of the block within its resource (0-based).
     pub block_seq: i32,
-    /// `"resource"` or `"event"` (the DDL enum as text).
+    /// `"resource"`, `"event"`, or `"remote"` (the DDL enum as text).
     pub source_kind: String,
-    /// The contributing resource/event id.
+    /// The contributing resource/event id, or (for `"remote"`) the minted `kb_remote_sources` id.
     pub source_id: Uuid,
+    /// For a `"remote"` source, the external URL as supplied; `None` for resource/event sources.
+    pub source_uri: Option<String>,
     /// Monotonic order in which this source shaped the block.
     pub accretion_seq: i32,
     /// The `block_mutated` event that recorded this incorporation.

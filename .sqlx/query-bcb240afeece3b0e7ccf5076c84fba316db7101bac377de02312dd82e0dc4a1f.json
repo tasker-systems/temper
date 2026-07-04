@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT block_id            AS \"block_id!\",\n                  block_seq           AS \"block_seq!\",\n                  source_kind         AS \"source_kind!\",\n                  source_id           AS \"source_id!\",\n                  accretion_seq       AS \"accretion_seq!\",\n                  contributed_by_event_id AS \"contributed_by_event_id!\",\n                  created             AS \"created!\"\n             FROM resource_block_provenance($1, 'profile', $2)",
+  "query": "SELECT block_id            AS \"block_id!\",\n                  block_seq           AS \"block_seq!\",\n                  source_kind         AS \"source_kind!\",\n                  source_id           AS \"source_id!\",\n                  source_uri,\n                  accretion_seq       AS \"accretion_seq!\",\n                  contributed_by_event_id AS \"contributed_by_event_id!\",\n                  created             AS \"created!\"\n             FROM resource_block_provenance($1, 'profile', $2)",
   "describe": {
     "columns": [
       {
@@ -25,16 +25,21 @@
       },
       {
         "ordinal": 4,
+        "name": "source_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "accretion_seq!",
         "type_info": "Int4"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "contributed_by_event_id!",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "created!",
         "type_info": "Timestamptz"
       }
@@ -52,8 +57,9 @@
       null,
       null,
       null,
+      null,
       null
     ]
   },
-  "hash": "3ec245b62ffe85286b4da077705e20c23fa14ddf6b3773c3ed263aeb88cef712"
+  "hash": "bcb240afeece3b0e7ccf5076c84fba316db7101bac377de02312dd82e0dc4a1f"
 }
