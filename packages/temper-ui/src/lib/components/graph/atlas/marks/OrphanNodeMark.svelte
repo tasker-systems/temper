@@ -15,6 +15,7 @@
 	let hovered = $state(false);
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <g
 	class="orphan"
 	role={onEnter ? 'button' : undefined}

@@ -17,6 +17,7 @@
 	const tint = $derived(TERRITORY_TINTS[kind]);
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <g
 	class="territory"
 	role={onEnter ? 'button' : undefined}
