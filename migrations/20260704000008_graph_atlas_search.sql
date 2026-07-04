@@ -21,7 +21,11 @@ CREATE FUNCTION atlas_search(
 )
 LANGUAGE sql STABLE AS $$
     WITH scope AS (
-        SELECT array_agg(resource_id) AS ids
+        -- COALESCE to an EMPTY array (not NULL): unified_search treats a NULL
+        -- p_scope_ids as "no bound" (fall open to full visibility), so an empty
+        -- team scope must pass '{}' → c.id = ANY('{}') is false → fail CLOSED
+        -- (zero hits), never leaking the profile's cross-team visible set.
+        SELECT COALESCE(array_agg(resource_id), ARRAY[]::uuid[]) AS ids
         FROM resources_in_team_scope(p_profile, p_team)
     ),
     hits AS (

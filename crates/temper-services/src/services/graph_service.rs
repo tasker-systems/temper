@@ -370,7 +370,7 @@ pub async fn atlas_search(
     .bind(profile_id.as_uuid())
     .bind(team_id)
     .bind(query)
-    .bind(limit.min(50) as i32)
+    .bind(limit.clamp(1, 50) as i32)
     .fetch_all(pool)
     .await?;
 

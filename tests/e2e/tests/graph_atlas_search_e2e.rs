@@ -172,3 +172,69 @@ async fn atlas_search_scopes_to_team_and_denies_outsiders(pool: sqlx::PgPool) {
         "non-member denied as absence"
     );
 }
+
+/// Isolates the team-scope bound from mere visibility: the member belongs to BOTH
+/// team A and team B, but the target resource is homed only in B's scope. If
+/// `resources_in_team_scope` were dropped (or the scope join were wrong) and
+/// `atlas_search` fell back to plain visibility, this resource would leak into
+/// A's search results, since the member can see it via B. Asserting it is absent
+/// from A (and present in B, as a control) proves the scope bound is load-bearing,
+/// not just the visibility gate — the exact axis `atlas_search_scopes_to_team_and_denies_outsiders`
+/// leaves untested (test (b) there uses a resource that is also never homed/granted,
+/// so it passes on visibility alone).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn atlas_search_does_not_leak_across_team_scope(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let member = provision_profile(&app, &app.token).await;
+
+    let team_a = create_team(&pool, "cs-e2e-team-a").await;
+    let team_b = create_team(&pool, "cs-e2e-team-b").await;
+    add_member(&pool, team_a, member).await;
+    add_member(&pool, team_b, member).await;
+    let ctx_b = create_team_context(&pool, team_b, "cs-e2e-ctx-b").await;
+
+    // Homed ONLY in team B's scope — visible to the member (via B), but must not
+    // surface when searching team A's scope.
+    let b_only = create_resource(&pool, "Crossscope Widget", "temper://cs-e2e/b-only").await;
+    home_resource(&pool, b_only, "kb_contexts", ctx_b, member).await;
+    index_resource_for_search(&pool, b_only, "Crossscope Widget").await;
+
+    // Searching team A must NOT surface the B-scoped resource, even though the
+    // member is visible-to it and is also a member of A.
+    let (status, body) = search(&app, &app.token, team_a, "Crossscope").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "member gets 200 in team A: {body:?}"
+    );
+    let ids_a: Vec<&str> = body
+        .as_array()
+        .expect("array of hits")
+        .iter()
+        .filter_map(|h| h["node_id"].as_str())
+        .collect();
+    assert!(
+        !ids_a.contains(&b_only.to_string().as_str()),
+        "resource homed only in team B must not surface in team A's scope: {body:?}"
+    );
+
+    // Control: the same resource DOES surface when searching within team B, where
+    // it is actually homed — proves the search path itself works and isolates the
+    // scope bound (not a search-index or visibility issue).
+    let (status, body) = search(&app, &app.token, team_b, "Crossscope").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "member gets 200 in team B: {body:?}"
+    );
+    let ids_b: Vec<&str> = body
+        .as_array()
+        .expect("array of hits")
+        .iter()
+        .filter_map(|h| h["node_id"].as_str())
+        .collect();
+    assert!(
+        ids_b.contains(&b_only.to_string().as_str()),
+        "resource homed in team B surfaces when searching team B: {body:?}"
+    );
+}
