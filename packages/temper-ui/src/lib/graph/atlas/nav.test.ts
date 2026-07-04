@@ -4,6 +4,7 @@ import {
 	buildAscendUrl,
 	buildDrillNodeUrl,
 	buildDrillTerritoryUrl,
+	buildHomeUrl,
 	buildScopeUrl,
 	deriveTier,
 	parseFocus,
@@ -64,5 +65,10 @@ describe('URL builders', () => {
 	});
 	it('builders return path+query only (relative), preserving the graph pathname', () => {
 		expect(buildScopeUrl(url('?team=old'), 'new').startsWith('/graph/@me?')).toBe(true);
+	});
+	it('buildHomeUrl clears BOTH team and focus (back to membership home)', () => {
+		const p = new URL(buildHomeUrl(url('?team=t1&focus=node:n5')), 'https://x').searchParams;
+		expect(p.get('team')).toBeNull();
+		expect(p.get('focus')).toBeNull();
 	});
 });
