@@ -410,8 +410,8 @@ pub async fn territory_overview(
 
     const ORPHAN_LIMIT: usize = 50;
     let orphan_nodes: Vec<OrphanNode> =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid)>(
-            "SELECT id, title, doc_type, degree, anchor_id FROM graph_orphan_salient_nodes($1, $2)",
+        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid, Option<String>)>(
+            "SELECT id, title, doc_type, degree, anchor_id, anchor_label FROM graph_orphan_salient_nodes($1, $2)",
         )
         .bind(profile_id.as_uuid())
         .bind(team_id)
@@ -419,12 +419,13 @@ pub async fn territory_overview(
         .await?
         .into_iter()
         .take(ORPHAN_LIMIT)
-        .map(|(id, title, doc_type, degree, anchor_id)| OrphanNode {
+        .map(|(id, title, doc_type, degree, anchor_id, anchor_label)| OrphanNode {
             id,
             title,
             doc_type,
             degree,
             anchor_id,
+            anchor_label,
         })
         .collect();
 
@@ -511,8 +512,8 @@ pub async fn cogmap_panorama(
 
     const ORPHAN_LIMIT: usize = 50;
     let orphan_nodes: Vec<OrphanNode> =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid)>(
-            "SELECT id, title, doc_type, degree, anchor_id FROM graph_cogmap_orphan_nodes($1, $2)",
+        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid, Option<String>)>(
+            "SELECT id, title, doc_type, degree, anchor_id, anchor_label FROM graph_cogmap_orphan_nodes($1, $2)",
         )
         .bind(profile_id.as_uuid())
         .bind(cogmap_id)
@@ -520,12 +521,13 @@ pub async fn cogmap_panorama(
         .await?
         .into_iter()
         .take(ORPHAN_LIMIT)
-        .map(|(id, title, doc_type, degree, anchor_id)| OrphanNode {
+        .map(|(id, title, doc_type, degree, anchor_id, anchor_label)| OrphanNode {
             id,
             title,
             doc_type,
             degree,
             anchor_id,
+            anchor_label,
         })
         .collect();
 
