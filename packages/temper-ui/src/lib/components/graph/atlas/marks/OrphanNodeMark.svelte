@@ -19,6 +19,7 @@
 	class="orphan"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
+	aria-label={title}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
 	onmouseenter={() => (hovered = true)}

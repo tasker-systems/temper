@@ -29,7 +29,7 @@
 <text x={g.you.x} y={g.you.y + 4} text-anchor="middle" fill="#cfd6e2" font-size="11">you</text>
 
 {#each g.teams as t (t.id)}
-	<g role="button" tabindex="0" onclick={() => enterTeam(t.id)} onkeydown={(e) => e.key === 'Enter' && enterTeam(t.id)} style="cursor:pointer">
+	<g role="button" tabindex="0" aria-label={t.name} onclick={() => enterTeam(t.id)} onkeydown={(e) => e.key === 'Enter' && enterTeam(t.id)} style="cursor:pointer">
 		<rect x={t.x - 90} y={t.y - 19} width="180" height="38" rx="8" fill="#3a8ae8" fill-opacity="0.12" stroke="#6fa8c7" stroke-opacity="0.6" />
 		<text x={t.x} y={t.y + 4} text-anchor="middle" fill="#9fc4d6" font-size="11" font-weight="600">{t.name} ↵</text>
 	</g>

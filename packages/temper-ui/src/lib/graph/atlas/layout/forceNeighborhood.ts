@@ -2,7 +2,7 @@
  * Tier-2 neighborhood layout (spec C2-D6): the ONLY place d3-force runs. Builds
  * a force graph from an R4 AtlasSubgraph, runs the simulation synchronously to a
  * settled state, and returns final node/edge positions. Pure w.r.t. inputs; the
- * simulation is deterministic (phyllotaxis init, no Math.random).
+ * simulation is deterministic (deterministic ring init, no Math.random).
  */
 import {
 	forceCenter,
@@ -44,15 +44,16 @@ export function forceNeighborhood(
 	size: { width: number; height: number }
 ): ForceGraph {
 	const seedSet = new Set(seeds);
-	const nodes: ForceNode[] = subgraph.nodes.map((n) => ({
+	const nodeCount = subgraph.nodes.length;
+	const nodes: ForceNode[] = subgraph.nodes.map((n, i) => ({
 		id: n.id,
 		title: n.title,
 		docType: n.doc_type,
 		home: n.home,
 		degree: n.degree,
 		isSeed: seedSet.has(n.id),
-		x: 0,
-		y: 0
+		x: size.width / 2 + Math.cos((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120,
+		y: size.height / 2 + Math.sin((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120
 	}));
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 

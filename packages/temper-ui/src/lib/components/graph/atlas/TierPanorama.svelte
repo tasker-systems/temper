@@ -24,8 +24,13 @@
 	const ZONE_H = 90;
 
 	const bodyHeight = $derived(Math.max(1, height - ZONE_BAND));
-	const packed = $derived(packTerritories(overview.territories, { width, height: bodyHeight }));
-	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, { width, height: bodyHeight }));
+	const hasTerr = $derived(overview.territories.length > 0);
+	const hasCogmaps = $derived(overview.orphan_nodes.length > 0);
+	const terrBox = $derived(hasTerr && hasCogmaps ? { width, height: bodyHeight * 0.55 } : { width, height: bodyHeight });
+	const cogmapBox = $derived(hasTerr && hasCogmaps ? { width, height: bodyHeight * 0.45 } : { width, height: bodyHeight });
+	const cogmapOffsetY = $derived(hasTerr && hasCogmaps ? bodyHeight * 0.55 : 0);
+	const packed = $derived(packTerritories(overview.territories, terrBox));
+	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
 
 	function enterZone(teamId: string) {
 		goto(buildScopeUrl($page.url, teamId), { replaceState: true });
@@ -65,13 +70,15 @@
 	{/each}
 
 	<!-- sparse state: region-less cogmaps drawn as territories with clickable facet dots -->
-	{#each cogmaps as cm (cm.cogmapId)}
-		<g class="cogmap-territory">
-			<circle cx={cm.x} cy={cm.y} r={cm.r} fill={TERRITORY_TINTS.cogmap} fill-opacity="0.06" stroke={TERRITORY_TINTS.cogmap} stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4" />
-			<text x={cm.x} y={cm.y - cm.r - 6} text-anchor="middle" fill={TERRITORY_TINTS.cogmap} font-size="11" font-weight="600" letter-spacing="1" style="text-transform:uppercase">{cm.label}</text>
-			{#each cm.facets as f (f.id)}
-				<OrphanNodeMark x={f.x} y={f.y} r={Math.min(7, f.r)} title={f.title} docType={f.docType} onEnter={() => drillNode(f.id)} />
-			{/each}
-		</g>
-	{/each}
+	<g transform={`translate(0, ${cogmapOffsetY})`}>
+		{#each cogmaps as cm (cm.cogmapId)}
+			<g class="cogmap-territory">
+				<circle cx={cm.x} cy={cm.y} r={cm.r} fill={TERRITORY_TINTS.cogmap} fill-opacity="0.06" stroke={TERRITORY_TINTS.cogmap} stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4" />
+				<text x={cm.x} y={cm.y - cm.r - 6} text-anchor="middle" fill={TERRITORY_TINTS.cogmap} font-size="11" font-weight="600" letter-spacing="1" style="text-transform:uppercase">{cm.label}</text>
+				{#each cm.facets as f (f.id)}
+					<OrphanNodeMark x={f.x} y={f.y} r={Math.min(7, f.r)} title={f.title} docType={f.docType} onEnter={() => drillNode(f.id)} />
+				{/each}
+			</g>
+		{/each}
+	</g>
 </g>

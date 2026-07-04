@@ -4,7 +4,6 @@
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
 	import { buildDrillNodeUrl } from '$lib/graph/atlas/nav';
-	import { EDGE_COLORS } from '$lib/graph/atlas/palette';
 	import NodeChip from './marks/NodeChip.svelte';
 	import Edge from './marks/Edge.svelte';
 
@@ -30,10 +29,10 @@
 
 <defs>
 	<marker id="arrow-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-		<path d="M0,0 L10,5 L0,10 z" fill={EDGE_COLORS.structural} />
+		<path d="M0,0 L10,5 L0,10 z" fill="context-stroke" />
 	</marker>
 	<marker id="arrow-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-		<path d="M10,0 L0,5 L10,10 z" fill={EDGE_COLORS.structural} />
+		<path d="M10,0 L0,5 L10,10 z" fill="context-stroke" />
 	</marker>
 </defs>
 

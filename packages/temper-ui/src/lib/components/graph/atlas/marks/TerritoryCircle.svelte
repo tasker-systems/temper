@@ -21,6 +21,7 @@
 	class="territory"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
+	aria-label={label ?? kind}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
 	style={onEnter ? 'cursor:pointer' : undefined}

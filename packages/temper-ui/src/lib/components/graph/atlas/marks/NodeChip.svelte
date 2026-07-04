@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { docTypeHue } from '$lib/graph/atlas/palette';
+	import { docTypeHue, CANVAS_BG } from '$lib/graph/atlas/palette';
 
 	interface Props {
 		x: number;
@@ -21,6 +21,7 @@
 	class="node-chip"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
+	aria-label={title}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
 	style={onEnter ? 'cursor:pointer' : undefined}
@@ -31,7 +32,7 @@
 	{#if filled}
 		<circle cx={x} cy={y} {r} fill={color} />
 	{:else}
-		<circle cx={x} cy={y} {r} fill="#1b1e26" stroke={color} stroke-width="2.5" />
+		<circle cx={x} cy={y} {r} fill={CANVAS_BG} stroke={color} stroke-width="2.5" />
 	{/if}
 	<text x={x} y={y + r + 13} text-anchor="middle" fill="#c7d0da" font-size="10">{title}</text>
 </g>
