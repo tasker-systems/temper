@@ -598,6 +598,7 @@ pub async fn resource_block_provenance_select(
                   block_seq           AS "block_seq!",
                   source_kind         AS "source_kind!",
                   source_id           AS "source_id!",
+                  source_uri,
                   accretion_seq       AS "accretion_seq!",
                   contributed_by_event_id AS "contributed_by_event_id!",
                   created             AS "created!"

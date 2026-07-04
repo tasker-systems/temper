@@ -370,3 +370,104 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
         "resource_blocks.reinforce_count reflects both sources"
     );
 }
+
+/// T7c Task 9: a create carrying a REMOTE (URL) source mints a `kb_remote_sources` row, writes a
+/// provenance row (`source_kind='remote'`, `source_id` = the minted id), the read fn surfaces the raw
+/// URL, and two normalization-equivalent URLs (case / default-port) collapse to a single row.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn create_with_remote_source_mints_dedups_and_surfaces_url(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+    use temper_substrate::writes::{self, CreateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+
+    let mk = |title: &'static str, origin: &'static str, url: &'static str| CreateParams {
+        title,
+        origin_uri: origin,
+        body: "deployment pipeline staging and rollout cadence",
+        doc_type: "research",
+        home: AnchorRef::context(ContextId::from(home)),
+        owner: ProfileId::from(owner),
+        originator: ProfileId::from(owner),
+        emitter: EntityId::from(emitter),
+        properties: &[],
+        chunks: None,
+        sources: vec![Incorporation {
+            source: ProvenanceSource::Remote(url.to_owned()),
+            seq: 0,
+        }],
+    };
+
+    // First create: raw casing/path preserved; scheme+host lowercased in the normalized key.
+    let resource = writes::create_resource_with(
+        &pool,
+        mk("a", "temper://prov/remote-a", "https://Example.com/Issue/1"),
+        EventContext::default(),
+    )
+    .await
+    .expect("create with remote source");
+
+    let (kind, sid): (String, uuid::Uuid) = sqlx::query_as(
+        "SELECT source_kind::text, source_id FROM kb_block_provenance \
+         WHERE NOT is_corrected ORDER BY created DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kind, "remote", "source kind tagged 'remote'");
+
+    let (uri, normalized): (String, String) =
+        sqlx::query_as("SELECT uri, uri_normalized FROM kb_remote_sources WHERE id=$1")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        uri, "https://Example.com/Issue/1",
+        "raw URL preserved verbatim"
+    );
+    assert_eq!(
+        normalized, "https://example.com/Issue/1",
+        "scheme+host lowercased; path casing untouched"
+    );
+
+    // Second create with a normalization-equivalent URL (default port) dedups to the same source row.
+    writes::create_resource_with(
+        &pool,
+        mk(
+            "b",
+            "temper://prov/remote-b",
+            "https://example.com:443/Issue/1",
+        ),
+        EventContext::default(),
+    )
+    .await
+    .expect("create with equivalent remote source");
+
+    let remote_count: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_remote_sources")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        remote_count, 1,
+        "normalization-equivalent URLs collapse to one kb_remote_sources row"
+    );
+
+    // The read fn surfaces the raw URL for the remote row (source_uri), scoped to a reader who can see it.
+    let (read_kind, read_uri): (String, Option<String>) = sqlx::query_as(
+        "SELECT source_kind, source_uri FROM resource_block_provenance($1, 'profile', $2) LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .bind(owner)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(read_kind, "remote");
+    assert_eq!(
+        read_uri.as_deref(),
+        Some("https://Example.com/Issue/1"),
+        "read fn surfaces the human URL, not the minted uuid"
+    );
+}

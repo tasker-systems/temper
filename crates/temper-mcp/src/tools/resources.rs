@@ -41,12 +41,12 @@ pub struct CreateResourceInput {
     /// Optional markdown content body. Processed through the ingest
     /// pipeline (chunk + embed) synchronously on create.
     pub content: Option<String>,
-    /// Block-provenance sources this body was distilled from, as resource UUIDs.
-    /// Each becomes a provenance record on the created resource's body block
-    /// (list position → accretion `seq`). Requires `content` — with no body block
-    /// there is nothing to attribute. Resource ids only in T7b; URL/remote is T7c.
+    /// Block-provenance sources this body was distilled from: resource refs (UUID or decorated) or
+    /// external http/https URLs. Each becomes a provenance record on the created resource's body
+    /// block (list position → accretion `seq`). Requires `content` — with no body block there is
+    /// nothing to attribute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sources: Option<Vec<Uuid>>,
+    pub sources: Option<Vec<String>>,
     /// Optional URL-friendly slug.
     pub slug: Option<String>,
     /// Optional origin URI. Defaults to `mcp://agent/{uuid}`.
@@ -123,12 +123,12 @@ pub struct UpdateResourceInput {
     /// New markdown content. Replaces existing content and triggers
     /// re-processing.
     pub content: Option<String>,
-    /// Block-provenance sources this body was distilled from, as resource UUIDs.
-    /// Each becomes a provenance record on the resource's body block (list position →
-    /// accretion `seq`). Requires `content` — with no body update there is nothing to
-    /// attribute. Resource ids only in T7b; URL/remote is T7c.
+    /// Block-provenance sources this body was distilled from: resource refs (UUID or decorated) or
+    /// external http/https URLs. Each becomes a provenance record on the resource's body block (list
+    /// position → accretion `seq`). Requires `content` — with no body update there is nothing to
+    /// attribute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sources: Option<Vec<Uuid>>,
+    pub sources: Option<Vec<String>>,
     /// Managed (temper-*) frontmatter. Typed: the schema covers every key
     /// temper governs and extras round-trip through `ManagedMeta::extra`.
     /// A concrete object schema (rather than free-form JSON) keeps MCP
@@ -330,16 +330,21 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 /// `invalid_params` error rather than a silent drop.
 fn provenance_body(
     content: Option<String>,
-    sources: Option<Vec<Uuid>>,
+    sources: Option<Vec<String>>,
 ) -> Result<Option<BodyUpdate>, rmcp::ErrorData> {
     match content {
         Some(content) if !content.is_empty() => {
             let mut body = BodyUpdate::new(content);
+            // Classify each source (http/https URL → Remote, else ref → Resource) with the same shared
+            // resolver the CLI uses; an unparseable value is a hard error, never a silent drop.
             body.sources = sources
                 .unwrap_or_default()
-                .into_iter()
-                .map(temper_core::types::provenance::ProvenanceSource::Resource)
-                .collect();
+                .iter()
+                .map(|s| temper_workflow::operations::resolve_provenance_source(s))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
+                })?;
             Ok(Some(body))
         }
         _ => {

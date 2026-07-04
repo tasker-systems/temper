@@ -17,7 +17,7 @@
   ],
   "$defs": {
     "EdgeId": {
-      "description": "A `kb_edges` row (a declared relationship assertion).",
+      "description": "A `kb_edges.id` value — a declared relationship assertion.\n\nReturned by `Backend::assert_relationship` and fed back into\nretype/reweight/fold. Post-WS6-flip there is a single substrate-backed\nbackend, so this is always a real `kb_edges` row id (not a backend-opaque\ncorrelation handle).",
       "type": "string",
       "format": "uuid"
     }

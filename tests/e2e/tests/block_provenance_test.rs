@@ -242,3 +242,53 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
     .await
     .expect("spawn_blocking joined");
 }
+
+/// A remote (URL) source round-trips end to end (T7c): `create --sources <url>` records a `'remote'`
+/// provenance row and the HTTP endpoint surfaces the raw URL (`source_uri`). Proves
+/// `ProvenanceSource::Remote` flows the whole CLI → client → Axum → DbBackend → substrate →
+/// kb_remote_sources spine with no wire reshape (the same `Vec<ProvenanceSource>` field as T7b).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn remote_url_source_round_trips_through_cli_api_db(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    let dist_body = app.vault_dir.path().join("remote-distilled.md");
+    std::fs::write(
+        &dist_body,
+        "# Remote Distilled\n\nDistilled from an external issue.\n",
+    )
+    .unwrap();
+    // Mixed casing in the host is preserved raw and normalized only in the dedup key (server-side).
+    let url = "https://Example.com/issue/42";
+    cli_create(
+        &app,
+        "Remote Distilled",
+        format!("@{}", dist_body.display()),
+        vec![url.to_string()],
+    )
+    .await;
+    let distilled = created_id_for_title(&pool, "Remote Distilled").await;
+
+    let prov = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read");
+    assert_eq!(prov.len(), 1, "one remote source recorded, got {prov:?}");
+    assert_eq!(prov[0].source_kind, "remote");
+    assert_eq!(
+        prov[0].source_uri.as_deref(),
+        Some(url),
+        "the raw external URL is surfaced, not the minted uuid"
+    );
+}
