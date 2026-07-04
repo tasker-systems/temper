@@ -146,6 +146,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create with --task must succeed")
@@ -269,6 +270,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create without --task must succeed")
@@ -338,6 +340,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
         })
@@ -411,6 +414,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
         })
@@ -483,6 +487,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
         })

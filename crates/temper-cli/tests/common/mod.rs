@@ -71,6 +71,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             from: None,
             format: temper_cli::format::OutputFormat::Json,
             act: Default::default(),
+            sources: Vec::new(),
         },
     )
     .unwrap();
@@ -111,6 +112,7 @@ pub fn create_task(
             from: None,
             format: temper_cli::format::OutputFormat::Json,
             act: Default::default(),
+            sources: Vec::new(),
         },
     )
     .unwrap();

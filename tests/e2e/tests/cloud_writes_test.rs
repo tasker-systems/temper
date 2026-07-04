@@ -135,6 +135,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create should succeed")
@@ -201,6 +202,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                     edges: false,
                     meta_only: false,
                     fields: &[],
+                    provenance: false,
                 },
             )
             .expect("cloud show must succeed for a freshly created resource")
@@ -324,6 +326,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     body: None,
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
+                    sources: &[],
                 },
             )
             .expect("cloud meta-only update must succeed")
@@ -489,6 +492,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     body: Some(body_flag),
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
+                    sources: &[],
                 },
             )
             .expect("cloud body+meta update must succeed")
@@ -652,6 +656,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
                     body: Some(body_flag),
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
+                    sources: &[],
                 },
             )
             .expect("cloud body-only update must succeed")
@@ -804,6 +809,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
                     body: Some(body_flag),
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
+                    sources: &[],
                 },
             )
         })
@@ -904,6 +910,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create for dedup test")
@@ -960,6 +967,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     body: Some(body_flag2),
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
+                    sources: &[],
                 },
             )
             .expect("second (identical) PATCH must succeed")
@@ -1157,6 +1165,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create should succeed")
@@ -1255,6 +1264,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create should succeed")
@@ -1324,6 +1334,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     body: None, // meta-only, no chunks_packed needed
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
+                    sources: &[],
                 },
             )
             .expect("cloud meta-only update must succeed")
@@ -1406,6 +1417,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                     from: None,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
+                    sources: Vec::new(),
                 },
             )
             .expect("cloud create should succeed")
@@ -1544,6 +1556,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
                     edges: true, // edges — the path under test
                     meta_only: false,
                     fields: &[],
+                    provenance: false,
                 },
             )
             .expect(
@@ -1655,6 +1668,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
                         edges: false,
                         meta_only: false,
                         fields: &[],
+                        provenance: false,
                     },
                 )
                 .unwrap_or_else(|e| {
@@ -1682,6 +1696,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
                     edges: false,
                     meta_only: false,
                     fields: &[],
+                    provenance: false,
                 },
             )
         })

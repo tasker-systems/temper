@@ -146,6 +146,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     stdin: _,
                     body,
                     from,
+                    sources,
                     act,
                 } => {
                     if show_template {
@@ -173,6 +174,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             task: task.as_deref(),
                             body_flag: body,
                             from,
+                            sources,
                             format: output_format,
                             act: act.into_act_input()?,
                         },
@@ -204,6 +206,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 ResourceAction::Show {
                     r#ref,
                     edges,
+                    provenance,
                     meta_only,
                     fields,
                 } => temper_cli::commands::resource::show(
@@ -212,6 +215,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         r#ref: &r#ref,
                         format: output_format,
                         edges,
+                        provenance,
                         meta_only,
                         fields: &fields,
                     },
@@ -238,6 +242,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     pr,
                     status,
                     body,
+                    sources,
                     act,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
@@ -262,6 +267,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         pr: pr.as_deref(),
                         status: status.as_deref(),
                         body,
+                        sources: &sources,
                         format: output_format,
                         act: act.into_act_input()?,
                     };
