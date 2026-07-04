@@ -41,6 +41,12 @@ pub struct CreateResourceInput {
     /// Optional markdown content body. Processed through the ingest
     /// pipeline (chunk + embed) synchronously on create.
     pub content: Option<String>,
+    /// Block-provenance sources this body was distilled from, as resource UUIDs.
+    /// Each becomes a provenance record on the created resource's body block
+    /// (list position → accretion `seq`). Requires `content` — with no body block
+    /// there is nothing to attribute. Resource ids only in T7b; URL/remote is T7c.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<Uuid>>,
     /// Optional URL-friendly slug.
     pub slug: Option<String>,
     /// Optional origin URI. Defaults to `mcp://agent/{uuid}`.
@@ -78,6 +84,13 @@ pub struct GetResourceInput {
     pub fields: Option<Vec<String>>,
 }
 
+/// MCP input for get_block_provenance.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetBlockProvenanceInput {
+    /// The resource whose per-block provenance to read (UUID).
+    pub resource: Uuid,
+}
+
 /// MCP input for list_resources.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListResourcesInput {
@@ -110,6 +123,12 @@ pub struct UpdateResourceInput {
     /// New markdown content. Replaces existing content and triggers
     /// re-processing.
     pub content: Option<String>,
+    /// Block-provenance sources this body was distilled from, as resource UUIDs.
+    /// Each becomes a provenance record on the resource's body block (list position →
+    /// accretion `seq`). Requires `content` — with no body update there is nothing to
+    /// attribute. Resource ids only in T7b; URL/remote is T7c.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<Uuid>>,
     /// Managed (temper-*) frontmatter. Typed: the schema covers every key
     /// temper governs and extras round-trip through `ManagedMeta::extra`.
     /// A concrete object schema (rather than free-form JSON) keeps MCP
@@ -304,6 +323,38 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Build the command's `BodyUpdate` from optional content + optional resource-id sources,
+/// mapping each source id to `ProvenanceSource::Resource` (list position → accretion seq
+/// downstream). Shared by create and update. Guards the parse-don't-validate invariant:
+/// sources without a body block have nothing to attribute, so that combination is an
+/// `invalid_params` error rather than a silent drop.
+fn provenance_body(
+    content: Option<String>,
+    sources: Option<Vec<Uuid>>,
+) -> Result<Option<BodyUpdate>, rmcp::ErrorData> {
+    match content {
+        Some(content) if !content.is_empty() => {
+            let mut body = BodyUpdate::new(content);
+            body.sources = sources
+                .unwrap_or_default()
+                .into_iter()
+                .map(temper_core::types::provenance::ProvenanceSource::Resource)
+                .collect();
+            Ok(Some(body))
+        }
+        _ => {
+            if sources.is_some_and(|s| !s.is_empty()) {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "sources supplied without content — there is no body block to attribute"
+                        .to_owned(),
+                    None,
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
 // ── Tool handlers ──────────────────────────────────────────────────
 
 pub async fn create_resource(
@@ -416,11 +467,7 @@ pub async fn create_resource(
     let managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
 
-    let body = if content.is_empty() {
-        None
-    } else {
-        Some(BodyUpdate::new(content))
-    };
+    let body = provenance_body(Some(content), input.sources)?;
 
     // Assemble the per-act correlation + authorship from the flattened discrete fields. The
     // shared assembler enforces "confidence required iff authorship supplied"; map its
@@ -546,6 +593,30 @@ pub async fn get_resource(
     Ok(CallToolResult::success(parts))
 }
 
+/// Itemized per-block provenance for a resource. Service-direct read (reads bypass the Backend
+/// trait); the access gate lives in the SQL function — an unreadable resource yields an empty list.
+pub async fn get_block_provenance(
+    svc: &TemperMcpService,
+    input: GetBlockProvenanceInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+
+    let rows = substrate_read::resource_block_provenance_select(
+        pool,
+        ProfileId::from(profile.id),
+        input.resource,
+    )
+    .await
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
+    })?;
+
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&rows),
+    )]))
+}
+
 pub async fn list_resources(
     svc: &TemperMcpService,
     input: ListResourcesInput,
@@ -659,9 +730,10 @@ pub async fn update_resource(
         .act
         .into_act_context()
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+    let body = provenance_body(input.content, input.sources)?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
-        body: input.content.map(BodyUpdate::new),
+        body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
         move_to: None,

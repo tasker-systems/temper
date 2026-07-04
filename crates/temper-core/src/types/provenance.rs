@@ -35,6 +35,30 @@ pub enum ProvenanceSource {
     Resource(Uuid),
 }
 
+/// One itemized block-provenance record — a single source's contribution to a resource's content
+/// block, as returned by the `resource_block_provenance` SQL function in `(block_seq, accretion_seq)`
+/// order. `source_kind` is the DDL `provenance_source_kind` enum rendered as text (`"resource"` /
+/// `"event"`; `"remote"` arrives in T7c). Access-scoped in SQL — a principal who cannot read the
+/// resource gets an empty set, never an error. The shared read shape for the MCP `get_block_provenance`
+/// tool, the CLI `--provenance` view, and the HTTP provenance endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct BlockProvenanceRow {
+    /// The content block this source contributed to.
+    pub block_id: Uuid,
+    /// Position of the block within its resource (0-based).
+    pub block_seq: i32,
+    /// `"resource"` or `"event"` (the DDL enum as text).
+    pub source_kind: String,
+    /// The contributing resource/event id.
+    pub source_id: Uuid,
+    /// Monotonic order in which this source shaped the block.
+    pub accretion_seq: i32,
+    /// The `block_mutated` event that recorded this incorporation.
+    pub contributed_by_event_id: Uuid,
+    pub created: chrono::DateTime<chrono::Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
