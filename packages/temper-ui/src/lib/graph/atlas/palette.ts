@@ -133,6 +133,13 @@ const KIND_DASH: Record<AtlasEdge['edge_kind'], string | null> = {
 	near: '4 4'
 };
 
+/**
+ * Canonical `EdgeKind` iteration order, derived from `KIND_DASH`'s keys so it can
+ * never drift from the dash mapping — the legend's "EDGE KIND" section and any
+ * other UI enumerating kinds should source the list from here, not hand-roll it.
+ */
+export const EDGE_KINDS = Object.keys(KIND_DASH) as AtlasEdge['edge_kind'][];
+
 /** Map an Atlas edge to its SVG style per the encoding grammar (spec C2-D6). */
 export function edgeStyle(edge: AtlasEdge): EdgeStyle {
 	const color =

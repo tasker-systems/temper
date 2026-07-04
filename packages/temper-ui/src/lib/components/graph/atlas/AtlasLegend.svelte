@@ -33,9 +33,56 @@
 			{/each}
 		</div>
 		<div class="sec">
-			<div class="lbl">EDGES</div>
-			{#each m.edges as e (e.label)}
+			<div class="lbl">EDGE KIND</div>
+			{#each m.edgeKinds as k (k.kind)}
+				<div class="row">
+					<svg class="sample" width="24" height="8" aria-hidden="true">
+						<line x1="1" y1="4" x2="23" y2="4" stroke={k.color} stroke-width="2" stroke-dasharray={k.dash ?? undefined} />
+					</svg>{k.kind}
+				</div>
+			{/each}
+		</div>
+		<div class="sec">
+			<div class="lbl">EDGE COLOR</div>
+			{#each m.edgeColors as e (e.label)}
 				<div class="row"><span class="line" style="background:{e.color}"></span>{e.label}</div>
+			{/each}
+		</div>
+		<div class="sec">
+			<div class="lbl">POLARITY</div>
+			{#each m.polarity as p (p.label)}
+				<div class="row">
+					<svg class="sample" width="24" height="8" aria-hidden="true">
+						<defs>
+							<marker id="legend-arrow-end-{p.label}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+								<path d="M0,0 L10,5 L0,10 z" fill={p.color} />
+							</marker>
+							<marker id="legend-arrow-start-{p.label}" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+								<path d="M10,0 L0,5 L10,10 z" fill={p.color} />
+							</marker>
+						</defs>
+						<line
+							x1="1"
+							y1="4"
+							x2="23"
+							y2="4"
+							stroke={p.color}
+							stroke-width="2"
+							marker-end={p.marker === 'end' ? `url(#legend-arrow-end-${p.label})` : undefined}
+							marker-start={p.marker === 'start' ? `url(#legend-arrow-start-${p.label})` : undefined}
+						/>
+					</svg>{p.label}
+				</div>
+			{/each}
+		</div>
+		<div class="sec">
+			<div class="lbl">WEIGHT</div>
+			{#each m.weight as w (w.label)}
+				<div class="row">
+					<svg class="sample" width="24" height="8" aria-hidden="true">
+						<line x1="1" y1="4" x2="23" y2="4" stroke={w.color} stroke-width={w.width} />
+					</svg>{w.label}
+				</div>
 			{/each}
 		</div>
 	{/if}
@@ -81,5 +128,9 @@
 		width: 16px;
 		height: 2px;
 		flex: 0 0 auto;
+	}
+	.sample {
+		flex: 0 0 auto;
+		overflow: visible;
 	}
 </style>
