@@ -1,0 +1,244 @@
+#![cfg(all(feature = "test-db", feature = "test-embed"))]
+
+//! End-to-end coverage for block-provenance surface parity (T7b).
+//!
+//! Drives the full spine at the production caller's level: the CLI `resource create`/`update`
+//! `--sources` path → `temper-client` → Axum → `DbBackend` → substrate → `kb_block_provenance`,
+//! then reads it back through the HTTP `GET /api/resources/{id}/provenance` endpoint (the typed
+//! `client.resources().provenance()` method the CLI `--provenance` view calls) and the CLI
+//! `show --provenance` surface itself.
+//!
+//! Embed-gated: CLI create/update compute body chunks synchronously (the embed pipeline), so this
+//! file only compiles under `test-embed` (the "Embed & MCP Round-Trip" CI job). Run locally with
+//! `cargo make test-e2e-embed`.
+
+mod common;
+
+fn cloud_env<'a>(
+    api_url: &'a str,
+    token: &'a str,
+    global_config: &'a str,
+) -> [(&'static str, Option<&'a str>); 4] {
+    [
+        ("TEMPER_API_URL", Some(api_url)),
+        ("TEMPER_TOKEN", Some(token)),
+        ("TEMPER_GLOBAL_CONFIG", Some(global_config)),
+        ("TEMPER_AUTH_PATH", None),
+    ]
+}
+
+/// The `no-such-config.toml` sentinel (cloud mode reads config from env, not disk).
+fn global_config_path(app: &common::E2eTestApp) -> String {
+    app.vault_dir
+        .path()
+        .join("no-such-config.toml")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Recover the server-assigned id of a resource created earlier in this test, keyed on its
+/// (unique) title. Not an addressing path — production addresses by id; the in-process CLI create
+/// path does not return the minted id, so the title is the stable handle for the assertion.
+async fn created_id_for_title(pool: &sqlx::PgPool, title: &str) -> uuid::Uuid {
+    sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM kb_resources WHERE title = $1 AND is_active \
+         ORDER BY created DESC LIMIT 1",
+    )
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|e| panic!("created_id_for_title({title}): {e}"))
+}
+
+/// Drive a cloud-mode CLI `resource create` on a blocking thread (the embed pipeline runs
+/// synchronously; nesting runtimes would panic).
+async fn cli_create(
+    app: &common::E2eTestApp,
+    title: &'static str,
+    body: String,
+    sources: Vec<String>,
+) {
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = global_config_path(app);
+    let cli_config = app.cli_config.clone();
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            temper_cli::commands::resource::create(
+                &cli_config,
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "research",
+                    title,
+                    context: Some("@me/prov"),
+                    cogmap: None,
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    task: None,
+                    body_flag: Some(body),
+                    from: None,
+                    sources,
+                    format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
+                },
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+}
+
+/// The full CLI-driven round-trip: create-with-sources records provenance, update-with-a-second-
+/// source accretes, and both the HTTP provenance endpoint and the CLI `show --provenance` surface
+/// read it back.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    // Two source resources to attribute to. `--body @<path>` reads the body from a file.
+    let src1_body = app.vault_dir.path().join("src1.md");
+    let src2_body = app.vault_dir.path().join("src2.md");
+    std::fs::write(&src1_body, "# Source One\n\nFirst source.\n").unwrap();
+    std::fs::write(&src2_body, "# Source Two\n\nSecond source.\n").unwrap();
+    cli_create(
+        &app,
+        "Source One",
+        format!("@{}", src1_body.display()),
+        vec![],
+    )
+    .await;
+    cli_create(
+        &app,
+        "Source Two",
+        format!("@{}", src2_body.display()),
+        vec![],
+    )
+    .await;
+    let source1 = created_id_for_title(&pool, "Source One").await;
+    let source2 = created_id_for_title(&pool, "Source Two").await;
+
+    // Create a distilled resource attributing its body to source1.
+    let dist_body = app.vault_dir.path().join("distilled.md");
+    std::fs::write(
+        &dist_body,
+        "# Distilled Note\n\nDistilled from source one.\n",
+    )
+    .unwrap();
+    cli_create(
+        &app,
+        "Distilled Note",
+        format!("@{}", dist_body.display()),
+        vec![source1.to_string()],
+    )
+    .await;
+    let distilled = created_id_for_title(&pool, "Distilled Note").await;
+
+    // ---- Assertion 1: one provenance row, resource→source1, via the HTTP endpoint ----
+    let prov = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read");
+    assert_eq!(prov.len(), 1, "one source recorded on create, got {prov:?}");
+    assert_eq!(prov[0].source_kind, "resource");
+    assert_eq!(prov[0].source_id, source1);
+    assert_eq!(prov[0].accretion_seq, 0);
+
+    // ---- Update the distilled body attributing it to source2 → accretion ----
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = global_config_path(&app);
+    let cli_config = app.cli_config.clone();
+    let distilled_ref = distilled.to_string();
+    let source2_ref = source2.to_string();
+    let upd_body = app.vault_dir.path().join("distilled-v2.md");
+    std::fs::write(&upd_body, "# Distilled Note\n\nNow also from source two.\n").unwrap();
+    let upd_body_flag = format!("@{}", upd_body.display());
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            let sources = [source2_ref];
+            let params = temper_cli::commands::resource::UpdateParams {
+                r#ref: &distilled_ref,
+                type_to: None,
+                context_to: None,
+                title: None,
+                tags: &[],
+                aliases: &[],
+                relates_to: &[],
+                references: &[],
+                depends_on: &[],
+                extends: &[],
+                preceded_by: &[],
+                derived_from: &[],
+                stage: None,
+                mode: None,
+                effort: None,
+                goal: None,
+                seq: None,
+                branch: None,
+                pr: None,
+                status: None,
+                body: Some(upd_body_flag),
+                sources: &sources,
+                format: temper_cli::format::OutputFormat::Json,
+                act: Default::default(),
+            };
+            temper_cli::commands::resource::update(&cli_config, &params)
+                .expect("cloud update with --sources should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // ---- Assertion 2: provenance accretes — both sources present after the revise ----
+    let prov2 = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read after update");
+    let source_ids: Vec<uuid::Uuid> = prov2.iter().map(|r| r.source_id).collect();
+    assert!(
+        source_ids.contains(&source1) && source_ids.contains(&source2),
+        "both sources present after accretion; got {prov2:?}"
+    );
+
+    // ---- Assertion 3: the CLI `show --provenance` surface returns cleanly ----
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = global_config_path(&app);
+    let cli_config = app.cli_config.clone();
+    let distilled_ref = distilled.to_string();
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            temper_cli::commands::resource::show(
+                &cli_config,
+                temper_cli::commands::resource::ShowParams {
+                    r#ref: &distilled_ref,
+                    format: temper_cli::format::OutputFormat::Json,
+                    edges: false,
+                    provenance: true,
+                    meta_only: false,
+                    fields: &[],
+                },
+            )
+            .expect("show --provenance should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+}
