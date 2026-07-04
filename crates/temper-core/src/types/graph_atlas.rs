@@ -46,6 +46,7 @@ pub struct AtlasNode {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct AtlasEdge {
+    pub id: Uuid,
     pub source: Uuid,
     pub target: Uuid,
     pub edge_kind: EdgeKind,

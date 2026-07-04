@@ -6,7 +6,7 @@ import type { Polarity } from "./graph";
  * A directed edge on the Atlas canvas. `label` is nullable (matches
  * `kb_edges.label`), `weight` drives stroke thickness in the Atlas grammar.
  */
-export type AtlasEdge = { source: string, target: string, edge_kind: EdgeKind, polarity: Polarity, label: string | null, weight: number, };
+export type AtlasEdge = { id: string, source: string, target: string, edge_kind: EdgeKind, polarity: Polarity, label: string | null, weight: number, };
 
 /**
  * A node on the Atlas canvas. `doc_type` is the raw, optional `kb_properties`

@@ -284,8 +284,8 @@ pub async fn neighborhood_slice(
     // natively via their `sqlx::Type` derive (same mechanism as fetch_subgraph_edges
     // above), so req.edge_kinds binds directly as an `edge_kind[]` array param —
     // no `::text` cast round-trip.
-    let walked = sqlx::query_as::<_, (Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
-        "SELECT source_id, target_id, edge_kind, polarity, label, weight \
+    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
+        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
          FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
     )
     .bind(profile_id.as_uuid())
@@ -299,7 +299,8 @@ pub async fn neighborhood_slice(
     let edges: Vec<AtlasEdge> = walked
         .iter()
         .map(
-            |(source, target, edge_kind, polarity, label, weight)| AtlasEdge {
+            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
+                id: *id,
                 source: *source,
                 target: *target,
                 edge_kind: *edge_kind,
@@ -312,7 +313,7 @@ pub async fn neighborhood_slice(
 
     // Node id set = seeds ∪ all walked endpoints.
     let mut node_ids: Vec<Uuid> = req.seeds.clone();
-    for (s, t, ..) in &walked {
+    for (_, s, t, ..) in &walked {
         node_ids.push(*s);
         node_ids.push(*t);
     }

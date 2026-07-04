@@ -75,6 +75,7 @@ describe('paletteStyleVars', () => {
 });
 
 const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({
+	id: 'e',
 	source: 's',
 	target: 't',
 	edge_kind: 'contains',

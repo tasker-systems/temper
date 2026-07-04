@@ -11,6 +11,7 @@ const node = (id: string, degree = 1): AtlasNode => ({
 	salience: null
 });
 const edge = (source: string, target: string): AtlasEdge => ({
+	id: `${source}-${target}`,
 	source,
 	target,
 	edge_kind: 'contains',

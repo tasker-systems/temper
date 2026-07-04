@@ -6,6 +6,7 @@
 mod common;
 
 use reqwest::StatusCode;
+use temper_core::types::graph::EdgeKind;
 use uuid::Uuid;
 
 async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
@@ -64,6 +65,57 @@ async fn grant_read_to_team(pool: &sqlx::PgPool, resource: Uuid, team: Uuid, gra
     .execute(pool)
     .await
     .unwrap();
+}
+
+/// A context owned by a team — real (FK-backed by `owner_id`) so it passes
+/// `anchor_readable_by_profile`'s "context OWNED by a team the principal is a
+/// member of" branch, which `graph_traverse_scoped`'s edge gate depends on.
+async fn create_team_context(pool: &sqlx::PgPool, team: Uuid, slug: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_teams', $1, $2, $2) RETURNING id",
+    )
+    .bind(team)
+    .bind(slug)
+    .fetch_one(pool)
+    .await
+    .expect("create team context")
+}
+
+/// Any pre-existing kb_events row (the L0 kernel cogmap genesis migration inserts
+/// one) — sufficient FK target for asserted_by_event_id/last_event_id in these tests.
+async fn any_event(pool: &sqlx::PgPool) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .expect("at least one kb_events row exists (L0 genesis)")
+}
+
+async fn assert_edge(
+    pool: &sqlx::PgPool,
+    source: Uuid,
+    target: Uuid,
+    edge_kind: EdgeKind,
+    home_anchor_table: &str,
+    home_anchor_id: Uuid,
+    event: Uuid,
+) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_edges \
+             (source_table, source_id, target_table, target_id, edge_kind, \
+              home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
+         VALUES ('kb_resources', $1, 'kb_resources', $2, $3, $4, $5, $6, $6) \
+         RETURNING id",
+    )
+    .bind(source)
+    .bind(target)
+    .bind(edge_kind)
+    .bind(home_anchor_table)
+    .bind(home_anchor_id)
+    .bind(event)
+    .fetch_one(pool)
+    .await
+    .expect("assert edge")
 }
 
 async fn slice(
@@ -155,5 +207,57 @@ async fn slice_returns_subgraph_validates_seeds_and_denies_outsiders(pool: sqlx:
         status,
         StatusCode::NOT_FOUND,
         "a non-member of the team is denied as absence"
+    );
+}
+
+/// C3: a walked edge carries its `kb_edges.id` as a non-null UUID on the wire —
+/// the prerequisite for R5 edge trails (`readTrail('edge', id)`), which need a
+/// stable id to address a rendered `AtlasEdge`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn slice_edge_carries_its_kb_edges_id(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let member = provision_profile(&app, &app.token).await;
+
+    let team = create_team(&pool, "gas-e2e-edge-id-team").await;
+    add_member(&pool, team, member).await;
+    let ctx = create_team_context(&pool, team, "gas-e2e-edge-id-ctx").await;
+    let event = any_event(&pool).await;
+
+    let source = create_resource(&pool, "edge source", "temper://gas-e2e/edge-id-src").await;
+    let target = create_resource(&pool, "edge target", "temper://gas-e2e/edge-id-tgt").await;
+    grant_read_to_team(&pool, source, team, member).await;
+    grant_read_to_team(&pool, target, team, member).await;
+
+    let edge_id = assert_edge(
+        &pool,
+        source,
+        target,
+        EdgeKind::Contains,
+        "kb_contexts",
+        ctx,
+        event,
+    )
+    .await;
+
+    let (status, body) = slice(
+        &app,
+        &app.token,
+        team,
+        serde_json::json!({ "seeds": [source], "depth": 2, "edge_kinds": [] }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "member gets a 200 subgraph: {body:?}"
+    );
+
+    let edges = body["edges"].as_array().expect("edges array");
+    assert_eq!(edges.len(), 1, "one walked edge: {edges:?}");
+    let wire_id = edges[0]["id"].as_str().expect("edge id is a string");
+    assert_eq!(
+        wire_id.parse::<Uuid>().expect("edge id parses as a UUID"),
+        edge_id,
+        "wire edge id matches the kb_edges row it was induced from"
     );
 }
