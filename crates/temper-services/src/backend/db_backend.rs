@@ -135,7 +135,7 @@ fn body_sources(body: Option<&BodyUpdate>) -> Vec<temper_substrate::payloads::In
             .iter()
             .enumerate()
             .map(|(i, source)| temper_substrate::payloads::Incorporation {
-                source: *source,
+                source: source.clone(),
                 seq: i as i32,
             })
             .collect()
