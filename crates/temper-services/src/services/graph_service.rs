@@ -14,6 +14,7 @@ use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
 };
+use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeTeam};
 use temper_core::types::graph_territory::{
     Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
     TerritorySlice,
@@ -505,6 +506,47 @@ pub async fn territory_slice(
         components,
         members,
     })
+}
+
+/// Atlas Home — the you→teams→cogmaps membership graph with count hints.
+/// No entry gate: the read is inherently self-scoped (member teams +
+/// cogmap_visible_maps), so it returns exactly what the caller may see.
+pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<AtlasHome> {
+    let teams: Vec<HomeTeam> = sqlx::query_as::<_, (Uuid, String, String, i32, i32)>(
+        "SELECT team_id, slug, name, resource_count, cogmap_count FROM graph_home_teams($1)",
+    )
+    .bind(profile_id.as_uuid())
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, slug, name, resource_count, cogmap_count)| HomeTeam {
+        id,
+        slug,
+        name,
+        resource_count,
+        cogmap_count,
+    })
+    .collect();
+
+    let cogmaps: Vec<HomeCogmap> = sqlx::query_as::<_, (Uuid, String, Vec<Uuid>, i32, i32)>(
+        "SELECT cogmap_id, name, team_ids, region_count, facet_count FROM graph_home_cogmaps($1)",
+    )
+    .bind(profile_id.as_uuid())
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(
+        |(id, name, team_ids, region_count, facet_count)| HomeCogmap {
+            id,
+            name,
+            team_ids,
+            region_count,
+            facet_count,
+        },
+    )
+    .collect();
+
+    Ok(AtlasHome { teams, cogmaps })
 }
 
 #[cfg(test)]

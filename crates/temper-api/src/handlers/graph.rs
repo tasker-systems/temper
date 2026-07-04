@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_home::AtlasHome;
 use temper_core::types::graph_territory::{TerritoryOverview, TerritorySlice};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -149,6 +150,23 @@ pub async fn territory_slice(
     Path(region_id): Path<Uuid>,
 ) -> ApiResult<Json<TerritorySlice>> {
     graph_service::territory_slice(&state.pool, ProfileId::from(auth.0.profile.id), region_id)
+        .await
+        .map(Json)
+}
+
+/// GET /api/graph/home — the you→teams→cogmaps membership home.
+#[utoipa::path(
+    get,
+    path = "/api/graph/home",
+    tag = "Graph",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Atlas membership home", body = AtlasHome))
+)]
+pub async fn atlas_home(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<AtlasHome>> {
+    graph_service::atlas_home(&state.pool, ProfileId::from(auth.0.profile.id))
         .await
         .map(Json)
 }
