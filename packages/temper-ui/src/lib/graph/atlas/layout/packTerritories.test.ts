@@ -28,14 +28,30 @@ describe('packTerritories', () => {
 		}
 	});
 
-	it('sizes radius monotonically with member_count', () => {
-		const out = packTerritories([terr('big', 100), terr('small', 1)], {
-			width: 400,
-			height: 400
+	it('sizes regions by salience and contexts by member_count', () => {
+		const region = (id: string, salience: number): Territory => ({
+			id,
+			kind: 'region',
+			label: id,
+			member_count: 1,
+			salience,
+			anchor_id: `anchor-${id}`
 		});
-		const big = out.find((p) => p.id === 'big')!;
-		const small = out.find((p) => p.id === 'small')!;
-		expect(big.r).toBeGreaterThan(small.r);
+		const context = (id: string, member_count: number): Territory => ({
+			id,
+			kind: 'context',
+			label: id,
+			member_count,
+			salience: null,
+			anchor_id: `anchor-${id}`
+		});
+		const out = packTerritories(
+			[region('hi', 0.9), region('lo', 0.1), context('big', 80), context('small', 2)],
+			{ width: 500, height: 500 }
+		);
+		const r = (id: string) => out.find((p) => p.id === id)!;
+		expect(r('hi').r).toBeGreaterThan(r('lo').r); // salience sizes regions
+		expect(r('big').r).toBeGreaterThan(r('small').r); // member_count sizes contexts
 	});
 
 	it('carries kind/label/anchor through and floors member_count at 1', () => {
