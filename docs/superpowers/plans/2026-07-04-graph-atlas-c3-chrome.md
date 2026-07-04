@@ -15,7 +15,7 @@
 
 - **DATABASE_URL** for local dev/tests: `postgresql://temper:temper@localhost:5437/temper_development` (Docker Postgres on 5437). `cargo make` tasks set it; bare `cargo`/`nextest` need it exported.
 - **SQL macros are offline-cached.** After adding/changing any `sqlx::query!`-family call, regenerate: `cargo sqlx prepare --workspace -- --all-features`; for test-target SQL also `cargo make prepare-e2e` / `prepare-api`. This plan uses **runtime `query_as`** (no macro) for the new reads (mirrors existing graph_service reads + `unified_search`), so no `.sqlx` regen is needed for those — but the e2e/test helpers that use `sqlx::query!` may.
-- **Shipped migrations are immutable.** Never edit an applied migration file. New behavior = a new additive migration. Next filename: **`20260704000006_*.sql`** (current MAX is `20260704000005`).
+- **Shipped migrations are immutable.** Never edit an applied migration file. New behavior = a new additive migration. Next filenames: **`20260704000008_*.sql`** then `20260704000009_*.sql` (current MAX is `20260704000007`, after the sibling remote-source PR landed `…0006`/`…0007`).
 - **ts-rs regen:** after adding/changing a `#[cfg_attr(feature="typescript", ...)]` type in temper-core, run `cargo make generate-ts-types` and **commit the regenerated `packages/temper-ui/src/lib/types/generated/*.ts`** (even unrelated regenerated files that change).
 - **All public types implement `Debug`.** Lint suppression uses `#[expect(..., reason="...")]`, never `#[allow]`.
 - **e2e access-tier gate:** access/visibility-scoped reads MUST have an e2e test (`#![cfg(feature = "test-db")]`, `#[sqlx::test(migrator = "temper_api::MIGRATOR")]`); `test-db`-only predicate tests are a false signal for access changes.
@@ -28,7 +28,7 @@
 ## Task 1: Backend — `atlas_search` team-scoped search read
 
 **Files:**
-- Create: `migrations/20260704000006_graph_atlas_search.sql`
+- Create: `migrations/20260704000008_graph_atlas_search.sql`
 - Create/Modify: `crates/temper-core/src/types/graph_atlas.rs` (add `AtlasSearchHit`)
 - Modify: `crates/temper-core/src/types/mod.rs:71` (re-export)
 - Modify: `crates/temper-services/src/services/graph_service.rs` (add `atlas_search` fn)
@@ -44,7 +44,7 @@
 
 - [ ] **Step 1: Write the SQL migration**
 
-Create `migrations/20260704000006_graph_atlas_search.sql`:
+Create `migrations/20260704000008_graph_atlas_search.sql`:
 
 ```sql
 -- C3 SearchAccelerator: team-scoped name-locate over the Atlas graph.
@@ -130,7 +130,7 @@ Run:
 cd /Users/petetaylor/projects/tasker-systems/temper
 DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo sqlx migrate run
 ```
-Expected: applies `20260704000006_graph_atlas_search` with no error. If Docker Postgres isn't up: `cargo make docker-up` first.
+Expected: applies `20260704000008_graph_atlas_search` with no error. If Docker Postgres isn't up: `cargo make docker-up` first.
 
 - [ ] **Step 3: Add the `AtlasSearchHit` wire type**
 
@@ -366,7 +366,7 @@ cargo make check 2>&1 | tail -20
 ```
 Expected: `graph_atlas.ts` now contains `AtlasSearchHit`; `cargo make check` green. Then commit:
 ```bash
-git add migrations/20260704000006_graph_atlas_search.sql \
+git add migrations/20260704000008_graph_atlas_search.sql \
   crates/temper-core/src/types/graph_atlas.rs crates/temper-core/src/types/mod.rs \
   crates/temper-services/src/services/graph_service.rs \
   crates/temper-api/src/handlers/graph.rs crates/temper-api/src/routes.rs \
@@ -382,7 +382,7 @@ git commit -m "feat(atlas): C3 atlas_search — team-scoped search read (reuses 
 Edge trails (Task 5) need each rendered edge to carry its `kb_edges.id` so it can be addressed for `readTrail('edge', id)`. Today `AtlasEdge` and `graph_traverse_scoped` omit it.
 
 **Files:**
-- Create: `migrations/20260704000007_graph_traverse_edge_id.sql`
+- Create: `migrations/20260704000009_graph_traverse_edge_id.sql`
 - Modify: `crates/temper-core/src/types/graph_atlas.rs` (`AtlasEdge` — add `id`)
 - Modify: `crates/temper-services/src/services/graph_service.rs` (`neighborhood_slice` mapping)
 - Test: extend `tests/e2e/tests/*neighborhood*` (or the slice e2e) to assert edges carry a non-null `id`.
@@ -400,7 +400,7 @@ Read the function body it points to (in `20260703130000_graph_atlas_chunk_b_read
 
 - [ ] **Step 2: Write the DROP/CREATE migration**
 
-Create `migrations/20260704000007_graph_traverse_edge_id.sql`. Changing a `RETURNS TABLE` shape requires DROP then CREATE (CREATE OR REPLACE cannot alter the return type):
+Create `migrations/20260704000009_graph_traverse_edge_id.sql`. Changing a `RETURNS TABLE` shape requires DROP then CREATE (CREATE OR REPLACE cannot alter the return type):
 
 ```sql
 -- C3: expose kb_edges.id from graph_traverse_scoped so rendered AtlasEdges can be
@@ -496,7 +496,7 @@ Run:
 DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development \
   cargo test -p temper-e2e --features test-db --test <neighborhood_test_name> 2>&1 | tail -20
 cargo fmt && cargo make check 2>&1 | tail -20
-git add migrations/20260704000007_graph_traverse_edge_id.sql \
+git add migrations/20260704000009_graph_traverse_edge_id.sql \
   crates/temper-core/src/types/graph_atlas.rs \
   crates/temper-services/src/services/graph_service.rs \
   packages/temper-ui/src/lib/types/generated/graph_atlas.ts tests/e2e/tests/
