@@ -255,6 +255,7 @@ mod tests {
                 content: "# Test\n\nBody.\n".to_string(),
                 content_hash: None,
                 chunks_packed: None,
+                sources: Vec::new(),
             }),
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
@@ -459,6 +460,7 @@ mod tests {
             content: "# Updated\n".to_string(),
             content_hash: None,
             chunks_packed: None,
+            sources: Vec::new(),
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         assert_eq!(req.content.as_deref(), Some("# Updated\n"));
@@ -524,6 +526,7 @@ mod body_resolution_tests {
             content: content.to_string(),
             content_hash: None,
             chunks_packed: None,
+            sources: Vec::new(),
         }
     }
 

@@ -27,6 +27,12 @@ pub struct BodyUpdate {
     /// the translator skips `prepare_body_trio` entirely.
     #[serde(default)]
     pub chunks_packed: Option<String>,
+    /// Block-provenance sources this body was distilled from. Position in the list
+    /// becomes the accretion `seq` when `DbBackend` converts these into substrate
+    /// `Incorporation`s. Empty for bodies with no
+    /// declared provenance. Resource refs only in T7b; URL/`remote` sources are T7c.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
 }
 
 impl BodyUpdate {
@@ -35,6 +41,7 @@ impl BodyUpdate {
             content: content.into(),
             content_hash: None,
             chunks_packed: None,
+            sources: Vec::new(),
         }
     }
 }

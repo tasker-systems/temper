@@ -443,6 +443,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
             content: updated_content.to_string(),
             content_hash: Some(updated_hash.clone()),
             chunks_packed: Some(updated_packed),
+            sources: Vec::new(),
         }),
         managed_meta: Some(
             serde_json::from_value(serde_json::json!({"date": "2026-04-10"}))

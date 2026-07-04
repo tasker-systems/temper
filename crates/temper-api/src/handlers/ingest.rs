@@ -142,6 +142,8 @@ pub async fn update(
             // present. Matches the short-circuit in ingest_service::update.
             content_hash: payload.content_hash,
             chunks_packed: payload.chunks_packed,
+            // Wired from `payload.sources` in Task 5.
+            sources: Vec::new(),
         })
     };
 

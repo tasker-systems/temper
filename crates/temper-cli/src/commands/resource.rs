@@ -273,6 +273,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                 content,
                 content_hash: None,
                 chunks_packed: None,
+                // Wired from the `--sources` flag in Task 7.
+                sources: Vec::new(),
             }
         }),
         managed_meta: ManagedMeta {
