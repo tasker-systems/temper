@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import AtlasCanvas from '$lib/components/graph/atlas/AtlasCanvas.svelte';
+	import AtlasLegend from '$lib/components/graph/atlas/AtlasLegend.svelte';
 	import ScopeBar from '$lib/components/graph/atlas/ScopeBar.svelte';
 	import SearchAccelerator from '$lib/components/graph/atlas/SearchAccelerator.svelte';
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
@@ -28,6 +29,7 @@
 		{:else}
 			<nav class="scope-bar home">Atlas · your teams</nav>
 		{/if}
+		<AtlasLegend />
 	</aside>
 	<div class="canvas-wrap">
 		{#key viewKey}
