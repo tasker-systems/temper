@@ -5,12 +5,18 @@ import {
 	buildCogmapUrl,
 	buildDrillNodeUrl,
 	buildDrillTerritoryUrl,
+	buildEdgeSelectUrl,
+	buildFiltersUrl,
 	buildHomeUrl,
 	buildScopeUrl,
+	clearSelectionUrl,
 	deriveTier,
 	parseCogmap,
+	parseFilters,
 	parseFocus,
-	parseTeam
+	parseSelection,
+	parseTeam,
+	selectedElement
 } from './nav';
 
 const url = (qs: string) => new URL(`https://x/graph/@me${qs}`);
@@ -88,5 +94,47 @@ describe('cogmap addressing', () => {
 	});
 	it('buildHomeUrl clears cogmap too', () => {
 		expect(buildHomeUrl(url('?cogmap=c9'))).not.toContain('cogmap=');
+	});
+});
+
+describe('edge selection (?sel)', () => {
+	it('parses ?sel=edge:e1', () => {
+		expect(parseSelection(url('?sel=edge:e1'))).toEqual({ kind: 'edge', id: 'e1' });
+	});
+	it('none when absent/malformed', () => {
+		expect(parseSelection(url(''))).toEqual({ kind: 'none' });
+		expect(parseSelection(url('?sel=node:n1'))).toEqual({ kind: 'none' }); // only edges use ?sel
+	});
+	it('buildEdgeSelectUrl sets ?sel, leaves ?focus/?team intact', () => {
+		expect(buildEdgeSelectUrl(url('?team=t1&focus=node:n1'), 'e9')).toBe(
+			'/graph/@me?team=t1&focus=node%3An1&sel=edge%3Ae9'
+		);
+	});
+	it('clearSelectionUrl drops ?sel', () => {
+		expect(clearSelectionUrl(url('?team=t1&sel=edge:e9'))).toBe('/graph/@me?team=t1');
+	});
+	it('selectedElement prefers edge sel, else focus node', () => {
+		expect(selectedElement({ kind: 'node', id: 'n1' }, url('?sel=edge:e9'))).toEqual({
+			kind: 'edge',
+			id: 'e9'
+		});
+		expect(selectedElement({ kind: 'node', id: 'n1' }, url(''))).toEqual({ kind: 'node', id: 'n1' });
+		expect(selectedElement({ kind: 'none' }, url(''))).toEqual({ kind: 'none' });
+	});
+});
+
+describe('filters', () => {
+	it('parses edge_kinds + doc_types CSV', () => {
+		expect(parseFilters(url('?edge_kinds=derived,contains&doc_types=task,goal').searchParams)).toEqual({
+			lensId: null,
+			edgeKinds: ['derived', 'contains'],
+			docTypes: ['task', 'goal']
+		});
+	});
+	it('buildFiltersUrl sets/clears CSV params', () => {
+		expect(buildFiltersUrl(url('?team=t1'), { edgeKinds: ['derived'] })).toBe(
+			'/graph/@me?team=t1&edge_kinds=derived'
+		);
+		expect(buildFiltersUrl(url('?team=t1&edge_kinds=derived'), { edgeKinds: [] })).toBe('/graph/@me?team=t1');
 	});
 });
