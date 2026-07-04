@@ -49,6 +49,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("encode chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let resource = app

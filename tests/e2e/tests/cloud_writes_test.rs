@@ -265,6 +265,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let seeded = app
         .client
@@ -423,6 +424,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let seeded = app
         .client
@@ -591,6 +593,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let seeded = app
         .client
@@ -742,6 +745,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let seeded = app
         .client
@@ -1040,6 +1044,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
             act: Default::default(),
+            sources: Vec::new(),
         };
         app.client
             .ingest()
@@ -1515,6 +1520,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
             act: Default::default(),
+            sources: Vec::new(),
         })
         .await
         .expect("seed resource via client");
@@ -1604,6 +1610,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
             act: Default::default(),
+            sources: Vec::new(),
         })
         .await
         .expect("seed resource via client");

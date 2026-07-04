@@ -208,6 +208,18 @@ pub struct ResourceUpdateRequest {
     /// resource. Forwarded verbatim from the CLI `--context-to` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_to: Option<String>,
+    /// Block-provenance sources this body was distilled from — recorded against the
+    /// resource's body block, position → accretion `seq`. Resource refs only in T7b;
+    /// URL/`remote` sources are T7c.
+    ///
+    /// `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs
+    /// `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent
+    /// write path, exactly like `act` below). Skipping keeps the generated TS honest —
+    /// the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource`
+    /// import. (Precedent: `act`, and the `extra` bucket in `managed_meta.rs`.)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the update act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     ///
@@ -351,6 +363,7 @@ mod tests {
             chunks_packed: Some("base64-blob".to_string()),
             context_to: Some("@me/knowledge".to_string()),
             act: Default::default(),
+            sources: Vec::new(),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
@@ -385,6 +398,7 @@ mod tests {
             chunks_packed: None,
             context_to: None,
             act: Default::default(),
+            sources: Vec::new(),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         assert!(!serialized.contains("\"title\""));

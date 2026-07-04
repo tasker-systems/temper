@@ -41,6 +41,11 @@ pub struct IngestPayload {
     /// Server computes via `temper_ingest::pipeline::prepare_markdown` if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
+    /// Block-provenance sources this body was distilled from — recorded against the
+    /// created resource's body block, position → accretion `seq`. Resource refs only
+    /// in T7b; URL/`remote` sources are T7c.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<crate::types::provenance::ProvenanceSource>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the create act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     #[serde(default, flatten)]
@@ -206,6 +211,7 @@ mod tests {
             managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
             open_meta: Some(serde_json::json!({"tags": ["rust"]})),
             chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
+            sources: Vec::new(),
             act: Default::default(),
         };
 
@@ -241,6 +247,7 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             chunks_packed: None,
+            sources: Vec::new(),
             act: Default::default(),
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -277,6 +284,7 @@ mod tests {
             managed_meta: None,
             open_meta: None,
             chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
+            sources: Vec::new(),
             act: Default::default(),
         };
         let json = serde_json::to_string(&payload).unwrap();

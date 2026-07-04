@@ -223,8 +223,7 @@ pub async fn update(
         content,
         content_hash: req.content_hash,
         chunks_packed: req.chunks_packed,
-        // Wired from `req.sources` in Task 5.
-        sources: Vec::new(),
+        sources: req.sources,
     });
 
     // Fold top-level title/slug into managed_meta so the translator can extract

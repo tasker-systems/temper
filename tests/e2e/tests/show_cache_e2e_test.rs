@@ -80,6 +80,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         open_meta: Some(serde_json::json!({"tags": ["regression"]})),
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 
@@ -180,6 +181,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 

@@ -38,6 +38,7 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let created = app.client.ingest().create(&payload).await.expect("ingest");
@@ -107,6 +108,7 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let created = app.client.ingest().create(&payload).await.expect("ingest");
     let id = created.id.as_uuid().to_string();
@@ -176,6 +178,7 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let created = app.client.ingest().create(&payload).await.expect("ingest");
     let id = created.id.as_uuid().to_string();
@@ -245,6 +248,7 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).unwrap()),
             act: Default::default(),
+            sources: Vec::new(),
         };
         app.client.ingest().create(&payload).await.expect("ingest");
     }
@@ -320,6 +324,7 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
         act: Default::default(),
+        sources: Vec::new(),
     };
     app.client.ingest().create(&payload).await.expect("ingest");
 

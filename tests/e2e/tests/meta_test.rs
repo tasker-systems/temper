@@ -42,6 +42,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let resource = app
@@ -175,6 +176,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let resource = app
@@ -324,6 +326,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         open_meta: Some(serde_json::json!({})),
         chunks_packed: Some(pack_chunks(&[]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let resource = app
         .client
@@ -498,6 +501,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         open_meta: Some(seeded_open.clone()),
         chunks_packed: Some(pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let resource = app

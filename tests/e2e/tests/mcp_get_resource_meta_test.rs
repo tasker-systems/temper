@@ -70,6 +70,7 @@ async fn seed_resource(
             open_meta: Some(open_meta.clone()),
             chunks_packed: Some(pack_chunks(&[]).expect("pack empty chunks")),
             act: Default::default(),
+            sources: Vec::new(),
         })
         .await
         .expect("ingest create")

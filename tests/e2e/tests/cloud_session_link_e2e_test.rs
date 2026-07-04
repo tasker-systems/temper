@@ -57,6 +57,7 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     client
         .ingest()
