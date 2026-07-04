@@ -44,7 +44,13 @@ thin composed read — no new foundational data modeling, no new ranking model.
    the legend surfaces a real legibility gap.
 5. **TrailRail covers nodes and edges.** R5 serves trails for both; the spec's headline trail
    example (`asserted → reweighted → folded`) is an edge lifecycle. C3 adds the missing
-   edge-selection surface so R5 is fully consumed.
+   edge-selection surface so R5 is fully consumed. **Two plan-grounding refinements** (see below):
+   (a) edge selection uses an **orthogonal `?sel=edge:<id>` param**, not `?focus=edge:` — because
+   `?focus` also *seeds the Tier-2 neighborhood* (a node), which an edge cannot; `?sel` drives only
+   the panel and leaves the loaded neighborhood intact. (b) The rendered `AtlasEdge` carries **no
+   `id`** today, so edge trails need a small backend prerequisite: add `id` to `AtlasEdge` +
+   `graph_traverse_scoped` + the `neighborhood_slice` mapping (a new additive migration that
+   DROP/CREATEs the traversal fn with the extra column — the shipped migration stays immutable).
 6. **TrailRail is the Atlas evolution of `ResourcePeek`, not a bare event list.** The old
    Cytoscape stack shipped a well-considered resource-level detail panel
    (`ResourcePeek.svelte`); C3 borrows its content vocabulary — doctype-hue hairline aside,
@@ -145,25 +151,34 @@ Tailwind/`styling.ts` hues to `palette.ts` (`docTypeHue`) so it shares the Atlas
 ~420px as a right panel in the left-dock layout (appears on selection).
 
 **Selection surface (net-new):**
-- Extend `nav.ts`: add `edge` to the `Focus` kind union
-  (`{kind:'none'|'territory'|'node'|'edge', id}`), parse `?focus=edge:<id>`, add a builder that
-  sets edge focus. Node focus stays as-is.
-- Make `marks/Edge.svelte` clickable at Tier 2 (it carries only ephemeral `hoveredEdge` today):
-  on click, `goto(buildEdgeFocusUrl(edgeId), {replaceState:true})`.
-- `NodeChip` already navigates via `buildDrillNodeUrl` (sets `?focus=node:`); the panel keys off
-  whatever `focus` resolves to.
+- **Node selection** stays on `?focus=node:<id>` (unchanged — it re-seeds the neighborhood and
+  drives the panel). `NodeChip` already navigates via `buildDrillNodeUrl`.
+- **Edge selection is orthogonal:** add a `?sel=edge:<id>` param (new `nav.ts`
+  `parseSelection` + `buildEdgeSelectUrl`). Make `marks/Edge.svelte` clickable at Tier 2 (it
+  carries only ephemeral `hoveredEdge` today) — on click the *parent* (`TierNeighborhood`) calls
+  `goto(buildEdgeSelectUrl($page.url, edgeId), {replaceState:true})` (mirroring how `NodeChip`'s
+  `onEnter` delegates its `goto` to the parent). `?focus` and the loaded neighborhood are untouched.
+- **Panel target** (new pure `selectedElement(focus, url)`): `?sel=edge:<id>` → edge panel; else
+  `focus.kind==='node'` → node panel; else no panel.
+- **Backend prerequisite (edge id):** `AtlasEdge` has no `id` today; add `id` to the wire type +
+  `graph_traverse_scoped` SQL + `neighborhood_slice` mapping so an edge can be addressed for
+  `readTrail('edge', id)`.
 
-**Node panel — content (ResourcePeek parity) + History:**
-- **Identity / excerpt / metadata:** `AtlasNode` is leaner than the old `GraphNode`, so the panel
-  fetches node detail from the existing resource read (the resource show / `native_resource_row`
-  projection already carries `slug`, `excerpt`, dates, `cogmap_id`) — reuse, no new read. Renders
-  the ResourcePeek header/title/metadata/excerpt from it.
-- **Neighbors:** computed client-side from the already-loaded Tier-2 slice via the reused pure
-  `buildNeighborEntries(focusId, nodes, edges)` — same deterministic sort. Click a neighbor →
-  refocus (`buildDrillNodeUrl`).
-- **History (net-new, R5):** a section rendering `readTrail(token, 'node', id)` — time-ordered
-  events newest-first (`kind` humanized, `actor`, `occurred_at` relative + absolute on hover,
-  `confidence` when present).
+**Node panel — content (ResourcePeek lineage) + History:** a *new Atlas-native component* that
+borrows ResourcePeek's markup/design (ResourcePeek itself is old-`GraphNode`-typed — not editable
+in place).
+- **Identity:** title / doc_type / home come from the **already-loaded neighborhood seed node**
+  (`AtlasNode`) — zero extra fetch for the core panel.
+- **Metadata:** richer rows (context, cogmap, stage) from the existing `GET /api/resources/{id}`
+  → `ResourceRow` (already used by the vault route). Note `ResourceRow` has **no `excerpt`**.
+- **Excerpt (optional):** derived from the existing `GET /api/resources/{id}/content` markdown
+  (first paragraph). One extra read, only on selection — acceptable for a detail panel; may defer.
+- **Neighbors:** a **new Atlas-native builder** `atlasNeighbors(focusId, nodes, edges)` over the
+  loaded slice — `buildNeighborEntries` is *not* reusable (it is typed against the old
+  `GraphNode`/`GraphEdge`, sorts on `aggregator`, and assumes non-null `label`). The Atlas version
+  coalesces `label ?? edge_kind` and sorts by home/degree/title. Click a neighbor → refocus
+  (`buildDrillNodeUrl`).
+- **History (net-new, R5):** a section rendering `readTrail(token, 'node', id)`.
 
 **Edge panel:** lighter — edge kind (mono-cap), source/target titles (from the loaded slice),
 polarity + weight (via `edgeStyle()`), and the **edge History** from `readTrail(token, 'edge', id)`
@@ -178,9 +193,10 @@ identity (edges aren't resources).
 - Empty trail (`[]` for unreadable/nonexistent element) → a quiet "no recorded history" state, not
   an error.
 
-**Pure-testable units:** reuse `buildNeighborEntries` (already tested); add `trailModel(events)`
-(humanize kind, sort, confidence normalization) with a colocated test, mirroring the
-`nav`/`palette`/`peek` test pattern.
+**Pure-testable units:** new `atlasNeighbors(focusId, nodes, edges)` (Atlas-typed neighbors,
+label coalesce, deterministic sort); `selectedElement(focus, url)`; `nav.ts` `?sel` parse/build;
+`trailModel(events)` (humanize kind, sort, confidence normalization). Each with a colocated test,
+mirroring the `nav`/`palette` test pattern.
 
 ### ② SearchAccelerator
 
@@ -192,13 +208,20 @@ identity (edges aren't resources).
   2. **Bound + rank:** `unified_search(p_scope_ids := resources_in_team_scope(profile, team), …)`
      with `graph_expand = false` (name-locate precision; structural self-seed off). Ranking,
      weights, and the visibility gate are inherited unchanged.
-  3. **Drill-target projection (net-new SQL fn):** map each hit `id → {home, degree, region_id}`
-     via a single visibility-gated join to `kb_cogmap_region_members` — one function, so no N+1
-     `native_resource_row` re-read. `region_id` is the camera-jump target.
-- **New wire type** `AtlasSearchHit { node_id, title, home: NodeHome, region_id: Option<Uuid>,
-  combined_score, fts_score, vector_score, graph_score }` in `temper-core`
-  (`crates/temper-core/src/types/graph_atlas.rs` or a sibling), with the `ts-rs` derive, flowing
-  through `cargo make generate-ts-types`. **Never hand-model in the UI.**
+  3. **Hit projection (net-new SQL, folded into the same function):** project each hit `id →
+     {title, doc_type, home}` via the `graph_atlas_nodes` LATERAL-join pattern (home from
+     `kb_resource_homes`, doc_type from `kb_properties`), plus an optional best-affinity
+     `region_id` from `kb_cogmap_region_members` — one function, no N+1. `atlas_search` can be a
+     single SQL fn that calls `unified_search(...)` internally with `p_scope_ids := array_agg from
+     resources_in_team_scope`, so Rust makes one `query_as` call.
+- **New wire type** `AtlasSearchHit { node_id, title, doc_type: Option<String>, home: NodeHome,
+  region_id: Option<Uuid>, combined_score, fts_score, vector_score, graph_score }` in
+  `crates/temper-core/src/types/graph_atlas.rs`, mirroring `AtlasNode`'s exact derive/ts-rs stack
+  (`export_to = "graph_atlas.ts"`), re-exported from `types/mod.rs`, flowing through `cargo make
+  generate-ts-types`. **Never hand-model in the UI.**
+- **Embedding:** v1 passes `query` text with **NULL embedding** (`unified_search` zeroes the vector
+  term) — a pure FTS + team-scope name-locate. Adding query embedding later is a drop-in (the
+  param already exists). `graph_expand = false`.
 - **Endpoint:** `GET /api/graph/search?team=<id>&q=<str>&limit=<n>` → `Vec<AtlasSearchHit>`, gated
   in the handler.
 - **e2e (access tier):** member sees only in-scope hits; visibility gate holds (a resource the
@@ -208,9 +231,10 @@ identity (edges aren't resources).
 **UI:**
 - Search input in the left dock. On query, fetch hits; render a compact hit list (title + home
   glyph + doc-type hue dot).
-- Pick a hit → build the drill URL from its `region_id`/home (`buildDrillNodeUrl` for the node,
-  or territory drill when only a region is known) → `goto` → the existing `{#key viewKey}` remount
-  lands the camera on the target.
+- Pick a hit → `goto(buildDrillNodeUrl($page.url, hit.node_id))` — sets `?focus=node:<id>` within
+  the current `?team`, which seeds the Tier-2 neighborhood around the hit; the existing
+  `{#key viewKey}` remount lands the camera on it. (`region_id` is informational / future
+  territory-first landing; the node-focus jump alone suffices.)
 
 ### ③ AtlasLegend
 
@@ -249,16 +273,22 @@ identity (edges aren't resources).
 
 One PR (Cole's "C3 as one chunk"), SDD build, one consolidated end-of-plan opus review.
 
-1. **Backend — SearchAccelerator read.** Drill-target projection SQL fn + `atlas_search` service
-   read + `AtlasSearchHit` wire type + `ts-rs` regen + endpoint + **e2e access-tier test**. First,
-   per the data-before-UI convention; it is the primary backend work and the only real risk
-   surface. (The lens picker in ④ may need a tiny lens-enumeration read if none is reusable — a
-   trivial addition, not a risk surface. TrailRail reuses the existing resource-detail read; no new
-   backend.)
+1. **Backend — two additive migrations + reads (data-before-UI, the only risk surface):**
+   - **`atlas_search`** — SQL fn (calls `unified_search` with `p_scope_ids` from
+     `resources_in_team_scope`, projects home/doc_type/region) + `atlas_search` service read
+     (`team_viewable_by` gate) + `AtlasSearchHit` wire type + `ts-rs` regen + endpoint + **e2e
+     access-tier test**.
+   - **Edge-id in the neighborhood projection** — a migration that DROP/CREATEs
+     `graph_traverse_scoped` to also return `id`, add `id` to the `AtlasEdge` wire type, and thread
+     it through `neighborhood_slice`'s mapping. Unblocks edge trails. (`ts-rs` regen.)
+   - (The lens picker in ④ may need a tiny lens-enumeration read if none is reusable — trivial, not
+     a risk surface. TrailRail's node metadata/excerpt reuse existing resource endpoints — no new
+     backend.)
 2. **Frontend siblings (parallelizable):**
-   - **TrailRail** — `nav.ts` edge focus + clickable `Edge` marks + the ResourcePeek-lineage panel
-     (ported to `palette.ts`, reusing `buildNeighborEntries` + resource-detail read) + the R5
-     History section (`readTrail`) + `trailModel` unit test.
+   - **TrailRail** — `nav.ts` `?sel` edge selection + clickable `Edge` marks + the new
+     Atlas-native ResourcePeek-lineage panel (`palette.ts`-styled, `atlasNeighbors` + resource
+     metadata/excerpt reads) + the R5 History section (`readTrail`) + `atlasNeighbors`/`trailModel`
+     unit tests.
    - **SearchAccelerator UI** — dock search input + hit list + jump-to-drill.
    - **AtlasLegend** — dock legend component + `legendModel` unit test.
    - **ScopeBar filters** — lens picker + edge-kind toggles + doc-type dimming + `nav.ts` filter
@@ -298,7 +328,8 @@ filter that threads through a tier read); doc-type (client-side) and lens (exist
 - Each sibling is independently useful and does not regress the shipped canvas.
 - TrailRail renders the ResourcePeek-lineage detail panel for a selected **node or edge** —
   doctype-hue header, serif title, neighbors (node), metadata/excerpt (node) — plus the R5
-  **History** section, visibility-scoped; edge selection works via `?focus=edge:`.
+  **History** section, visibility-scoped; edge selection works via `?sel=edge:` (with `AtlasEdge.id`
+  threaded through the neighborhood projection).
 - Search locates + camera-jumps to a node in the visible team-scoped set; hits are visibility-
   scoped; ranking is `unified_search`'s, unchanged.
 - Legend accurately reflects doc-type hues, home encoding, and edge grammar, all sourced from
