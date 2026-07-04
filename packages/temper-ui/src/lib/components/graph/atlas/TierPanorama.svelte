@@ -4,7 +4,9 @@
 	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
 	import { packTerritories } from '$lib/graph/atlas/layout/packTerritories';
-	import { buildScopeUrl } from '$lib/graph/atlas/nav';
+	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
+	import { buildScopeUrl, buildDrillTerritoryUrl, buildDrillNodeUrl } from '$lib/graph/atlas/nav';
+	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 	import TeamZoneMark from './marks/TeamZoneMark.svelte';
 	import OrphanNodeMark from './marks/OrphanNodeMark.svelte';
@@ -17,17 +19,27 @@
 	}
 	let { overview, zones, width, height }: Props = $props();
 
-	// Zones occupy a top band; territories pack the rest.
 	const ZONE_BAND = 120;
 	const ZONE_W = 170;
 	const ZONE_H = 90;
 
-	const packed = $derived(
-		packTerritories(overview.territories, { width, height: Math.max(1, height - ZONE_BAND) })
-	);
+	const bodyHeight = $derived(Math.max(1, height - ZONE_BAND));
+	const hasTerr = $derived(overview.territories.length > 0);
+	const hasCogmaps = $derived(overview.orphan_nodes.length > 0);
+	const terrBox = $derived(hasTerr && hasCogmaps ? { width, height: bodyHeight * 0.55 } : { width, height: bodyHeight });
+	const cogmapBox = $derived(hasTerr && hasCogmaps ? { width, height: bodyHeight * 0.45 } : { width, height: bodyHeight });
+	const cogmapOffsetY = $derived(hasTerr && hasCogmaps ? bodyHeight * 0.55 : 0);
+	const packed = $derived(packTerritories(overview.territories, terrBox));
+	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
 
 	function enterZone(teamId: string) {
 		goto(buildScopeUrl($page.url, teamId), { replaceState: true });
+	}
+	function drillTerritory(regionId: string) {
+		goto(buildDrillTerritoryUrl($page.url, regionId), { replaceState: true });
+	}
+	function drillNode(nodeId: string) {
+		goto(buildDrillNodeUrl($page.url, nodeId), { replaceState: true });
 	}
 </script>
 
@@ -44,14 +56,29 @@
 	/>
 {/each}
 
-<!-- this scope's own territories -->
 <g transform={`translate(0, ${ZONE_BAND})`}>
+	<!-- dense territories: regions drill to Tier 1, contexts are inert -->
 	{#each packed as t (t.id)}
-		<TerritoryCircle x={t.x} y={t.y} r={t.r} kind={t.kind} label={t.label} />
+		<TerritoryCircle
+			x={t.x}
+			y={t.y}
+			r={t.r}
+			kind={t.kind}
+			label={t.label}
+			onEnter={t.kind === 'region' ? () => drillTerritory(t.id) : undefined}
+		/>
 	{/each}
 
-	<!-- sparsity fallback: orphan salient nodes drawn directly -->
-	{#each overview.orphan_nodes as o, i (o.id)}
-		<OrphanNodeMark x={40} y={20 + i * 22} title={o.title} docType={o.doc_type} />
-	{/each}
+	<!-- sparse state: region-less cogmaps drawn as territories with clickable facet dots -->
+	<g transform={`translate(0, ${cogmapOffsetY})`}>
+		{#each cogmaps as cm (cm.cogmapId)}
+			<g class="cogmap-territory">
+				<circle cx={cm.x} cy={cm.y} r={cm.r} fill={TERRITORY_TINTS.cogmap} fill-opacity="0.06" stroke={TERRITORY_TINTS.cogmap} stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4" />
+				<text x={cm.x} y={cm.y - cm.r - 6} text-anchor="middle" fill={TERRITORY_TINTS.cogmap} font-size="11" font-weight="600" letter-spacing="1" style="text-transform:uppercase">{cm.label}</text>
+				{#each cm.facets as f (f.id)}
+					<OrphanNodeMark x={f.x} y={f.y} r={Math.min(7, f.r)} title={f.title} docType={f.docType} onEnter={() => drillNode(f.id)} />
+				{/each}
+			</g>
+		{/each}
+	</g>
 </g>

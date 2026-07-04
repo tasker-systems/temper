@@ -11,7 +11,7 @@
  * `--color-graph-*` CSS vars and styling.ts NODE_COLORS belong to the old graph
  * stack and are removed in Chunk D.
  */
-import type { NodeHome } from '$lib/types/generated/graph_atlas';
+import type { AtlasEdge, NodeHome } from '$lib/types/generated/graph_atlas';
 import type { TerritoryKind } from '$lib/types/generated/graph_territory';
 
 export type AtlasDocType =
@@ -100,4 +100,39 @@ export function paletteStyleVars(): string {
 	return (Object.entries(DOC_TYPE_HUES) as [AtlasDocType, string][])
 		.map(([type, hex]) => `--dt-${type}:${hex};`)
 		.join('');
+}
+
+export interface EdgeStyle {
+	color: string;
+	width: number;
+	dash: string | null;
+	markerStart: boolean;
+	markerEnd: boolean;
+}
+
+const KIND_DASH: Record<AtlasEdge['edge_kind'], string | null> = {
+	contains: null,
+	leads_to: '7 4',
+	express: '1 4',
+	near: '4 4'
+};
+
+/** Map an Atlas edge to its SVG style per the encoding grammar (spec C2-D6). */
+export function edgeStyle(edge: AtlasEdge): EdgeStyle {
+	const color =
+		edge.label === 'derived_from'
+			? EDGE_COLORS.derived
+			: edge.label === 'contradicts'
+				? EDGE_COLORS.contradicts
+				: EDGE_COLORS.structural;
+	const dash = edge.label === 'derived_from' ? '7 4' : KIND_DASH[edge.edge_kind];
+	const width = Math.max(1, Math.min(5, edge.weight));
+	const symmetric = edge.edge_kind === 'near';
+	return {
+		color,
+		width,
+		dash,
+		markerStart: !symmetric && edge.polarity === 'inverse',
+		markerEnd: !symmetric && edge.polarity === 'forward'
+	};
 }

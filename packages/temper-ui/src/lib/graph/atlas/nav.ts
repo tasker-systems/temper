@@ -70,3 +70,11 @@ export function buildDrillNodeUrl(base: URL, nodeId: string): string {
 export function buildAscendUrl(base: URL): string {
 	return withParams(base, (p) => p.delete('focus'));
 }
+
+/** Return to the membership home: clear both team and focus. */
+export function buildHomeUrl(base: URL): string {
+	return withParams(base, (p) => {
+		p.delete('team');
+		p.delete('focus');
+	});
+}

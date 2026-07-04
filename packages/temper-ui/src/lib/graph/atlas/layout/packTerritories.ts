@@ -32,7 +32,13 @@ export function packTerritories(
 	const root = hierarchy<PackDatum>({
 		children: territories.map((t) => ({ territory: t }))
 	})
-		.sum((d) => (d.territory ? Math.max(1, d.territory.member_count) : 0));
+		.sum((d) => {
+			if (!d.territory) return 0;
+			const t = d.territory;
+			return t.kind === 'region'
+				? Math.max(1, Math.round((t.salience ?? 0) * 100))
+				: Math.max(1, t.member_count);
+		});
 
 	const layout = pack<PackDatum>().size([size.width, size.height]).padding(6);
 	const packed = layout(root);

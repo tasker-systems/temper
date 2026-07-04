@@ -4,15 +4,18 @@ import {
 	AUTHORED_DOC_TYPES,
 	CANVAS_BG,
 	DOC_TYPE_HUES,
+	EDGE_COLORS,
 	FALLBACK_HUE,
 	TEAM_ZONE,
 	TERRITORY_TINTS,
 	docTypeHue,
+	edgeStyle,
 	isAuthored,
 	nodeMark,
 	paletteStyleVars,
 	salienceOpacity
 } from './palette';
+import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
 
 describe('DOC_TYPE_HUES', () => {
 	it('defines all 14 doc-types with the locked Vivid Cartographer hexes', () => {
@@ -68,6 +71,48 @@ describe('paletteStyleVars', () => {
 		const s = paletteStyleVars();
 		expect(s).toContain('--dt-concept:#e8942e');
 		expect(s).toContain('--dt-goal:#3a8ae8');
+	});
+});
+
+const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({
+	source: 's',
+	target: 't',
+	edge_kind: 'contains',
+	polarity: 'forward',
+	label: null,
+	weight: 1,
+	...o
+});
+
+describe('edgeStyle', () => {
+	it('maps edge_kind to line style', () => {
+		expect(edgeStyle(edge({ edge_kind: 'contains' })).dash).toBeNull();
+		expect(edgeStyle(edge({ edge_kind: 'leads_to' })).dash).toBe('7 4');
+		expect(edgeStyle(edge({ edge_kind: 'express' })).dash).toBe('1 4');
+		expect(edgeStyle(edge({ edge_kind: 'near' })).dash).toBe('4 4');
+	});
+	it('derived_from label → provenance color + dashed regardless of kind', () => {
+		const s = edgeStyle(edge({ edge_kind: 'contains', label: 'derived_from' }));
+		expect(s.color).toBe(EDGE_COLORS.derived);
+		expect(s.dash).toBe('7 4');
+	});
+	it('contradicts label → warning red', () => {
+		expect(edgeStyle(edge({ label: 'contradicts' })).color).toBe(EDGE_COLORS.contradicts);
+	});
+	it('default color is structural gray', () => {
+		expect(edgeStyle(edge({})).color).toBe(EDGE_COLORS.structural);
+	});
+	it('weight → thickness clamped to [1,5]', () => {
+		expect(edgeStyle(edge({ weight: 0.2 })).width).toBe(1);
+		expect(edgeStyle(edge({ weight: 3 })).width).toBe(3);
+		expect(edgeStyle(edge({ weight: 99 })).width).toBe(5);
+	});
+	it('polarity → arrowhead; near is symmetric (no marker)', () => {
+		expect(edgeStyle(edge({ polarity: 'forward' }))).toMatchObject({ markerEnd: true, markerStart: false });
+		expect(edgeStyle(edge({ polarity: 'inverse' }))).toMatchObject({ markerEnd: false, markerStart: true });
+		const n = edgeStyle(edge({ edge_kind: 'near', polarity: 'forward' }));
+		expect(n.markerStart).toBe(false);
+		expect(n.markerEnd).toBe(false);
 	});
 });
 
