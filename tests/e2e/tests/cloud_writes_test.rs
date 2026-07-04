@@ -327,6 +327,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                     sources: &[],
+                    content_block: None,
                 },
             )
             .expect("cloud meta-only update must succeed")
@@ -493,6 +494,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                     sources: &[],
+                    content_block: None,
                 },
             )
             .expect("cloud body+meta update must succeed")
@@ -657,6 +659,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                     sources: &[],
+                    content_block: None,
                 },
             )
             .expect("cloud body-only update must succeed")
@@ -810,6 +813,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                     sources: &[],
+                    content_block: None,
                 },
             )
         })
@@ -968,6 +972,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                     sources: &[],
+                    content_block: None,
                 },
             )
             .expect("second (identical) PATCH must succeed")
@@ -1335,6 +1340,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     act: Default::default(),
                     format: temper_cli::format::OutputFormat::Json,
                     sources: &[],
+                    content_block: None,
                 },
             )
             .expect("cloud meta-only update must succeed")

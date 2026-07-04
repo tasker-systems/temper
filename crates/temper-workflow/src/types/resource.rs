@@ -220,6 +220,15 @@ pub struct ResourceUpdateRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
+    /// Which content block the body revise + `sources` target. `None` → the resource's sole
+    /// non-folded body block (today's default); `Some(id)` addresses that block explicitly (must
+    /// belong to the resource and be non-folded). Also the escape hatch for a multi-block resource.
+    ///
+    /// `ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent
+    /// write path the SvelteKit UI never exercises, so the generated TS omits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub content_block: Option<uuid::Uuid>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the update act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     ///
@@ -364,11 +373,13 @@ mod tests {
             context_to: Some("@me/knowledge".to_string()),
             act: Default::default(),
             sources: Vec::new(),
+            content_block: Some(uuid::Uuid::nil()),
         };
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.title.as_deref(), Some("New Title"));
         assert_eq!(parsed.slug.as_deref(), Some("new-slug"));
+        assert_eq!(parsed.content_block, Some(uuid::Uuid::nil()));
         assert_eq!(
             parsed
                 .managed_meta
@@ -399,11 +410,13 @@ mod tests {
             context_to: None,
             act: Default::default(),
             sources: Vec::new(),
+            content_block: None,
         };
         let serialized = serde_json::to_string(&req).unwrap();
         assert!(!serialized.contains("\"title\""));
         assert!(!serialized.contains("\"content\""));
         assert!(!serialized.contains("\"context_to\""));
+        assert!(!serialized.contains("\"content_block\""));
         assert!(serialized.contains("\"managed_meta\""));
     }
 }

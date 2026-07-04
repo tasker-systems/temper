@@ -565,6 +565,8 @@ impl DbBackend {
                             chunks: Some(incoming_chunks),
                             // Corpus reconcile carries no provenance attribution (not a distillation).
                             sources: Vec::new(),
+                            // Corpus reconcile revises the resource's sole body block (never addresses one).
+                            content_block: None,
                             rehome_to: None,
                             emitter: ctx.emitter,
                         },
@@ -1044,6 +1046,7 @@ impl Backend for DbBackend {
                 properties: &properties,
                 chunks: incoming_chunks,
                 sources: body_sources(cmd.body.as_ref()),
+                content_block: cmd.body.as_ref().and_then(|b| b.content_block),
                 rehome_to,
                 emitter,
             },

@@ -581,6 +581,7 @@ async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
             origin_uri: None,
             properties: &[("temper-stage".to_string(), serde_json::json!("done"))],
             chunks: None,
+            content_block: None,
             rehome_to: Some(ctx2),
             emitter,
         },

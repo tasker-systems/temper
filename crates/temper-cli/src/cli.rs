@@ -471,10 +471,15 @@ pub enum ResourceAction {
         #[arg(long)]
         body: Option<String>,
         /// Provenance sources this body was distilled from — comma-separated resource
-        /// refs (UUID or decorated). Each becomes a block-provenance record on the
-        /// resource's body block. Requires a body update. URLs are deferred (T7c).
+        /// refs (UUID or decorated) or http(s) URLs. Each becomes a block-provenance
+        /// record on the addressed block. Requires a body update.
         #[arg(long, value_delimiter = ',')]
         sources: Vec<String>,
+        /// Which content block the body revise + `--sources` target (a block UUID). Omit to
+        /// address the resource's sole body block (the default); required to revise a resource
+        /// that has more than one block. The block must belong to the resource and be non-folded.
+        #[arg(long)]
+        content_block: Option<uuid::Uuid>,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,

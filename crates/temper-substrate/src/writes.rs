@@ -186,6 +186,11 @@ pub struct UpdateParams<'a> {
     /// into `kb_block_provenance` (accretes onto whatever the block already carried). Empty for an
     /// ordinary body revise with no attribution.
     pub sources: Vec<Incorporation>,
+    /// Which content block the body revise + `sources` target. `None` → the resource's sole non-folded
+    /// body block (the default; errors if the resource has zero or >1 live blocks). `Some(id)` →
+    /// address that block explicitly (must belong to the resource and be non-folded); this is also the
+    /// escape hatch for revising a resource that has more than one block.
+    pub content_block: Option<Uuid>,
     /// Destination context for a move (`move_to.context_to`).
     pub rehome_to: Option<ContextId>,
     pub emitter: EntityId,
@@ -220,23 +225,48 @@ pub async fn update_resource_in_tx(
     ctx: EventContext,
 ) -> Result<()> {
     if let Some(body) = p.body {
-        // resolve the resource's single non-folded body block (CONFORM scenario runner revise).
-        let block_ids: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
-        )
-        .bind(p.resource.uuid())
-        .fetch_all(&mut *conn)
-        .await?;
-        let block_id = match block_ids.as_slice() {
-            [one] => *one,
-            [] => anyhow::bail!(
-                "update_resource: resource {} has no live block",
-                p.resource.uuid()
-            ),
-            _ => anyhow::bail!(
-                "update_resource: resource {} has >1 block (multi-block revise unsupported)",
-                p.resource.uuid()
-            ),
+        let block_id = match p.content_block {
+            // Explicit addressing: validate the block belongs to this resource and is non-folded.
+            // A null row ⇒ not-this-resource; is_folded ⇒ folded — both rejected before any write.
+            Some(target) => {
+                let is_folded: Option<bool> = sqlx::query_scalar(
+                    "SELECT is_folded FROM kb_content_blocks WHERE id=$1 AND resource_id=$2",
+                )
+                .bind(target)
+                .bind(p.resource.uuid())
+                .fetch_optional(&mut *conn)
+                .await?;
+                match is_folded {
+                    Some(false) => target,
+                    Some(true) => anyhow::bail!(
+                        "update_resource: content block {target} is folded (folded blocks are not revisable)"
+                    ),
+                    None => anyhow::bail!(
+                        "update_resource: content block {target} does not belong to resource {}",
+                        p.resource.uuid()
+                    ),
+                }
+            }
+            // Default: resolve the resource's single non-folded body block (CONFORM scenario runner revise).
+            None => {
+                let block_ids: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+                )
+                .bind(p.resource.uuid())
+                .fetch_all(&mut *conn)
+                .await?;
+                match block_ids.as_slice() {
+                    [one] => *one,
+                    [] => anyhow::bail!(
+                        "update_resource: resource {} has no live block",
+                        p.resource.uuid()
+                    ),
+                    _ => anyhow::bail!(
+                        "update_resource: resource {} has >1 block (pass --content-block to address one)",
+                        p.resource.uuid()
+                    ),
+                }
+            }
         };
         let mut prepared = match p.chunks {
             Some(chunks) => prepare_block_from_chunks(0, None, chunks),

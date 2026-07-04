@@ -334,6 +334,7 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
                 source: ProvenanceSource::Resource(src_b),
                 seq: 1,
             }],
+            content_block: None,
             rehome_to: None,
             emitter: EntityId::from(emitter),
         },
@@ -368,6 +369,214 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
     assert_eq!(
         reinforce, 2,
         "resource_blocks.reinforce_count reflects both sources"
+    );
+}
+
+/// T7c Task 11: an update addressing a block explicitly (`content_block = Some(id)`) applies the
+/// revision + sources to THAT block. Here the addressed block is the resource's sole body block, so
+/// the outcome matches the default path — the point is that the explicit `Some(id)` selection resolves
+/// to the same block and lands provenance (proving the `Some` branch, not the count-based default).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn update_with_content_block_targets_named_block(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+    use temper_substrate::writes::{self, CreateParams, UpdateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+    let src_b = uuid::Uuid::now_v7();
+
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            title: "distilled",
+            origin_uri: "temper://prov/cb-target",
+            body: "deployment pipeline staging and rollout cadence",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(uuid::Uuid::now_v7()),
+                seq: 0,
+            }],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create");
+
+    let block_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    writes::update_resource_with(
+        &pool,
+        UpdateParams {
+            resource,
+            body: Some("a revised body about staged rollout and canary cadence over regions"),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            chunks: None,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(src_b),
+                seq: 1,
+            }],
+            content_block: Some(block_id),
+            rehome_to: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("revise addressing the block explicitly");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_provenance p JOIN kb_content_blocks b ON b.id=p.block_id \
+         WHERE b.id=$1 AND NOT p.is_corrected",
+    )
+    .bind(block_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 2,
+        "create source + explicitly-addressed revise source both land on the addressed block"
+    );
+}
+
+/// T7c Task 11: addressing a `content_block` that does not belong to the resource is rejected before
+/// any write — the default path would silently revise the resource's own block instead.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn update_with_foreign_content_block_is_rejected(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::AnchorRef;
+    use temper_substrate::writes::{self, CreateParams, UpdateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            title: "distilled",
+            origin_uri: "temper://prov/cb-foreign",
+            body: "deployment pipeline staging and rollout cadence",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create");
+
+    let err = writes::update_resource_with(
+        &pool,
+        UpdateParams {
+            resource,
+            body: Some("a revised body about staged rollout and canary cadence over regions"),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+            // a block id that belongs to no resource in this DB
+            content_block: Some(uuid::Uuid::now_v7()),
+            rehome_to: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect_err("a content_block that does not belong to the resource must be rejected");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("does not belong") || msg.contains("not belong"),
+        "error should explain the block does not belong to the resource, got: {msg}"
+    );
+}
+
+/// T7c Task 11: addressing a folded `content_block` is rejected — folding is the availability gate, and
+/// a revise must not resurrect content on a folded block.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn update_with_folded_content_block_is_rejected(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::AnchorRef;
+    use temper_substrate::writes::{self, CreateParams, UpdateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            title: "distilled",
+            origin_uri: "temper://prov/cb-folded",
+            body: "deployment pipeline staging and rollout cadence",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create");
+
+    let block_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Fold the block directly — we only need the folded precondition, not an event-sourced fold.
+    sqlx::query("UPDATE kb_content_blocks SET is_folded = true WHERE id = $1")
+        .bind(block_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = writes::update_resource_with(
+        &pool,
+        UpdateParams {
+            resource,
+            body: Some("a revised body about staged rollout and canary cadence over regions"),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+            content_block: Some(block_id),
+            rehome_to: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect_err("addressing a folded content_block must be rejected");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("folded"),
+        "error should explain the block is folded, got: {msg}"
     );
 }
 

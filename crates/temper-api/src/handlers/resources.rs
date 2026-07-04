@@ -251,6 +251,7 @@ pub async fn update(
         content_hash: req.content_hash,
         chunks_packed: req.chunks_packed,
         sources: req.sources,
+        content_block: req.content_block,
     });
 
     // Fold top-level title/slug into managed_meta so the translator can extract

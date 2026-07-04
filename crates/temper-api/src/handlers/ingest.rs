@@ -86,6 +86,8 @@ pub async fn create(
             content_hash: None,
             chunks_packed: None,
             sources: payload.sources,
+            // Ingest create writes a single body block; per-block addressing is the PATCH surface.
+            content_block: None,
         })
     };
 
@@ -150,6 +152,8 @@ pub async fn update(
             content_hash: payload.content_hash,
             chunks_packed: payload.chunks_packed,
             sources: payload.sources,
+            // Ingest update revises the resource's sole body block; per-block addressing is the PATCH surface.
+            content_block: None,
         })
     };
 

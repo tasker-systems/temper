@@ -225,6 +225,9 @@ pub(crate) fn cmd_to_resource_update_request(
             .as_ref()
             .map(|b| b.sources.clone())
             .unwrap_or_default(),
+        // Which block the body+sources address (`--content-block`); the update handler maps it
+        // back onto the UpdateResource's BodyUpdate alongside `sources`.
+        content_block: cmd.body.as_ref().and_then(|b| b.content_block),
         // Carry the per-act correlation + authorship from the command onto the wire (discrete
         // ActInput shape); the update handler reassembles it into the act on its UpdateResource.
         act: cmd.act.clone().into(),
@@ -270,6 +273,7 @@ mod tests {
                 content_hash: None,
                 chunks_packed: None,
                 sources: Vec::new(),
+                content_block: None,
             }),
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
@@ -475,6 +479,7 @@ mod tests {
             content_hash: None,
             chunks_packed: None,
             sources: Vec::new(),
+            content_block: None,
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         assert_eq!(req.content.as_deref(), Some("# Updated\n"));
@@ -541,6 +546,7 @@ mod body_resolution_tests {
             content_hash: None,
             chunks_packed: None,
             sources: Vec::new(),
+            content_block: None,
         }
     }
 
