@@ -21,7 +21,7 @@ use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
-use crate::payloads::{self, AnchorRef, EdgePolarity};
+use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation};
 use crate::text::slugify;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
@@ -107,6 +107,9 @@ pub struct CreateParams<'a> {
     /// verbatim (no server-side embed — the client did extract→chunk→embed); when `None`, the server
     /// chunks + embeds `body` itself (the fallback path). Reverses PR#71's discard-client-chunks contract.
     pub chunks: Option<Vec<IncomingChunk>>,
+    /// Provenance sources the body was distilled from — applied to the resource's body block and
+    /// recorded into `kb_block_provenance`. Empty for an ordinary create with no attribution.
+    pub sources: Vec<Incorporation>,
 }
 
 pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<ResourceId> {
@@ -122,10 +125,12 @@ pub async fn create_resource_with(
     p: CreateParams<'_>,
     ctx: EventContext,
 ) -> Result<ResourceId> {
-    let block = match p.chunks {
+    let mut block = match p.chunks {
         Some(chunks) => prepare_block_from_chunks(0, None, chunks),
         None => prepare_block(0, None, p.body)?,
     };
+    // Resource-level sources apply to the (single) body block; carried onto the manifest → provenance.
+    block.incorporated = p.sources;
     let blocks = [block];
     let mut tx = begin_scoped(pool).await?;
     let new_id = fire_with(
@@ -177,6 +182,10 @@ pub struct UpdateParams<'a> {
     /// supplied), the new block is built from these verbatim (no server-side embed); when `None`, the
     /// server chunks + embeds `body` (the fallback path). Reverses PR#71's discard contract.
     pub chunks: Option<Vec<IncomingChunk>>,
+    /// Provenance sources this revision incorporated — applied to the revised body block and recorded
+    /// into `kb_block_provenance` (accretes onto whatever the block already carried). Empty for an
+    /// ordinary body revise with no attribution.
+    pub sources: Vec<Incorporation>,
     /// Destination context for a move (`move_to.context_to`).
     pub rehome_to: Option<ContextId>,
     pub emitter: EntityId,
@@ -229,7 +238,7 @@ pub async fn update_resource_in_tx(
                 p.resource.uuid()
             ),
         };
-        let prepared = match p.chunks {
+        let mut prepared = match p.chunks {
             Some(chunks) => prepare_block_from_chunks(0, None, chunks),
             None => prepare_block(0, None, body)?,
         };
@@ -238,11 +247,13 @@ pub async fn update_resource_in_tx(
                 "update_resource: empty/whitespace body — refusing to write a contentless block"
             );
         }
+        prepared.incorporated = p.sources;
         fire_with(
             &mut *conn,
             SeedAction::BlockMutate {
                 block: crate::ids::BlockId::from(block_id),
                 chunks: &prepared.chunks,
+                incorporated: &prepared.incorporated,
                 emitter: p.emitter,
             },
             ctx.clone(),
@@ -607,6 +618,7 @@ pub async fn mutate_block(
         SeedAction::BlockMutate {
             block,
             chunks,
+            incorporated: &[],
             emitter,
         },
     )

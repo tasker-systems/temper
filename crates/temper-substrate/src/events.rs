@@ -230,6 +230,10 @@ pub enum SeedAction<'a> {
         block: BlockId,
         /// The revised body as a single prepared block's worth of chunks (re-embedded inline).
         chunks: &'a [PreparedChunk],
+        /// Sources this revision incorporated — recorded into `kb_block_provenance` by the projector.
+        /// `&[]` for the scenario/charter/no-source paths; the resource-update write path passes the
+        /// caller's sources.
+        incorporated: &'a [payloads::Incorporation],
         emitter: EntityId,
     },
     /// Replace a cogmap's telos charter with a full role-tagged block set (post-birth populate). The
@@ -730,12 +734,13 @@ pub async fn fire_with(
         SeedAction::BlockMutate {
             block,
             chunks,
+            incorporated,
             emitter,
         } => {
             let payload = payloads::BlockMutated {
                 block_id: block,
                 chunks: chunks.iter().map(payloads::ChunkManifest::from).collect(),
-                incorporated: Vec::new(), // body-revision only; provenance accretion deferred
+                incorporated: incorporated.to_vec(), // recorded into kb_block_provenance by the projector
             };
             let mut sidecar = std::collections::HashMap::new();
             payloads::content_sidecar_chunks(&mut sidecar, chunks);
@@ -1012,6 +1017,7 @@ mod tests {
             SeedAction::BlockMutate {
                 block: BlockId::from(Uuid::nil()),
                 chunks: &chunks,
+                incorporated: &[],
                 emitter,
             }
             .event_type()

@@ -49,6 +49,13 @@ pub struct PreparedBlock {
     pub seq: i32,
     pub role: Option<String>,
     pub chunks: Vec<PreparedChunk>,
+    /// Provenance: the ordered sources this block's content was incorporated from. Empty for the
+    /// scenario/charter paths; the resource create/update write path sets it from the caller's
+    /// `sources`. Carried onto the block manifest (via `From<&PreparedBlock>`, read directly — NOT
+    /// serialized) → recorded in `kb_block_provenance` by the projector. `#[serde(skip)]` keeps
+    /// `PreparedBlock`'s own serialized shape (the content sidecar) byte-identical.
+    #[serde(skip)]
+    pub incorporated: Vec<crate::payloads::Incorporation>,
 }
 
 /// Pure chunk plan for one block's prose — chunking + hashing only, **no** embedding (so it is
@@ -122,6 +129,7 @@ pub fn prepare_block_from_chunks(
         seq,
         role: role.map(str::to_owned),
         chunks,
+        incorporated: Vec::new(),
     }
 }
 
@@ -168,6 +176,7 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         seq,
         role: role.map(str::to_owned),
         chunks,
+        incorporated: Vec::new(),
     })
 }
 
@@ -483,6 +492,7 @@ mod tests {
                 header_path: None,
                 heading_depth: None,
             }],
+            incorporated: vec![],
         };
         let v = serde_json::to_value([&block]).unwrap();
         assert_eq!(v[0]["seq"], 2);

@@ -115,6 +115,11 @@ pub struct BlockManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub chunks: Vec<ChunkManifest>,
+    /// The ordered sources this block's content was incorporated from — recorded into
+    /// `kb_block_provenance` by the projector. Empty (and skipped on the wire) for the
+    /// scenario/charter paths; set by the resource create/update write path from the caller's sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incorporated: Vec<Incorporation>,
 }
 
 impl From<&crate::content::PreparedChunk> for ChunkManifest {
@@ -142,6 +147,7 @@ impl From<&PreparedBlock> for BlockManifest {
                     content_hash: c.content_hash.clone(),
                 })
                 .collect(),
+            incorporated: b.incorporated.clone(),
         }
     }
 }
@@ -442,14 +448,11 @@ pub struct ResourceReassigned {
     pub to_profile_id: ProfileId,
 }
 
-/// Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum ProvenanceSource {
-    Event(Uuid),
-    Resource(Uuid),
-}
+// `ProvenanceSource` is the shared wire carrier — canonical home `temper_core::types::provenance`
+// (CLAUDE.md: "the wire type lives in temper-core", the same chain as authorship below). Re-exported
+// so substrate's `payloads::ProvenanceSource` users (`Incorporation`, `BlockProvenanceCorrected`, and
+// the projectors) stay stable.
+pub use temper_core::types::provenance::ProvenanceSource;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -622,6 +625,7 @@ mod tests {
                 header_path: None,
                 heading_depth: None,
             }],
+            incorporated: vec![],
         };
         let m = BlockManifest::from(&b);
         let v = serde_json::to_value(&m).unwrap();
@@ -697,6 +701,7 @@ mod tests {
                 header_path: None,
                 heading_depth: None,
             }],
+            incorporated: vec![],
         };
         let side = content_sidecar(std::slice::from_ref(&b));
         let entry = side.get(&b.chunks[0].chunk_id.to_string()).unwrap();
