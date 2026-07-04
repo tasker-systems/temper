@@ -71,6 +71,7 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: 
         metadata: None,
         open_meta: None,
         act: Default::default(),
+        sources: Vec::new(),
     };
     let resp = app
         .client

@@ -34,6 +34,7 @@ async fn ingest_with_chunks(
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     app.client
         .ingest()

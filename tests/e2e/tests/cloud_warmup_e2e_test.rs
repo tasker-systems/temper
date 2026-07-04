@@ -86,6 +86,7 @@ async fn seed_session(
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("encode session chunk")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     client
         .ingest()
@@ -124,6 +125,7 @@ async fn seed_task(
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     client
         .ingest()

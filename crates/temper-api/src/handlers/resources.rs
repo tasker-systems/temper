@@ -18,6 +18,7 @@ use temper_core::types::cognitive_maps::{
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
@@ -134,6 +135,32 @@ pub async fn get_content(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/resources/{id}/provenance",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Itemized per-block provenance", body = Vec<BlockProvenanceRow>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
+pub async fn provenance(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(resource_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<BlockProvenanceRow>>> {
+    temper_services::backend::substrate_read::resource_block_provenance_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        resource_id,
+    )
+    .await
+    .map(Json)
+}
+
+#[utoipa::path(
     post,
     path = "/api/resources",
     tag = "Resources",
@@ -223,6 +250,7 @@ pub async fn update(
         content,
         content_hash: req.content_hash,
         chunks_packed: req.chunks_packed,
+        sources: req.sources,
     });
 
     // Fold top-level title/slug into managed_meta so the translator can extract

@@ -339,6 +339,11 @@ pub enum ResourceAction {
         /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
+        /// Provenance sources this body was distilled from — comma-separated resource
+        /// refs (UUID or decorated). Each becomes a block-provenance record on the
+        /// resource's body block. URLs are deferred (need the 'remote' source kind, T7c).
+        #[arg(long, value_delimiter = ',')]
+        sources: Vec<String>,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
@@ -379,6 +384,10 @@ pub enum ResourceAction {
         /// Show graph edges connected to this resource
         #[arg(long)]
         edges: bool,
+        /// Show itemized per-block provenance — the sources each of the
+        /// resource's content blocks was distilled from. Calls GET /provenance.
+        #[arg(long, conflicts_with = "meta_only")]
+        provenance: bool,
         /// Return only the resource's meta tier (managed + open
         /// frontmatter, hashes); no body. Calls GET /meta endpoint.
         #[arg(long, conflicts_with = "edges")]
@@ -461,6 +470,11 @@ pub enum ResourceAction {
         /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
         #[arg(long)]
         body: Option<String>,
+        /// Provenance sources this body was distilled from — comma-separated resource
+        /// refs (UUID or decorated). Each becomes a block-provenance record on the
+        /// resource's body block. Requires a body update. URLs are deferred (T7c).
+        #[arg(long, value_delimiter = ',')]
+        sources: Vec<String>,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,

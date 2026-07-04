@@ -81,6 +81,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
         metadata: None,
         open_meta: None,
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let create_resp = app

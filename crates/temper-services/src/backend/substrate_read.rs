@@ -30,6 +30,7 @@ use temper_core::types::cognitive_maps::{
 };
 use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
 use temper_core::types::invocation::{InvocationActRow, InvocationSummary, InvocationView};
+use temper_core::types::provenance::BlockProvenanceRow;
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
@@ -573,6 +574,35 @@ pub async fn cogmap_charter_select(
              FROM resource_blocks(cogmap_telos($1), 'profile', $2, NULL)
             ORDER BY seq"#,
         cogmap_id,
+        profile_id.uuid(),
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(api_err)
+}
+
+/// `resource_block_provenance` — the itemized per-block provenance read for one resource. Service-direct
+/// (reads bypass the Backend trait). The access gate lives IN the SQL function
+/// (`resources_readable_by('profile', …)` composes `resources_visible_to`): a principal who cannot read
+/// the resource gets an empty vec, never an error. Rows arrive ordered by `(block_seq, accretion_seq)`.
+/// The function's `RETURNS TABLE` declares every column nullable, but each maps a `NOT NULL` table
+/// column (or an always-present block field), so we force non-null (`col!`) to avoid needless `Option`s.
+pub async fn resource_block_provenance_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    resource_id: uuid::Uuid,
+) -> ApiResult<Vec<BlockProvenanceRow>> {
+    sqlx::query_as!(
+        BlockProvenanceRow,
+        r#"SELECT block_id            AS "block_id!",
+                  block_seq           AS "block_seq!",
+                  source_kind         AS "source_kind!",
+                  source_id           AS "source_id!",
+                  accretion_seq       AS "accretion_seq!",
+                  contributed_by_event_id AS "contributed_by_event_id!",
+                  created             AS "created!"
+             FROM resource_block_provenance($1, 'profile', $2)"#,
+        resource_id,
         profile_id.uuid(),
     )
     .fetch_all(pool)

@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
+use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_workflow::types::graph::GraphEdgeRow;
@@ -138,6 +139,16 @@ impl<'a> ResourceClient<'a> {
     pub async fn edges(&self, resource_id: Uuid) -> Result<Vec<GraphEdgeRow>> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{resource_id}/edges");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// Get the itemized per-block provenance for a resource.
+    pub async fn provenance(&self, resource_id: Uuid) -> Result<Vec<BlockProvenanceRow>> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{resource_id}/provenance");
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))

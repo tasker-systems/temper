@@ -66,6 +66,10 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::resources::get_content),
         )
         .route(
+            "/api/resources/{id}/provenance",
+            get(handlers::resources::provenance),
+        )
+        .route(
             "/api/resources/{id}/reassign",
             post(handlers::reassign::reassign_resource),
         )

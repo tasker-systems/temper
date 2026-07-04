@@ -118,6 +118,13 @@ pub(crate) fn cmd_to_ingest_payload(
         managed_meta,
         open_meta,
         chunks_packed,
+        // Block-provenance sources travel with the body on the wire; the ingest handler
+        // maps them back onto the CreateResource's BodyUpdate.
+        sources: cmd
+            .body
+            .as_ref()
+            .map(|b| b.sources.clone())
+            .unwrap_or_default(),
         // Carry the per-act correlation + authorship from the command onto the wire (discrete
         // ActInput shape); the ingest handler reassembles it into the act on its CreateResource.
         act: cmd.act.clone().into(),
@@ -211,6 +218,13 @@ pub(crate) fn cmd_to_resource_update_request(
         content_hash,
         chunks_packed,
         context_to,
+        // Block-provenance sources travel with the body on the wire; the update handler
+        // maps them back onto the UpdateResource's BodyUpdate.
+        sources: cmd
+            .body
+            .as_ref()
+            .map(|b| b.sources.clone())
+            .unwrap_or_default(),
         // Carry the per-act correlation + authorship from the command onto the wire (discrete
         // ActInput shape); the update handler reassembles it into the act on its UpdateResource.
         act: cmd.act.clone().into(),
@@ -255,6 +269,7 @@ mod tests {
                 content: "# Test\n\nBody.\n".to_string(),
                 content_hash: None,
                 chunks_packed: None,
+                sources: Vec::new(),
             }),
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
@@ -459,6 +474,7 @@ mod tests {
             content: "# Updated\n".to_string(),
             content_hash: None,
             chunks_packed: None,
+            sources: Vec::new(),
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         assert_eq!(req.content.as_deref(), Some("# Updated\n"));
@@ -524,6 +540,7 @@ mod body_resolution_tests {
             content: content.to_string(),
             content_hash: None,
             chunks_packed: None,
+            sources: Vec::new(),
         }
     }
 

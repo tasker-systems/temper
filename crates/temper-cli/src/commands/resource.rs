@@ -173,9 +173,28 @@ pub struct CreateResourceArgs<'a> {
     pub task: Option<&'a str>,
     pub body_flag: Option<String>,
     pub from: Option<String>,
+    /// Provenance source refs (`--sources`) — resolved to `ProvenanceSource::Resource`
+    /// via `parse_ref` and attached to the body block. Requires a body.
+    pub sources: Vec<String>,
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
+}
+
+/// Resolve `--sources` refs (UUID or decorated) to `ProvenanceSource::Resource`s. A ref that
+/// fails `parse_ref` is a hard error — never a silent drop (parse-don't-validate / escalate).
+/// URLs are rejected here by `parse_ref`; URL sources need the `remote` kind (T7c).
+fn resolve_provenance_sources(
+    refs: &[String],
+) -> Result<Vec<temper_core::types::provenance::ProvenanceSource>> {
+    refs.iter()
+        .map(|r| {
+            let id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r)?);
+            Ok(temper_core::types::provenance::ProvenanceSource::Resource(
+                id,
+            ))
+        })
+        .collect()
 }
 
 /// Create a new resource.
@@ -192,6 +211,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         task,
         body_flag,
         from,
+        sources,
         format,
         act,
     } = args;
@@ -263,17 +283,27 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // `cmd_to_ingest_payload`; for a cogmap home, `home` carries the resolved
     // `CogmapId` and the translator sends `home_cogmap_id` with an empty
     // `context_ref`.
+    // Resolve --sources refs → provenance records for the body block. A ref that fails to
+    // parse is a hard error (escalate, never silently drop); sources without a body have
+    // nothing to attribute.
+    let resolved_sources = resolve_provenance_sources(&sources)?;
+    let body_content = body_opt.filter(|b| !b.is_empty());
+    if !resolved_sources.is_empty() && body_content.is_none() {
+        return Err(TemperError::BadRequest(
+            "--sources requires a body update; add --body/--from or pipe content".into(),
+        ));
+    }
+
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
         home,
         title: title.to_string(),
-        body: body_opt.filter(|b| !b.is_empty()).map(|content| {
-            temper_workflow::operations::BodyUpdate {
-                content,
-                content_hash: None,
-                chunks_packed: None,
-            }
+        body: body_content.map(|content| temper_workflow::operations::BodyUpdate {
+            content,
+            content_hash: None,
+            chunks_packed: None,
+            sources: resolved_sources,
         }),
         managed_meta: ManagedMeta {
             mode: mode.map(String::from),
@@ -457,6 +487,7 @@ pub struct ShowParams<'a> {
     pub r#ref: &'a str,
     pub format: crate::format::OutputFormat,
     pub edges: bool,
+    pub provenance: bool,
     pub meta_only: bool,
     pub fields: &'a [String],
 }
@@ -847,6 +878,10 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
         show_edges(config, id, params.format)?;
     }
 
+    if params.provenance {
+        show_provenance(config, id, params.format)?;
+    }
+
     Ok(())
 }
 
@@ -940,6 +975,35 @@ fn show_edges(
     Ok(())
 }
 
+/// Fetch and display the itemized per-block provenance for a resource via the API.
+///
+/// Cloud-only and context-free: the id was already resolved from the ref by `show`; this
+/// hits `GET /api/resources/{id}/provenance` and renders the rows in `(block, accretion)`
+/// order. An unreadable resource returns an empty list (access-scoped in SQL).
+fn show_provenance(
+    _config: &Config,
+    id: temper_core::types::ids::ResourceId,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    use crate::actions::runtime;
+
+    let rows: Vec<temper_core::types::provenance::BlockProvenanceRow> =
+        runtime::with_client(|client| {
+            Box::pin(async move {
+                client
+                    .resources()
+                    .provenance(uuid::Uuid::from(id))
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)
+            })
+        })?;
+
+    let rendered = crate::format::render(&rows, fmt)?;
+    println!("{rendered}");
+
+    Ok(())
+}
+
 /// Parameters for resource update.
 pub struct UpdateParams<'a> {
     pub r#ref: &'a str,
@@ -970,6 +1034,9 @@ pub struct UpdateParams<'a> {
     /// `Some("-")` (explicit stdin; errors if empty), or `Some("@<path>")`
     /// (read from file; errors if empty).
     pub body: Option<String>,
+    /// Provenance source refs (`--sources`) — resolved to `ProvenanceSource::Resource`
+    /// and attached to the body block. Requires a body update.
+    pub sources: &'a [String],
     /// Output format, resolved globally upstream in `main`.
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the update act (from `--invocation`/`--confidence`/…).
@@ -1144,13 +1211,26 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         crate::actions::body_source::stdin_has_input_within,
     )?;
 
+    // 3b. Resolve --sources refs → provenance records. A ref that fails to parse is a hard
+    // error (escalate); sources without a body update have nothing to attribute.
+    let resolved_sources = resolve_provenance_sources(params.sources)?;
+    if !resolved_sources.is_empty() && resolved_body.is_none() {
+        return Err(TemperError::BadRequest(
+            "--sources requires a body update; add --body or pipe content".into(),
+        ));
+    }
+
     // 4. Build the UpdateResource cmd.
     // context_to travels as a raw ref via context_ref (the API handler resolves
     // it server-side); type_to goes through MoveSpec so the translator can set
     // managed_meta.doc_type on the wire.
     let cmd = UpdateResource {
         resource: id,
-        body: resolved_body.map(BodyUpdate::new),
+        body: resolved_body.map(|content| {
+            let mut body = BodyUpdate::new(content);
+            body.sources = resolved_sources;
+            body
+        }),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
@@ -1272,6 +1352,7 @@ mod build_helpers_tests {
             pr: None,
             status: None,
             body: None,
+            sources: &[],
             format: crate::format::OutputFormat::Json,
             act: temper_core::types::ActInput::default(),
         }
