@@ -35,6 +35,7 @@ pub mod materialize;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
+pub mod provenance;
 pub mod reassign;
 pub mod reconcile;
 pub mod relationship_events;
