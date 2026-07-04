@@ -340,8 +340,8 @@ pub enum ResourceAction {
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
         /// Provenance sources this body was distilled from — comma-separated resource
-        /// refs (UUID or decorated). Each becomes a block-provenance record on the
-        /// resource's body block. URLs are deferred (need the 'remote' source kind, T7c).
+        /// refs (UUID or decorated) and/or external http/https URLs. Each becomes a
+        /// block-provenance record on the resource's body block (URLs via the 'remote' kind).
         #[arg(long, value_delimiter = ',')]
         sources: Vec<String>,
         /// Per-act authorship + invocation-correlation flags.

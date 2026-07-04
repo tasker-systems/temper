@@ -9,6 +9,7 @@
 
 use temper_core::error::TemperError;
 use temper_core::types::ids::ResourceId;
+use temper_core::types::provenance::ProvenanceSource;
 use uuid::Uuid;
 
 /// Slugify a title for the decoration half of a ref / a filename.
@@ -49,6 +50,29 @@ pub fn parse_ref(s: &str) -> Result<ResourceId, TemperError> {
     Err(TemperError::Project(format!(
         "not a resource ref (expected a UUID or `slug-<uuid>`): {s:?}"
     )))
+}
+
+/// Classify one `--sources` value into a [`ProvenanceSource`]: an http/https URL becomes
+/// [`ProvenanceSource::Remote`] (an external source, carried verbatim — the projector normalizes it);
+/// anything else is a ref (UUID or decorated) resolved to [`ProvenanceSource::Resource`] via
+/// [`parse_ref`]. A value that is neither a URL nor a parseable ref is a hard error — never a silent
+/// drop (parse-don't-validate / escalate). Shared by the CLI `--sources` flag and the MCP `sources`
+/// input so both surfaces classify identically (one classifier, no send/receive drift).
+pub fn resolve_provenance_source(value: &str) -> Result<ProvenanceSource, TemperError> {
+    let value = value.trim();
+    if is_remote_url(value) {
+        Ok(ProvenanceSource::Remote(value.to_owned()))
+    } else {
+        Ok(ProvenanceSource::Resource(Uuid::from(parse_ref(value)?)))
+    }
+}
+
+/// A source value is remote iff it carries an http/https scheme. Scheme-only + conservative, so a bare
+/// UUID or decorated ref can never be mistaken for a URL (and a non-web scheme like `ftp://` is not a
+/// provenance source — it falls through to `parse_ref` and errors).
+fn is_remote_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 #[cfg(test)]
@@ -109,5 +133,37 @@ mod tests {
         assert!(parse_ref("just-a-slug").is_err());
         assert!(parse_ref("").is_err());
         assert!(parse_ref("not-a-uuid-1234").is_err());
+    }
+
+    #[test]
+    fn resolve_provenance_source_classifies_url_as_remote() {
+        // http/https (any scheme case) → Remote, carrying the URL verbatim (not lowercased whole).
+        assert_eq!(
+            resolve_provenance_source("https://Example.com/Issue/1").unwrap(),
+            ProvenanceSource::Remote("https://Example.com/Issue/1".to_owned())
+        );
+        assert_eq!(
+            resolve_provenance_source("  HTTP://a.test/x  ").unwrap(),
+            ProvenanceSource::Remote("HTTP://a.test/x".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_provenance_source_classifies_ref_as_resource() {
+        let uuid = "019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+        let want = ProvenanceSource::Resource(Uuid::parse_str(uuid).unwrap());
+        assert_eq!(resolve_provenance_source(uuid).unwrap(), want);
+        // decorated ref resolves to the same Resource (trailing-UUID-only)
+        assert_eq!(
+            resolve_provenance_source(&format!("my-task-{uuid}")).unwrap(),
+            want
+        );
+    }
+
+    #[test]
+    fn resolve_provenance_source_rejects_non_url_non_ref() {
+        // neither a URL nor a parseable ref → hard error (escalate, never a silent drop)
+        assert!(resolve_provenance_source("just-a-slug").is_err());
+        assert!(resolve_provenance_source("ftp://host/x").is_err()); // non-http scheme is not remote
     }
 }

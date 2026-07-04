@@ -21,12 +21,12 @@
   ],
   "$defs": {
     "BlockId": {
-      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     },
     "ResourceId": {
-      "description": "A `kb_resources` row (the named, edge-connected, findable unit).",
+      "description": "A `kb_resources.id` value.",
       "type": "string",
       "format": "uuid"
     }

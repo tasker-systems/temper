@@ -52,7 +52,7 @@
   ],
   "$defs": {
     "ResourceId": {
-      "description": "A `kb_resources` row (the named, edge-connected, findable unit).",
+      "description": "A `kb_resources.id` value.",
       "type": "string",
       "format": "uuid"
     },
@@ -86,7 +86,7 @@
       ]
     },
     "ProfileId": {
-      "description": "A `kb_profiles` row (the owner/actor principal).",
+      "description": "A `kb_profiles.id` value.",
       "type": "string",
       "format": "uuid"
     },
@@ -112,6 +112,13 @@
           "items": {
             "$ref": "#/$defs/ChunkManifest"
           }
+        },
+        "incorporated": {
+          "description": "The ordered sources this block's content was incorporated from — recorded into\n`kb_block_provenance` by the projector. Empty (and skipped on the wire) for the\nscenario/charter paths; set by the resource create/update write path from the caller's sources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Incorporation"
+          }
         }
       },
       "required": [
@@ -121,7 +128,7 @@
       ]
     },
     "BlockId": {
-      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     },
@@ -147,9 +154,81 @@
       ]
     },
     "ChunkId": {
-      "description": "A `kb_chunks` row (one embedding window of a block's prose).",
+      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
       "type": "string",
       "format": "uuid"
+    },
+    "Incorporation": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "source",
+        "seq"
+      ]
+    },
+    "ProvenanceSource": {
+      "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "event"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resource"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "An external URL (e.g. a Linear issue, a GitHub PR, a doc). The value is the URL as supplied;\nthe projector normalizes + resolves it to a `kb_remote_sources.id` via `_upsert_remote_source`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "remote"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
+      ]
     }
   }
 }

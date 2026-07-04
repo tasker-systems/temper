@@ -181,19 +181,15 @@ pub struct CreateResourceArgs<'a> {
     pub act: temper_core::types::ActInput,
 }
 
-/// Resolve `--sources` refs (UUID or decorated) to `ProvenanceSource::Resource`s. A ref that
-/// fails `parse_ref` is a hard error — never a silent drop (parse-don't-validate / escalate).
-/// URLs are rejected here by `parse_ref`; URL sources need the `remote` kind (T7c).
+/// Resolve `--sources` values to `ProvenanceSource`s: an http/https URL → `Remote` (external
+/// source), any other value → a ref (UUID or decorated) → `Resource`. A value that is neither a URL
+/// nor a parseable ref is a hard error — never a silent drop (parse-don't-validate / escalate). The
+/// classifier is shared with the MCP surface so both classify identically.
 fn resolve_provenance_sources(
     refs: &[String],
 ) -> Result<Vec<temper_core::types::provenance::ProvenanceSource>> {
     refs.iter()
-        .map(|r| {
-            let id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r)?);
-            Ok(temper_core::types::provenance::ProvenanceSource::Resource(
-                id,
-            ))
-        })
+        .map(|r| temper_workflow::operations::resolve_provenance_source(r))
         .collect()
 }
 
