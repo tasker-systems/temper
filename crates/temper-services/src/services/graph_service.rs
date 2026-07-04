@@ -14,6 +14,7 @@ use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
 };
+use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeTeam};
 use temper_core::types::graph_territory::{
     Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
     TerritorySlice,
@@ -409,8 +410,8 @@ pub async fn territory_overview(
 
     const ORPHAN_LIMIT: usize = 50;
     let orphan_nodes: Vec<OrphanNode> =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid)>(
-            "SELECT id, title, doc_type, degree, anchor_id FROM graph_orphan_salient_nodes($1, $2)",
+        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid, Option<String>)>(
+            "SELECT id, title, doc_type, degree, anchor_id, anchor_label FROM graph_orphan_salient_nodes($1, $2)",
         )
         .bind(profile_id.as_uuid())
         .bind(team_id)
@@ -418,12 +419,13 @@ pub async fn territory_overview(
         .await?
         .into_iter()
         .take(ORPHAN_LIMIT)
-        .map(|(id, title, doc_type, degree, anchor_id)| OrphanNode {
+        .map(|(id, title, doc_type, degree, anchor_id, anchor_label)| OrphanNode {
             id,
             title,
             doc_type,
             degree,
             anchor_id,
+            anchor_label,
         })
         .collect();
 
@@ -446,6 +448,94 @@ pub async fn territory_overview(
         territories,
         orphan_nodes,
         bridges,
+    })
+}
+
+/// Cogmap-scoped panorama (enter-a-cogmap). Deny-as-absence via
+/// cogmap_readable_by_profile. Returns the R2 TerritoryOverview shape so the
+/// frontend renders it with the shipped TierPanorama.
+pub async fn cogmap_panorama(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap_id: Uuid,
+    lens_id: Option<Uuid>,
+) -> ApiResult<TerritoryOverview> {
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(cogmap_id)
+        .fetch_one(pool)
+        .await?;
+    if !readable {
+        return Err(ApiError::NotFound);
+    }
+
+    // Default lens (D2): the lens with the most live regions for THIS cogmap;
+    // fall back to the global telos-default if the cogmap has no materialized region.
+    let lens: Uuid = match lens_id {
+        Some(l) => l,
+        None => {
+            sqlx::query_scalar(
+                "SELECT COALESCE(
+                 (SELECT lens_id FROM kb_cogmap_regions
+                   WHERE cogmap_id = $1 AND NOT is_folded
+                   GROUP BY lens_id ORDER BY count(*) DESC LIMIT 1),
+                 (SELECT id FROM kb_cogmap_lenses
+                   WHERE name = 'telos-default' AND cogmap_id IS NULL LIMIT 1))",
+            )
+            .bind(cogmap_id)
+            .fetch_one(pool)
+            .await?
+        }
+    };
+
+    let territories: Vec<Territory> = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64)>(
+        "SELECT region_id, cogmap_id, label, member_count, salience \
+             FROM graph_cogmap_territories($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(cogmap_id)
+    .bind(lens)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(
+        |(region_id, cogmap_id, label, member_count, salience)| Territory {
+            id: region_id,
+            kind: TerritoryKind::Region,
+            label,
+            member_count,
+            salience: Some(salience),
+            anchor_id: cogmap_id,
+        },
+    )
+    .collect();
+
+    const ORPHAN_LIMIT: usize = 50;
+    let orphan_nodes: Vec<OrphanNode> =
+        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid, Option<String>)>(
+            "SELECT id, title, doc_type, degree, anchor_id, anchor_label FROM graph_cogmap_orphan_nodes($1, $2)",
+        )
+        .bind(profile_id.as_uuid())
+        .bind(cogmap_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .take(ORPHAN_LIMIT)
+        .map(|(id, title, doc_type, degree, anchor_id, anchor_label)| OrphanNode {
+            id,
+            title,
+            doc_type,
+            degree,
+            anchor_id,
+            anchor_label,
+        })
+        .collect();
+
+    // A single cogmap panorama has no cross-cogmap bridges.
+    Ok(TerritoryOverview {
+        territories,
+        orphan_nodes,
+        bridges: Vec::new(),
     })
 }
 
@@ -505,6 +595,47 @@ pub async fn territory_slice(
         components,
         members,
     })
+}
+
+/// Atlas Home — the you→teams→cogmaps membership graph with count hints.
+/// No entry gate: the read is inherently self-scoped (member teams +
+/// cogmap_visible_maps), so it returns exactly what the caller may see.
+pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<AtlasHome> {
+    let teams: Vec<HomeTeam> = sqlx::query_as::<_, (Uuid, String, String, i32, i32)>(
+        "SELECT team_id, slug, name, resource_count, cogmap_count FROM graph_home_teams($1)",
+    )
+    .bind(profile_id.as_uuid())
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, slug, name, resource_count, cogmap_count)| HomeTeam {
+        id,
+        slug,
+        name,
+        resource_count,
+        cogmap_count,
+    })
+    .collect();
+
+    let cogmaps: Vec<HomeCogmap> = sqlx::query_as::<_, (Uuid, String, Vec<Uuid>, i32, i32)>(
+        "SELECT cogmap_id, name, team_ids, region_count, facet_count FROM graph_home_cogmaps($1)",
+    )
+    .bind(profile_id.as_uuid())
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(
+        |(id, name, team_ids, region_count, facet_count)| HomeCogmap {
+            id,
+            name,
+            team_ids,
+            region_count,
+            facet_count,
+        },
+    )
+    .collect();
+
+    Ok(AtlasHome { teams, cogmaps })
 }
 
 #[cfg(test)]

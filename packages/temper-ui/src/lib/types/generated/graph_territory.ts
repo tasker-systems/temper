@@ -14,7 +14,11 @@ export type Component = { id: string, member_count: number, };
  * A high-degree standalone node surfaced where its cogmap home has no region
  * (sparsity rule). `doc_type` is optional/free-form.
  */
-export type OrphanNode = { id: string, title: string, doc_type: string | null, degree: number, anchor_id: string, };
+export type OrphanNode = { id: string, title: string, doc_type: string | null, degree: number, anchor_id: string, 
+/**
+ * Human name of the home cogmap (`kb_cogmaps.name`), for the sparse territory label.
+ */
+anchor_label: string | null, };
 
 /**
  * A member of a region's interior (resolved per-member through resources_visible_to).

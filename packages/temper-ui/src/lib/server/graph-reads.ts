@@ -8,9 +8,15 @@
 import { apiGet, apiPost } from '$lib/server/api';
 import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
 import type { EventTrail, ElementKind } from '$lib/types/generated/element_trail';
+import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 import type { TeamRow } from '$lib/types/generated/team';
 import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
+
+export const atlasHomePath = (): string => '/api/graph/home';
+
+export const cogmapPanoramaPath = (id: string, lensId?: string): string =>
+	`/api/graph/cogmaps/${id}/panorama${lensId ? `?lens_id=${lensId}` : ''}`;
 
 export const teamScopePath = (teamId: string): string => `/api/teams/${teamId}/graph-scope`;
 
@@ -27,6 +33,15 @@ export const trailPath = (kind: ElementKind, id: string): string =>
 	`/api/graph/elements/${kind}/${id}/trail`;
 
 export const teamsListPath = (): string => `/api/teams`;
+
+export const readAtlasHome = (token: string): Promise<AtlasHome> =>
+	apiGet<AtlasHome>(atlasHomePath(), token);
+
+export const readCogmapPanorama = (
+	token: string,
+	id: string,
+	lensId?: string
+): Promise<TerritoryOverview> => apiGet<TerritoryOverview>(cogmapPanoramaPath(id, lensId), token);
 
 export const readTeamScope = (token: string, teamId: string): Promise<TeamScopeView> =>
 	apiGet<TeamScopeView>(teamScopePath(teamId), token);

@@ -85,6 +85,26 @@ async fn home_resource(
     .unwrap();
 }
 
+async fn create_cogmap(pool: &sqlx::PgPool, name: &str, telos_resource: Uuid) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(name)
+    .bind(telos_resource)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn join_cogmap_team(pool: &sqlx::PgPool, cogmap: Uuid, team: Uuid) {
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(cogmap)
+        .bind(team)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 async fn territories(
     app: &common::E2eTestApp,
     token: &str,
@@ -161,5 +181,42 @@ async fn territories_returns_overview_on_default_lens_and_denies_outsiders(pool:
         status,
         StatusCode::NOT_FOUND,
         "a non-member of the team is denied as absence"
+    );
+}
+
+/// D3: a resource homed in a joined, region-LESS cogmap surfaces as an orphan
+/// node carrying the home cogmap's human name as `anchor_label`, so the Atlas
+/// sparse-territory label can show a real name instead of a generic fallback.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn territories_orphan_node_carries_home_cogmap_anchor_label(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let member = provision_profile(&app, &app.token).await;
+
+    let team = create_team(&pool, "gto-e2e-label-team").await;
+    add_member(&pool, team, member).await;
+
+    let telos = create_resource(&pool, "telos", "temper://gto-e2e-label/telos").await;
+    let cogmap = create_cogmap(&pool, "gto-e2e-label-cogmap", telos).await;
+    join_cogmap_team(&pool, cogmap, team).await;
+
+    let orphan = create_resource(&pool, "orphan node", "temper://gto-e2e-label/orphan").await;
+    home_resource(&pool, orphan, "kb_cogmaps", cogmap, member).await;
+
+    let (status, body) = territories(&app, &app.token, team, None).await;
+    assert_eq!(status, StatusCode::OK, "member gets a 200: {body:?}");
+
+    let orphan_nodes = body["orphan_nodes"].as_array().expect("orphan_nodes array");
+    let orphan_row = orphan_nodes
+        .iter()
+        .find(|n| n["id"] == orphan.to_string())
+        .expect("the region-less cogmap's homed resource surfaces as an orphan");
+    assert_eq!(
+        orphan_row["anchor_id"],
+        cogmap.to_string(),
+        "anchor_id is the orphan's home cogmap"
+    );
+    assert_eq!(
+        orphan_row["anchor_label"], "gto-e2e-label-cogmap",
+        "anchor_label carries the home cogmap's human name: {orphan_row:?}"
     );
 }

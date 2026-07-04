@@ -2,11 +2,13 @@
 import { describe, expect, it } from 'vitest';
 import {
 	buildAscendUrl,
+	buildCogmapUrl,
 	buildDrillNodeUrl,
 	buildDrillTerritoryUrl,
 	buildHomeUrl,
 	buildScopeUrl,
 	deriveTier,
+	parseCogmap,
 	parseFocus,
 	parseTeam
 } from './nav';
@@ -70,5 +72,21 @@ describe('URL builders', () => {
 		const p = new URL(buildHomeUrl(url('?team=t1&focus=node:n5')), 'https://x').searchParams;
 		expect(p.get('team')).toBeNull();
 		expect(p.get('focus')).toBeNull();
+	});
+});
+
+describe('cogmap addressing', () => {
+	it('parses ?cogmap=', () => {
+		expect(parseCogmap(url('?cogmap=abc'))).toBe('abc');
+		expect(parseCogmap(url(''))).toBeNull();
+	});
+	it('buildCogmapUrl sets cogmap and clears team+focus', () => {
+		const out = buildCogmapUrl(url('?team=t1&focus=node:n1'), 'c9');
+		expect(out).toContain('cogmap=c9');
+		expect(out).not.toContain('team=');
+		expect(out).not.toContain('focus=');
+	});
+	it('buildHomeUrl clears cogmap too', () => {
+		expect(buildHomeUrl(url('?cogmap=c9'))).not.toContain('cogmap=');
 	});
 });

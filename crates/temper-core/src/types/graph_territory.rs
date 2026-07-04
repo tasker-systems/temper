@@ -63,6 +63,9 @@ pub struct OrphanNode {
     pub doc_type: Option<String>,
     pub degree: i32,
     pub anchor_id: Uuid,
+    /// Human name of the home cogmap (`kb_cogmaps.name`), for the sparse territory label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_label: Option<String>,
 }
 
 /// The whole Tier-0 panorama for a team scope.

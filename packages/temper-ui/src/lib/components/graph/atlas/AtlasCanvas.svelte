@@ -2,8 +2,8 @@
 	import { onDestroy, onMount } from 'svelte';
 	import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+	import type { HomeCogmap, HomeTeam } from '$lib/types/generated/graph_home';
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
-	import type { TeamRow } from '$lib/types/generated/team';
 	import type { Focus } from '$lib/graph/atlas/nav';
 	import { attachCamera, type Camera } from '$lib/graph/atlas/camera';
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
@@ -14,15 +14,18 @@
 
 	interface Props {
 		teamId: string | null;
+		cogmapId: string | null;
 		tier: number;
 		focus: Focus;
 		territories: TerritoryOverview | null;
 		slice: TerritorySlice | null;
 		neighborhood: AtlasSubgraph | null;
-		teams: TeamRow[] | null;
+		teams: HomeTeam[] | null;
+		cogmaps: HomeCogmap[] | null;
 		zones: TeamZone[];
 	}
-	let { teamId, tier, focus, territories, slice, neighborhood, teams, zones }: Props = $props();
+	let { teamId, cogmapId, tier, focus, territories, slice, neighborhood, teams, cogmaps, zones }: Props =
+		$props();
 
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;
@@ -49,8 +52,8 @@
 	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Team graph atlas">
 		<rect x="0" y="0" width={W} height={H} fill={CANVAS_BG} />
 		<g bind:this={viewportEl}>
-			{#if !teamId && teams}
-				<TierHome {teams} width={W} height={H} />
+			{#if !teamId && !cogmapId && teams}
+				<TierHome {teams} cogmaps={cogmaps ?? []} width={W} height={H} />
 			{:else if tier === 0 && territories}
 				<TierPanorama overview={territories} {zones} width={W} height={H} />
 			{:else if tier === 1 && slice}

@@ -1,6 +1,8 @@
 // graph-reads.paths.test.ts
 import { describe, expect, it } from 'vitest';
 import {
+	atlasHomePath,
+	cogmapPanoramaPath,
 	neighborhoodSlicePath,
 	regionSlicePath,
 	teamScopePath,
@@ -29,5 +31,12 @@ describe('graph API path builders', () => {
 	});
 	it('teams list', () => {
 		expect(teamsListPath()).toBe('/api/teams');
+	});
+	it('atlasHomePath', () => {
+		expect(atlasHomePath()).toBe('/api/graph/home');
+	});
+	it('cogmapPanoramaPath', () => {
+		expect(cogmapPanoramaPath('c1')).toBe('/api/graph/cogmaps/c1/panorama');
+		expect(cogmapPanoramaPath('c1', 'l2')).toBe('/api/graph/cogmaps/c1/panorama?lens_id=l2');
 	});
 });
