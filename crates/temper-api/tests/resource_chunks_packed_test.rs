@@ -87,6 +87,7 @@ async fn create_honors_client_chunks_no_server_embed(pool: PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("pack")),
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let resp = app
@@ -144,6 +145,7 @@ async fn update_honors_client_chunks_no_server_embed(pool: PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&create_chunks).expect("pack")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     let created: Value = app
         .client
@@ -217,6 +219,7 @@ async fn create_without_chunks_falls_back_to_server_embed(pool: PgPool) {
         // No client chunks → the server embeds.
         chunks_packed: None,
         act: Default::default(),
+        sources: Vec::new(),
     };
 
     let resp = app

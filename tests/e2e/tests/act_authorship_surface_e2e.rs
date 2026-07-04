@@ -58,6 +58,7 @@ fn empty_payload(title: &str, ctx: &str, act: ActInput) -> IngestPayload {
         open_meta: None,
         chunks_packed: None,
         act,
+        sources: Vec::new(),
     }
 }
 

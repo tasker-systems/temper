@@ -47,6 +47,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("pack")),
         act: Default::default(),
+        sources: Vec::new(),
     }
 }
 

@@ -79,7 +79,14 @@ pub async fn create(
     let body = if payload.content.is_empty() {
         None
     } else {
-        Some(BodyUpdate::new(payload.content))
+        Some(BodyUpdate {
+            content: payload.content,
+            // Create passes chunks/hash separately on CreateResource (below), so the
+            // BodyUpdate carries only content + provenance sources here.
+            content_hash: None,
+            chunks_packed: None,
+            sources: payload.sources,
+        })
     };
 
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
@@ -142,6 +149,7 @@ pub async fn update(
             // present. Matches the short-circuit in ingest_service::update.
             content_hash: payload.content_hash,
             chunks_packed: payload.chunks_packed,
+            sources: payload.sources,
         })
     };
 

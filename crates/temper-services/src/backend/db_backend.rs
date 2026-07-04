@@ -27,9 +27,9 @@ use temper_core::types::reconcile::{
 };
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
-    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
+    AdvanceStewardWatermark, AssertRelationship, Backend, BodyUpdate, CloseInvocation,
+    CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+    ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
     RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
     Surface, UpdateResource,
 };
@@ -123,6 +123,24 @@ fn unpack_incoming_chunks(
         .map_err(|e| TemperError::BadRequest(format!("invalid chunks_packed: {e}")))?;
     chunks.sort_by_key(|c| c.chunk_index);
     Ok(chunks.iter().map(packed_to_incoming).collect())
+}
+
+/// A body update's declared provenance sources → substrate `Incorporation`s, with each source's
+/// position in the list becoming its accretion `seq`. `None` (metadata-only update, or no body) and
+/// an empty `sources` both yield no incorporations — the projector then writes no `kb_block_provenance`
+/// rows. Shared by the create and update paths so both derive `seq` identically.
+fn body_sources(body: Option<&BodyUpdate>) -> Vec<temper_substrate::payloads::Incorporation> {
+    body.map(|b| {
+        b.sources
+            .iter()
+            .enumerate()
+            .map(|(i, source)| temper_substrate::payloads::Incorporation {
+                source: *source,
+                seq: i as i32,
+            })
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Build the substrate-native charter [`PreparedBlock`]s from a wire [`ReconcileTelos`] (client-embedded
@@ -854,6 +872,8 @@ impl Backend for DbBackend {
             invocation: cmd.act.invocation,
             authorship: cmd.act.authorship,
         };
+        // Block-provenance: the body's declared sources, position → accretion `seq`.
+        let sources = body_sources(cmd.body.as_ref());
         let new_id = writes::create_resource_with(
             &self.pool,
             writes::CreateParams {
@@ -869,8 +889,7 @@ impl Backend for DbBackend {
                 emitter,
                 properties: &properties,
                 chunks: incoming_chunks,
-                // T7a Task 4 wires this from `cmd.body.sources`; empty until then.
-                sources: Vec::new(),
+                sources,
             },
             act_ctx,
         )
@@ -1024,8 +1043,7 @@ impl Backend for DbBackend {
                 origin_uri: None,
                 properties: &properties,
                 chunks: incoming_chunks,
-                // T7a Task 4 wires this from `cmd.body.sources`; empty until then.
-                sources: Vec::new(),
+                sources: body_sources(cmd.body.as_ref()),
                 rehome_to,
                 emitter,
             },

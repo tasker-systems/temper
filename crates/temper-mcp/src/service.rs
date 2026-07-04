@@ -143,6 +143,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Get the itemized block-provenance for a resource — the sources each of its content blocks was distilled from, in (block, accretion) order. Access-scoped: an unreadable resource returns an empty list."
+    )]
+    async fn get_block_provenance(
+        &self,
+        Parameters(input): Parameters<tools::resources::GetBlockProvenanceInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::get_block_provenance(self, input).await
+    }
+
+    #[tool(
         description = "List resources in the knowledge base. Filter by context and/or document type. Returns most recent first."
     )]
     async fn list_resources(

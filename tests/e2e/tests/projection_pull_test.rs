@@ -45,6 +45,7 @@ async fn seed_resource(
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
         act: Default::default(),
+        sources: Vec::new(),
     };
     app.client
         .ingest()
