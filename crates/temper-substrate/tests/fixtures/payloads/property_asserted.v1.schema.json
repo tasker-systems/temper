@@ -27,7 +27,7 @@
   ],
   "$defs": {
     "PropertyId": {
-      "description": "A `kb_properties` row (a facet/doc_type/block_role assertion).",
+      "description": "A `kb_properties.id` value — a facet/doc_type/block_role assertion.",
       "type": "string",
       "format": "uuid"
     },

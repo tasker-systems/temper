@@ -18,7 +18,7 @@
   ],
   "$defs": {
     "BlockId": {
-      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     }

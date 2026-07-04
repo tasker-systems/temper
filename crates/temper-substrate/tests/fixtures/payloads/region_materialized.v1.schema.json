@@ -33,22 +33,22 @@
   ],
   "$defs": {
     "CogmapId": {
-      "description": "A `kb_cogmaps` row.",
+      "description": "A `kb_cogmaps.id` value — a cognitive map.",
       "type": "string",
       "format": "uuid"
     },
     "LensId": {
-      "description": "A `kb_cogmap_lenses` row.",
+      "description": "A `kb_cogmap_lenses.id` value.",
       "type": "string",
       "format": "uuid"
     },
     "EventId": {
-      "description": "A `kb_events` row (a ledger event).",
+      "description": "A `kb_events.id` value. Always UUIDv7 (time-sortable).",
       "type": "string",
       "format": "uuid"
     },
     "RegionId": {
-      "description": "A `kb_cogmap_regions` row (one materialized region).",
+      "description": "A `kb_cogmap_regions.id` value — one materialized region.",
       "type": "string",
       "format": "uuid"
     }

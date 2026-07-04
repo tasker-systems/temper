@@ -43,12 +43,12 @@
   ],
   "$defs": {
     "LensId": {
-      "description": "A `kb_cogmap_lenses` row.",
+      "description": "A `kb_cogmap_lenses.id` value.",
       "type": "string",
       "format": "uuid"
     },
     "CogmapId": {
-      "description": "A `kb_cogmaps` row.",
+      "description": "A `kb_cogmaps.id` value — a cognitive map.",
       "type": "string",
       "format": "uuid"
     },
