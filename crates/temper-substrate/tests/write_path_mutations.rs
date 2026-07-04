@@ -44,6 +44,7 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
     let mut embedding = vec![0.0_f32; 768];
     embedding[0] = 1.0;
     PreparedBlock {
+        incorporated: vec![],
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,
@@ -554,6 +555,7 @@ async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "Orig",
             origin_uri: "temper://w/r",
             body: "original body text here",
@@ -572,6 +574,7 @@ async fn writes_create_then_update_reflected_in_readback(pool: sqlx::PgPool) {
     writes::update_resource(
         &pool,
         writes::UpdateParams {
+            sources: vec![],
             resource: r,
             body: Some("revised body text now"),
             title: Some("Renamed"),

@@ -68,6 +68,7 @@ async fn create_populates_index_with_title_and_body(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "Salamander architecture",
             origin_uri: "temper://idx/r",
             body: "the quenching pipeline tempers steel",
@@ -105,6 +106,7 @@ async fn body_edit_updates_index(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "Doc",
             origin_uri: "temper://idx/r",
             body: "original lexeme here",
@@ -127,6 +129,7 @@ async fn body_edit_updates_index(pool: sqlx::PgPool) {
     writes::update_resource(
         &pool,
         writes::UpdateParams {
+            sources: vec![],
             resource: r,
             body: Some("revised distinctive wording"),
             title: None,
@@ -158,6 +161,7 @@ async fn title_only_update_updates_index(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "Aardvark",
             origin_uri: "temper://idx/r",
             body: "stable body",
@@ -176,6 +180,7 @@ async fn title_only_update_updates_index(pool: sqlx::PgPool) {
     writes::update_resource(
         &pool,
         writes::UpdateParams {
+            sources: vec![],
             resource: r,
             body: None,
             title: Some("Pangolin"),
@@ -215,6 +220,7 @@ async fn backfill_covers_preexisting_rows(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "Backfillable",
             origin_uri: "temper://idx/r",
             body: "corpus content word",
@@ -256,6 +262,7 @@ async fn soft_deleted_resource_excluded_from_fts_search(pool: sqlx::PgPool) {
     let r = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "Phlogiston study",
             origin_uri: "temper://del/r",
             body: "phlogiston theory explains combustion",
@@ -329,6 +336,7 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
         writes::create_resource(
             &pool,
             writes::CreateParams {
+                sources: vec![],
                 title: t,
                 origin_uri: u,
                 body: b,
@@ -402,6 +410,7 @@ async fn create_resource_homes_in_cogmap(pool: sqlx::PgPool) {
     let id = writes::create_resource(
         &pool,
         writes::CreateParams {
+            sources: vec![],
             title: "concept",
             origin_uri: "",
             body: "body text",

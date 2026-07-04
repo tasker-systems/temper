@@ -316,6 +316,9 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                 SeedAction::BlockMutate {
                     block: crate::ids::BlockId::from(block_id),
                     chunks: &prepared.chunks,
+                    // Scenario `revise` carries no provenance sources (T7 threads them on the
+                    // production write path, not the YAML DSL).
+                    incorporated: &[],
                     emitter: EntityId::from(loaded.emitter),
                 },
             )

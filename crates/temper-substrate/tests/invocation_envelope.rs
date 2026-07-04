@@ -94,6 +94,7 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
     let mut embedding = vec![0.0_f32; 768];
     embedding[0] = 1.0;
     PreparedBlock {
+        incorporated: vec![],
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,

@@ -149,3 +149,72 @@ async fn revert_to_prior_body_replays_byte_identically(pool: sqlx::PgPool) {
         .await
         .expect("ledger payload roundtrip after revert");
 }
+
+/// T7a Task 2: a create carrying a resource-level provenance source fires a `resource_created` whose
+/// block manifest carries the incorporation. (The `kb_block_provenance` INSERT is Task 3's projector
+/// change — here we prove only that the source is threaded into the fired payload.)
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn create_with_sources_carries_incorporation_in_payload(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+    use temper_substrate::writes::{self, CreateParams};
+
+    common::seed_system(&pool).await;
+    let owner: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let emitter: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+            .bind(owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let home = common::insert_context(&pool, "kb_profiles", owner, "prov", "Prov")
+        .await
+        .unwrap();
+    let src = uuid::Uuid::now_v7();
+
+    writes::create_resource_with(
+        &pool,
+        CreateParams {
+            title: "distilled concept",
+            origin_uri: "temper://prov/distilled",
+            body: "deployment pipeline staging and rollout cadence",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(src),
+                seq: 0,
+            }],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create with sources");
+
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e JOIN kb_event_types et ON et.id=e.event_type_id \
+         WHERE et.name='resource_created' ORDER BY e.id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let inc = &payload["blocks"][0]["incorporated"][0];
+    assert_eq!(
+        inc["source"]["kind"], "resource",
+        "source kind tagged 'resource'"
+    );
+    assert_eq!(
+        inc["source"]["value"],
+        src.to_string(),
+        "source id is the distilled-from resource"
+    );
+    assert_eq!(inc["seq"], 0, "accretion seq preserved");
+}

@@ -47,6 +47,7 @@ async fn mk(
     writes::create_resource(
         pool,
         writes::CreateParams {
+            sources: vec![],
             title,
             origin_uri: uri,
             body,
@@ -126,6 +127,7 @@ async fn fts_candidates_normalized_and_scoped(pool: sqlx::PgPool) {
 /// One block/chunk with a caller-chosen 768-d embedding (ONNX-free — structural).
 fn block_with_embedding(content: &str, emb: Vec<f32>) -> PreparedBlock {
     PreparedBlock {
+        incorporated: vec![],
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,

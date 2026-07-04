@@ -545,6 +545,8 @@ impl DbBackend {
                             origin_uri: None,
                             properties: &[],
                             chunks: Some(incoming_chunks),
+                            // Corpus reconcile carries no provenance attribution (not a distillation).
+                            sources: Vec::new(),
                             rehome_to: None,
                             emitter: ctx.emitter,
                         },
@@ -867,6 +869,8 @@ impl Backend for DbBackend {
                 emitter,
                 properties: &properties,
                 chunks: incoming_chunks,
+                // T7a Task 4 wires this from `cmd.body.sources`; empty until then.
+                sources: Vec::new(),
             },
             act_ctx,
         )
@@ -1020,6 +1024,8 @@ impl Backend for DbBackend {
                 origin_uri: None,
                 properties: &properties,
                 chunks: incoming_chunks,
+                // T7a Task 4 wires this from `cmd.body.sources`; empty until then.
+                sources: Vec::new(),
                 rehome_to,
                 emitter,
             },

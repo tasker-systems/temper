@@ -115,6 +115,11 @@ pub struct BlockManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub chunks: Vec<ChunkManifest>,
+    /// The ordered sources this block's content was incorporated from — recorded into
+    /// `kb_block_provenance` by the projector. Empty (and skipped on the wire) for the
+    /// scenario/charter paths; set by the resource create/update write path from the caller's sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incorporated: Vec<Incorporation>,
 }
 
 impl From<&crate::content::PreparedChunk> for ChunkManifest {
@@ -142,6 +147,7 @@ impl From<&PreparedBlock> for BlockManifest {
                     content_hash: c.content_hash.clone(),
                 })
                 .collect(),
+            incorporated: b.incorporated.clone(),
         }
     }
 }
@@ -619,6 +625,7 @@ mod tests {
                 header_path: None,
                 heading_depth: None,
             }],
+            incorporated: vec![],
         };
         let m = BlockManifest::from(&b);
         let v = serde_json::to_value(&m).unwrap();
@@ -694,6 +701,7 @@ mod tests {
                 header_path: None,
                 heading_depth: None,
             }],
+            incorporated: vec![],
         };
         let side = content_sidecar(std::slice::from_ref(&b));
         let entry = side.get(&b.chunks[0].chunk_id.to_string()).unwrap();

@@ -95,6 +95,7 @@ async fn explicit_context_read_grant_confers_context_homed_edge(pool: PgPool) {
     let src = writes::create_resource(
         &pool,
         CreateParams {
+            sources: vec![],
             title: "eg-src",
             origin_uri: "temper://eg-src",
             body: "body",
@@ -112,6 +113,7 @@ async fn explicit_context_read_grant_confers_context_homed_edge(pool: PgPool) {
     let tgt = writes::create_resource(
         &pool,
         CreateParams {
+            sources: vec![],
             title: "eg-tgt",
             origin_uri: "temper://eg-tgt",
             body: "body",
