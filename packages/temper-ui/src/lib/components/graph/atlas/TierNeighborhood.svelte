@@ -3,7 +3,7 @@
 	import { page } from '$app/stores';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
-	import { buildDrillNodeUrl } from '$lib/graph/atlas/nav';
+	import { buildDrillNodeUrl, buildEdgeSelectUrl } from '$lib/graph/atlas/nav';
 	import NodeChip from './marks/NodeChip.svelte';
 	import Edge from './marks/Edge.svelte';
 
@@ -22,6 +22,10 @@
 		goto(buildDrillNodeUrl($page.url, nodeId), { replaceState: true });
 	}
 
+	function selectEdge(edgeId: string) {
+		goto(buildEdgeSelectUrl($page.url, edgeId), { replaceState: true });
+	}
+
 	function nodeRadius(degree: number): number {
 		return 8 + Math.min(10, degree);
 	}
@@ -38,7 +42,15 @@
 
 {#each graph.edges as e, i (i)}
 	<g role="presentation" onmouseenter={() => (hoveredEdge = i)} onmouseleave={() => (hoveredEdge = null)}>
-		<Edge x1={e.source.x} y1={e.source.y} x2={e.target.x} y2={e.target.y} edge={e.edge} label={hoveredEdge === i} />
+		<Edge
+			x1={e.source.x}
+			y1={e.source.y}
+			x2={e.target.x}
+			y2={e.target.y}
+			edge={e.edge}
+			label={hoveredEdge === i}
+			onSelect={() => selectEdge(e.edge.id)}
+		/>
 	</g>
 {/each}
 

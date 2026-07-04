@@ -1,13 +1,15 @@
 // +page.server.ts
 import type { PageServerLoad } from './$types';
-import { deriveTier, parseCogmap, parseFilters, parseFocus, parseTeam } from '$lib/graph/atlas/nav';
+import { deriveTier, parseCogmap, parseFilters, parseFocus, parseTeam, selectedElement } from '$lib/graph/atlas/nav';
 import {
 	readAtlasHome,
 	readCogmapPanorama,
 	readNeighborhood,
 	readRegionSlice,
+	readResourceRow,
 	readTeamScope,
-	readTerritories
+	readTerritories,
+	readTrail
 } from '$lib/server/graph-reads';
 
 const NEIGHBORHOOD_DEPTH = 2;
@@ -36,7 +38,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			cogmaps: null,
 			territories,
 			slice,
-			neighborhood: null
+			neighborhood: null,
+			selection: { kind: 'none' as const },
+			trail: null,
+			resourceRow: null
 		};
 	}
 
@@ -54,7 +59,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			cogmaps: home.cogmaps,
 			territories: null,
 			slice: null,
-			neighborhood: null
+			neighborhood: null,
+			selection: { kind: 'none' as const },
+			trail: null,
+			resourceRow: null
 		};
 	}
 
@@ -68,6 +76,15 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			? await readNeighborhood(token, teamId, { seeds: [focus.id], depth: NEIGHBORHOOD_DEPTH, edge_kinds: [] })
 			: null;
 
+	const selection = selectedElement(focus, url);
+	const trail =
+		selection.kind === 'edge'
+			? await readTrail(token, 'edge', selection.id)
+			: selection.kind === 'node'
+				? await readTrail(token, 'node', selection.id)
+				: null;
+	const resourceRow = selection.kind === 'node' ? await readResourceRow(token, selection.id) : null;
+
 	return {
 		owner: params.owner,
 		teamId,
@@ -79,6 +96,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		cogmaps: null,
 		territories,
 		slice,
-		neighborhood
+		neighborhood,
+		selection,
+		trail,
+		resourceRow
 	};
 };

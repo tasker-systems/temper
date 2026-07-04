@@ -1,0 +1,196 @@
+<script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { buildDrillNodeUrl, clearSelectionUrl, type SelectedElement } from '$lib/graph/atlas/nav';
+	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+	import type { EventTrail } from '$lib/types/generated/element_trail';
+	import type { ResourceRow } from '$lib/types/generated/resource';
+	import { atlasNeighbors } from '$lib/graph/atlas/neighbors';
+	import { trailModel } from '$lib/graph/atlas/trail';
+	import { docTypeHue } from '$lib/graph/atlas/palette';
+
+	interface Props {
+		selection: SelectedElement;
+		subgraph: AtlasSubgraph | null;
+		trail: EventTrail | null;
+		resourceRow: ResourceRow | null;
+	}
+	let { selection, subgraph, trail, resourceRow }: Props = $props();
+
+	const node = $derived(
+		selection.kind === 'node' && subgraph ? (subgraph.nodes.find((n) => n.id === selection.id) ?? null) : null
+	);
+	const edge = $derived(
+		selection.kind === 'edge' && subgraph ? (subgraph.edges.find((e) => e.id === selection.id) ?? null) : null
+	);
+	const hue = $derived(node ? docTypeHue(node.doc_type ?? null) : edge ? '#c9b183' : '#8a929e');
+	const neighbors = $derived(node && subgraph ? atlasNeighbors(node.id, subgraph.nodes, subgraph.edges) : []);
+	const rows = $derived(trail ? trailModel(trail) : []);
+
+	function close() {
+		goto(clearSelectionUrl($page.url), { replaceState: true });
+	}
+	function refocus(id: string) {
+		goto(buildDrillNodeUrl($page.url, id), { replaceState: true });
+	}
+</script>
+
+{#if selection.kind !== 'none'}
+	<aside class="trail-rail" style="--hue: {hue};" data-testid="trail-rail">
+		<header>
+			<span class="marker">{edge ? 'EDGE' : 'NODE'} · {node?.doc_type ?? edge?.edge_kind ?? ''}</span>
+			<button class="close" onclick={close}>CLOSE ✕</button>
+		</header>
+		<h2 class="title">{node?.title ?? (edge ? `${edge.edge_kind}` : '')}</h2>
+
+		{#if node && neighbors.length}
+			<section class="neighbors">
+				<div class="label">NEIGHBORS · {neighbors.length}</div>
+				{#each neighbors as n (n.other.id + n.label + n.dir)}
+					<button class="nb" onclick={() => refocus(n.other.id)}>
+						<span class="dir">{n.dir}</span>
+						<span class="rel">{n.label}</span>
+						<span class="name" style="color: {docTypeHue(n.other.doc_type ?? null)}">{n.other.title}</span>
+					</button>
+				{/each}
+			</section>
+		{/if}
+
+		{#if node && resourceRow}
+			<section class="meta">
+				<div><span class="k">CONTEXT</span><span>{resourceRow.context_slug ?? '—'}</span></div>
+				{#if resourceRow.cogmap_name}
+					<div><span class="k">COGMAP</span><span>{resourceRow.cogmap_name}</span></div>
+				{/if}
+				{#if resourceRow.stage}
+					<div><span class="k">STAGE</span><span>{resourceRow.stage}</span></div>
+				{/if}
+			</section>
+		{/if}
+
+		{#if edge}
+			<section class="meta">
+				<div><span class="k">POLARITY</span><span>{edge.polarity}</span></div>
+				<div><span class="k">WEIGHT</span><span>{edge.weight}</span></div>
+			</section>
+		{/if}
+
+		<section class="history">
+			<div class="label">HISTORY · {rows.length}</div>
+			{#if rows.length === 0}
+				<p class="empty">No recorded history.</p>
+			{:else}
+				{#each rows.slice(0, 50) as row (row.actor + row.occurredAt + row.kind)}
+					<div class="event">
+						<span class="ekind">{row.kind}</span>
+						<time datetime={row.occurredAt}>{row.occurredAt}</time>
+						{#if row.confidence}<span class="conf">{row.confidence}</span>{/if}
+					</div>
+				{/each}
+			{/if}
+		</section>
+	</aside>
+{/if}
+
+<style>
+	.trail-rail {
+		width: 340px;
+		height: 100%;
+		overflow-y: auto;
+		background: rgba(20, 23, 29, 0.96);
+		border-left: 1px solid color-mix(in srgb, var(--hue) 33%, transparent);
+		backdrop-filter: blur(8px);
+		color: #c9d1d9;
+	}
+	header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 14px 18px 8px;
+	}
+	.marker {
+		font-family: monospace;
+		font-size: 9px;
+		letter-spacing: 0.2em;
+		color: color-mix(in srgb, var(--hue) 80%, white);
+	}
+	.close {
+		background: none;
+		border: 0;
+		color: #6a727e;
+		font: 9px monospace;
+		letter-spacing: 0.2em;
+		cursor: pointer;
+	}
+	.title {
+		margin: 0;
+		padding: 0 18px 10px;
+		font-family: Georgia, serif;
+		font-size: 22px;
+		color: var(--hue);
+	}
+	section {
+		padding: 8px 18px;
+		border-top: 1px solid rgba(255, 255, 255, 0.06);
+	}
+	.label {
+		font-family: monospace;
+		font-size: 8.5px;
+		letter-spacing: 0.2em;
+		color: #6a727e;
+		margin-bottom: 6px;
+	}
+	.nb {
+		display: grid;
+		grid-template-columns: 14px 70px 1fr;
+		gap: 8px;
+		width: 100%;
+		text-align: left;
+		background: none;
+		border: 0;
+		padding: 5px 0;
+		cursor: pointer;
+		font-size: 13px;
+	}
+	.nb .dir {
+		color: #4a5261;
+	}
+	.nb .rel {
+		font: 8px monospace;
+		letter-spacing: 0.15em;
+		color: #6a727e;
+	}
+	.meta > div {
+		display: grid;
+		grid-template-columns: 80px 1fr;
+		gap: 10px;
+		font: 10px monospace;
+		padding: 3px 0;
+	}
+	.meta .k {
+		color: #6a727e;
+		letter-spacing: 0.15em;
+	}
+	.event {
+		display: flex;
+		gap: 8px;
+		align-items: baseline;
+		padding: 4px 0;
+		font-size: 12px;
+	}
+	.ekind {
+		color: var(--hue);
+	}
+	time {
+		color: #6a727e;
+		font-size: 10px;
+	}
+	.conf {
+		font-size: 9px;
+		color: #8fd8a8;
+	}
+	.empty {
+		color: #6a727e;
+		font-size: 12px;
+	}
+</style>
