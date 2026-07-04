@@ -24,6 +24,28 @@
 	function enterCogmap(cogmapId: string) {
 		goto(buildCogmapUrl($page.url, cogmapId), { replaceState: true });
 	}
+
+	// D4-threshold fix: `onpointerup` alone (see comment below) also fires at the
+	// END of a pan gesture — d3-zoom's camera sees the down/up pair as a drag, but
+	// the pointerup still lands on whichever door is under the cursor on release,
+	// so panning across a door and letting go on top of it used to navigate.
+	// Fix: remember where the pointer went down and only treat pointerup as an
+	// activation if it released within POINTER_MOVE_THRESHOLD px (euclidean) of
+	// that point — a stationary click is ~0px and always passes; a real pan
+	// exceeds it and is ignored here (d3-zoom handles the pan itself).
+	const POINTER_MOVE_THRESHOLD = 6;
+	let downPt = $state<{ x: number; y: number } | null>(null);
+
+	function onDoorPointerDown(e: PointerEvent) {
+		downPt = { x: e.clientX, y: e.clientY };
+	}
+	function onDoorPointerUp(e: PointerEvent, activate: () => void) {
+		if (!downPt) return;
+		const dx = e.clientX - downPt.x;
+		const dy = e.clientY - downPt.y;
+		downPt = null;
+		if (Math.hypot(dx, dy) < POINTER_MOVE_THRESHOLD) activate();
+	}
 </script>
 
 <text x={width * 0.34} y="28" text-anchor="middle" fill="#5f7686" font-size="11" letter-spacing="1">YOUR TEAMS</text>
@@ -53,6 +75,13 @@
 	`onclick` stays wired too (harmless/idempotent — same URL) so activation via
 	assistive tech that synthesizes a `click` without a preceding pointer event
 	still works. `onkeydown` (Enter) remains the keyboard path.
+
+	Follow-up: `pointerup` alone also fires at the end of a PAN — releasing the
+	pointer on top of a door after dragging across the canvas used to navigate.
+	`onDoorPointerDown`/`onDoorPointerUp` (above) gate activation on the pointer
+	having moved less than `POINTER_MOVE_THRESHOLD` px between down and up, so a
+	pan is ignored here (d3-zoom drives the pan) while a stationary click
+	(~0px movement) still enters.
 -->
 {#each g.teams as t (t.id)}
 	{@const team = teamById.get(t.id)}
@@ -61,7 +90,8 @@
 		tabindex="0"
 		aria-label={t.name}
 		onclick={() => enterTeam(t.id)}
-		onpointerup={() => enterTeam(t.id)}
+		onpointerdown={onDoorPointerDown}
+		onpointerup={(e) => onDoorPointerUp(e, () => enterTeam(t.id))}
 		onkeydown={(e) => e.key === 'Enter' && enterTeam(t.id)}
 		style="cursor:pointer"
 	>
@@ -82,7 +112,8 @@
 		tabindex="0"
 		aria-label={c.name}
 		onclick={() => enterCogmap(c.id)}
-		onpointerup={() => enterCogmap(c.id)}
+		onpointerdown={onDoorPointerDown}
+		onpointerup={(e) => onDoorPointerUp(e, () => enterCogmap(c.id))}
 		onkeydown={(e) => e.key === 'Enter' && enterCogmap(c.id)}
 		style="cursor:pointer"
 	>

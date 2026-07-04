@@ -111,3 +111,51 @@ async fn home_returns_member_teams_and_shared_cogmap_edges(pool: sqlx::PgPool) {
         "shared cogmap lists both member teams"
     );
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn home_excludes_cogmaps_visible_only_via_non_member_team(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    let team_x = create_team(&pool, "home-x").await;
+    let team_y = create_team(&pool, "home-y").await;
+    add_member(&pool, team_x, profile).await;
+    // Caller is deliberately NOT added to team_y.
+
+    let only_y = create_cogmap(&pool, "only-y").await;
+    join_cogmap(&pool, only_y, team_y).await;
+
+    let mixed = create_cogmap(&pool, "mixed").await;
+    join_cogmap(&pool, mixed, team_x).await;
+    join_cogmap(&pool, mixed, team_y).await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(
+        !body.cogmaps.iter().any(|c| c.name == "only-y"),
+        "cogmap joined only to a non-member team must not appear in the home response"
+    );
+
+    let mc = body
+        .cogmaps
+        .iter()
+        .find(|c| c.name == "mixed")
+        .expect("cogmap joined to a member team is present");
+    assert!(
+        mc.team_ids.contains(&team_x),
+        "mixed cogmap's team_ids includes the caller's member team"
+    );
+    assert!(
+        !mc.team_ids.contains(&team_y),
+        "mixed cogmap's team_ids must not leak the non-member team's id"
+    );
+}

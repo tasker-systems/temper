@@ -23,7 +23,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// cogmap's own panorama directly, no team-scope fetch involved. Checked before
 	// the `!teamId` home branch, since `buildCogmapUrl` always clears `team`.
 	if (cogmapId) {
-		const territories = await readCogmapPanorama(token, cogmapId);
+		const territories = tier === 0 ? await readCogmapPanorama(token, cogmapId) : null;
 		const slice = tier === 1 && focus.kind === 'territory' ? await readRegionSlice(token, focus.id) : null;
 		return {
 			owner: params.owner,
