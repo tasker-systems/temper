@@ -7,11 +7,14 @@
 		r?: number;
 		title: string;
 		docType: string | null;
+		/** Visual-only doc-type filter dimming (Task 8) — never affects the read. */
+		dim?: boolean;
 		onEnter?: () => void;
 	}
-	let { x, y, r = 5, title, docType, onEnter }: Props = $props();
+	let { x, y, r = 5, title, docType, dim = false, onEnter }: Props = $props();
 
 	const color = $derived(docTypeHue(docType));
+	const style = $derived(`${onEnter ? 'cursor:pointer;' : ''}opacity:${dim ? 0.15 : 1};`);
 	let hovered = $state(false);
 </script>
 
@@ -25,7 +28,7 @@
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
 	onmouseenter={() => (hovered = true)}
 	onmouseleave={() => (hovered = false)}
-	style={onEnter ? 'cursor:pointer' : undefined}
+	{style}
 >
 	<circle cx={x} cy={y} {r} fill={color} />
 	{#if hovered}

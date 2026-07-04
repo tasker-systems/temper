@@ -25,7 +25,7 @@
 			<SearchAccelerator teamId={data.teamId} />
 		{/if}
 		{#if data.scope}
-			<ScopeBar scope={data.scope} />
+			<ScopeBar scope={data.scope} filters={data.filters} />
 		{:else}
 			<nav class="scope-bar home">Atlas · your teams</nav>
 		{/if}
@@ -44,6 +44,7 @@
 				teams={data.teams}
 				cogmaps={data.cogmaps}
 				zones={data.scope?.zones ?? []}
+				filters={data.filters}
 			/>
 		{/key}
 	</div>

@@ -9,12 +9,15 @@
 		docType: string | null;
 		home: 'context' | 'cogmap';
 		seed?: boolean;
+		/** Visual-only doc-type filter dimming (Task 8) — never affects the read. */
+		dim?: boolean;
 		onEnter?: () => void;
 	}
-	let { x, y, r, title, docType, home, seed = false, onEnter }: Props = $props();
+	let { x, y, r, title, docType, home, seed = false, dim = false, onEnter }: Props = $props();
 
 	const color = $derived(docTypeHue(docType));
 	const filled = $derived(home === 'cogmap');
+	const style = $derived(`${onEnter ? 'cursor:pointer;' : ''}opacity:${dim ? 0.15 : 1};`);
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -25,7 +28,7 @@
 	aria-label={title}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
-	style={onEnter ? 'cursor:pointer' : undefined}
+	{style}
 >
 	{#if seed}
 		<circle cx={x} cy={y} r={r + 6} fill="none" stroke="#cfd6e2" stroke-width="1.5" />

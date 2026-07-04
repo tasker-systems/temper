@@ -4,6 +4,7 @@
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
 	import { buildDrillNodeUrl, buildEdgeSelectUrl } from '$lib/graph/atlas/nav';
+	import { isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import NodeChip from './marks/NodeChip.svelte';
 	import Edge from './marks/Edge.svelte';
 
@@ -12,8 +13,10 @@
 		seedId: string;
 		width: number;
 		height: number;
+		/** Doc-types to keep at full opacity; empty = no dimming (Task 8, visual-only). */
+		docTypes?: string[];
 	}
-	let { subgraph, seedId, width, height }: Props = $props();
+	let { subgraph, seedId, width, height, docTypes = [] }: Props = $props();
 
 	const graph = $derived(forceNeighborhood(subgraph, [seedId], { width, height }));
 	let hoveredEdge = $state<number | null>(null);
@@ -55,5 +58,15 @@
 {/each}
 
 {#each graph.nodes as n (n.id)}
-	<NodeChip x={n.x} y={n.y} r={nodeRadius(n.degree)} title={n.title} docType={n.docType} home={n.home} seed={n.isSeed} onEnter={() => drill(n.id)} />
+	<NodeChip
+		x={n.x}
+		y={n.y}
+		r={nodeRadius(n.degree)}
+		title={n.title}
+		docType={n.docType}
+		home={n.home}
+		seed={n.isSeed}
+		dim={isDocTypeDimmed(n.docType, docTypes)}
+		onEnter={() => drill(n.id)}
+	/>
 {/each}

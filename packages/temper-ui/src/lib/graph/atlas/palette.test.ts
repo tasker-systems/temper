@@ -11,6 +11,7 @@ import {
 	docTypeHue,
 	edgeStyle,
 	isAuthored,
+	isDocTypeDimmed,
 	nodeMark,
 	paletteStyleVars,
 	salienceOpacity
@@ -63,6 +64,22 @@ describe('salienceOpacity', () => {
 		expect(salienceOpacity(1)).toBeCloseTo(1);
 		expect(salienceOpacity(2)).toBeCloseTo(1); // clamp high
 		expect(salienceOpacity(null)).toBeCloseTo(0.35); // null → floor
+	});
+});
+
+describe('isDocTypeDimmed', () => {
+	it('never dims when the filter set is empty', () => {
+		expect(isDocTypeDimmed('concept', [])).toBe(false);
+		expect(isDocTypeDimmed(null, [])).toBe(false);
+	});
+	it('keeps matching doc-types at full opacity', () => {
+		expect(isDocTypeDimmed('concept', ['concept', 'task'])).toBe(false);
+	});
+	it('dims non-matching doc-types', () => {
+		expect(isDocTypeDimmed('fact', ['concept', 'task'])).toBe(true);
+	});
+	it('dims a null doc-type once any filter is active', () => {
+		expect(isDocTypeDimmed(null, ['concept'])).toBe(true);
 	});
 });
 

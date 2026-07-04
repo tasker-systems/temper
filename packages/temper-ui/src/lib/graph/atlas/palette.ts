@@ -102,6 +102,15 @@ export function salienceOpacity(salience: number | null): number {
 	return SALIENCE_FLOOR + (1 - SALIENCE_FLOOR) * clamped;
 }
 
+/**
+ * ScopeBar doc-type filter (Task 8): a node dims when the active filter set is
+ * non-empty and the node's doc-type is not among the selected ones (an absent
+ * doc-type never matches a non-empty filter). Purely visual — never gates a read.
+ */
+export function isDocTypeDimmed(docType: string | null, docTypes: string[]): boolean {
+	return docTypes.length > 0 && (docType === null || !docTypes.includes(docType));
+}
+
 /** CSS custom-property string (`--dt-<type>:<hex>;…`) for scoping onto the canvas root. */
 export function paletteStyleVars(): string {
 	return (Object.entries(DOC_TYPE_HUES) as [AtlasDocType, string][])
