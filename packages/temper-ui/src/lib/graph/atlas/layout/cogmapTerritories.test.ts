@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { packCogmapTerritories } from './cogmapTerritories';
 import type { OrphanNode } from '$lib/types/generated/graph_territory';
 
-const orphan = (id: string, anchor: string, degree = 1): OrphanNode => ({
+const orphan = (
+	id: string,
+	anchor: string,
+	opts: { degree?: number; anchorLabel?: string | null } = {}
+): OrphanNode => ({
 	id,
 	title: id,
 	doc_type: 'concept',
-	degree,
-	anchor_id: anchor
+	degree: opts.degree ?? 1,
+	anchor_id: anchor,
+	anchor_label: opts.anchorLabel ?? null
 });
 
 describe('packCogmapTerritories', () => {
@@ -35,8 +40,20 @@ describe('packCogmapTerritories', () => {
 			expect(d).toBeLessThanOrEqual(t.r);
 		}
 	});
-	it('labels generically (no cogmap name in the wire) and returns [] for no orphans', () => {
-		expect(packCogmapTerritories([orphan('a', 'cm1')], { width: 200, height: 200 })[0].label).toContain('cogmap');
+	it('falls back to a generic label when anchor_label is absent, and returns [] for no orphans', () => {
+		expect(packCogmapTerritories([orphan('a', 'cm1')], { width: 200, height: 200 })[0].label).toBe(
+			'cogmap · 1 facets'
+		);
 		expect(packCogmapTerritories([], { width: 10, height: 10 })).toEqual([]);
+	});
+	it('uses the cogmap name in the label when anchor_label is set', () => {
+		const out = packCogmapTerritories(
+			[
+				orphan('a', 'cm1', { anchorLabel: 'Product Strategy' }),
+				orphan('b', 'cm1', { anchorLabel: 'Product Strategy' })
+			],
+			{ width: 200, height: 200 }
+		);
+		expect(out[0].label).toBe('Product Strategy · 2 facets');
 	});
 });

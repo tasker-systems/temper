@@ -22,6 +22,11 @@ export function parseTeam(params: URLSearchParams): string | null {
 	return params.get('team');
 }
 
+/** `?cogmap` addressing — entering a cogmap door is a distinct scope from a team (spec Task 5). */
+export function parseCogmap(url: URL): string | null {
+	return url.searchParams.get('cogmap');
+}
+
 export function parseFocus(params: URLSearchParams): Focus {
 	const raw = params.get('focus');
 	if (!raw) return { kind: 'none' };
@@ -59,6 +64,15 @@ export function buildScopeUrl(base: URL, teamId: string): string {
 	});
 }
 
+/** Enter a cogmap door: set cogmap, clear team + focus (re-scope resets to Tier 0). */
+export function buildCogmapUrl(base: URL, cogmapId: string): string {
+	return withParams(base, (p) => {
+		p.set('cogmap', cogmapId);
+		p.delete('team');
+		p.delete('focus');
+	});
+}
+
 export function buildDrillTerritoryUrl(base: URL, territoryId: string): string {
 	return withParams(base, (p) => p.set('focus', `territory:${territoryId}`));
 }
@@ -71,10 +85,11 @@ export function buildAscendUrl(base: URL): string {
 	return withParams(base, (p) => p.delete('focus'));
 }
 
-/** Return to the membership home: clear both team and focus. */
+/** Return to the membership home: clear team, cogmap, and focus. */
 export function buildHomeUrl(base: URL): string {
 	return withParams(base, (p) => {
 		p.delete('team');
+		p.delete('cogmap');
 		p.delete('focus');
 	});
 }

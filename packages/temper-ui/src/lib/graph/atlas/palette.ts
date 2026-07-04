@@ -72,6 +72,13 @@ export const CANVAS_BG = '#1b1e26';
 /** Team-zone rectangle fill, name label, and sub-count text. */
 export const TEAM_ZONE = { fill: '#6fa8c7', label: '#9fc4d6', sub: '#5f7686' } as const;
 
+/**
+ * Atlas Home door tokens (spec Task 4). Cogmap door reuses the cogmap territory
+ * hue (`TERRITORY_TINTS.cogmap`) so the door and the panorama wash agree.
+ */
+export const TEAM_DOOR = { fill: 'rgba(58,138,232,0.13)', stroke: '#3a8ae8', ink: '#cfe0f6' } as const;
+export const COGMAP_DOOR = { fill: 'rgba(232,148,46,0.13)', stroke: '#e8942e', ink: '#f4d3a6' } as const;
+
 const SALIENCE_FLOOR = 0.35;
 
 export function docTypeHue(docType: string | null): string {

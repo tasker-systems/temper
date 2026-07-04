@@ -7,7 +7,7 @@
 
 	// M6: keying AtlasCanvas on the scoped view remounts it on re-scope, resetting the camera.
 	const viewKey = $derived(
-		`${data.teamId ?? 'home'}|${data.focus.kind}:${data.focus.kind === 'none' ? '' : data.focus.id}`
+		`${data.teamId ?? data.cogmapId ?? 'home'}|${data.focus.kind}:${data.focus.kind === 'none' ? '' : data.focus.id}`
 	);
 </script>
 
@@ -20,12 +20,14 @@
 	{#key viewKey}
 		<AtlasCanvas
 			teamId={data.teamId}
+			cogmapId={data.cogmapId}
 			tier={data.tier}
 			focus={data.focus}
 			territories={data.territories}
 			slice={data.slice}
 			neighborhood={data.neighborhood}
 			teams={data.teams}
+			cogmaps={data.cogmaps}
 			zones={data.scope?.zones ?? []}
 		/>
 	{/key}

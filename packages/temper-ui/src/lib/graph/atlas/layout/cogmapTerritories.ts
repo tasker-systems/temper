@@ -66,9 +66,11 @@ export function packCogmapTerritories(
 			y: leaf.y,
 			r: Math.max(4, leaf.r)
 		}));
+		// All facets in a group share anchor_id, so any element's anchor_label works.
+		const anchorLabel = group.children?.[0]?.data.orphan?.anchor_label;
 		return {
 			cogmapId,
-			label: `cogmap · ${facets.length} facets`,
+			label: `${anchorLabel ?? 'cogmap'} · ${facets.length} facets`,
 			facetCount: facets.length,
 			x: group.x,
 			y: group.y,
