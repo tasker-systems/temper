@@ -70,6 +70,7 @@
 			kind={t.kind}
 			label={t.label}
 			onEnter={t.kind === 'region' ? () => drillTerritory(t.id) : undefined}
+			ghost={t.member_count === 0}
 		/>
 	{/each}
 

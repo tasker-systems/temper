@@ -33,7 +33,7 @@
 	{/each}
 </g>
 
-<text x="24" y="28" fill={TERRITORY_TINTS.region} font-size="12" font-weight="600" letter-spacing="1">REGION · interior</text>
+<text x="24" y="28" fill={TERRITORY_TINTS.region} font-size="12" font-weight="600" letter-spacing="1">{(slice.label ?? 'REGION').toUpperCase()} · interior</text>
 <g transform={`translate(${width - 190}, 14)`}>
 	<rect width="168" height="24" rx="12" fill={TERRITORY_TINTS.region} fill-opacity="0.08" stroke={TERRITORY_TINTS.region} stroke-opacity="0.25" />
 	<text x="84" y="16" text-anchor="middle" fill="#c9b183" font-size="10">◵ {slice.components.length} sub-clusters</text>

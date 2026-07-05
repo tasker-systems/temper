@@ -59,7 +59,13 @@ describe('packTerritories', () => {
 			width: 200,
 			height: 200
 		});
-		expect(out[0]).toMatchObject({ id: 'z', kind: 'context', label: 'ctx', anchorId: 'anchor-z' });
+		expect(out[0]).toMatchObject({
+			id: 'z',
+			kind: 'context',
+			label: 'ctx',
+			anchorId: 'anchor-z',
+			member_count: 0
+		});
 		expect(out[0].r).toBeGreaterThan(0); // member_count 0 floored so it still gets a circle
 	});
 
