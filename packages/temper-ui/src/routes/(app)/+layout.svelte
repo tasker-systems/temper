@@ -1,12 +1,20 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { LayoutData } from './$types';
+	import { page } from '$app/stores';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import { sidebarCollapsed } from '$lib/stores/sidebar.svelte';
 
 	let { data, children }: { data: LayoutData; children: Snippet } = $props();
 
 	let palette: CommandPalette;
+
+	// Seed collapse from stored preference or the route default on each navigation
+	// (explicit user toggles persist and win). $effect re-runs when the path changes.
+	$effect(() => {
+		sidebarCollapsed.initFor($page.url.pathname);
+	});
 
 	function onKeydown(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -26,6 +34,8 @@
 			: null}
 		isAdmin={data.entitlements?.is_admin ?? false}
 		instanceName={data.instanceName ?? null}
+		collapsed={sidebarCollapsed.value}
+		onToggle={() => sidebarCollapsed.toggle()}
 	/>
 	<!--
 		main is a flex-col so page content can size itself against a resolved
