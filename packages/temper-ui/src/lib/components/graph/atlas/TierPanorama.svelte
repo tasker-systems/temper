@@ -5,11 +5,13 @@
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
 	import { packTerritories } from '$lib/graph/atlas/layout/packTerritories';
 	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
+	import { bridgeGeometry } from '$lib/graph/atlas/layout/bridges';
 	import { buildScopeUrl, buildDrillTerritoryUrl, buildDrillNodeUrl } from '$lib/graph/atlas/nav';
 	import { TERRITORY_TINTS, isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 	import TeamZoneMark from './marks/TeamZoneMark.svelte';
 	import OrphanNodeMark from './marks/OrphanNodeMark.svelte';
+	import BridgeRibbon from './marks/BridgeRibbon.svelte';
 
 	interface Props {
 		overview: TerritoryOverview;
@@ -33,6 +35,8 @@
 	const cogmapOffsetY = $derived(hasTerr && hasCogmaps ? bodyHeight * 0.55 : 0);
 	const packed = $derived(packTerritories(overview.territories, terrBox));
 	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
+	const territoryPos = $derived(new Map(packed.map((t) => [t.id, { x: t.x, y: t.y }])));
+	const bridgeLines = $derived(bridgeGeometry(overview.bridges, territoryPos));
 
 	// Zone-enter and drill are drill steps — PUSH history so browser Back walks
 	// the path (Atlas ← team ← territory ← node). See nav.ts.
@@ -61,6 +65,11 @@
 {/each}
 
 <g transform={`translate(0, ${ZONE_BAND})`}>
+	<!-- aggregate bridges: render beneath territory circles -->
+	{#each bridgeLines as bl, i (i)}
+		<BridgeRibbon x1={bl.x1} y1={bl.y1} x2={bl.x2} y2={bl.y2} edgeCount={bl.edgeCount} />
+	{/each}
+
 	<!-- dense territories: regions drill to Tier 1, contexts are inert -->
 	{#each packed as t (t.id)}
 		<TerritoryCircle
