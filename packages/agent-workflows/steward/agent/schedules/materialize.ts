@@ -1,5 +1,6 @@
 import { defineSchedule } from "eve/schedules";
 
+import { fetchWithRetry } from "../lib/fetch-retry.js";
 import { requireEnv, temperToken } from "../lib/temper-auth.js";
 
 /**
@@ -43,9 +44,11 @@ async function materializeTick(): Promise<void> {
   const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
   const token = await temperToken();
 
-  const list = await fetch(`${apiUrl}/api/steward/candidates`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const list = await fetchWithRetry(
+    `${apiUrl}/api/steward/candidates`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "candidates" },
+  );
   if (!list.ok) {
     throw new Error(`candidates fetch failed: ${list.status} ${await list.text()}`);
   }
@@ -54,15 +57,19 @@ async function materializeTick(): Promise<void> {
 
   await Promise.all(
     ids.map(async (id) => {
-      const res = await fetch(`${apiUrl}/api/cognitive-maps/${id}/materialize`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
+      const res = await fetchWithRetry(
+        `${apiUrl}/api/cognitive-maps/${id}/materialize`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          // Empty body → the server applies its DEFAULT_MATERIALIZE_THRESHOLD (self-gating no-op below).
+          body: "{}",
         },
-        // Empty body → the server applies its DEFAULT_MATERIALIZE_THRESHOLD (self-gating no-op below).
-        body: "{}",
-      });
+        { label: `materialize ${id}` },
+      );
       if (!res.ok) {
         throw new Error(`materialize ${id} POST failed: ${res.status} ${await res.text()}`);
       }

@@ -1,6 +1,7 @@
 import { defineSchedule } from "eve/schedules";
 
 import eve from "../channels/eve.js";
+import { fetchWithRetry } from "../lib/fetch-retry.js";
 import { requireEnv, temperToken } from "../lib/temper-auth.js";
 
 /**
@@ -33,15 +34,21 @@ export default defineSchedule({
           const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
           const token = await temperToken();
 
-          const res = await fetch(`${apiUrl}/api/steward/dispatch`, {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${token}`,
-              "content-type": "application/json",
+          // Retry on 5xx: this hourly call always hits a cold serverless function, which can 500 on
+          // a Neon pool-acquire timeout at startup; a retry warms it and succeeds.
+          const res = await fetchWithRetry(
+            `${apiUrl}/api/steward/dispatch`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${token}`,
+                "content-type": "application/json",
+              },
+              // Empty body → server defaults (ingest threshold + dispatch cap).
+              body: "{}",
             },
-            // Empty body → server defaults (ingest threshold + dispatch cap).
-            body: "{}",
-          });
+            { label: "dispatch" },
+          );
           if (!res.ok) {
             throw new Error(`dispatch failed: ${res.status} ${await res.text()}`);
           }
