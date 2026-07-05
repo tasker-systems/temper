@@ -83,7 +83,7 @@
 			{#if rows.length === 0}
 				<p class="empty">No recorded history.</p>
 			{:else}
-				{#each rows.slice(0, 50) as row (row.actor + row.occurredAt + row.kind)}
+				{#each rows.slice(0, 50) as row (row.id)}
 					<div class="event">
 						<span class="ekind">{row.kind}</span>
 						<time datetime={row.occurredAt}>{row.occurredAt}</time>
