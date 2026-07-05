@@ -17,7 +17,7 @@
 -- ADDITIVE, additive-only-on-`main`: a new table + four new functions; no existing object altered.
 
 CREATE TABLE kb_workflow_jobs (
-    id               uuid PRIMARY KEY DEFAULT uuidv7(),
+    id               uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
     cogmap_id        uuid NOT NULL REFERENCES kb_cogmaps(id) ON DELETE CASCADE,
     persona          text NOT NULL,
     dispatch_type    text NOT NULL,
