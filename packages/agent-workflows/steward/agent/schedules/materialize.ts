@@ -1,5 +1,6 @@
-import { getToken } from "@vercel/connect";
 import { defineSchedule } from "eve/schedules";
+
+import { requireEnv, temperToken } from "../lib/temper-auth.js";
 
 /**
  * Region materialization on its OWN threshold cadence (T6 acceptance #3).
@@ -15,10 +16,10 @@ import { defineSchedule } from "eve/schedules";
  * no-op (`MaterializeAck { materialized: false }`) below it. So a fixed cadence
  * is safe — the threshold, not the cron, decides when work actually happens.
  *
- * Auth mirrors connections/temper.ts EXACTLY: Vercel Connect (app subject) when
- * `TEMPER_CONNECT_CONNECTOR` is set (T6's registered connector — the same one
- * the MCP connection uses), else the already-OAuth-obtained `TEMPER_TOKEN` that
- * drives `eve dev`. No provider secret ever lives in code.
+ * Auth is machine-identity-first via the shared `temperToken` (`../lib/temper-auth`), the SAME
+ * ordering the MCP connection uses — M2M `client_credentials` on prod, then Connect, then
+ * `TEMPER_TOKEN`. (An earlier Connect-first copy here hit the dead-end connector on prod and threw
+ * before any request went out, so materialize silently never ran — this fix resolves that.)
  *
  * Fan-out (goal 019f3220): materialization now runs across ALL team-joined cogmaps, not one
  * env-pinned map. It enumerates candidates via `GET /api/steward/candidates` (the readable
@@ -49,6 +50,7 @@ async function materializeTick(): Promise<void> {
     throw new Error(`candidates fetch failed: ${list.status} ${await list.text()}`);
   }
   const ids = (await list.json()) as string[];
+  console.log(`[steward-materialize] materializing ${ids.length} candidate cogmap(s)`);
 
   await Promise.all(
     ids.map(async (id) => {
@@ -66,20 +68,4 @@ async function materializeTick(): Promise<void> {
       }
     }),
   );
-}
-
-async function temperToken(): Promise<string> {
-  const connector = process.env.TEMPER_CONNECT_CONNECTOR;
-  if (connector) {
-    return getToken(connector, { subject: { type: "app" } });
-  }
-  return requireEnv("TEMPER_TOKEN");
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} is required — the temper-mcp target/credential is never hardcoded`);
-  }
-  return value;
 }
