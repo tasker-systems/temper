@@ -18,6 +18,8 @@
 	const EDGE_KIND_OPTIONS: EdgeKind[] = ['contains', 'leads_to', 'express', 'near'];
 	const DOC_TYPE_OPTIONS = Object.keys(DOC_TYPE_HUES) as AtlasDocType[];
 
+	// Filter toggles and the lens are ephemeral view state — REPLACE so they don't
+	// clutter the drill history the browser Back button walks (see nav.ts).
 	function toggleEdgeKind(k: EdgeKind) {
 		const next = filters.edgeKinds.includes(k)
 			? filters.edgeKinds.filter((x) => x !== k)
@@ -39,7 +41,7 @@
 </script>
 
 <nav class="scope-bar">
-	<button class="crumb home" type="button" onclick={() => goto(buildHomeUrl($page.url), { replaceState: true })}>⌂ Atlas</button>
+	<button class="crumb home" type="button" onclick={() => goto(buildHomeUrl($page.url))}>⌂ Atlas</button>
 	<span class="sep">/</span>
 	{#each scope.ancestors as ancestor (ancestor.id)}
 		<span class="crumb">{ancestor.name}</span>

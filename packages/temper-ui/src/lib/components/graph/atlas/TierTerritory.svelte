@@ -18,8 +18,9 @@
 	const members = $derived(packRegionMembers(slice.members, { width, height: Math.max(1, height - 60) }));
 	const hull = $derived(hullPath(members.map((m) => [m.x, m.y] as [number, number]), 26));
 
+	// Drill is a drill step — PUSH history so browser Back walks the path. See nav.ts.
 	function drill(nodeId: string) {
-		goto(buildDrillNodeUrl($page.url, nodeId), { replaceState: true });
+		goto(buildDrillNodeUrl($page.url, nodeId));
 	}
 </script>
 
