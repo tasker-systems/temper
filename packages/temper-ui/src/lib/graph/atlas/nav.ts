@@ -115,6 +115,12 @@ export function parseFilters(params: URLSearchParams): GraphFilters {
 	return { lensId: params.get('lens_id'), edgeKinds: csv('edge_kinds'), docTypes: csv('doc_types') };
 }
 
+/** Count of active (non-default) filter dimensions — drives the popover badge. */
+export function activeFilterCount(url: URL): number {
+	const f = parseFilters(url.searchParams);
+	return (f.lensId ? 1 : 0) + (f.edgeKinds.length ? 1 : 0) + (f.docTypes.length ? 1 : 0);
+}
+
 export function buildFiltersUrl(
 	base: URL,
 	patch: Partial<{ lensId: string | null; edgeKinds: string[]; docTypes: string[] }>

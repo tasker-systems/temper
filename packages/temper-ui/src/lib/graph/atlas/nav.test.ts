@@ -1,6 +1,7 @@
 // nav.test.ts
 import { describe, expect, it } from 'vitest';
 import {
+	activeFilterCount,
 	buildAscendUrl,
 	buildCogmapUrl,
 	buildDrillNodeUrl,
@@ -138,6 +139,13 @@ describe('filters', () => {
 		);
 		expect(buildFiltersUrl(url('?team=t1&edge_kinds=derived'), { edgeKinds: [] })).toBe('/graph/@me?team=t1');
 	});
+});
+
+describe('activeFilterCount', () => {
+	it('is 0 with no filters', () => expect(activeFilterCount(url(''))).toBe(0));
+	it('counts each active dimension', () =>
+		expect(activeFilterCount(url('?lens_id=L&edge_kinds=contains,near&doc_types=note'))).toBe(3));
+	it('empty CSV params do not count', () => expect(activeFilterCount(url('?edge_kinds='))).toBe(0));
 });
 
 describe('focus-as-path', () => {
