@@ -1,6 +1,6 @@
 import { defineSchedule } from "eve/schedules";
 
-import eve from "../channels/eve.js";
+import worker from "../channels/worker.js";
 import { fetchWithRetry } from "../lib/fetch-retry.js";
 import { requireEnv, temperToken } from "../lib/temper-auth.js";
 
@@ -66,7 +66,7 @@ export default defineSchedule({
           // SINGLE cogmap id. Each session ends by advancing the watermark, completing its job.
           await Promise.all(
             claimed.map((job) =>
-              receive(eve, {
+              receive(worker, {
                 target: {},
                 auth: appAuth,
                 message:
