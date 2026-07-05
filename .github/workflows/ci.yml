@@ -8,21 +8,113 @@ on:
 
 jobs:
   # ==========================================================================
-  # Stage 1: Parallel quality + test jobs
+  # Stage 0: Detect change scope
+  # Analyzes changed files so a docs-only change skips the whole pipeline.
+  # Everything else runs the full pipeline. ~15s.
+  # ==========================================================================
+  detect-scope:
+    name: Detect CI Scope
+    runs-on: ubuntu-latest
+    outputs:
+      docs-only: ${{ steps.detect.outputs.docs-only }}
+      run-code-quality: ${{ steps.detect.outputs.run-code-quality }}
+      run-test-rust: ${{ steps.detect.outputs.run-test-rust }}
+      run-test-typescript: ${{ steps.detect.outputs.run-test-typescript }}
+      scope-summary: ${{ steps.detect.outputs.scope-summary }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect change scope
+        id: detect
+        run: |
+          chmod +x .github/scripts/detect-ci-scope.sh
+          .github/scripts/detect-ci-scope.sh --github-output --verbose
+
+      - name: Annotate scope
+        run: echo "::notice title=CI Scope::${{ steps.detect.outputs.scope-summary }}"
+
+  # ==========================================================================
+  # Stage 1: Parallel quality + test jobs (skipped on docs-only changes)
   # ==========================================================================
   code-quality:
+    needs: detect-scope
+    if: needs.detect-scope.outputs.run-code-quality == 'true'
     uses: ./.github/workflows/code-quality.yml
 
   test-rust:
+    needs: detect-scope
+    if: needs.detect-scope.outputs.run-test-rust == 'true'
     uses: ./.github/workflows/test-rust.yml
 
   test-typescript:
+    needs: detect-scope
+    if: needs.detect-scope.outputs.run-test-typescript == 'true'
     uses: ./.github/workflows/test-typescript.yml
 
   # ==========================================================================
   # Stage 2: CI Success Gate
-  # All jobs must pass for CI to succeed (used as branch protection rule)
+  # The single check meant for branch protection. Always runs and validates
+  # each job's result against whether scope said it should run — so a
+  # correctly-skipped job (docs-only) still yields a green gate, while a
+  # failed or cancelled in-scope job fails it.
   # ==========================================================================
   ci-success:
-    needs: [code-quality, test-rust, test-typescript]
-    uses: ./.github/workflows/ci-success.yml
+    name: CI Success
+    needs: [detect-scope, code-quality, test-rust, test-typescript]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate CI results against scope
+        run: |
+          echo "=== CI Scope: ${{ needs.detect-scope.outputs.scope-summary }} ==="
+          echo ""
+
+          if [ "${{ needs.detect-scope.result }}" != "success" ]; then
+            echo "FATAL: detect-scope failed (result=${{ needs.detect-scope.result }})"
+            exit 1
+          fi
+
+          FAILED=""
+
+          # check_job <name> <result> <should-run>
+          check_job() {
+            name="$1"; result="$2"; should_run="$3"
+            if [ "$should_run" = "true" ]; then
+              if [ "$result" = "success" ]; then
+                echo "  PASS: ${name} (ran and succeeded)"
+              else
+                echo "  FAIL: ${name} (expected success, got ${result})"
+                FAILED="${FAILED} ${name}"
+              fi
+            else
+              if [ "$result" = "skipped" ]; then
+                echo "  SKIP: ${name} (docs-only, correctly skipped)"
+              elif [ "$result" = "success" ]; then
+                echo "  PASS: ${name} (not in scope but succeeded anyway)"
+              else
+                echo "  SKIP: ${name} (not in scope, result=${result})"
+              fi
+            fi
+          }
+
+          check_job "code-quality" \
+            "${{ needs.code-quality.result }}" \
+            "${{ needs.detect-scope.outputs.run-code-quality }}"
+
+          check_job "test-rust" \
+            "${{ needs.test-rust.result }}" \
+            "${{ needs.detect-scope.outputs.run-test-rust }}"
+
+          check_job "test-typescript" \
+            "${{ needs.test-typescript.result }}" \
+            "${{ needs.detect-scope.outputs.run-test-typescript }}"
+
+          echo ""
+          if [ -n "$FAILED" ]; then
+            echo "FAILED jobs:${FAILED}"
+            exit 1
+          fi
+          echo "All required CI checks passed."
