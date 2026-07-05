@@ -6,7 +6,7 @@
 </script>
 
 <div class="legend" data-testid="atlas-legend">
-	<button type="button" class="head" onclick={() => (open = !open)}>
+	<button type="button" class="head" aria-expanded={open} onclick={() => (open = !open)}>
 		▦ Legend {open ? '▾' : '▸'}
 	</button>
 	{#if open}
@@ -98,8 +98,8 @@
 		font-size: 12px;
 		color: var(--color-quiet-ink, #c9d1d9);
 		display: flex;
-		align-items: flex-start;
-		gap: 18px;
+		align-items: center;
+		gap: 6px 14px;
 		flex-wrap: wrap;
 	}
 	.head {
@@ -109,21 +109,31 @@
 		cursor: pointer;
 		font-size: 12px;
 		padding: 4px 0;
+		white-space: nowrap;
 	}
+	/* Sections AND their rows lay out horizontally so the open legend stays a thin
+	   strip that wraps within its band, instead of stacking 14 doc-type rows into a
+	   tall column that grows up into the canvas (Beat-2a regression L1). A leading
+	   divider separates sections when they sit on the same wrapped line. */
 	.sec {
-		padding: 2px 0;
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 3px 9px;
+		padding-left: 12px;
+		border-left: 1px solid rgba(255, 255, 255, 0.08);
 	}
 	.lbl {
 		font: 8.5px monospace;
-		letter-spacing: 0.2em;
+		letter-spacing: 0.16em;
 		color: #6a727e;
-		margin-bottom: 4px;
+		text-transform: uppercase;
 	}
 	.row {
-		display: flex;
+		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-		padding: 2px 0;
+		gap: 5px;
+		white-space: nowrap;
 	}
 	.sw {
 		width: 10px;

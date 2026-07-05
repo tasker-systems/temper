@@ -19,4 +19,17 @@ describe('trailModel', () => {
 		const t = trail([{ event_id: 'a', kind: 'block.created', actor_entity_id: 'u', occurred_at: '2026-01-01T00:00:00Z', confidence: undefined as unknown as null }]);
 		expect(trailModel(t)[0].confidence).toBeNull();
 	});
+	it('carries a unique row id even when actor+time+kind collide', () => {
+		// Two batch events share actor, occurred_at, and kind; only event_id
+		// distinguishes them. Keying the TrailRail render on actor+time+kind
+		// crashed the panel (each_key_duplicate) — the row id must stay unique so
+		// the trail renders. This is the fix for "TrailRail fails on most resources".
+		const t = trail([
+			{ event_id: 'e1', kind: 'property.set', actor_entity_id: 'u1', occurred_at: '2026-07-05T00:03:08Z', confidence: null },
+			{ event_id: 'e2', kind: 'property.set', actor_entity_id: 'u1', occurred_at: '2026-07-05T00:03:08Z', confidence: null }
+		]);
+		const ids = trailModel(t).map((r) => r.id);
+		expect(ids).toEqual(['e2', 'e1']);
+		expect(new Set(ids).size).toBe(2);
+	});
 });

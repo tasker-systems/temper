@@ -84,10 +84,17 @@
 	.atlas-canvas {
 		width: 100%;
 		height: 100%;
+		min-height: 0;
 	}
+	/* Fill the (bounded) canvas row and letterbox via the viewBox's default
+	   `preserveAspectRatio: xMidYMid meet`, so the whole map stays visible and the
+	   svg never exceeds its 1fr grid row. The previous `height: auto` sized the svg
+	   to the viewBox's intrinsic aspect ratio, overflowing short viewports and
+	   pushing the bottom-bar legend off-screen (Beat-2a regressions L2/short-height).
+	   The d3 camera still zooms/pans for detail. */
 	.atlas-canvas svg {
 		display: block;
 		width: 100%;
-		height: auto;
+		height: 100%;
 	}
 </style>
