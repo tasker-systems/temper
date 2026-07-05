@@ -20,7 +20,8 @@ for source in delta.new_or_changed:
     temper__fold_relationship(existing.derived_from, act)
     existing = none
   if not existing:
-    node = temper__create_resource(cogmap=cogmap, type=<label>, act)
+    # `sources` = every resource this node distills from (block provenance); see Source attribution.
+    node = temper__create_resource(cogmap=cogmap, type=<label>, sources=[<source id(s)>], act)
     temper__assert_relationship(node -> source, label="derived_from", kind="express", act)
     for rel in inter_node_relationships(node):
       temper__assert_relationship(node -> other, kind, polarity, label, weight, act)
@@ -59,6 +60,27 @@ is broader, organizing many concepts.
   `derived_from` edge.
 - **Synthesized** (`concept`/`question`/`theme`/`concern`/`principle`/`commitment`/
   `domain`): one node spans many sources — many `derived_from` edges into it.
+
+## Source attribution (block provenance)
+
+Every `create_resource` carries `sources` — the resources this node distills from. It is the
+**block-provenance** channel: it records where the node's content came from on the node's own body
+block (`kb_block_provenance`), which lights up the map's reinforcement and region-salience signals.
+It runs *alongside* the `derived_from` edge, not instead of it — the edge is the graph-level lineage,
+`sources` is the block-level lineage, and they carry the **same** source set.
+
+- **Per-source node** (`fact`/`memory`/`decision`): `sources=[the one source id]` — the same id you
+  give its single `derived_from` edge.
+- **Synthesized node** (`concept`/`question`/…): `sources=[every source id you distilled from]` —
+  the same set as the many `derived_from` edges you assert into it. Order is attribution order.
+- **External source** (a web page, an issue/PR URL — not one of the team's own resources): pass the
+  raw `http(s)://…` URL in `sources` instead of a resource id. The steward's ingest is team-internal,
+  so this is rare — reach for it only when a node genuinely cites something outside the corpus.
+- **Materially-changed re-distill**: you create a *fresh* node (never edit blocks in place), so set
+  its `sources` to the current distillation's sources — the stale node keeps its own.
+
+The rule of thumb: **whatever gets a `derived_from` edge goes in `sources`.** If you assert N
+`derived_from` edges into a node, its `sources` list has those same N ids.
 
 ## Edge conventions
 

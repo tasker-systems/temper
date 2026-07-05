@@ -13,6 +13,8 @@ Each run, over the resources that are new or changed since your last run
 (`temper__steward_ingest_delta`), you tend the map with the **authored-4**:
 
 - **create** cogmap-homed nodes that distill sources (`temper__create_resource`),
+  passing the `sources` they distill from so provenance is recorded on the node's
+  own block (not only as an edge),
 - **assert** edges — provenance (`derived_from`) and inter-node relationships
   (`temper__assert_relationship`),
 - **set facets** on nodes (`temper__facet_set`),
