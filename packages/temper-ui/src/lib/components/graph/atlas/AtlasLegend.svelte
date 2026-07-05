@@ -2,7 +2,7 @@
 	import { legendModel } from '$lib/graph/atlas/legend';
 
 	const m = legendModel();
-	let open = $state(true);
+	let open = $state(false);
 </script>
 
 <div class="legend" data-testid="atlas-legend">
@@ -85,14 +85,22 @@
 				</div>
 			{/each}
 		</div>
+		<div class="sec">
+			<div class="lbl">BRIDGE</div>
+			<div class="row"><span class="line thick" style="background:#e8cf8f"></span>shared-edge count · thicker = stronger</div>
+		</div>
 	{/if}
 </div>
 
 <style>
 	.legend {
-		padding: 8px 12px;
+		padding: 6px 12px;
 		font-size: 12px;
 		color: var(--color-quiet-ink, #c9d1d9);
+		display: flex;
+		align-items: flex-start;
+		gap: 18px;
+		flex-wrap: wrap;
 	}
 	.head {
 		background: none;
@@ -103,7 +111,7 @@
 		padding: 4px 0;
 	}
 	.sec {
-		padding: 6px 0;
+		padding: 2px 0;
 	}
 	.lbl {
 		font: 8.5px monospace;
@@ -128,6 +136,9 @@
 		width: 16px;
 		height: 2px;
 		flex: 0 0 auto;
+	}
+	.line.thick {
+		height: 4px;
 	}
 	.sample {
 		flex: 0 0 auto;
