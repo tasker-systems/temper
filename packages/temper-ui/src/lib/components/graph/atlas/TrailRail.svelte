@@ -27,11 +27,14 @@
 	const neighbors = $derived(node && subgraph ? atlasNeighbors(node.id, subgraph.nodes, subgraph.edges) : []);
 	const rows = $derived(trail ? trailModel(trail) : []);
 
+	// Closing the panel is ephemeral (clears ?sel) — REPLACE so it doesn't leave a
+	// history step. Refocusing to a neighbor is a drill — PUSH so Back returns to
+	// the prior node (see nav.ts).
 	function close() {
 		goto(clearSelectionUrl($page.url), { replaceState: true });
 	}
 	function refocus(id: string) {
-		goto(buildDrillNodeUrl($page.url, id), { replaceState: true });
+		goto(buildDrillNodeUrl($page.url, id));
 	}
 </script>
 

@@ -27,8 +27,10 @@
 		}, 180);
 	}
 
+	// Jumping to a hit is a drill step — PUSH history so browser Back returns to
+	// where the search started (see nav.ts).
 	function jump(hit: AtlasSearchHit) {
-		goto(buildDrillNodeUrl($page.url, hit.node_id), { replaceState: true });
+		goto(buildDrillNodeUrl($page.url, hit.node_id));
 		q = '';
 		hits = [];
 	}

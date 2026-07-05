@@ -18,11 +18,14 @@
 	const teamById = $derived(new Map(teams.map((t) => [t.id, t])));
 	const cogmapById = $derived(new Map(cogmaps.map((c) => [c.id, c])));
 
+	// Entering a scope is a drill step — PUSH history so browser Back walks the
+	// path (Atlas ← team/cogmap). Only ephemeral state (filters, panel selection)
+	// stays replaceState. See nav.ts.
 	function enterTeam(teamId: string) {
-		goto(buildScopeUrl($page.url, teamId), { replaceState: true });
+		goto(buildScopeUrl($page.url, teamId));
 	}
 	function enterCogmap(cogmapId: string) {
-		goto(buildCogmapUrl($page.url, cogmapId), { replaceState: true });
+		goto(buildCogmapUrl($page.url, cogmapId));
 	}
 
 	// D4-threshold fix: `onpointerup` alone (see comment below) also fires at the

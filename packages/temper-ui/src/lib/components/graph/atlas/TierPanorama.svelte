@@ -34,14 +34,16 @@
 	const packed = $derived(packTerritories(overview.territories, terrBox));
 	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
 
+	// Zone-enter and drill are drill steps — PUSH history so browser Back walks
+	// the path (Atlas ← team ← territory ← node). See nav.ts.
 	function enterZone(teamId: string) {
-		goto(buildScopeUrl($page.url, teamId), { replaceState: true });
+		goto(buildScopeUrl($page.url, teamId));
 	}
 	function drillTerritory(regionId: string) {
-		goto(buildDrillTerritoryUrl($page.url, regionId), { replaceState: true });
+		goto(buildDrillTerritoryUrl($page.url, regionId));
 	}
 	function drillNode(nodeId: string) {
-		goto(buildDrillNodeUrl($page.url, nodeId), { replaceState: true });
+		goto(buildDrillNodeUrl($page.url, nodeId));
 	}
 </script>
 

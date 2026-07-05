@@ -35,6 +35,18 @@
 
 	const seedId = $derived(focus.kind === 'node' ? focus.id : '');
 
+	// A Tier-2 neighborhood with no nodes must not fall through to a blank canvas
+	// (B4). Cogmap scope has no neighborhood read at all, so a node drilled inside a
+	// cogmap gets a scope-aware message instead of the generic "No data" (B3).
+	const hasNeighbors = $derived(tier === 2 && !!neighborhood && neighborhood.nodes.length > 0);
+	const emptyMessage = $derived(
+		cogmapId && tier === 2
+			? 'Node neighborhoods are not available in cogmap view yet — return to the map to explore its regions.'
+			: tier === 2
+				? 'This node has no mapped neighbors yet.'
+				: 'No data for this view.'
+	);
+
 	let svgEl: SVGSVGElement | undefined = $state();
 	let viewportEl: SVGGElement | undefined = $state();
 	let camera: Camera | undefined;
@@ -59,10 +71,10 @@
 				<TierPanorama overview={territories} {zones} width={W} height={H} docTypes={filters.docTypes} />
 			{:else if tier === 1 && slice}
 				<TierTerritory {slice} width={W} height={H} />
-			{:else if tier === 2 && neighborhood}
+			{:else if hasNeighbors && neighborhood}
 				<TierNeighborhood subgraph={neighborhood} {seedId} width={W} height={H} docTypes={filters.docTypes} />
 			{:else}
-				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14">No data for this view.</text>
+				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14">{emptyMessage}</text>
 			{/if}
 		</g>
 	</svg>

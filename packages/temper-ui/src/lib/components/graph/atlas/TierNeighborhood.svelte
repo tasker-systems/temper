@@ -21,10 +21,13 @@
 	const graph = $derived(forceNeighborhood(subgraph, [seedId], { width, height }));
 	let hoveredEdge = $state<number | null>(null);
 
+	// Drill is a drill step — PUSH history so browser Back walks the path (see nav.ts).
 	function drill(nodeId: string) {
-		goto(buildDrillNodeUrl($page.url, nodeId), { replaceState: true });
+		goto(buildDrillNodeUrl($page.url, nodeId));
 	}
 
+	// Edge selection is ephemeral panel state (?sel), not a scope change — REPLACE
+	// so it doesn't clutter the drill history the Back button walks.
 	function selectEdge(edgeId: string) {
 		goto(buildEdgeSelectUrl($page.url, edgeId), { replaceState: true });
 	}

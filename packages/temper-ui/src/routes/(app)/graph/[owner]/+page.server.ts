@@ -33,10 +33,16 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	if (cogmapId) {
 		const territories = tier === 0 ? await readCogmapPanorama(token, cogmapId) : null;
 		const slice = tier === 1 && focus.kind === 'territory' ? await readRegionSlice(token, focus.id) : null;
+		// Resolve the cogmap's display name for the breadcrumb (B2). The panorama read
+		// carries no self-name, so look it up in the membership home (the same list the
+		// door was entered from). Falls back to a generic label if not visible there.
+		const home = await readAtlasHome(token);
+		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
 		return {
 			owner: params.owner,
 			teamId: null,
 			cogmapId,
+			cogmapName,
 			scope: null,
 			tier,
 			focus,
@@ -59,6 +65,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			owner: params.owner,
 			teamId: null,
 			cogmapId: null,
+			cogmapName: null,
 			scope: null,
 			tier,
 			focus,
@@ -101,6 +108,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		owner: params.owner,
 		teamId,
 		cogmapId: null,
+		cogmapName: null,
 		scope,
 		tier,
 		focus,

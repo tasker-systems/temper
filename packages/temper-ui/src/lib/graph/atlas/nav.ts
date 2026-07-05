@@ -4,7 +4,14 @@
  * `/vault/[owner]/graph` carries `?team`, `?focus`, and filter params; the tier is
  * DERIVED from focus, never stored. Zoom/pan is ephemeral client state and is NOT
  * in the URL. See spec D2. Builders return a relative `path?query` string ready to
- * hand to `goto(…, { replaceState: true })`.
+ * hand to `goto()`.
+ *
+ * History mode is chosen at the call site, not here:
+ *   - Scope/drill transitions (buildScopeUrl, buildCogmapUrl, buildDrillTerritoryUrl,
+ *     buildDrillNodeUrl, buildAscendUrl, buildHomeUrl) PUSH history so the browser
+ *     Back button walks the drill path (Atlas ← team ← territory ← node).
+ *   - Ephemeral view state (buildFiltersUrl, buildEdgeSelectUrl, clearSelectionUrl)
+ *     REPLACES history so filter toggles and panel selection don't clutter the path.
  */
 export type Tier = 0 | 1 | 2;
 
