@@ -38,12 +38,26 @@ export function parseCogmap(url: URL): string | null {
 	return url.searchParams.get('cogmap');
 }
 
+/** Parse one `kind:id` focus token; null if malformed. */
+function parseFocusToken(raw: string): Focus | null {
+	const [kind, id] = raw.split(':', 2);
+	if (id && (kind === 'territory' || kind === 'node')) return { kind, id };
+	return null;
+}
+
+/** The full drill path (`?focus=territory:X,node:Y` → [territory, node]). */
+export function parseFocusPath(url: URL): Focus[] {
+	const raw = url.searchParams.get('focus');
+	if (!raw) return [];
+	return raw.split(',').map(parseFocusToken).filter((f): f is Focus => f !== null);
+}
+
+/** The active focus = the leaf (last) segment; drives tier + neighborhood seeding. */
 export function parseFocus(params: URLSearchParams): Focus {
 	const raw = params.get('focus');
 	if (!raw) return { kind: 'none' };
-	const [kind, id] = raw.split(':', 2);
-	if (id && (kind === 'territory' || kind === 'node')) return { kind, id };
-	return { kind: 'none' };
+	const segs = raw.split(',').map(parseFocusToken).filter((f): f is Focus => f !== null);
+	return segs.length ? segs[segs.length - 1] : { kind: 'none' };
 }
 
 export type Selection =
@@ -101,6 +115,12 @@ export function parseFilters(params: URLSearchParams): GraphFilters {
 	return { lensId: params.get('lens_id'), edgeKinds: csv('edge_kinds'), docTypes: csv('doc_types') };
 }
 
+/** Count of active (non-default) filter dimensions — drives the popover badge. */
+export function activeFilterCount(url: URL): number {
+	const f = parseFilters(url.searchParams);
+	return (f.lensId ? 1 : 0) + (f.edgeKinds.length ? 1 : 0) + (f.docTypes.length ? 1 : 0);
+}
+
 export function buildFiltersUrl(
 	base: URL,
 	patch: Partial<{ lensId: string | null; edgeKinds: string[]; docTypes: string[] }>
@@ -144,15 +164,30 @@ export function buildCogmapUrl(base: URL, cogmapId: string): string {
 }
 
 export function buildDrillTerritoryUrl(base: URL, territoryId: string): string {
+	// A territory is always the first drill hop from the panorama.
 	return withParams(base, (p) => p.set('focus', `territory:${territoryId}`));
 }
 
 export function buildDrillNodeUrl(base: URL, nodeId: string): string {
-	return withParams(base, (p) => p.set('focus', `node:${nodeId}`));
+	// Replace a trailing node leaf (node→node drill) while KEEPING any preceding
+	// territory prefix; otherwise append to a territory leaf, or set directly
+	// from the panorama (no focus yet).
+	return withParams(base, (p) => {
+		const path = (p.get('focus') ?? '').split(',').filter(Boolean);
+		if (path[path.length - 1]?.startsWith('node:')) path.pop();
+		path.push(`node:${nodeId}`);
+		p.set('focus', path.join(','));
+	});
 }
 
 export function buildAscendUrl(base: URL): string {
-	return withParams(base, (p) => p.delete('focus'));
+	// Pop exactly one drill level (node → its territory → panorama).
+	return withParams(base, (p) => {
+		const path = (p.get('focus') ?? '').split(',').filter(Boolean);
+		path.pop();
+		if (path.length) p.set('focus', path.join(','));
+		else p.delete('focus');
+	});
 }
 
 /** Return to the membership home: clear team, cogmap, and focus. */

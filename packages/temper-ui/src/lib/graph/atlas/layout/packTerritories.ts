@@ -16,6 +16,7 @@ export interface PositionedTerritory {
 	y: number;
 	r: number;
 	salience: number | null;
+	member_count: number;
 }
 
 interface PackDatum {
@@ -53,7 +54,8 @@ export function packTerritories(
 			x: leaf.x,
 			y: leaf.y,
 			r: leaf.r,
-			salience: t.salience
+			salience: t.salience,
+			member_count: t.member_count
 		};
 	});
 }

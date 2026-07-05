@@ -1,7 +1,15 @@
 // +page.server.ts
 import type { PageServerLoad } from './$types';
 import type { GraphFilters } from '$lib/graph/atlas/nav';
-import { deriveTier, parseCogmap, parseFilters, parseFocus, parseTeam, selectedElement } from '$lib/graph/atlas/nav';
+import {
+	deriveTier,
+	parseCogmap,
+	parseFilters,
+	parseFocus,
+	parseFocusPath,
+	parseTeam,
+	selectedElement
+} from '$lib/graph/atlas/nav';
 import type { EdgeKind } from '$lib/types/generated/graph';
 import {
 	readAtlasHome,
@@ -22,6 +30,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const cogmapId = parseCogmap(url);
 	const focus = parseFocus(url.searchParams);
 	const tier = deriveTier(focus);
+	const focusPath = parseFocusPath(url);
+	const territorySeg = focusPath.find((f) => f.kind === 'territory') ?? null;
 
 	// Default filter bag for the two branches below (no team scope, so no real
 	// edge-kind/lens filtering happens yet — deferred, see Task 8 self-review notes).
@@ -42,6 +52,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			readAtlasHome(token)
 		]);
 		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
+		// Name the territory hop in the crumb — mirrors the team branch below (reuses
+		// the already-loaded slice at Tier 1; fetches the path territory's slice for
+		// its label at Tier 2).
+		const crumbTerritory = territorySeg
+			? slice && slice.region_id === territorySeg.id
+				? { id: territorySeg.id, label: slice.label }
+				: { id: territorySeg.id, label: (await readRegionSlice(token, territorySeg.id)).label }
+			: null;
 		return {
 			owner: params.owner,
 			teamId: null,
@@ -58,7 +76,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			selection: { kind: 'none' as const },
 			trail: null,
 			resourceRow: null,
-			filters: defaultFilters
+			filters: defaultFilters,
+			focusPath,
+			crumbTerritory
 		};
 	}
 
@@ -81,7 +101,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			selection: { kind: 'none' as const },
 			trail: null,
 			resourceRow: null,
-			filters: defaultFilters
+			filters: defaultFilters,
+			focusPath,
+			crumbTerritory: null
 		};
 	}
 
@@ -108,6 +130,15 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				: null;
 	const resourceRow = selection.kind === 'node' ? await readResourceRow(token, selection.id) : null;
 
+	// Name the territory hop in the crumb. Tier 1 already loaded the slice (carries
+	// label); at Tier 2 fetch the path territory's slice for its label (reuses the
+	// gated R3 read — over-fetches members, acceptable for one label).
+	const crumbTerritory = territorySeg
+		? slice && slice.region_id === territorySeg.id
+			? { id: territorySeg.id, label: slice.label }
+			: { id: territorySeg.id, label: (await readRegionSlice(token, territorySeg.id)).label }
+		: null;
+
 	return {
 		owner: params.owner,
 		teamId,
@@ -124,6 +155,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		selection,
 		trail,
 		resourceRow,
-		filters
+		filters,
+		focusPath,
+		crumbTerritory
 	};
 };

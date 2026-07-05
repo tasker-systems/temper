@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
+	import { labelAnchors } from '$lib/graph/atlas/labels';
 	import { buildDrillNodeUrl, buildEdgeSelectUrl } from '$lib/graph/atlas/nav';
 	import { isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import NodeChip from './marks/NodeChip.svelte';
@@ -19,6 +20,7 @@
 	let { subgraph, seedId, width, height, docTypes = [] }: Props = $props();
 
 	const graph = $derived(forceNeighborhood(subgraph, [seedId], { width, height }));
+	const anchors = $derived(labelAnchors(graph.nodes, seedId, 5));
 	let hoveredEdge = $state<number | null>(null);
 
 	// Drill is a drill step — PUSH history so browser Back walks the path (see nav.ts).
@@ -69,6 +71,7 @@
 		docType={n.docType}
 		home={n.home}
 		seed={n.isSeed}
+		anchored={anchors.has(n.id)}
 		dim={isDocTypeDimmed(n.docType, docTypes)}
 		onEnter={() => drill(n.id)}
 	/>

@@ -46,6 +46,10 @@ export type TerritoryKind = "region" | "context" | "cogmap";
 export type TerritoryOverview = { territories: Array<Territory>, orphan_nodes: Array<OrphanNode>, bridges: Array<Bridge>, };
 
 /**
- * R3 territory drill-in: components + top-N members (visibility-scoped).
+ * R3 territory drill-in: region label, components + top-N members (visibility-scoped).
  */
-export type TerritorySlice = { region_id: string, components: Array<Component>, members: Array<RegionMember>, };
+export type TerritorySlice = { region_id: string, 
+/**
+ * The region's human label (`kb_cogmap_regions.label`); may be null.
+ */
+label: string | null, components: Array<Component>, members: Array<RegionMember>, };
