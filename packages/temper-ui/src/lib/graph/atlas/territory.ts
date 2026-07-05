@@ -1,7 +1,7 @@
 // territory.ts
-import type { Territory } from '$lib/types/generated/graph_territory';
 
-/** A territory with no members — rendered as a de-emphasized ghost (L3). */
-export function isEmptyTerritory(t: Territory): boolean {
+/** A territory with no members — rendered as a de-emphasized ghost (L3).
+ *  Structural param so both `Territory` and `PositionedTerritory` satisfy it. */
+export function isEmptyTerritory(t: { member_count: number }): boolean {
 	return t.member_count === 0;
 }

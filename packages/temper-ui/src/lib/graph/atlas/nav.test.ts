@@ -170,6 +170,16 @@ describe('focus-as-path', () => {
 	it('drillNode sets directly when drilled from panorama', () => {
 		expect(buildDrillNodeUrl(url('?team=T'), 'N')).toBe('/graph/@me?team=T&focus=node%3AN');
 	});
+	it('drillNode replaces a trailing node leaf while KEEPING a territory prefix', () => {
+		expect(buildDrillNodeUrl(url('?team=T&focus=territory:R,node:N'), 'N2')).toBe(
+			'/graph/@me?team=T&focus=territory%3AR%2Cnode%3AN2'
+		);
+	});
+	it('drillNode replaces a bare node leaf with no prefix', () => {
+		expect(buildDrillNodeUrl(url('?team=T&focus=node:N'), 'N2')).toBe(
+			'/graph/@me?team=T&focus=node%3AN2'
+		);
+	});
 	it('drillTerritory sets the first hop', () => {
 		expect(buildDrillTerritoryUrl(url('?team=T'), 'R')).toBe('/graph/@me?team=T&focus=territory%3AR');
 	});

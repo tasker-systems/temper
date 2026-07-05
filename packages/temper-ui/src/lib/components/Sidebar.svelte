@@ -37,6 +37,16 @@
 	>
 		{collapsed ? '≡' : brand}
 	</button>
+	{#if collapsed}
+		<a
+			href="/vault/all"
+			class="block px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 text-center"
+			title="Home"
+			aria-label="Home"
+		>
+			⌂
+		</a>
+	{/if}
 	{#if !collapsed}
 		<nav class="flex-1 overflow-y-auto py-2">
 			<div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-zinc-500">

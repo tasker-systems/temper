@@ -169,13 +169,14 @@ export function buildDrillTerritoryUrl(base: URL, territoryId: string): string {
 }
 
 export function buildDrillNodeUrl(base: URL, nodeId: string): string {
-	// Append the node to the existing path when we drilled in via a territory
-	// (so the crumb + ascend keep the territory hop); otherwise drill straight.
+	// Replace a trailing node leaf (node→node drill) while KEEPING any preceding
+	// territory prefix; otherwise append to a territory leaf, or set directly
+	// from the panorama (no focus yet).
 	return withParams(base, (p) => {
 		const path = (p.get('focus') ?? '').split(',').filter(Boolean);
-		const leaf = path[path.length - 1] ?? '';
-		if (leaf.startsWith('territory:')) p.set('focus', `${path.join(',')},node:${nodeId}`);
-		else p.set('focus', `node:${nodeId}`);
+		if (path[path.length - 1]?.startsWith('node:')) path.pop();
+		path.push(`node:${nodeId}`);
+		p.set('focus', path.join(','));
 	});
 }
 

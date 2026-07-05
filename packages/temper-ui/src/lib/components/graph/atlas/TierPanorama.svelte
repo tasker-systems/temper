@@ -8,6 +8,7 @@
 	import { bridgeGeometry } from '$lib/graph/atlas/layout/bridges';
 	import { buildScopeUrl, buildDrillTerritoryUrl, buildDrillNodeUrl } from '$lib/graph/atlas/nav';
 	import { TERRITORY_TINTS, isDocTypeDimmed } from '$lib/graph/atlas/palette';
+	import { isEmptyTerritory } from '$lib/graph/atlas/territory';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 	import TeamZoneMark from './marks/TeamZoneMark.svelte';
 	import OrphanNodeMark from './marks/OrphanNodeMark.svelte';
@@ -79,7 +80,7 @@
 			kind={t.kind}
 			label={t.label}
 			onEnter={t.kind === 'region' ? () => drillTerritory(t.id) : undefined}
-			ghost={t.member_count === 0}
+			ghost={isEmptyTerritory(t)}
 		/>
 	{/each}
 

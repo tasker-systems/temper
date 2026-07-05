@@ -52,6 +52,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			readAtlasHome(token)
 		]);
 		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
+		// Name the territory hop in the crumb — mirrors the team branch below (reuses
+		// the already-loaded slice at Tier 1; fetches the path territory's slice for
+		// its label at Tier 2).
+		const crumbTerritory = territorySeg
+			? slice && slice.region_id === territorySeg.id
+				? { id: territorySeg.id, label: slice.label }
+				: { id: territorySeg.id, label: (await readRegionSlice(token, territorySeg.id)).label }
+			: null;
 		return {
 			owner: params.owner,
 			teamId: null,
@@ -70,7 +78,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			resourceRow: null,
 			filters: defaultFilters,
 			focusPath,
-			crumbTerritory: null
+			crumbTerritory
 		};
 	}
 
