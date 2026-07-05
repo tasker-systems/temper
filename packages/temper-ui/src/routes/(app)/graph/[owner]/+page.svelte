@@ -23,6 +23,14 @@
 	// thin/empty panel for cogmap-scoped nodes (no subgraph, B3) and empty neighborhoods
 	// (B4) — the canvas carries the explanatory message in those cases instead.
 	const hasPanelData = $derived(subgraph !== null && subgraph.nodes.length > 0);
+	// Show the loading veil only for real view-loads — a scope or focus change that
+	// remounts the canvas — not for ephemeral replaceState navigations (filter
+	// toggle, edge select, panel close) which keep the same team/cogmap/focus. Those
+	// still run `load`, so an unconditional $navigating veil would flash on every
+	// minor interaction.
+	const scopeKey = (u: URL) =>
+		`${u.searchParams.get('team') ?? u.searchParams.get('cogmap') ?? 'home'}|${u.searchParams.get('focus') ?? ''}`;
+	const isViewLoad = $derived(!!$navigating?.to && scopeKey($navigating.to.url) !== scopeKey($page.url));
 </script>
 
 <div class="atlas-page">
@@ -40,7 +48,7 @@
 		<AtlasLegend />
 	</aside>
 	<div class="canvas-wrap">
-		{#if $navigating}
+		{#if isViewLoad}
 			<div class="loading-veil" role="status" aria-live="polite">Loading…</div>
 		{/if}
 		{#key viewKey}

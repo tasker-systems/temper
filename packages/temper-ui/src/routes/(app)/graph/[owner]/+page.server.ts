@@ -31,12 +31,16 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// cogmap's own panorama directly, no team-scope fetch involved. Checked before
 	// the `!teamId` home branch, since `buildCogmapUrl` always clears `team`.
 	if (cogmapId) {
-		const territories = tier === 0 ? await readCogmapPanorama(token, cogmapId) : null;
-		const slice = tier === 1 && focus.kind === 'territory' ? await readRegionSlice(token, focus.id) : null;
 		// Resolve the cogmap's display name for the breadcrumb (B2). The panorama read
 		// carries no self-name, so look it up in the membership home (the same list the
-		// door was entered from). Falls back to a generic label if not visible there.
-		const home = await readAtlasHome(token);
+		// door was entered from). Falls back to a generic label if not visible there
+		// (e.g. a public/system cogmap outside your membership — refined in Beat 2).
+		// The home read is independent of the tier read, so run them concurrently.
+		const [territories, slice, home] = await Promise.all([
+			tier === 0 ? readCogmapPanorama(token, cogmapId) : Promise.resolve(null),
+			tier === 1 && focus.kind === 'territory' ? readRegionSlice(token, focus.id) : Promise.resolve(null),
+			readAtlasHome(token)
+		]);
 		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
 		return {
 			owner: params.owner,
