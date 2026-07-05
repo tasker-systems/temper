@@ -14,6 +14,7 @@ import {
 	parseCogmap,
 	parseFilters,
 	parseFocus,
+	parseFocusPath,
 	parseSelection,
 	parseTeam,
 	selectedElement
@@ -136,5 +137,38 @@ describe('filters', () => {
 			'/graph/@me?team=t1&edge_kinds=derived'
 		);
 		expect(buildFiltersUrl(url('?team=t1&edge_kinds=derived'), { edgeKinds: [] })).toBe('/graph/@me?team=t1');
+	});
+});
+
+describe('focus-as-path', () => {
+	it('parses an empty path', () => {
+		expect(parseFocusPath(url(''))).toEqual([]);
+	});
+	it('parses a territory→node path', () => {
+		expect(parseFocusPath(url('?focus=territory:R,node:N'))).toEqual([
+			{ kind: 'territory', id: 'R' },
+			{ kind: 'node', id: 'N' }
+		]);
+	});
+	it('parseFocus returns the leaf segment', () => {
+		expect(parseFocus(url('?focus=territory:R,node:N').searchParams)).toEqual({ kind: 'node', id: 'N' });
+		expect(parseFocus(url('?focus=territory:R').searchParams)).toEqual({ kind: 'territory', id: 'R' });
+	});
+	it('drillNode appends when a territory leaf is present', () => {
+		expect(buildDrillNodeUrl(url('?team=T&focus=territory:R'), 'N')).toBe(
+			'/graph/@me?team=T&focus=territory%3AR%2Cnode%3AN'
+		);
+	});
+	it('drillNode sets directly when drilled from panorama', () => {
+		expect(buildDrillNodeUrl(url('?team=T'), 'N')).toBe('/graph/@me?team=T&focus=node%3AN');
+	});
+	it('drillTerritory sets the first hop', () => {
+		expect(buildDrillTerritoryUrl(url('?team=T'), 'R')).toBe('/graph/@me?team=T&focus=territory%3AR');
+	});
+	it('ascend pops one segment', () => {
+		expect(buildAscendUrl(url('?team=T&focus=territory:R,node:N'))).toBe(
+			'/graph/@me?team=T&focus=territory%3AR'
+		);
+		expect(buildAscendUrl(url('?team=T&focus=territory:R'))).toBe('/graph/@me?team=T');
 	});
 });
