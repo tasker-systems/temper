@@ -26,7 +26,7 @@ pub use commands::{
     AdvanceStewardWatermark, AssertRelationship, CloseInvocation, CreateCognitiveMap,
     CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
     MoveSpec, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
-    SearchResources, SetFacet, ShowResource, UpdateResource,
+    SearchResources, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
 };
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};

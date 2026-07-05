@@ -22,7 +22,7 @@ use super::commands::{
     AdvanceStewardWatermark, AssertRelationship, CloseInvocation, CreateCognitiveMap,
     CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
     OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
-    SearchResources, SetFacet, ShowResource, UpdateResource,
+    SearchResources, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -150,6 +150,13 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: AdvanceStewardWatermark,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError>;
+
+    /// Run one deterministic steward-dispatch pass (reap → sweep → enqueue → claim) and return the
+    /// claimed jobs for fan-out. See [`StewardDispatchTick`].
+    async fn steward_dispatch_tick(
+        &self,
+        cmd: StewardDispatchTick,
+    ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError>;
 
     // ── cron-driven region materialize-on-threshold (T4b) ──
     // Re-materialize a cogmap's regions when its formation delta since the last materialize clears

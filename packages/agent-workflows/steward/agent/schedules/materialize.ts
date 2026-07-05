@@ -20,38 +20,52 @@ import { defineSchedule } from "eve/schedules";
  * the MCP connection uses), else the already-OAuth-obtained `TEMPER_TOKEN` that
  * drives `eve dev`. No provider secret ever lives in code.
  *
+ * Fan-out (goal 019f3220): materialization now runs across ALL team-joined cogmaps, not one
+ * env-pinned map. It enumerates candidates via `GET /api/steward/candidates` (the readable
+ * team-joined maps) and POSTs a self-gating materialize per map. NO lease/queue is needed —
+ * re-materialization is deterministic and idempotent (worst case: a little wasted compute), and the
+ * server no-ops below threshold. The env pin `TEMPER_SELF_COGMAP_ID` is GONE.
+ *
  * Targets are env-driven, never hardcoded:
  * - `TEMPER_API_URL` — the temper REST base (e.g. https://temperkb.io). Distinct
  *   from `TEMPER_MCP_URL`, which is the MCP endpoint the connection speaks to.
- * - `TEMPER_SELF_COGMAP_ID` — the team self-cognition map minted at genesis
- *   (`temper cogmap create`). Set once the map exists on the target instance.
  */
 export default defineSchedule({
   cron: "0 * * * *", // hourly, UTC; the server gates on the materialize threshold
   async run({ waitUntil }) {
-    // waitUntil keeps the cron task alive until the POST settles (per eve docs).
+    // waitUntil keeps the cron task alive until the POSTs settle (per eve docs).
     waitUntil(materializeTick());
   },
 });
 
 async function materializeTick(): Promise<void> {
   const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
-  const cogmapId = requireEnv("TEMPER_SELF_COGMAP_ID");
   const token = await temperToken();
 
-  const res = await fetch(`${apiUrl}/api/cognitive-maps/${cogmapId}/materialize`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
-    // Empty body → the server applies its DEFAULT_MATERIALIZE_THRESHOLD.
-    body: "{}",
+  const list = await fetch(`${apiUrl}/api/steward/candidates`, {
+    headers: { authorization: `Bearer ${token}` },
   });
-
-  if (!res.ok) {
-    throw new Error(`materialize POST failed: ${res.status} ${await res.text()}`);
+  if (!list.ok) {
+    throw new Error(`candidates fetch failed: ${list.status} ${await list.text()}`);
   }
+  const ids = (await list.json()) as string[];
+
+  await Promise.all(
+    ids.map(async (id) => {
+      const res = await fetch(`${apiUrl}/api/cognitive-maps/${id}/materialize`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        // Empty body → the server applies its DEFAULT_MATERIALIZE_THRESHOLD (self-gating no-op below).
+        body: "{}",
+      });
+      if (!res.ok) {
+        throw new Error(`materialize ${id} POST failed: ${res.status} ${await res.text()}`);
+      }
+    }),
+  );
 }
 
 async function temperToken(): Promise<string> {

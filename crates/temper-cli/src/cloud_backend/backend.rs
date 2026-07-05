@@ -61,7 +61,8 @@ mod embed_impl {
         AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
         CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
         ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
-        RetypeRelationship, ReweightRelationship, SearchResources, ShowResource, UpdateResource,
+        RetypeRelationship, ReweightRelationship, SearchResources, ShowResource,
+        StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::ResourceRow;
@@ -272,6 +273,16 @@ mod embed_impl {
             ))
         }
 
+        async fn steward_dispatch_tick(
+            &self,
+            _cmd: StewardDispatchTick,
+        ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::steward_dispatch_tick not wired until cutover".to_string(),
+            ))
+        }
+
         async fn materialize_on_threshold(
             &self,
             _cmd: MaterializeOnThreshold,
@@ -359,7 +370,7 @@ mod non_embed_impl {
         CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
         MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
         RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
-        UpdateResource,
+        StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::types::resource::ResourceRow;
 
@@ -513,6 +524,16 @@ mod non_embed_impl {
             &self,
             _cmd: AdvanceStewardWatermark,
         ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn steward_dispatch_tick(
+            &self,
+            _cmd: StewardDispatchTick,
+        ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError>
+        {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

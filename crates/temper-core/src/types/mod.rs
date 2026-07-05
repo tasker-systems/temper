@@ -48,6 +48,7 @@ pub mod team;
 pub mod upload;
 pub mod vault;
 pub mod vault_config;
+pub mod workflow_job;
 
 pub use access_gate::{
     Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,

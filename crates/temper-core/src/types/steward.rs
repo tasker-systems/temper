@@ -13,6 +13,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::types::workflow_job::ClaimedJob;
+
 /// Default ingest threshold when a caller omits one: the number of newly-created resources in the
 /// team's contexts that must accumulate before the steward should run. A calibratable starting
 /// point (mirrors the "tuning constants live in one place" discipline); the Eve cron may override
@@ -83,4 +85,45 @@ pub struct AdvanceWatermarkAck {
     pub cogmap_id: Uuid,
     /// The watermark it now holds.
     pub watermark: Uuid,
+}
+
+/// One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark.
+/// Ordered most-drifted-first by the sweep (`steward_drift_sweep`).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "steward.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftSweepRow {
+    /// The team-joined cogmap that drifted.
+    pub cogmap_id: Uuid,
+    /// The watermark the delta was computed against; `None` when the steward has never run for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<Uuid>,
+    /// Newly-created resources in the team's contexts since the watermark (the gated ingest signal).
+    pub new_resources: i64,
+    /// All events anchored to the team's contexts since the watermark (total activity).
+    pub new_events: i64,
+}
+
+/// Request body for `POST /api/steward/dispatch`. Both optional — server defaults apply
+/// (`DEFAULT_STEWARD_INGEST_THRESHOLD`, `DEFAULT_STEWARD_DISPATCH_CAP`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct DispatchTickRequest {
+    /// Ingest threshold gating which maps count as drifted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<i64>,
+    /// Max maps to claim (and thus sessions to fan out) this tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<i64>,
+}
+
+/// Response for a dispatch tick — the jobs claimed for fan-out (one isolated session per entry,
+/// each tending a single cogmap).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "steward.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchTickResponse {
+    pub claimed: Vec<ClaimedJob>,
 }
