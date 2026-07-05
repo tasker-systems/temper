@@ -612,18 +612,20 @@ pub async fn territory_slice(
     profile_id: ProfileId,
     region_id: Uuid,
 ) -> ApiResult<TerritorySlice> {
-    let readable: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM kb_cogmap_regions reg \
+    // The readability gate and the label come from one query: deny-as-absence
+    // (region must exist, be unfolded, and be cogmap-readable). Selecting the
+    // label here adds no new visibility surface — it is strictly less sensitive
+    // than the member titles returned below.
+    let label: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT reg.label FROM kb_cogmap_regions reg \
          WHERE reg.id = $1 AND NOT reg.is_folded \
-           AND cogmap_readable_by_profile($2, reg.cogmap_id))",
+           AND cogmap_readable_by_profile($2, reg.cogmap_id)",
     )
     .bind(region_id)
     .bind(profile_id.as_uuid())
-    .fetch_one(pool)
-    .await?;
-    if !readable {
-        return Err(ApiError::NotFound);
-    }
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
 
     let components: Vec<Component> = sqlx::query_as::<_, (Uuid, i32)>(
         "SELECT component_id, member_count FROM graph_region_components($1, $2)",
@@ -657,6 +659,7 @@ pub async fn territory_slice(
 
     Ok(TerritorySlice {
         region_id,
+        label,
         components,
         members,
     })

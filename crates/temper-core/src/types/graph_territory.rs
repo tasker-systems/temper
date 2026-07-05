@@ -106,7 +106,7 @@ pub struct Component {
     pub member_count: i32,
 }
 
-/// R3 territory drill-in: components + top-N members (visibility-scoped).
+/// R3 territory drill-in: region label, components + top-N members (visibility-scoped).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,6 +114,8 @@ pub struct Component {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct TerritorySlice {
     pub region_id: Uuid,
+    /// The region's human label (`kb_cogmap_regions.label`); may be null.
+    pub label: Option<String>,
     pub components: Vec<Component>,
     pub members: Vec<RegionMember>,
 }
