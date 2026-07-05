@@ -26,7 +26,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <g
-	class="node-chip"
+	class="node-chip atlas-focusable"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
 	aria-label={title}
@@ -47,4 +47,5 @@
 	{#if showLabel}
 		<text x={x} y={y + r + 13} text-anchor="middle" fill="#c7d0da" font-size="10">{truncateLabel(title, 22)}</text>
 	{/if}
+	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
 </g>

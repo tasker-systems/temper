@@ -24,7 +24,7 @@
 </script>
 
 <g
-	class="member-chip"
+	class="member-chip atlas-focusable"
 	role="button"
 	tabindex="0"
 	aria-label={title}
@@ -39,4 +39,5 @@
 		<circle cx={x} cy={y} {r} fill={CANVAS_BG} stroke={color} stroke-width="2.2" />
 	{/if}
 	<text x={x} y={y + r + 11} text-anchor="middle" fill="#c7d0da" font-size={fontSize}>{label}</text>
+	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
 </g>

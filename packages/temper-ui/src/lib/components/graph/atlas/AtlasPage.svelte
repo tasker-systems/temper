@@ -18,11 +18,17 @@
 	);
 	const selection = $derived(selectedElement(data.focus, $page.url));
 	const subgraph = $derived(data.neighborhood ?? null);
-	// The TrailRail derives node/edge detail from the loaded subgraph, so it only has
-	// real content when a subgraph with nodes is present. Gating on this suppresses the
-	// thin/empty panel for cogmap-scoped nodes (no subgraph, B3) and empty neighborhoods
-	// (B4) — the canvas carries the explanatory message in those cases instead.
-	const hasPanelData = $derived(subgraph !== null && subgraph.nodes.length > 0);
+	// The TrailRail derives node/edge detail from the loaded subgraph, so an edge
+	// selection and neighbor rendering need a populated subgraph. A resource LEAF is
+	// the exception: even with no mapped neighbors (empty subgraph) it opens a working
+	// rail off its resourceRow (meta) + trail (history), which the server loads for any
+	// node selection. So the rail shows when the subgraph has nodes OR a selected node
+	// carries a resourceRow. Still suppressed: no selection, and cogmap-scoped nodes
+	// (B3 — no resourceRow there), where the canvas carries the explanatory message.
+	const hasPanelData = $derived(
+		(subgraph !== null && subgraph.nodes.length > 0) ||
+			(selection.kind === 'node' && data.resourceRow !== null)
+	);
 	const seedTitle = $derived(
 		data.focus.kind === 'node' && subgraph
 			? (subgraph.nodes.find((n) => n.id === (data.focus as { id: string }).id)?.title ?? null)

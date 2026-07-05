@@ -89,6 +89,7 @@
 {#each g.teams as t (t.id)}
 	{@const team = teamById.get(t.id)}
 	<g
+		class="atlas-focusable"
 		role="button"
 		tabindex="0"
 		aria-label={t.name}
@@ -105,12 +106,14 @@
 				{team.resource_count} res · {team.cogmap_count} maps
 			</text>
 		{/if}
+		<rect class="focus-ring" x={t.x - 93} y={t.y - 25} width="186" height="52" rx="10" stroke-width="2" />
 	</g>
 {/each}
 
 {#each g.cogmaps as c (c.id)}
 	{@const cogmap = cogmapById.get(c.id)}
 	<g
+		class="atlas-focusable"
 		role="button"
 		tabindex="0"
 		aria-label={c.name}
@@ -127,5 +130,6 @@
 				{cogmap.region_count} regions · {cogmap.facet_count} facets
 			</text>
 		{/if}
+		<rect class="focus-ring" x={c.x - 93} y={c.y - 25} width="186" height="52" rx="10" stroke-width="2" />
 	</g>
 {/each}

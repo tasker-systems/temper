@@ -459,3 +459,24 @@
 .ed-footnote a:hover {
   color: var(--color-quiet-fg);
 }
+
+/* ─── Atlas canvas focus ring ─────────────────────────────────────
+   Interactive canvas marks (chips, territory hulls, team zones, node
+   dots, edges, home doors) are focusable <g> groups. A CSS `outline`
+   on an SVG <g> is browser-inconsistent, so each mark draws an explicit
+   `.focus-ring` child shape and supplies its own geometry (+ stroke-width).
+   This block is the single source of truth for the ring's colour and for
+   showing it ONLY on keyboard focus, so every tier mark reads the same. */
+.atlas-focusable {
+  outline: none;
+}
+.atlas-focusable .focus-ring {
+  fill: none;
+  stroke: #8ecbff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+.atlas-focusable:focus-visible .focus-ring {
+  opacity: 1;
+}

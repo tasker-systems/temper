@@ -20,7 +20,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <g
-	class="orphan"
+	class="orphan atlas-focusable"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
 	aria-label={title}
@@ -34,4 +34,5 @@
 	{#if hovered}
 		<text x={x + r + 4} y={y + 3} fill="#e6edf5" font-size="10">{title}</text>
 	{/if}
+	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
 </g>
