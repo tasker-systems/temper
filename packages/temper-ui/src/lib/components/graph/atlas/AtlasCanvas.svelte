@@ -4,7 +4,7 @@
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import type { HomeCogmap, HomeTeam } from '$lib/types/generated/graph_home';
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
-	import type { Focus } from '$lib/graph/atlas/nav';
+	import type { Focus, GraphFilters } from '$lib/graph/atlas/nav';
 	import { attachCamera, type Camera } from '$lib/graph/atlas/camera';
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
 	import TierHome from './TierHome.svelte';
@@ -23,8 +23,9 @@
 		teams: HomeTeam[] | null;
 		cogmaps: HomeCogmap[] | null;
 		zones: TeamZone[];
+		filters: GraphFilters;
 	}
-	let { teamId, cogmapId, tier, focus, territories, slice, neighborhood, teams, cogmaps, zones }: Props =
+	let { teamId, cogmapId, tier, focus, territories, slice, neighborhood, teams, cogmaps, zones, filters }: Props =
 		$props();
 
 	const MIN_ZOOM = 0.3;
@@ -55,11 +56,11 @@
 			{#if !teamId && !cogmapId && teams}
 				<TierHome {teams} cogmaps={cogmaps ?? []} width={W} height={H} />
 			{:else if tier === 0 && territories}
-				<TierPanorama overview={territories} {zones} width={W} height={H} />
+				<TierPanorama overview={territories} {zones} width={W} height={H} docTypes={filters.docTypes} />
 			{:else if tier === 1 && slice}
 				<TierTerritory {slice} width={W} height={H} />
 			{:else if tier === 2 && neighborhood}
-				<TierNeighborhood subgraph={neighborhood} {seedId} width={W} height={H} />
+				<TierNeighborhood subgraph={neighborhood} {seedId} width={W} height={H} docTypes={filters.docTypes} />
 			{:else}
 				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14">No data for this view.</text>
 			{/if}

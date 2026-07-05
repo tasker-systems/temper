@@ -9,15 +9,26 @@
 		y2: number;
 		edge: AtlasEdge;
 		label?: boolean;
+		onSelect?: () => void;
 	}
-	let { x1, y1, x2, y2, edge, label = false }: Props = $props();
+	let { x1, y1, x2, y2, edge, label = false, onSelect }: Props = $props();
 
 	const s = $derived(edgeStyle(edge));
 	const midX = $derived((x1 + x2) / 2);
 	const midY = $derived((y1 + y2) / 2);
 </script>
 
-<g class="edge">
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<g
+	class="edge"
+	role={onSelect ? 'button' : undefined}
+	tabindex={onSelect ? 0 : undefined}
+	aria-label={edge.label ?? edge.edge_kind}
+	onclick={onSelect}
+	onkeydown={(e) => e.key === 'Enter' && onSelect?.()}
+	style={onSelect ? 'cursor:pointer' : undefined}
+>
+	<line {x1} {y1} {x2} {y2} stroke="transparent" stroke-width="10" />
 	<line
 		{x1}
 		{y1}

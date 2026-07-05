@@ -16,6 +16,10 @@ export type Focus =
 export interface GraphFilters {
 	/** Optional lens id driving Tier-0 salience sizing (R2 `?lens_id`). */
 	lensId: string | null;
+	/** `?edge_kinds` CSV — restrict rendered edges to these kinds (ScopeBar, Task 8). */
+	edgeKinds: string[];
+	/** `?doc_types` CSV — restrict rendered nodes to these doc types (ScopeBar, Task 8). */
+	docTypes: string[];
 }
 
 export function parseTeam(params: URLSearchParams): string | null {
@@ -35,6 +39,42 @@ export function parseFocus(params: URLSearchParams): Focus {
 	return { kind: 'none' };
 }
 
+export type Selection =
+	| { kind: 'none' }
+	| { kind: 'edge'; id: string };
+
+/** Orthogonal panel selection for edges. `?focus` still owns scope/camera/seed;
+ *  `?sel=edge:<id>` selects an edge for the TrailRail panel without re-seeding. */
+export function parseSelection(url: URL): Selection {
+	const raw = url.searchParams.get('sel');
+	if (!raw) return { kind: 'none' };
+	const [kind, id] = raw.split(':', 2);
+	if (id && kind === 'edge') return { kind: 'edge', id };
+	return { kind: 'none' };
+}
+
+export function buildEdgeSelectUrl(base: URL, edgeId: string): string {
+	return withParams(base, (p) => p.set('sel', `edge:${edgeId}`));
+}
+
+export function clearSelectionUrl(base: URL): string {
+	return withParams(base, (p) => p.delete('sel'));
+}
+
+/** The element whose detail panel is shown: an explicitly-selected edge wins,
+ *  else the focused node, else nothing. */
+export type SelectedElement =
+	| { kind: 'none' }
+	| { kind: 'node'; id: string }
+	| { kind: 'edge'; id: string };
+
+export function selectedElement(focus: Focus, url: URL): SelectedElement {
+	const sel = parseSelection(url);
+	if (sel.kind === 'edge') return sel;
+	if (focus.kind === 'node') return { kind: 'node', id: focus.id };
+	return { kind: 'none' };
+}
+
 export function deriveTier(focus: Focus): Tier {
 	switch (focus.kind) {
 		case 'territory':
@@ -47,7 +87,30 @@ export function deriveTier(focus: Focus): Tier {
 }
 
 export function parseFilters(params: URLSearchParams): GraphFilters {
-	return { lensId: params.get('lens_id') };
+	const csv = (k: string) => {
+		const v = params.get(k);
+		return v ? v.split(',').filter(Boolean) : [];
+	};
+	return { lensId: params.get('lens_id'), edgeKinds: csv('edge_kinds'), docTypes: csv('doc_types') };
+}
+
+export function buildFiltersUrl(
+	base: URL,
+	patch: Partial<{ lensId: string | null; edgeKinds: string[]; docTypes: string[] }>
+): string {
+	return withParams(base, (p) => {
+		if ('lensId' in patch) {
+			if (patch.lensId) p.set('lens_id', patch.lensId);
+			else p.delete('lens_id');
+		}
+		const setCsv = (k: string, v?: string[]) => {
+			if (!v) return;
+			if (v.length) p.set(k, v.join(','));
+			else p.delete(k);
+		};
+		setCsv('edge_kinds', patch.edgeKinds);
+		setCsv('doc_types', patch.docTypes);
+	});
 }
 
 function withParams(base: URL, mutate: (p: URLSearchParams) => void): string {

@@ -6,7 +6,7 @@ import type { Polarity } from "./graph";
  * A directed edge on the Atlas canvas. `label` is nullable (matches
  * `kb_edges.label`), `weight` drives stroke thickness in the Atlas grammar.
  */
-export type AtlasEdge = { source: string, target: string, edge_kind: EdgeKind, polarity: Polarity, label: string | null, weight: number, };
+export type AtlasEdge = { id: string, source: string, target: string, edge_kind: EdgeKind, polarity: Polarity, label: string | null, weight: number, };
 
 /**
  * A node on the Atlas canvas. `doc_type` is the raw, optional `kb_properties`
@@ -15,6 +15,14 @@ export type AtlasEdge = { source: string, target: string, edge_kind: EdgeKind, p
  * is region-derived and may be `None` in the neighborhood tier.
  */
 export type AtlasNode = { id: string, title: string, doc_type: string | null, home: NodeHome, degree: number, salience: number | null, };
+
+/**
+ * A team-scoped search hit on the Atlas canvas. `node_id` is `kb_resources.id`
+ * (identical to `AtlasNode.id`, so the UI can drill straight to it). Scores are
+ * the `unified_search` blend, inherited verbatim. `region_id` is a best-affinity
+ * territory hint (may be `None`); the camera jump uses `node_id` alone.
+ */
+export type AtlasSearchHit = { node_id: string, title: string, doc_type: string | null, home: NodeHome, region_id: string | null, combined_score: number, fts_score: number, vector_score: number, graph_score: number, };
 
 /**
  * The response body for an R4 neighborhood slice.

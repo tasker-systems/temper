@@ -11,6 +11,7 @@ import {
 	docTypeHue,
 	edgeStyle,
 	isAuthored,
+	isDocTypeDimmed,
 	nodeMark,
 	paletteStyleVars,
 	salienceOpacity
@@ -66,6 +67,22 @@ describe('salienceOpacity', () => {
 	});
 });
 
+describe('isDocTypeDimmed', () => {
+	it('never dims when the filter set is empty', () => {
+		expect(isDocTypeDimmed('concept', [])).toBe(false);
+		expect(isDocTypeDimmed(null, [])).toBe(false);
+	});
+	it('keeps matching doc-types at full opacity', () => {
+		expect(isDocTypeDimmed('concept', ['concept', 'task'])).toBe(false);
+	});
+	it('dims non-matching doc-types', () => {
+		expect(isDocTypeDimmed('fact', ['concept', 'task'])).toBe(true);
+	});
+	it('dims a null doc-type once any filter is active', () => {
+		expect(isDocTypeDimmed(null, ['concept'])).toBe(true);
+	});
+});
+
 describe('paletteStyleVars', () => {
 	it('emits a CSS custom-property string for every doc-type', () => {
 		const s = paletteStyleVars();
@@ -75,6 +92,7 @@ describe('paletteStyleVars', () => {
 });
 
 const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({
+	id: 'e',
 	source: 's',
 	target: 't',
 	edge_kind: 'contains',

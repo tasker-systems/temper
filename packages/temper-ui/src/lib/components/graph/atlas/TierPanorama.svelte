@@ -6,7 +6,7 @@
 	import { packTerritories } from '$lib/graph/atlas/layout/packTerritories';
 	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
 	import { buildScopeUrl, buildDrillTerritoryUrl, buildDrillNodeUrl } from '$lib/graph/atlas/nav';
-	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
+	import { TERRITORY_TINTS, isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 	import TeamZoneMark from './marks/TeamZoneMark.svelte';
 	import OrphanNodeMark from './marks/OrphanNodeMark.svelte';
@@ -16,8 +16,10 @@
 		zones: TeamZone[];
 		width: number;
 		height: number;
+		/** Doc-types to keep at full opacity; empty = no dimming (Task 8, visual-only). */
+		docTypes?: string[];
 	}
-	let { overview, zones, width, height }: Props = $props();
+	let { overview, zones, width, height, docTypes = [] }: Props = $props();
 
 	const ZONE_BAND = 120;
 	const ZONE_W = 170;
@@ -76,7 +78,15 @@
 				<circle cx={cm.x} cy={cm.y} r={cm.r} fill={TERRITORY_TINTS.cogmap} fill-opacity="0.06" stroke={TERRITORY_TINTS.cogmap} stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4" />
 				<text x={cm.x} y={cm.y - cm.r - 6} text-anchor="middle" fill={TERRITORY_TINTS.cogmap} font-size="11" font-weight="600" letter-spacing="1" style="text-transform:uppercase">{cm.label}</text>
 				{#each cm.facets as f (f.id)}
-					<OrphanNodeMark x={f.x} y={f.y} r={Math.min(7, f.r)} title={f.title} docType={f.docType} onEnter={() => drillNode(f.id)} />
+					<OrphanNodeMark
+						x={f.x}
+						y={f.y}
+						r={Math.min(7, f.r)}
+						title={f.title}
+						docType={f.docType}
+						dim={isDocTypeDimmed(f.docType, docTypes)}
+						onEnter={() => drillNode(f.id)}
+					/>
 				{/each}
 			</g>
 		{/each}

@@ -6,12 +6,13 @@
  * the async wrappers are thin pass-throughs.
  */
 import { apiGet, apiPost } from '$lib/server/api';
-import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
+import type { AtlasSearchHit, AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
 import type { EventTrail, ElementKind } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 import type { TeamRow } from '$lib/types/generated/team';
 import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
+import type { ResourceRow } from '$lib/types/generated/resource';
 
 export const atlasHomePath = (): string => '/api/graph/home';
 
@@ -33,6 +34,11 @@ export const trailPath = (kind: ElementKind, id: string): string =>
 	`/api/graph/elements/${kind}/${id}/trail`;
 
 export const teamsListPath = (): string => `/api/teams`;
+
+export const resourceRowPath = (id: string): string => `/api/resources/${id}`;
+
+export const atlasSearchPath = (teamId: string, q: string, limit = 15): string =>
+	`/api/teams/${teamId}/graph/search?q=${encodeURIComponent(q)}&limit=${limit}`;
 
 export const readAtlasHome = (token: string): Promise<AtlasHome> =>
 	apiGet<AtlasHome>(atlasHomePath(), token);
@@ -66,3 +72,9 @@ export const readTrail = (token: string, kind: ElementKind, id: string): Promise
 
 export const listTeams = (token: string): Promise<TeamRow[]> =>
 	apiGet<TeamRow[]>(teamsListPath(), token);
+
+export const readResourceRow = (token: string, id: string): Promise<ResourceRow> =>
+	apiGet<ResourceRow>(resourceRowPath(id), token);
+
+export const readAtlasSearch = (token: string, teamId: string, q: string): Promise<AtlasSearchHit[]> =>
+	apiGet<AtlasSearchHit[]>(atlasSearchPath(teamId, q), token);
