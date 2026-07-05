@@ -2,8 +2,8 @@
 	import type { PageData } from './$types';
 	import AtlasCanvas from '$lib/components/graph/atlas/AtlasCanvas.svelte';
 	import AtlasLegend from '$lib/components/graph/atlas/AtlasLegend.svelte';
-	import ScopeBar from '$lib/components/graph/atlas/ScopeBar.svelte';
-	import CogmapCrumb from '$lib/components/graph/atlas/CogmapCrumb.svelte';
+	import AtlasCrumb from '$lib/components/graph/atlas/AtlasCrumb.svelte';
+	import FilterPopover from '$lib/components/graph/atlas/FilterPopover.svelte';
 	import SearchAccelerator from '$lib/components/graph/atlas/SearchAccelerator.svelte';
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
 	import { selectedElement } from '$lib/graph/atlas/nav';
@@ -23,6 +23,11 @@
 	// thin/empty panel for cogmap-scoped nodes (no subgraph, B3) and empty neighborhoods
 	// (B4) — the canvas carries the explanatory message in those cases instead.
 	const hasPanelData = $derived(subgraph !== null && subgraph.nodes.length > 0);
+	const seedTitle = $derived(
+		data.focus.kind === 'node' && subgraph
+			? (subgraph.nodes.find((n) => n.id === (data.focus as { id: string }).id)?.title ?? null)
+			: null
+	);
 	// Show the loading veil only for real view-loads — a scope or focus change that
 	// remounts the canvas — not for ephemeral replaceState navigations (filter
 	// toggle, edge select, panel close) which keep the same team/cogmap/focus. Those
@@ -34,19 +39,26 @@
 </script>
 
 <div class="atlas-page">
-	<aside class="dock">
-		{#if data.teamId}
-			<SearchAccelerator teamId={data.teamId} />
-		{/if}
-		{#if data.scope}
-			<ScopeBar scope={data.scope} filters={data.filters} />
-		{:else if data.cogmapId}
-			<CogmapCrumb name={data.cogmapName ?? 'Cognitive map'} />
-		{:else}
-			<nav class="scope-bar home">Atlas · your teams</nav>
-		{/if}
-		<AtlasLegend />
-	</aside>
+	<div class="top-bar">
+		<AtlasCrumb
+			scope={data.scope}
+			cogmapName={data.cogmapName}
+			focusPath={data.focusPath}
+			crumbTerritory={data.crumbTerritory}
+			{seedTitle}
+			teamId={data.teamId}
+			cogmapId={data.cogmapId}
+		/>
+		<div class="top-right">
+			{#if data.scope}
+				<FilterPopover filters={data.filters} />
+			{/if}
+			{#if data.teamId}
+				<SearchAccelerator teamId={data.teamId} />
+			{/if}
+		</div>
+	</div>
+
 	<div class="canvas-wrap">
 		{#if isViewLoad}
 			<div class="loading-veil" role="status" aria-live="polite">Loading…</div>
@@ -66,26 +78,54 @@
 				filters={data.filters}
 			/>
 		{/key}
+		{#if selection.kind !== 'none' && hasPanelData}
+			<TrailRail {selection} {subgraph} trail={data.trail} resourceRow={data.resourceRow} />
+		{/if}
 	</div>
-	{#if selection.kind !== 'none' && hasPanelData}
-		<TrailRail {selection} {subgraph} trail={data.trail} resourceRow={data.resourceRow} />
-	{/if}
+
+	<div class="bottom-bar"><AtlasLegend /></div>
 </div>
 
 <style>
 	.atlas-page {
 		display: grid;
-		grid-template-columns: 232px 1fr auto;
+		grid-template-rows: auto 1fr auto;
 		height: 100%;
 		min-height: 0;
 	}
-	.dock {
-		border-right: 1px solid rgba(255, 255, 255, 0.06);
-		overflow-y: auto;
+	.top-bar {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 8px 14px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		min-width: 0;
+	}
+	.top-right {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		gap: 10px;
 	}
 	.canvas-wrap {
 		position: relative;
 		min-width: 0;
+		min-height: 0;
+	}
+	/* TrailRail's own stylesheet has no `position` — it previously relied on the old
+	   3-column grid's `auto` column to sit at the right. Now that it's nested inside
+	   `.canvas-wrap`, pin it as an absolutely-positioned right rail so it overlays the
+	   canvas instead of stacking below it in normal flow. */
+	.canvas-wrap > :global(.trail-rail) {
+		position: absolute;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 3;
+	}
+	.bottom-bar {
+		border-top: 1px solid rgba(255, 255, 255, 0.06);
+		overflow-x: auto;
 	}
 	.loading-veil {
 		position: absolute;
@@ -101,10 +141,5 @@
 		font-size: 12px;
 		letter-spacing: 0.04em;
 		pointer-events: none;
-	}
-	.scope-bar.home {
-		padding: 8px 14px;
-		font-size: 13px;
-		color: var(--color-quiet-ink, #c9ced9);
 	}
 </style>
