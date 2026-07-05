@@ -13,11 +13,15 @@ C3 shipped the chrome; browser-verifying it in prod surfaced a cluster of **wayf
 and legibility** gaps. Beat 1 fixed the four behavioral bugs. Beat 2a is the **presentation pass**:
 it reorganizes the Atlas shell so the map is navigable and legible, without touching the data.
 
-The task's eight items split by cost. Beat 2a takes the six that are **frontend-only** — W1
+The task's eight items split by cost. Beat 2a takes the six that are frontend-centric — W1
 (wayfinding), L1/L2/L3 (chrome/layout), G1/G2 (legibility) — and defers the two that need a
-backend read (N1/N2 node content) to Beat 2b. Every change here lives in `packages/temper-ui`:
-**no migrations, no Rust, no new reads, no operator step.** Merge auto-deploys temper-ui to prod
-(same posture as Beat 1). That's the whole reason to ship these together and fast.
+substantive backend read (N1/N2 node content) to Beat 2b. Nearly everything lives in
+`packages/temper-ui`. The **one** backend touch is a thin extension to W1's existing, already-
+visibility-gated R3 region-slice read — it gains the region's `label` (folded into the read's
+current readability query; **no migration, no new endpoint, no new visibility surface, no new e2e
+tier** — the label is strictly less sensitive than the member titles R3 already returns), plus a
+`ts-rs` regen. That is the whole backend delta. Merge auto-deploys temper-ui to prod (same posture
+as Beat 1); no operator step.
 
 The unifying move is a **shell reorganization**: the old IDE-style left dock (a C3 decision) is
 retired for the legend and filters; the vault sidebar collapses to an icon rail; search, the
@@ -35,10 +39,18 @@ The canvas goes near-full-bleed. Wayfinding and legibility then slot into that r
    dock (A) and over full-bleed focus-mode with no persistent nav (C).
 2. **Wayfinding — depth-aware clickable crumb + explicit ascend, in the top bar (W1).** One shared
    breadcrumb component renders the full drill path (`⌂ Atlas › team|cogmap › territory › node`),
-   every segment clickable-to-jump. A dedicated **`↑` up-one-level** button wires the currently-
-   **unused** `buildAscendUrl`. The path is shallow (≤4), so it renders in full — **no
-   ellipsis-collapse**. This unifies `ScopeBar`'s team-ancestor crumb and `CogmapCrumb` into one
-   component (the Beat-1-deferred crumb dedup).
+   every segment clickable-to-jump. To make the crumb depth-aware and give a true single-level
+   ascend, **`focus` becomes a path** (`?focus=territory:X,node:Y`) instead of a single element:
+   drilling a node *from a territory* appends to the path; `deriveTier`/loader read the **leaf**
+   segment (unchanged seeding); `buildAscendUrl` **pops the last segment** (node → its territory →
+   panorama) rather than clearing focus. The `↑` button wires the (currently **unused**)
+   `buildAscendUrl`. The territory hop is **named** by extending the existing R3 region-slice read
+   with the region `label` (the one backend touch — see Throughline); drilling a node directly from
+   panorama carries no territory segment, so the crumb is simply `Atlas › team › node`. Path is
+   shallow (≤4) → rendered in full, **no ellipsis-collapse**. This unifies `ScopeBar`'s
+   team-ancestor crumb and `CogmapCrumb` into one component (the Beat-1-deferred crumb dedup); the
+   team-DAG `ancestors` stay a de-emphasized set (their wire type documents them as a set, not a
+   linear path), distinct from the drill path.
 3. **Filters — a `⚑ Filters` popover, top-right (chrome relocation).** With the dock gone, the C3
    filters (lens / edge-kind / doc-type) collapse into a popover button carrying an
    **active-count badge**, beside Search in the top bar. Keeps the bar calm at any depth and any
@@ -146,18 +158,47 @@ colocated `.test.ts`.
 
 ### W1 — shared depth-aware breadcrumb + ascend (top bar)
 
-- **New `AtlasCrumb.svelte`** (replaces ScopeBar's crumb + `CogmapCrumb` + the home `<nav>`): a
-  single component that renders the full path from URL state — `⌂ Atlas › {team|cogmap} ›
-  {territory} › {node}` — each segment a button. `⌂ Atlas` → `buildHomeUrl`; team/cogmap →
-  scope URL; territory → `buildDrillTerritoryUrl`; node segment is the current leaf. Team scope
-  still shows DAG ancestors between Atlas and the team (from `scope.ancestors`), cogmap scope shows
-  the cogmap name (resolved as in Beat 1).
-- **`↑` ascend button** wires `buildAscendUrl($page.url)` (PUSH history, matching Beat 1's
-  drill-transition policy) — pops exactly one level. Present in all scopes; disabled/hidden at
-  Atlas root.
-- **Pure unit:** a `crumbModel(url, scope, cogmapName)` deriving the ordered, labeled, href-bearing
-  segments — colocated test (mirrors `nav`/`legend` model tests). `buildAscendUrl` already tested;
-  add a test that the `↑` target equals `crumbModel`'s parent segment.
+**Focus-as-path (`nav.ts`).** Today `focus` holds a single element (`territory:X` **or**
+`node:Y`), so the URL forgets the territory once you drill into a node, and `buildAscendUrl` just
+deletes `focus` (jumps straight to panorama). Change `focus` to a comma-joined **path**:
+- `parseFocusPath(url)` → `Focus[]`; `parseFocus` stays but returns the **leaf** (last segment) so
+  `deriveTier` + the loader's seeding are unchanged.
+- `buildDrillTerritoryUrl` sets `focus=territory:X`. `buildDrillNodeUrl` **appends** `node:Y` to the
+  existing path when a territory leaf is present (`territory:X` → `territory:X,node:Y`), else sets
+  `focus=node:Y` (direct-from-panorama drill — no territory hop).
+- `buildAscendUrl` **pops the last segment** (`territory:X,node:Y` → `territory:X` → *(empty)*),
+  PUSH history (matches Beat 1's drill-transition policy).
+- Pure units in `nav.test.ts`: path parse/round-trip; append-vs-set drill; ascend pop; leaf
+  extraction. (These change existing `nav.test.ts` expectations — update them in the same task.)
+
+**Backend — name the territory hop (the one backend touch).** Extend R3 `territory_slice`
+(`crates/temper-services/src/services/graph_service.rs:610`): fold the region `label` into the
+existing readability query (`SELECT reg.label FROM kb_cogmap_regions reg WHERE reg.id=$1 AND NOT
+reg.is_folded AND cogmap_readable_by_profile($2, reg.cogmap_id)` → `fetch_optional`; `None` →
+`NotFound`, `Some(label)` → readable). Add `label: Option<String>` to `TerritorySlice`
+(`crates/temper-core/src/types/graph_territory.rs:115`); `cargo make generate-ts-types`. **No
+migration** (`kb_cogmap_regions.label` exists), **no `.sqlx` regen** (this read uses runtime
+`query_scalar`/`query_as`, not the `query!` macro), **no new e2e** (gate unchanged; label ≤ the
+member titles already returned). Bonus: `TierTerritory` shows the real region name instead of the
+generic "REGION · interior".
+
+**New `AtlasCrumb.svelte`** (replaces ScopeBar's crumb + `CogmapCrumb.svelte` + the home `<nav>` in
+`+page.svelte`): renders the path from URL state — `⌂ Atlas › {team|cogmap} › {territory} ›
+{node}` — each segment a button. `⌂ Atlas` → `buildHomeUrl`; team/cogmap → scope URL; territory →
+its `buildDrillTerritoryUrl`; node = current leaf. Segment **labels**: Atlas (static); team
+(`scope.team.name`); cogmap (`cogmapName`, resolved as in Beat 1); territory (`slice.label` at
+Tier 1; at Tier 2 the loader fetches the label via the now-labeled region-slice read for the path's
+territory id); node (the loaded neighborhood seed `AtlasNode.title`). Team-DAG `ancestors` render as
+a de-emphasized set between Atlas and the team (unchanged from ScopeBar).
+- **`↑` ascend button** wires `buildAscendUrl($page.url)` — pops exactly one level; hidden at Atlas
+  root (no focus, home scope).
+- **Loader:** thread the territory label for the crumb — at Tier 1 it already loads the slice; at
+  Tier 2, when the focus path has a territory segment, fetch that region's slice for its `label`
+  (reuses the gated read; over-fetches components/members, acceptable for one label). Expose a
+  `crumbTerritory: { id, label } | null` on the page data.
+- **Pure unit:** `crumbModel({ scope, cogmapName, focusPath, crumbTerritory, seedTitle })` deriving
+  the ordered, labeled, href-bearing segments — colocated `crumbModel.test.ts`. Plus a test that the
+  `↑` target equals `crumbModel`'s parent segment.
 
 ### Filters — `⚑ Filters` popover (top bar, relocation)
 
@@ -211,32 +252,40 @@ colocated `.test.ts`.
 
 ## Build sequence (frontend-only, one PR)
 
-One PR, SDD build, one consolidated end-of-plan opus review. No backend, no migrations, no
-`ts-rs` regen. Suggested order (shell first, so the other items land in the reframed frame):
+One PR, SDD build, one consolidated end-of-plan opus review. One thin backend field (R3 `label` +
+`ts-rs` regen); no migration. Suggested order (shell first, so the other items land in the reframed
+frame; the W1 backend field before the crumb that consumes it):
 
 1. **Shell (L1):** collapsible vault sidebar (icon rail + persisted toggle + `/graph` default) →
    retire the Atlas dock → top-bar + bottom-bar scaffolding in `+page.svelte`.
-2. **Wayfinding (W1) + Filters relocation:** `AtlasCrumb.svelte` (+ `crumbModel`) wiring
-   `buildAscendUrl`; `FilterPopover.svelte` (+ `activeFilterCount`); retire `ScopeBar.svelte` /
-   `CogmapCrumb.svelte` / home `<nav>`.
-3. **Legend (L2):** re-home `AtlasLegend` to the bottom bar, default collapsed.
-4. **Legibility (L3, G2):** empty-territory ghost (`isEmptyTerritory`); Tier-2 anchor+hover labels
+2. **W1 backend — region label:** extend `territory_slice` + `TerritorySlice` with `label`;
+   `generate-ts-types`; commit regenerated `graph_territory.ts`.
+3. **Wayfinding (W1) + Filters relocation:** `nav.ts` focus-as-path (+ `nav.test.ts` updates);
+   loader `crumbTerritory` threading; `AtlasCrumb.svelte` (+ `crumbModel`) wiring `buildAscendUrl`;
+   `FilterPopover.svelte` (+ `activeFilterCount`); retire `ScopeBar.svelte` / `CogmapCrumb.svelte` /
+   home `<nav>`.
+4. **Legend (L2):** re-home `AtlasLegend` to the bottom bar, default collapsed.
+5. **Legibility (L3, G2):** empty-territory ghost (`isEmptyTerritory`); Tier-2 anchor+hover labels
    (`labelAnchors`, `truncateLabel`, `NodeChip` hover).
-5. **Bridges (G1/B):** `BridgeRibbon.svelte` + `bridgeGeometry`; wire `overview.bridges` in
+6. **Bridges (G1/B):** `BridgeRibbon.svelte` + `bridgeGeometry`; wire `overview.bridges` in
    `TierPanorama`; legend note.
 
-Items 2–5 are largely independent siblings over the item-1 shell and can parallelize across
-subagents.
+Items 3–6 are largely independent siblings over the item-1 shell (item 3's crumb depends on item
+2's field) and can otherwise parallelize across subagents.
 
 ## Testing & gates
 
 - **Pure-logic units** (established pattern), each colocated `.test.ts` under vitest: `crumbModel`,
   `activeFilterCount`, `isEmptyTerritory`, `bridgeGeometry`, `labelAnchors`, `truncateLabel`, plus
   the `buildAscendUrl` ↔ `crumbModel` parent-target assertion.
-- **No new backend / e2e tier** — Beat 2a is UI-only; no visibility surface changes, so the access
-  e2e tier does not apply (contrast C3's `atlas_search`).
+- **Backend delta is one field on an existing gated read** (`territory_slice` gains `label`) — the
+  visibility gate is unchanged and the field is strictly less sensitive than the members R3 already
+  returns, so **no new e2e access tier is required** (contrast C3's net-new `atlas_search`, which
+  did). Rust unit coverage of the existing read is unaffected; verify the label surfaces via the
+  crumb in prod browser-verify.
 - **Gates:** `packages/temper-ui` `bun run check` (svelte-check) + vitest green; workspace
-  `cargo make check` unaffected (no Rust touched) but run to confirm. Push + PR.
+  `cargo make check` green (the Rust field + `ts-rs` regen touch temper-core/temper-services);
+  `cargo make generate-ts-types` run and the regenerated `graph_territory.ts` committed. Push + PR.
 - **Verification is prod-only:** Vercel PR previews don't carry Auth0 auth
   (`reference_vercel_preview_no_auth0_verify_in_prod`). Browser-verify the shell / crumb / ascend /
   ghost territories / bridges / label legibility on temperkb.io/graph/@me **after** merge + rollout.
