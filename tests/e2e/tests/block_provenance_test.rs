@@ -194,6 +194,7 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
                 status: None,
                 body: Some(upd_body_flag),
                 sources: &sources,
+                content_block: None,
                 format: temper_cli::format::OutputFormat::Json,
                 act: Default::default(),
             };
@@ -290,5 +291,194 @@ async fn remote_url_source_round_trips_through_cli_api_db(pool: sqlx::PgPool) {
         prov[0].source_uri.as_deref(),
         Some(url),
         "the raw external URL is surfaced, not the minted uuid"
+    );
+}
+
+/// Per-content-block addressing round-trips (T7c Task 11): `update --content-block <id> --sources`
+/// applies the revise + sources to the addressed block (discovered via the provenance read), and a
+/// `--content-block` that does not belong to the resource is rejected with no write. Drives the full
+/// CLI → client → Axum → DbBackend → substrate spine at the production caller's level.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    // Two source resources + a distilled note attributed to source1 on create.
+    let src1_body = app.vault_dir.path().join("cb-src1.md");
+    let src2_body = app.vault_dir.path().join("cb-src2.md");
+    std::fs::write(&src1_body, "# CB Source One\n\nFirst.\n").unwrap();
+    std::fs::write(&src2_body, "# CB Source Two\n\nSecond.\n").unwrap();
+    cli_create(
+        &app,
+        "CB Source One",
+        format!("@{}", src1_body.display()),
+        vec![],
+    )
+    .await;
+    cli_create(
+        &app,
+        "CB Source Two",
+        format!("@{}", src2_body.display()),
+        vec![],
+    )
+    .await;
+    let source1 = created_id_for_title(&pool, "CB Source One").await;
+    let source2 = created_id_for_title(&pool, "CB Source Two").await;
+
+    let dist_body = app.vault_dir.path().join("cb-distilled.md");
+    std::fs::write(&dist_body, "# CB Distilled\n\nFrom source one.\n").unwrap();
+    cli_create(
+        &app,
+        "CB Distilled",
+        format!("@{}", dist_body.display()),
+        vec![source1.to_string()],
+    )
+    .await;
+    let distilled = created_id_for_title(&pool, "CB Distilled").await;
+
+    // Discover the body block's id the way a user would — through the provenance read.
+    let prov = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read");
+    assert_eq!(prov.len(), 1, "one source on create, got {prov:?}");
+    let block_id = prov[0].block_id;
+
+    // ---- Positive: update addressing that block explicitly accretes source2 onto it ----
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = global_config_path(&app);
+    let cli_config = app.cli_config.clone();
+    let distilled_ref = distilled.to_string();
+    let source2_ref = source2.to_string();
+    let upd_body = app.vault_dir.path().join("cb-distilled-v2.md");
+    std::fs::write(&upd_body, "# CB Distilled\n\nNow also from source two.\n").unwrap();
+    let upd_body_flag = format!("@{}", upd_body.display());
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            let sources = [source2_ref];
+            let params = temper_cli::commands::resource::UpdateParams {
+                r#ref: &distilled_ref,
+                type_to: None,
+                context_to: None,
+                title: None,
+                tags: &[],
+                aliases: &[],
+                relates_to: &[],
+                references: &[],
+                depends_on: &[],
+                extends: &[],
+                preceded_by: &[],
+                derived_from: &[],
+                stage: None,
+                mode: None,
+                effort: None,
+                goal: None,
+                seq: None,
+                branch: None,
+                pr: None,
+                status: None,
+                body: Some(upd_body_flag),
+                sources: &sources,
+                content_block: Some(block_id),
+                format: temper_cli::format::OutputFormat::Json,
+                act: Default::default(),
+            };
+            temper_cli::commands::resource::update(&cli_config, &params)
+                .expect("update addressing the resource's own block should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    let prov2 = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read after addressed update");
+    let ids: Vec<uuid::Uuid> = prov2.iter().map(|r| r.source_id).collect();
+    assert!(
+        ids.contains(&source1) && ids.contains(&source2),
+        "both sources present on the addressed block after accretion; got {prov2:?}"
+    );
+    assert!(
+        prov2.iter().all(|r| r.block_id == block_id),
+        "every provenance row is on the addressed block; got {prov2:?}"
+    );
+
+    // ---- Negative: a content_block that does not belong to the resource is rejected, no write ----
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = global_config_path(&app);
+    let cli_config = app.cli_config.clone();
+    let distilled_ref = distilled.to_string();
+    let source2_ref = source2.to_string();
+    let foreign_block = uuid::Uuid::now_v7();
+    let upd_body3 = app.vault_dir.path().join("cb-distilled-v3.md");
+    std::fs::write(&upd_body3, "# CB Distilled\n\nShould not be written.\n").unwrap();
+    let upd_body3_flag = format!("@{}", upd_body3.display());
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            let sources = [source2_ref];
+            let params = temper_cli::commands::resource::UpdateParams {
+                r#ref: &distilled_ref,
+                type_to: None,
+                context_to: None,
+                title: None,
+                tags: &[],
+                aliases: &[],
+                relates_to: &[],
+                references: &[],
+                depends_on: &[],
+                extends: &[],
+                preceded_by: &[],
+                derived_from: &[],
+                stage: None,
+                mode: None,
+                effort: None,
+                goal: None,
+                seq: None,
+                branch: None,
+                pr: None,
+                status: None,
+                body: Some(upd_body3_flag),
+                sources: &sources,
+                content_block: Some(foreign_block),
+                format: temper_cli::format::OutputFormat::Json,
+                act: Default::default(),
+            };
+            temper_cli::commands::resource::update(&cli_config, &params)
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+    assert!(
+        result.is_err(),
+        "addressing a content_block that does not belong to the resource must fail"
+    );
+
+    // Provenance is unchanged by the rejected update — still exactly the two accreted sources.
+    let prov3 = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read after rejected update");
+    assert_eq!(
+        prov3.len(),
+        prov2.len(),
+        "the rejected update wrote nothing; got {prov3:?}"
     );
 }

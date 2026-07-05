@@ -33,6 +33,11 @@ pub struct BodyUpdate {
     /// declared provenance. Resource refs only in T7b; URL/`remote` sources are T7c.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
+    /// Which content block this body revise + `sources` target. `None` → the resource's sole
+    /// non-folded body block (today's default). `Some(id)` → address that block explicitly (must
+    /// belong to the resource and be non-folded); also the escape hatch for a multi-block resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_block: Option<uuid::Uuid>,
 }
 
 impl BodyUpdate {
@@ -42,6 +47,7 @@ impl BodyUpdate {
             content_hash: None,
             chunks_packed: None,
             sources: Vec::new(),
+            content_block: None,
         }
     }
 }

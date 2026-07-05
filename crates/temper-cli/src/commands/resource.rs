@@ -300,6 +300,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             content_hash: None,
             chunks_packed: None,
             sources: resolved_sources,
+            // Create writes a single new body block; per-block addressing is update-only.
+            content_block: None,
         }),
         managed_meta: ManagedMeta {
             mode: mode.map(String::from),
@@ -1031,8 +1033,13 @@ pub struct UpdateParams<'a> {
     /// (read from file; errors if empty).
     pub body: Option<String>,
     /// Provenance source refs (`--sources`) — resolved to `ProvenanceSource::Resource`
-    /// and attached to the body block. Requires a body update.
+    /// (refs) or `ProvenanceSource::Remote` (URLs) and attached to the addressed block.
+    /// Requires a body update.
     pub sources: &'a [String],
+    /// Which content block the body revise + `sources` target (`--content-block`, a block UUID).
+    /// `None` → the resource's sole body block; `Some(id)` addresses that block explicitly.
+    /// Requires a body update.
+    pub content_block: Option<uuid::Uuid>,
     /// Output format, resolved globally upstream in `main`.
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the update act (from `--invocation`/`--confidence`/…).
@@ -1215,6 +1222,13 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
             "--sources requires a body update; add --body or pipe content".into(),
         ));
     }
+    // --content-block addresses which block the body revise targets; with no body there is
+    // nothing to write to it.
+    if params.content_block.is_some() && resolved_body.is_none() {
+        return Err(TemperError::BadRequest(
+            "--content-block requires a body update; add --body or pipe content".into(),
+        ));
+    }
 
     // 4. Build the UpdateResource cmd.
     // context_to travels as a raw ref via context_ref (the API handler resolves
@@ -1225,6 +1239,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         body: resolved_body.map(|content| {
             let mut body = BodyUpdate::new(content);
             body.sources = resolved_sources;
+            body.content_block = params.content_block;
             body
         }),
         managed_meta: build_partial_managed_meta_from_args(params),
@@ -1349,6 +1364,7 @@ mod build_helpers_tests {
             status: None,
             body: None,
             sources: &[],
+            content_block: None,
             format: crate::format::OutputFormat::Json,
             act: temper_core::types::ActInput::default(),
         }

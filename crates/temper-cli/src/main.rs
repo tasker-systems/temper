@@ -243,6 +243,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     status,
                     body,
                     sources,
+                    content_block,
                     act,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
@@ -268,6 +269,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         status: status.as_deref(),
                         body,
                         sources: &sources,
+                        content_block,
                         format: output_format,
                         act: act.into_act_input()?,
                     };

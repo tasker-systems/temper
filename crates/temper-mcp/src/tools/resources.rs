@@ -129,6 +129,11 @@ pub struct UpdateResourceInput {
     /// attribute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
+    /// Which content block the body revise + `sources` target (a block UUID). Omit to address the
+    /// resource's sole body block (the default); required to revise a resource that has more than one
+    /// block. The block must belong to the resource and be non-folded. Requires `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_block: Option<Uuid>,
     /// Managed (temper-*) frontmatter. Typed: the schema covers every key
     /// temper governs and extras round-trip through `ManagedMeta::extra`.
     /// A concrete object schema (rather than free-form JSON) keeps MCP
@@ -331,6 +336,7 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 fn provenance_body(
     content: Option<String>,
     sources: Option<Vec<String>>,
+    content_block: Option<Uuid>,
 ) -> Result<Option<BodyUpdate>, rmcp::ErrorData> {
     match content {
         Some(content) if !content.is_empty() => {
@@ -345,12 +351,20 @@ fn provenance_body(
                 .map_err(|e| {
                     rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
                 })?;
+            body.content_block = content_block;
             Ok(Some(body))
         }
         _ => {
             if sources.is_some_and(|s| !s.is_empty()) {
                 return Err(rmcp::ErrorData::invalid_params(
                     "sources supplied without content — there is no body block to attribute"
+                        .to_owned(),
+                    None,
+                ));
+            }
+            if content_block.is_some() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "content_block supplied without content — there is no body revise to address"
                         .to_owned(),
                     None,
                 ));
@@ -472,7 +486,8 @@ pub async fn create_resource(
     let managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
 
-    let body = provenance_body(Some(content), input.sources)?;
+    // Create always writes a single new body block; per-block addressing is an update-only concern.
+    let body = provenance_body(Some(content), input.sources, None)?;
 
     // Assemble the per-act correlation + authorship from the flattened discrete fields. The
     // shared assembler enforces "confidence required iff authorship supplied"; map its
@@ -735,7 +750,7 @@ pub async fn update_resource(
         .act
         .into_act_context()
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let body = provenance_body(input.content, input.sources)?;
+    let body = provenance_body(input.content, input.sources, input.content_block)?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         body,
