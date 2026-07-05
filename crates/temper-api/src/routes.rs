@@ -223,6 +223,7 @@ pub fn create_app(state: AppState) -> Router {
             "/api/steward/candidates",
             get(handlers::steward::candidates),
         )
+        .route("/api/steward/dispatch", post(handlers::steward::dispatch))
         .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),

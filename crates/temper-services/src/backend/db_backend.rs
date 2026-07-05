@@ -25,13 +25,14 @@ use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
 };
+use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AssertRelationship, Backend, BodyUpdate, CloseInvocation,
     CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
     ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
     RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
-    Surface, UpdateResource,
+    StewardDispatchTick, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::ResourceRow;
 
@@ -1731,7 +1732,59 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
+        // A clean watermark advance IS steward-run completion — complete the active job atomically so
+        // the concurrency race closes (the watermark only moves on clean completion). A no-op when no
+        // job is active (e.g. a manual advance outside the dispatch loop). ApiError → TemperError via `?`.
+        crate::services::workflow_job_service::complete(
+            &self.pool,
+            *cmd.cogmap,
+            Persona::Steward.as_str(),
+            DispatchType::Steward.as_str(),
+        )
+        .await?;
+
         Ok(CommandOutput::new(cmd.event_id))
+    }
+
+    async fn steward_dispatch_tick(
+        &self,
+        cmd: StewardDispatchTick,
+    ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError> {
+        use crate::services::{steward_service, workflow_job_service};
+        use temper_core::types::workflow_job::{
+            DEFAULT_STEWARD_DISPATCH_CAP, DEFAULT_STEWARD_LEASE_SECONDS,
+        };
+
+        // 1. Reap stale leases (crashed runs → retry/dead) before claiming.
+        workflow_job_service::reap(&self.pool, "lease expired").await?;
+
+        // 2. Deterministic sweep over the readable team-joined maps.
+        let drifted =
+            steward_service::drift_sweep(&self.pool, self.profile_id, cmd.threshold).await?;
+
+        // 3. Enqueue each drifted map (deduped by the in-flight index — already-active maps skip).
+        for row in &drifted {
+            workflow_job_service::enqueue(
+                &self.pool,
+                row.cogmap_id,
+                Persona::Steward.as_str(),
+                DispatchType::Steward.as_str(),
+            )
+            .await?;
+        }
+
+        // 4. Claim up to `cap` for fan-out (one isolated session per claimed job downstream).
+        let cap = cmd.cap.unwrap_or(DEFAULT_STEWARD_DISPATCH_CAP) as i32;
+        let claimed = workflow_job_service::claim(
+            &self.pool,
+            Persona::Steward.as_str(),
+            DispatchType::Steward.as_str(),
+            cap,
+            DEFAULT_STEWARD_LEASE_SECONDS,
+        )
+        .await?;
+
+        Ok(CommandOutput::new(claimed))
     }
 
     /// Re-materialize a cogmap's regions when its formation delta clears the threshold (T4b). AUTH

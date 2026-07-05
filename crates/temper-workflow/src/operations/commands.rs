@@ -244,6 +244,17 @@ pub struct AdvanceStewardWatermark {
     pub origin: Surface,
 }
 
+/// Compose one deterministic steward-dispatch pass (goal 019f3220): reap stale jobs, sweep drifted
+/// maps the principal can read, enqueue each (deduped by the in-flight index), and claim up to `cap`
+/// steward jobs for fan-out. Returns the claimed jobs — the caller starts one isolated session per
+/// job, each tending a single cogmap. `threshold`/`cap` default when `None`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StewardDispatchTick {
+    pub threshold: Option<i64>,
+    pub cap: Option<i64>,
+    pub origin: Surface,
+}
+
 /// Re-materialize a cognitive map's regions when its formation delta since the last materialize
 /// clears `threshold` (T4b) — the cron-invokable trigger for the substrate's own (deterministic,
 /// non-authored) region-formation cadence. Gated on cogmap-write (`cogmap_authorable_by_profile`),

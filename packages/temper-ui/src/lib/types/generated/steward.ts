@@ -14,6 +14,52 @@ cogmap_id: string,
 watermark: string, };
 
 /**
+ * A job claimed for dispatch — the caller starts exactly one agent session per `ClaimedJob`,
+ * carrying its single `cogmap_id` (the fan-out is over the workflow, never the agent's target).
+ */
+export type ClaimedJob = { 
+/**
+ * The queue row id.
+ */
+id: string, 
+/**
+ * The single cognitive map this claimed run tends.
+ */
+cogmap_id: string, 
+/**
+ * How many times this job has now been claimed (1 on first dispatch).
+ */
+attempts: number, };
+
+/**
+ * Response for a dispatch tick — the jobs claimed for fan-out (one isolated session per entry,
+ * each tending a single cogmap).
+ */
+export type DispatchTickResponse = { claimed: Array<ClaimedJob>, };
+
+/**
+ * One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark.
+ * Ordered most-drifted-first by the sweep (`steward_drift_sweep`).
+ */
+export type DriftSweepRow = { 
+/**
+ * The team-joined cogmap that drifted.
+ */
+cogmap_id: string, 
+/**
+ * The watermark the delta was computed against; `None` when the steward has never run for it.
+ */
+watermark: string | null, 
+/**
+ * Newly-created resources in the team's contexts since the watermark (the gated ingest signal).
+ */
+new_resources: bigint, 
+/**
+ * All events anchored to the team's contexts since the watermark (total activity).
+ */
+new_events: bigint, };
+
+/**
  * The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the
  * steward's cron pulls. `new_resources` is the gated metric (an *ingest* threshold); `new_events`
  * is the broader activity count for context.

@@ -19,9 +19,10 @@ use temper_services::state::AppState;
 
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::steward::{
-    AdvanceWatermarkAck, AdvanceWatermarkRequest, DriftSweepRow, IngestDelta,
+    AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
+    DriftSweepRow, IngestDelta,
 };
-use temper_workflow::operations::{AdvanceStewardWatermark, Backend, Surface};
+use temper_workflow::operations::{AdvanceStewardWatermark, Backend, StewardDispatchTick, Surface};
 
 /// Query params for the delta read. `threshold` is optional (omit → the service default).
 #[derive(Debug, Deserialize)]
@@ -128,4 +129,30 @@ pub async fn candidates(
     let ids =
         steward_service::candidate_cogmaps(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
     Ok(Json(ids))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/steward/dispatch",
+    tag = "Steward",
+    security(("bearer_auth" = [])),
+    request_body = DispatchTickRequest,
+    responses((status = 200, description = "Jobs claimed for fan-out", body = DispatchTickResponse))
+)]
+pub async fn dispatch(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<DispatchTickRequest>,
+) -> ApiResult<Json<DispatchTickResponse>> {
+    let cmd = StewardDispatchTick {
+        threshold: req.threshold,
+        cap: req.cap,
+        origin: Surface::ApiHttp,
+    };
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let out = backend
+        .steward_dispatch_tick(cmd)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(DispatchTickResponse { claimed: out.value }))
 }
