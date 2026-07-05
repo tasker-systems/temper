@@ -218,6 +218,11 @@ pub fn create_app(state: AppState) -> Router {
             "/api/steward/{cogmap}/watermark",
             post(handlers::steward::advance),
         )
+        .route("/api/steward/sweep", get(handlers::steward::sweep))
+        .route(
+            "/api/steward/candidates",
+            get(handlers::steward::candidates),
+        )
         .route(
             "/api/events/{kb_context_id}/cursor",
             get(handlers::events::cursor),

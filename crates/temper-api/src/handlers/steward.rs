@@ -18,7 +18,9 @@ use temper_services::services::steward_service;
 use temper_services::state::AppState;
 
 use temper_core::types::ids::{CogmapId, ProfileId};
-use temper_core::types::steward::{AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta};
+use temper_core::types::steward::{
+    AdvanceWatermarkAck, AdvanceWatermarkRequest, DriftSweepRow, IngestDelta,
+};
 use temper_workflow::operations::{AdvanceStewardWatermark, Backend, Surface};
 
 /// Query params for the delta read. `threshold` is optional (omit → the service default).
@@ -91,4 +93,39 @@ pub async fn advance(
         cogmap_id: cogmap,
         watermark: out.value,
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/steward/sweep",
+    tag = "Steward",
+    params(("threshold" = Option<i64>, Query, description = "Ingest threshold (default applies when omitted)")),
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Drifted team-joined cogmaps, most-drifted-first", body = Vec<DriftSweepRow>))
+)]
+pub async fn sweep(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<DeltaQuery>,
+) -> ApiResult<Json<Vec<DriftSweepRow>>> {
+    let rows =
+        steward_service::drift_sweep(&state.pool, ProfileId::from(auth.0.profile.id), q.threshold)
+            .await?;
+    Ok(Json(rows))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/steward/candidates",
+    tag = "Steward",
+    security(("bearer_auth" = [])),
+    responses((status = 200, description = "Readable team-joined cogmap ids", body = Vec<Uuid>))
+)]
+pub async fn candidates(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<Vec<Uuid>>> {
+    let ids =
+        steward_service::candidate_cogmaps(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
+    Ok(Json(ids))
 }

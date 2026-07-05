@@ -84,3 +84,21 @@ pub struct AdvanceWatermarkAck {
     /// The watermark it now holds.
     pub watermark: Uuid,
 }
+
+/// One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark.
+/// Ordered most-drifted-first by the sweep (`steward_drift_sweep`).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "steward.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftSweepRow {
+    /// The team-joined cogmap that drifted.
+    pub cogmap_id: Uuid,
+    /// The watermark the delta was computed against; `None` when the steward has never run for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<Uuid>,
+    /// Newly-created resources in the team's contexts since the watermark (the gated ingest signal).
+    pub new_resources: i64,
+    /// All events anchored to the team's contexts since the watermark (total activity).
+    pub new_events: i64,
+}

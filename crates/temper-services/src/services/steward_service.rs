@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{CogmapId, ProfileId};
-use temper_core::types::steward::{IngestDelta, DEFAULT_STEWARD_INGEST_THRESHOLD};
+use temper_core::types::steward::{DriftSweepRow, IngestDelta, DEFAULT_STEWARD_INGEST_THRESHOLD};
 
 /// Compute the ingest delta for a team-self-cognition cogmap: how many new resources + events have
 /// landed in the team's contexts since the cogmap's watermark, and whether that clears `threshold`.
@@ -60,6 +60,50 @@ pub async fn ingest_delta(
         threshold,
         exceeds_threshold: row.new_resources >= threshold,
     })
+}
+
+/// Sweep all team-joined cogmaps the principal can read, returning those whose ingest delta clears
+/// `threshold`, most-drifted-first. The privileged case (the steward app-principal) simply has broad
+/// read; the gate is the same `anchor_readable_by_profile` every read uses — not a bypass.
+pub async fn drift_sweep(
+    pool: &PgPool,
+    principal: ProfileId,
+    threshold: Option<i64>,
+) -> ApiResult<Vec<DriftSweepRow>> {
+    let threshold = threshold.unwrap_or(DEFAULT_STEWARD_INGEST_THRESHOLD);
+    let rows = sqlx::query!(
+        r#"
+        SELECT cogmap_id     AS "cogmap_id!: Uuid",
+               watermark     AS "watermark: Uuid",
+               new_resources AS "new_resources!: i64",
+               new_events    AS "new_events!: i64"
+          FROM steward_drift_sweep($1, $2)
+        "#,
+        *principal,
+        threshold,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| DriftSweepRow {
+            cogmap_id: r.cogmap_id,
+            watermark: r.watermark,
+            new_resources: r.new_resources,
+            new_events: r.new_events,
+        })
+        .collect())
+}
+
+/// All team-joined cogmaps the principal can read (the materialize fan-out candidate set).
+pub async fn candidate_cogmaps(pool: &PgPool, principal: ProfileId) -> ApiResult<Vec<Uuid>> {
+    let ids = sqlx::query_scalar!(
+        r#"SELECT cogmap_id AS "id!: Uuid" FROM steward_candidate_cogmaps($1)"#,
+        *principal,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -268,6 +312,47 @@ mod tests {
         assert_eq!(
             d.new_events, 2,
             "the trailing resource_created + relationship"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sweep_returns_only_drifted_maps_most_drifted_first(pool: PgPool) {
+        let s = seed(&pool).await;
+        // 6 resource_created in the team context → above default threshold 5.
+        for _ in 0..6 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+        let rows = drift_sweep(&pool, s.member.into(), None).await.unwrap();
+        assert_eq!(rows.len(), 1, "the one drifted, readable, team-joined map");
+        assert_eq!(rows[0].cogmap_id, s.cogmap);
+        assert_eq!(rows[0].new_resources, 6);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sweep_excludes_below_threshold_and_unreadable(pool: PgPool) {
+        let s = seed(&pool).await;
+        for _ in 0..2 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+        // Below threshold for the member.
+        assert!(drift_sweep(&pool, s.member.into(), None)
+            .await
+            .unwrap()
+            .is_empty());
+        // Push above threshold: the outsider still cannot read the map → never a candidate.
+        for _ in 0..6 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+        assert!(drift_sweep(&pool, s.outsider.into(), None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            drift_sweep(&pool, s.member.into(), None)
+                .await
+                .unwrap()
+                .len(),
+            1
         );
     }
 
