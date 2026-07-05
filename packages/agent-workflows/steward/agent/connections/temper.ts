@@ -2,6 +2,8 @@ import { connect } from "@vercel/connect/eve";
 import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
+import { mintM2mToken, requireEnv } from "../lib/temper-auth.js";
+
 /**
  * The steward's sole seam to temper-mcp.
  *
@@ -20,42 +22,10 @@ import { never } from "eve/tools/approval";
  *   HITL): a single team self-cogmap with no cross-map promotion (design D8).
  * - **24-tool allow-list** scoped to the steward persona. The 9 excluded tools
  *   (region reads + genesis/admin/access) are role-inappropriate for a steward.
+ *
+ * `mintM2mToken` + `requireEnv` are shared with the code schedules (`../lib/temper-auth`) so the
+ * connection and the schedules can never drift on how they authenticate.
  */
-/**
- * Mint the agent's own Auth0 token via the `client_credentials` grant. Cached
- * across calls until ~60s before expiry. Returns `{ token, expiresAt }` where
- * `expiresAt` is absolute ms-since-epoch, matching eve's `TokenResult`.
- */
-let cachedM2m: { token: string; expiresAt: number } | undefined;
-
-async function mintM2mToken(): Promise<{ token: string; expiresAt: number }> {
-  const skewMs = 60_000;
-  if (cachedM2m && cachedM2m.expiresAt - skewMs > Date.now()) {
-    return cachedM2m;
-  }
-
-  const res = await fetch(requireEnv("TEMPER_M2M_TOKEN_URL"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "client_credentials",
-      client_id: requireEnv("TEMPER_M2M_CLIENT_ID"),
-      client_secret: requireEnv("TEMPER_M2M_CLIENT_SECRET"),
-      audience: requireEnv("TEMPER_M2M_AUDIENCE"),
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`M2M token mint failed (${res.status}): ${await res.text()}`);
-  }
-
-  const body = (await res.json()) as { access_token: string; expires_in: number };
-  cachedM2m = {
-    token: body.access_token,
-    expiresAt: Date.now() + body.expires_in * 1000,
-  };
-  return cachedM2m;
-}
-
 export default defineMcpClientConnection({
   url: requireEnv("TEMPER_MCP_URL"),
   description:
@@ -100,11 +70,3 @@ export default defineMcpClientConnection({
     ],
   },
 });
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} is required — the temper-mcp target/credential is never hardcoded`);
-  }
-  return value;
-}
