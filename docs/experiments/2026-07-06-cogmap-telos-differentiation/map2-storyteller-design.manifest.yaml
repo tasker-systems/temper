@@ -1,0 +1,24 @@
+name: "Storyteller System Design"
+telos_title: "Storyteller System Design — telos"
+telos:
+  statement: >-
+    Understand how to design a system that models rich narrative possibility — one that
+    traces the relational, thematic, genre, and plot-beat lifecycles of a story as
+    information-rich, evolving structures, so that agentic and generative narrative can
+    unfold while the world and its characters stay grounded and coherent. Nodes are
+    distilled from the storyteller project's own resources and judged for their bearing on
+    that design purpose — never universally.
+  questions:
+    - question: "What must the system represent to hold a narrative world coherent?"
+      context: "entities, relations, canon, and state — the substrate a story rests on."
+    - question: "How are narrative lifecycles — thematic, genre, plot-beat, relational — traced as they evolve?"
+      context: "the moving parts, and how their change over time is captured."
+    - question: "Where does generative / agentic unfolding get its freedom, and what keeps it grounded?"
+      context: "the tension between open possibility and a coherent, consistent world."
+    - question: "What has the project decided about its model, and what is still open?"
+      context: "settled design choices vs live questions."
+    - question: "What tension sits between rich possibility and coherent grounding?"
+      context: "the central design pressure the system must hold."
+  framing:
+    - "Nodes carry a derived_from edge to their source(s); regions emerge only from materialize."
+    - "Labels are expressive: concept, fact, decision, theme, question, concern, principle, commitment, domain."
