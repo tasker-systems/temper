@@ -37,20 +37,30 @@
 	height={CARD_HEIGHT}
 	style="overflow: visible; pointer-events: none;"
 >
-	<div class="hover-card" style={`--hue: ${hue};`}>
-		<div class="row">
-			<span class="pill">{docType ?? '—'}</span>
-			<span class="chip">⌷ {edges} {edges === 1 ? 'edge' : 'edges'}</span>
+	<!-- Bottom-anchor the card within the fixed-height box: a short card (short or
+	     absent excerpt) still lands its bottom edge — and the arrow — at y - r - GAP,
+	     right above the node, instead of floating up against the reserved height. -->
+	<div class="hc-anchor">
+		<div class="hover-card" style={`--hue: ${hue};`}>
+			<div class="row">
+				<span class="pill">{docType ?? '—'}</span>
+				<span class="chip">⌷ {edges} {edges === 1 ? 'edge' : 'edges'}</span>
+			</div>
+			<div class="ctitle">{title}</div>
+			{#if excerpt}
+				<p class="snip">{excerpt}</p>
+			{/if}
+			<div class="hint">click → open in rail</div>
 		</div>
-		<div class="ctitle">{title}</div>
-		{#if excerpt}
-			<p class="snip">{excerpt}</p>
-		{/if}
-		<div class="hint">click → open in rail</div>
 	</div>
 </foreignObject>
 
 <style>
+	.hc-anchor {
+		height: 100%;
+		display: flex;
+		align-items: flex-end;
+	}
 	.hover-card {
 		position: relative;
 		box-sizing: border-box;
