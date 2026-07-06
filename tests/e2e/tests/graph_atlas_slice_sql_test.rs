@@ -8,6 +8,9 @@
 mod common;
 
 use temper_core::types::graph::EdgeKind;
+use temper_core::types::graph_atlas::SliceRequest;
+use temper_core::types::ids::ProfileId;
+use temper_services::services::graph_service::neighborhood_slice;
 use uuid::Uuid;
 
 /// Insert a profile with the given handle, return its id.
@@ -148,6 +151,41 @@ async fn any_event(pool: &sqlx::PgPool) -> Uuid {
         .fetch_one(pool)
         .await
         .expect("at least one kb_events row exists (L0 genesis)")
+}
+
+/// Seed a single current body chunk for a resource: a `kb_content_blocks` row,
+/// a `kb_chunks` row over it, and its text in `kb_chunk_content`. This is the
+/// minimal shape `graph_atlas_nodes`' `first_chunk` subquery reads (`ch.is_current
+/// AND NOT b.is_folded`, ordered by `b.seq, ch.chunk_index`) — single block/chunk
+/// at seq/index 0 is sufficient for a "first chunk" test; `content_hash` is a
+/// placeholder since no query in this suite re-derives it.
+async fn seed_first_chunk(pool: &sqlx::PgPool, resource: Uuid, content: &str, event: Uuid) {
+    let block: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id) \
+         VALUES ($1, 0, $2, $2) RETURNING id",
+    )
+    .bind(resource)
+    .bind(event)
+    .fetch_one(pool)
+    .await
+    .expect("insert content block");
+
+    let chunk: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash) \
+         VALUES ($1, $2, 0, 'test-hash') RETURNING id",
+    )
+    .bind(block)
+    .bind(resource)
+    .fetch_one(pool)
+    .await
+    .expect("insert chunk");
+
+    sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
+        .bind(chunk)
+        .bind(content)
+        .execute(pool)
+        .await
+        .expect("insert chunk content");
 }
 
 /// `graph_traverse_scoped` walks only within the team scope, respects the depth
@@ -397,5 +435,73 @@ async fn traverse_scoped_excludes_edge_with_unreadable_home(pool: sqlx::PgPool) 
     assert!(
         rows.is_empty(),
         "edge homed in an unreadable anchor is excluded despite visible endpoints: {rows:?}"
+    );
+}
+
+/// Beat 2b N1: `neighborhood_slice`'s node projection carries a body excerpt
+/// derived from the resource's first body chunk (via `compute_excerpt`), and
+/// `None` for a resource with no body chunks at all. Exercises the full
+/// service function (not just the raw SQL functions above) since the excerpt
+/// derivation happens in the Rust mapping layer, not in `graph_atlas_nodes` itself.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn neighborhood_node_carries_body_excerpt(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "gas-excerpt").await;
+    let team = create_team(&pool, "gas-excerpt-team").await;
+    add_member(&pool, team, profile).await;
+    let event = any_event(&pool).await;
+
+    let ctx = create_team_context(&pool, team, "gas-excerpt-ctx").await;
+
+    let with_body = create_resource(&pool, "has body", "temper://gas/with-body").await;
+    let no_body = create_resource(&pool, "no body", "temper://gas/no-body").await;
+    for r in [with_body, no_body] {
+        grant_read_to_team(&pool, r, team, profile).await;
+    }
+    // An edge between them so both land in the depth-1 induced subgraph from
+    // the `with_body` seed.
+    assert_edge(&pool, with_body, no_body, "near", "kb_contexts", ctx, event).await;
+
+    let body = "First paragraph of the resource body, long enough to read as a \
+                real excerpt once collapsed to a single line.\n\n\
+                Second paragraph that must NOT appear in the excerpt.";
+    seed_first_chunk(&pool, with_body, body, event).await;
+    // `no_body` gets no kb_content_blocks/kb_chunks rows at all.
+
+    let sub = neighborhood_slice(
+        &pool,
+        ProfileId::from(profile),
+        team,
+        SliceRequest {
+            seeds: vec![with_body],
+            depth: 1,
+            edge_kinds: vec![],
+        },
+    )
+    .await
+    .expect("neighborhood_slice");
+
+    let n_body = sub
+        .nodes
+        .iter()
+        .find(|n| n.id == with_body)
+        .expect("with_body node present in the slice");
+    assert!(
+        n_body
+            .excerpt
+            .as_deref()
+            .expect("with_body node has an excerpt")
+            .starts_with("First paragraph"),
+        "excerpt should be derived from the first body chunk's first paragraph: {:?}",
+        n_body.excerpt
+    );
+
+    let n_bare = sub
+        .nodes
+        .iter()
+        .find(|n| n.id == no_body)
+        .expect("no_body node present in the slice");
+    assert_eq!(
+        n_bare.excerpt, None,
+        "a resource with no body chunks projects excerpt = None"
     );
 }

@@ -8,6 +8,9 @@
 	import { atlasNeighbors } from '$lib/graph/atlas/neighbors';
 	import { trailModel } from '$lib/graph/atlas/trail';
 	import { docTypeHue } from '$lib/graph/atlas/palette';
+	import { relativeTime } from '$lib/graph/atlas/relativeTime';
+	import { summarizeEvent } from '$lib/graph/atlas/eventSummary';
+	import { flattenPayload } from '$lib/graph/atlas/payloadRows';
 
 	interface Props {
 		selection: SelectedElement;
@@ -31,6 +34,15 @@
 	const hue = $derived(isNode ? docTypeHue(nodeDocType) : edge ? '#c9b183' : '#8a929e');
 	const neighbors = $derived(node && subgraph ? atlasNeighbors(node.id, subgraph.nodes, subgraph.edges) : []);
 	const rows = $derived(trail ? trailModel(trail) : []);
+	// Read-first excerpt: server-derived first-paragraph preview (R4's compute_excerpt).
+	// null for edges and for nodes without a body (e.g. a leaf with no mapped content).
+	const nodeExcerpt = $derived(node?.excerpt ?? null);
+	// Title lookup for summarizeEvent's relationship-target resolution — built from
+	// the same subgraph nodes already loaded for the neighbors section.
+	const nodesById = $derived(new Map((subgraph?.nodes ?? []).map((n) => [n.id, { title: n.title }])));
+	// Which history row (by event id, the same stable key as `rows`) has its
+	// payload expanded. Exactly one row open at a time; null = all collapsed.
+	let openEvent = $state<string | null>(null);
 
 	// Closing the panel is ephemeral (clears ?sel) — REPLACE so it doesn't leave a
 	// history step. Refocusing to a neighbor is a drill — PUSH so Back returns to
@@ -50,6 +62,13 @@
 			<button class="close" onclick={close}>CLOSE ✕</button>
 		</header>
 		<h2 class="title">{nodeTitle ?? (edge ? `${edge.edge_kind}` : '')}</h2>
+
+		{#if isNode && nodeExcerpt}
+			<section class="excerpt-section">
+				<div class="label">EXCERPT</div>
+				<p class="excerpt">{nodeExcerpt}</p>
+			</section>
+		{/if}
 
 		{#if node && neighbors.length}
 			<section class="neighbors">
@@ -89,10 +108,28 @@
 				<p class="empty">No recorded history.</p>
 			{:else}
 				{#each rows.slice(0, 50) as row (row.id)}
+					{@const summary = summarizeEvent(row.rawKind, row.payload, nodesById)}
 					<div class="event">
-						<span class="ekind">{row.kind}</span>
-						<time datetime={row.occurredAt}>{row.occurredAt}</time>
-						{#if row.confidence}<span class="conf">{row.confidence}</span>{/if}
+						<button
+							class="event-head"
+							onclick={() => (openEvent = openEvent === row.id ? null : row.id)}
+							aria-expanded={openEvent === row.id}
+						>
+							<span class="ekind">{row.kind}</span>
+							<span class="chev">{openEvent === row.id ? '⌄' : '›'}</span>
+						</button>
+						{#if summary}<div class="ev-summary">{summary}</div>{/if}
+						<div class="ev-meta">
+							by <b>{row.actorName}</b> · {relativeTime(row.occurredAt)}{#if row.confidence}
+								· <span class="conf">{row.confidence}</span>{/if}
+						</div>
+						{#if openEvent === row.id}
+							<dl class="ev-payload">
+								{#each flattenPayload(row.payload) as pr (pr.key)}
+									<div><dt>{pr.key}</dt><dd>{pr.value}</dd></div>
+								{/each}
+							</dl>
+						{/if}
 					</div>
 				{/each}
 			{/if}
@@ -181,17 +218,17 @@
 	}
 	.event {
 		display: flex;
-		gap: 8px;
-		align-items: baseline;
-		padding: 4px 0;
+		flex-direction: column;
+		gap: 3px;
+		padding: 6px 0;
 		font-size: 12px;
+	}
+	.event:not(:first-child) {
+		border-top: 1px solid rgba(255, 255, 255, 0.06);
 	}
 	.ekind {
 		color: var(--hue);
-	}
-	time {
-		color: #6a727e;
-		font-size: 10px;
+		font-weight: 600;
 	}
 	.conf {
 		font-size: 9px;
@@ -200,5 +237,76 @@
 	.empty {
 		color: #6a727e;
 		font-size: 12px;
+	}
+
+	/* ─── Excerpt — read-first body preview, directly under the title ─── */
+	.excerpt-section {
+		padding-top: 0;
+	}
+	.excerpt {
+		margin: 0;
+		color: #aeb7c4;
+		font-size: 12.5px;
+		line-height: 1.5;
+		border-left: 2px solid color-mix(in srgb, var(--hue) 55%, transparent);
+		padding-left: 10px;
+	}
+
+	/* ─── History rows — collapsed summary + actor/time, expand for payload ─── */
+	.event-head {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		width: 100%;
+		background: none;
+		border: 0;
+		padding: 0;
+		margin: 0;
+		font: inherit;
+		text-align: left;
+		color: inherit;
+		cursor: pointer;
+	}
+	.chev {
+		margin-left: auto;
+		color: #5a6270;
+		font-size: 11px;
+	}
+	.ev-summary {
+		color: #aeb7c4;
+		font-size: 11.5px;
+	}
+	.ev-meta {
+		color: #8a929e;
+		font-size: 10.5px;
+	}
+	.ev-meta b {
+		color: #b7c0cd;
+		font-weight: 600;
+	}
+	.ev-payload {
+		margin: 4px 0 0;
+		padding-top: 6px;
+		border-top: 1px dashed rgba(255, 255, 255, 0.1);
+	}
+	.ev-payload > div {
+		display: grid;
+		grid-template-columns: 90px 1fr;
+		gap: 4px 10px;
+		padding: 2px 0;
+	}
+	.ev-payload dt,
+	.ev-payload dd {
+		margin: 0;
+		font-family: monospace;
+		font-size: 10.5px;
+	}
+	.ev-payload dt {
+		color: #6a727e;
+		letter-spacing: 0.08em;
+	}
+	.ev-payload dd {
+		color: #c3ccd8;
+		word-break: break-word;
 	}
 </style>

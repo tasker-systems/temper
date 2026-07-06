@@ -18,19 +18,33 @@ bun run dev
 ```
 
 Pick a **scenario** (home / teamPanorama / regionSlice / nodeNeighborhood /
-nodeSelected / cogmapPanorama) and a **viewport** preset (or type w/h). The frame
-clips like a real bounded viewport and is drag-resizable from its corner.
+nodeSelected / cogmapPanorama / leafBare) and a **viewport** preset (or type w/h).
+The frame clips like a real bounded viewport and is drag-resizable from its corner.
+On a fresh checkout the harness runs against the committed synthetic fixtures — no
+local capture required.
 
 ## Fixtures
 
-Fixtures live at `static/dev/atlas-fixtures.json` — a single bundle keyed by
-scenario, each value a full `AtlasViewData` (the exact object the `/graph/[owner]`
-page load returns). **The file is gitignored** — it holds real resource titles from
-a personal team, so it is captured locally rather than committed.
+Fixtures are a single bundle keyed by scenario, each value a full `AtlasViewData`
+(the exact object the `/graph/[owner]` page load returns). The loader reads, in
+precedence order:
+
+1. **`static/dev/atlas-fixtures.local.json`** — your own raw capture, if present.
+   **Gitignored** (holds real titles/handles/ids from a personal team). Use it to
+   eyeball the harness against real data.
+2. **`static/dev/atlas-fixtures.json`** — the **committed**, synthetic,
+   personal-data-free bundle. The default: drives the harness on a fresh checkout,
+   and is guarded by `src/lib/graph/atlas/fixtures.test.ts` (every scenario present +
+   full `AtlasViewData` key set + no personal-data leak). The key-set assertion is
+   pinned to the type via `satisfies Record<keyof AtlasViewData, true>`, so a page-load
+   shape change fails `bun run check` until the fixtures are regenerated.
 
 ### Regenerating fixtures
 
-Captured from the live app's SvelteKit data endpoint (`__data.json`), which carries
+Two steps: **capture** a raw bundle from prod into the local override, then
+**sanitize** it into the committed default.
+
+**1. Capture** from the live app's SvelteKit data endpoint (`__data.json`), which carries
 the exact page-load output. From a logged-in `temperkb.io/graph/@me` browser tab,
 in the devtools console:
 
@@ -64,6 +78,8 @@ const COGMAP = '<your cogmap id>';    // from grab('') → .cogmaps[].id
 const REGION = '<a region territory id>'; // from grab('team='+TEAM) → .territories.territories[] where kind==='region'
 const NODE = '<a member/node id>';    // from a region slice → .slice.members[].id
 
+const LEAF = '<a neighbor-less leaf node id>'; // a node whose neighborhood is empty
+
 const bundle = {
   _meta: { captured_from: 'temperkb.io/graph/@me', note: 'full PageData per scenario' },
   home: await grab(''),
@@ -71,16 +87,26 @@ const bundle = {
   regionSlice: await grab('team=' + TEAM + '&focus=territory:' + REGION),
   nodeNeighborhood: await grab('team=' + TEAM + '&focus=node:' + NODE),
   nodeSelected: await grab('team=' + TEAM + '&focus=node:' + NODE + '&sel=node:' + NODE),
-  cogmapPanorama: await grab('cogmap=' + COGMAP)
+  cogmapPanorama: await grab('cogmap=' + COGMAP),
+  leafBare: await grab('team=' + TEAM + '&focus=node:' + LEAF + '&sel=node:' + LEAF)
 };
 const a = document.createElement('a');
 a.href = URL.createObjectURL(new Blob([JSON.stringify(bundle)], { type: 'application/json' }));
-a.download = 'atlas-fixtures.json';
+a.download = 'atlas-fixtures.local.json';
 a.click();
 ```
 
-Then move the download into place:
+**2. Sanitize** — move the raw capture into place as the (gitignored) local override,
+then generate the committed, personal-data-free default from it:
 
 ```bash
-mv ~/Downloads/atlas-fixtures.json packages/temper-ui/static/dev/atlas-fixtures.json
+mv ~/Downloads/atlas-fixtures.local.json packages/temper-ui/static/dev/atlas-fixtures.local.json
+cd packages/temper-ui
+node scripts/sanitize-atlas-fixtures.mjs   # → static/dev/atlas-fixtures.json (commit this)
+bun run test src/lib/graph/atlas/fixtures.test.ts   # verify the committed bundle is clean
 ```
+
+The sanitizer remaps every UUID and replaces sensitive free-text (titles, names,
+handles, slugs) with deterministic synthetic values while preserving the exact
+structure — so the committed bundle stays schema-honest but carries no personal data.
+Keep the raw `.local.json` around locally; the loader prefers it when present.

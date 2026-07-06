@@ -318,8 +318,11 @@ pub async fn neighborhood_slice(
         node_ids.push(*t);
     }
 
-    let nodes: Vec<AtlasNode> = sqlx::query_as::<_, (Uuid, String, Option<String>, String, i32)>(
-        "SELECT id, title, doc_type, home, degree FROM graph_atlas_nodes($1, $2, $3)",
+    let nodes: Vec<AtlasNode> = sqlx::query_as::<
+        _,
+        (Uuid, String, Option<String>, String, i32, Option<String>),
+    >(
+        "SELECT id, title, doc_type, home, degree, first_chunk FROM graph_atlas_nodes($1, $2, $3)",
     )
     .bind(profile_id.as_uuid())
     .bind(team_id)
@@ -327,18 +330,21 @@ pub async fn neighborhood_slice(
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(id, title, doc_type, home, degree)| AtlasNode {
-        id,
-        title,
-        doc_type,
-        home: if home == "cogmap" {
-            NodeHome::Cogmap
-        } else {
-            NodeHome::Context
+    .map(
+        |(id, title, doc_type, home, degree, first_chunk)| AtlasNode {
+            id,
+            title,
+            doc_type,
+            home: if home == "cogmap" {
+                NodeHome::Cogmap
+            } else {
+                NodeHome::Context
+            },
+            degree,
+            salience: None, // neighborhood-tier salience deferred (no per-node source yet)
+            excerpt: first_chunk.as_deref().and_then(compute_excerpt),
         },
-        degree,
-        salience: None, // neighborhood-tier salience deferred (no per-node source yet)
-    })
+    )
     .collect();
 
     Ok(AtlasSubgraph { nodes, edges })

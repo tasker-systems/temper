@@ -5,5 +5,7 @@ node_modules
 .env.local
 .env.*.local
 
-# Local dev-only Atlas render-harness fixtures (real prod data, not committed)
-static/dev/
+# Local dev-only Atlas render-harness capture (real prod data, not committed).
+# The sanitized `atlas-fixtures.json` IS committed; the raw local capture that
+# shadows it is not (see src/routes/dev/atlas/README.md).
+static/dev/atlas-fixtures.local.json
