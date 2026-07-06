@@ -105,6 +105,7 @@ fn test_skill_install_writes_directory() {
         assert!(skill_dir.join("reference.md").exists());
         assert!(skill_dir.join("subagent-guidance.md").exists());
         assert!(skill_dir.join("session-lifecycle.md").exists());
+        assert!(skill_dir.join("cognitive-maps.md").exists());
         assert!(skill_dir.join("workflows/build-small.md").exists());
         assert!(skill_dir.join("workflows/build-medium.md").exists());
         assert!(skill_dir.join("workflows/build-large.md").exists());

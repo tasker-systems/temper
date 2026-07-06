@@ -24,6 +24,7 @@ upfront; read only what the current task requires.
 - `subagent-guidance.md` — 10 universal principles for dispatched subagents
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
+- `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
 
 ### Workflow Files (`workflows/`)
 One file per mode/effort combination. Read only the one that matches the current task.
@@ -137,6 +138,7 @@ User-created guidance files. Read and apply any files found here.
 | `task resume <slug>` | On Task Resume |
 | `task create [--context @me/<ctx>]` | On Task Create |
 | `session start [--context @me/<ctx>]` | On Session Start |
+| Anything touching a cognitive map (read/author a map, telos, nodes/edges, wayfind) | Read `cognitive-maps.md` |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Cheap Orientation (read-side projection)
@@ -171,6 +173,19 @@ temper pull <context>
 Deleting a projected file with `rm` has no server effect — it just creates a
 local cache miss. To actually delete a resource, use `temper resource delete
 <ref> [--force]` (the `<ref>` is the resource's `ref` field from `list`/`show`).
+
+## Cognitive Maps
+
+A **context** homes resources as they are; a **cognitive map** homes *distilled nodes* in a
+telos-governed graph (nodes · edges · facets · regions). They share storage but mean
+different things — a map node is a **new** resource that distills from its source(s), never
+the same row. Authoring into a map (the authored-4 under an invocation envelope,
+provenance, fold-then-recreate supersession, the access model, and cross-map wayfind) is
+its own discipline.
+
+When a task involves reading from or authoring into a map, **read `cognitive-maps.md`** —
+don't reconstruct the model from scratch. It cross-links the steward's `map-stewardship`
+skill for the exhaustive per-call mechanics.
 
 ## Subagent Dispatch
 

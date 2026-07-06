@@ -56,6 +56,12 @@ tail. Prefer a recognized label when one is honest. `concern` vs `question`: a
 concern is a held tension, a question is an open ask. `concept` vs `theme`: a theme
 is broader, organizing many concepts.
 
+**Keep the node's title ASCII.** A non-ASCII character in a title — an em-dash `—`, a
+smart quote, an accented letter — can break slug generation and fail the create on a
+server without the #287 slug fix. Your prose voice leans on em-dashes; a *title* must
+not. Write "Steward authorship - a hard invariant", not the em-dash form. (Once the
+map's server has #287 this is moot, but the ASCII habit is free insurance.)
+
 ## Granularity — a soft tendency, not a rule
 
 Labels lean toward a characteristic granularity, but this is a **tendency, never a
@@ -179,7 +185,12 @@ per-call discretionary; a node or edge without it is real but *orphaned*.
   `invocation_show`** — the map's nodes/edges become uncorrelated to the tick that
   authored them, breaking the accountability chain. Carry it on *every* call.
 - **`confidence`** — `tentative` / `probable` / `confident`. Required whenever any
-  other authorship field is set — it is the gate for the whole envelope.
+  other authorship field is set — it is the gate for the whole envelope. Which band
+  when: **`confident`** = an explicit, dated decision or a claim the source states
+  outright; **`probable`** = a synthesis you drew across sources they don't state
+  verbatim; **`tentative`** = thin or uncertain evidence, noted not leaned on. Set the
+  band from the *distillation's* footing, not a blanket default — a map where every act
+  is `confident` has thrown the confidence signal away.
 - **`reasoning`** — one line on *why* this act: which source it distills, why this
   label, why this edge. Required on create / edge / fold; set it on facets too.
 
