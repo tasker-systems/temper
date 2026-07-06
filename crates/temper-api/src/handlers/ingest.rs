@@ -40,7 +40,9 @@ pub async fn create(
     let home = match payload.home_cogmap_id {
         Some(map) => {
             // Auth before writes: the producer gate (a named service seam delegating to
-            // team-cogmap membership) runs and denies BEFORE any home-row write.
+            // `cogmap_authorable_by_profile` = an explicit `can_write` grant, NOT membership — the
+            // Q-A flip made authorship wholly explicit) runs and denies BEFORE any home-row write.
+            // A fast-fail pre-check; `DbBackend::create_resource` re-enforces the same gate (F1).
             let cogmap = CogmapId::from(map);
             if !temper_services::services::cogmap_service::authorable_by_profile(
                 &state.pool,

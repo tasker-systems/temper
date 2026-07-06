@@ -56,11 +56,14 @@ pub async fn bind_team(
 
 /// Producer write gate: can `profile` author a resource homed in `cogmap`?
 ///
-/// The named service seam for the `cogmap_authorable_by_profile` SQL predicate (team↔cogmap
-/// membership intersection). Surfaces (HTTP ingest, MCP create) call this as their
-/// auth-before-writes gate instead of inlining the `query_scalar!` — SQL stays in the service
-/// layer, and the gate is defined once rather than mirrored across surfaces. The nullable scalar
-/// is normalized to `false` (deny) here.
+/// The named service seam for the `cogmap_authorable_by_profile` SQL predicate — an explicit
+/// `can_write` grant on the map (`profile_explicit_grant(...,'write','kb_cogmaps',...)`), NOT team
+/// membership: cogmaps have no owner, and the Q-A flip made authorship wholly explicit (membership
+/// confers read only). Surfaces (HTTP ingest, MCP create) call this as their auth-before-writes gate
+/// instead of inlining the `query_scalar!` — SQL stays in the service layer, and the gate is defined
+/// once rather than mirrored across surfaces. `DbBackend::create_resource` also re-enforces the same
+/// predicate on the shared write path (F1), so the surface calls are fast-fail pre-checks. The
+/// nullable scalar is normalized to `false` (deny) here.
 pub async fn authorable_by_profile(
     pool: &PgPool,
     profile: ProfileId,
