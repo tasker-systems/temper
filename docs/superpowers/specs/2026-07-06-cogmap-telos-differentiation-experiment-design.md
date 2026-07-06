@@ -26,6 +26,7 @@ Verified against the codebase (2026-07-06):
 2. **Cross-map edges are structurally allowed but inert** — an edge homes wherever its *source* lives; the target's map is never validated (`db_backend.rs:1185`, `writes.rs:697-766`). So `Map3-node → Map2-node` is legal and homes in Map 3. But…
 3. **Region materialization + the telos-lens are single-map only** — `materialize` pulls only nodes+edges homed in the one map (`substrate.rs:32-53`); `telos_alignment` scores a region's centroid against **its own map's** charter embedding, hard-scoped `WHERE c.id = p_cogmap` (`canonical_functions.sql:461-471`). A cross-map edge's off-map target is not a member of any region, so cross-map edges contribute **nothing** to regions/salience — and produce an untested dangling-target case.
 4. **Wayfind is the one real, tested cross-map path** — it takes no cogmap argument; it pools top-N regions across **every map the principal can read** (`cogmap_visible_maps`), ranks them `α·salience + β·query_cos` (α=0.4/β=0.6), unions members, re-gated by `resources_visible_to` (`wayfind_scope.sql:38-95`; `cogmap_wayfind_test.rs`). The cross-map ranking signal is the **query embedding + visibility union**, *not* a cross-map telos.
+5. **The steward sweeps ALL team-joined maps it can read** — `steward_candidate_cogmaps(principal) = SELECT DISTINCT tc.cogmap_id FROM kb_team_cogmaps tc WHERE anchor_readable_by_profile(principal, …)` (`migrations/20260705000002_steward_drift_sweep.sql:11-16`). The steward M2M principal (`agent-y23aq…`) is a member of **both** of `@j-cole-taylor`'s teams (`personal-j-cole-taylor` → steward map, `temper-system` → L0). So binding the new maps to either existing team would enroll them in the steward's autonomous drift-sweep and let it author into them mid-experiment — a third, uncontrolled author. **Mitigation (§6 Phase 0): a dedicated experiment team the steward is not a member of.**
 
 **Consequence for (b):** cross-map value **today** is realized at *query time via wayfind*, never at *authoring time via edges or a shared telos*. The gap-spec's whole question is therefore narrow: *should cross-map edges (or cross-map telos projection) ever carry value, or is wayfind-pooling the intended and sufficient mechanism?* We **demonstrate** the wayfind path as evidence; we **do not build** anything.
 
@@ -77,7 +78,7 @@ Chosen over "I author" (proves feasibility, not emergence) and the hybrid (mixed
 
 | Role | Who | Does |
 |---|---|---|
-| **Admin / genesis** | You (system admin, holds the privilege, wants to witness) | Phase 0: `cogmap_create` ×2, deliver charters via `cogmap reconcile`, `cogmap_bind` to the common team ×2, `cogmap_grant write` ×2. |
+| **Admin / genesis** | You (system admin, holds the privilege, wants to witness) | Phase 0: `temper team create cogmap-experiment` (owner; steward NOT added), `cogmap_create` ×2, deliver charters via `cogmap reconcile`, `cogmap_bind` to the experiment team ×2, `cogmap_grant write` ×2. |
 | **Orchestrator** | Me | Draft charters/slice (this doc); dispatch the fresh agents; Phase-2 cross-map assertion + wayfind demo; Phase-3 analysis + write-up. |
 | **Fresh authors** | Two dispatched subagents | Distill nodes into their assigned map (Phase 1); Map-3 linking pass (Phase 2). Charter + mechanics only, no hypothesis. |
 
@@ -86,12 +87,12 @@ Chosen over "I author" (proves feasibility, not emergence) and the hybrid (mixed
 ## 6. The runbook
 
 ### Phase 0 — Genesis (You, admin)
-1. Identify the **common team** to bind (reuse the team the steward map `019f2391` is bound to — "same team bindings"). *Open item: confirm/lookup the team id.*
+1. `temper team create` the **dedicated experiment team** `cogmap-experiment` (name "Cognitive-Map Experiment"). You become owner. **Do NOT add the steward M2M agent** (`agent-y23aq…`) — this is the isolation that keeps the steward's drift-sweep off the new maps (grounding finding §2.5). Record the new `team_id`. *(Visibility parity still holds: `@j-cole-taylor` sees the steward map via `personal-j-cole-taylor` and L0 via `temper-system`, so Map 3 keeps its cross-map reach into temper's cogmap knowledge.)*
 2. `cogmap_create` Map 2 and Map 3 (empty charters). Record `cogmap_id` + `telos_resource_id` for each.
 3. Author the charter prose (§4) and deliver each via `temper cogmap reconcile` (client-side embed).
-4. `cogmap_bind` both maps to the common team.
-5. `cogmap_grant write` on both maps to the authoring principal (`@j-cole-taylor` profile, or the common team).
-6. Verify: `cogmap_read_charter` + `cogmap_analytics` return the delivered charters.
+4. `cogmap_bind` both maps to the experiment team **only** (never to `personal-j-cole-taylor` or `temper-system`).
+5. `cogmap_grant write` on both maps to the authoring principal (`@j-cole-taylor` profile, `019d4add-f49d-7c43-a87d-dda470e5dd9c`). Read is implied by write.
+6. Verify: `cogmap_read_charter` + `cogmap_analytics` return the delivered charters; confirm the steward's candidate set does **not** include the new maps (`steward_candidate_cogmaps(agent-y23aq…)`).
 
 ### Phase 1 — Differentiation authoring (Me → two fresh agents, parallel, from empty)
 7. Dispatch **Agent-2** and **Agent-3** simultaneously. Each prompt contains: its charter, its `cogmap_id`, the shared source-slice refs (§D-slice), the `map-stewardship` mechanics (authored-4: create/assert/facet/fold; invocation `open`/`close` envelope; distillation + `derived_from`; fold-then-recreate; never edit in place), and the standard subagent-guidance. **Withheld:** the hypothesis, the other map's existence/telos, any differentiation framing.
@@ -133,3 +134,15 @@ Chosen over "I author" (proves feasibility, not emergence) and the hybrid (mixed
 - **D2** — Map 3 (Cognitive Maps for Storyteller), live + materialized.
 - **D3** — Differentiation + teachability findings (a temper `research` resource in `@me/temper`).
 - **D4** — The (b) cross-map gap-spec + wayfind demonstration record.
+
+## 11. Resolved concrete values (for execution)
+
+| Item | Value |
+|---|---|
+| Neon production project | `crimson-fog-23541670` (temper-cloud), branch `main`, db `neondb` |
+| Admin / authoring profile | `@j-cole-taylor` = `019d4add-f49d-7c43-a87d-dda470e5dd9c` (system admin) |
+| Steward M2M principal (to EXCLUDE from the experiment team) | `agent-y23aqxuvzjysb5n8laueuigixoftcwyu` |
+| Existing steward map (reference/control) | `019f2391-e001-7933-b88a-28fb92e56ac1` — bound to `personal-j-cole-taylor` (`019eea5e-daf4-7eaa-a85a-369ab11539e4`) |
+| L0 kernel map | `system-default` `00000000-0000-0000-0005-000000000001` — bound to `temper-system` (`019f04a9-e43e-7985-99a6-ca6a95139e85`) |
+| Experiment team (Phase 0 step 1 creates) | slug `cogmap-experiment`, name "Cognitive-Map Experiment", owner `@j-cole-taylor`, **steward excluded** |
+| Shared source slice refs (`@me/storyteller` research) | `narrative-graph-019d5042-5531-7a90-b939-10cbcb717913` · `character-modeling-019d5042-f8e0-72a2-a390-c687cbfd30b4` · `scene-model-019d5044-012f-7513-a940-abc93c778035` · `world-design-019d5042-2acc-7ea3-adcf-edaf06565550` · `emotional-model-019d5042-2044-70f1-9c4b-f175e7a318dc` · `data-driven-narrative-elicitation-019d5042-0e74-7262-8bdb-78a96d33452d` · `system-architecture-019d5042-ea0d-7b62-b332-ea63768b7c0b` · `design-philosophy-019d5042-eeea-7661-b846-73754c216696` |
