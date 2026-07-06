@@ -261,3 +261,61 @@ async fn slice_edge_carries_its_kb_edges_id(pool: sqlx::PgPool) {
         "wire edge id matches the kb_edges row it was induced from"
     );
 }
+
+/// A1: a seed whose ONLY edge is *incoming* (neighbor -> seed) must still be
+/// reachable — the walk seeds the frontier NODE set and follows edges in either
+/// direction, not just outgoing from the seed. And the seed's reported `degree`
+/// must equal the number of distinct neighbors actually rendered in `sub.nodes`
+/// (the hover count and the walked graph must agree — no over-counting).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn incoming_edge_neighbor_is_reachable_and_degree_is_honest(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+    let team = create_team(&pool, "bidir-team").await;
+    add_member(&pool, team, profile).await;
+    let ctx = create_team_context(&pool, team, "bidir-team-ctx").await;
+    let event = any_event(&pool).await;
+
+    // seed S and neighbor N, both in team scope; the ONLY edge is N -> S (incoming to S).
+    let seed = create_resource(&pool, "seed", "temper://bidir-e2e/seed").await;
+    let nbr = create_resource(&pool, "neighbor", "temper://bidir-e2e/neighbor").await;
+    grant_read_to_team(&pool, seed, team, profile).await;
+    grant_read_to_team(&pool, nbr, team, profile).await;
+    assert_edge(
+        &pool,
+        nbr,
+        seed,
+        EdgeKind::Contains,
+        "kb_contexts",
+        ctx,
+        event,
+    )
+    .await; // source=nbr, target=seed
+
+    let body = serde_json::json!({ "seeds": [seed], "depth": 2, "edge_kinds": [] });
+    let (status, resp_body) = slice(&app, &app.token, team, body).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "member gets a 200 subgraph: {resp_body:?}"
+    );
+    let sub: temper_core::types::graph_atlas::AtlasSubgraph =
+        serde_json::from_value(resp_body).expect("response deserializes as AtlasSubgraph");
+
+    // BEFORE the fix: nodes == [seed] only. AFTER: neighbor is reachable via the incoming edge.
+    assert!(
+        sub.nodes.iter().any(|n| n.id == nbr),
+        "incoming-edge neighbor must be reachable"
+    );
+    // degree honesty: the seed's reported degree equals the distinct neighbors actually rendered.
+    let seed_node = sub
+        .nodes
+        .iter()
+        .find(|n| n.id == seed)
+        .expect("seed node present");
+    let rendered_neighbors = sub.nodes.iter().filter(|n| n.id != seed).count() as i32;
+    assert_eq!(
+        seed_node.degree, rendered_neighbors,
+        "hover degree must equal rendered neighbor count"
+    );
+}

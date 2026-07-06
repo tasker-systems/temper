@@ -1,10 +1,13 @@
-//! SQL-level semantics for the R3 territory-slice functions
-//! (`graph_region_components`, `graph_region_members`). Proves the new
-//! functions directly against the migrated schema: component projection
-//! under a region's cogmap/lens, and visibility-scoped member deref — a
-//! member outside `resources_visible_to` is excluded, and a member with no
-//! `doc_type` property still surfaces (LEFT JOIN, no erasure) — before the
-//! HTTP endpoint is exercised (that is `graph_territory_slice_e2e.rs`).
+//! SQL-level semantics for the R3 territory-slice function
+//! (`graph_region_members`). Proves the function directly against the
+//! migrated schema: visibility-scoped member deref — a member outside
+//! `resources_visible_to` is excluded, and a member with no `doc_type`
+//! property still surfaces (LEFT JOIN, no erasure) — before the HTTP
+//! endpoint is exercised (that is `graph_territory_slice_e2e.rs`).
+//!
+//! A3: `graph_region_components` (and its projection) was dropped — components
+//! are a region's PARENT grain, not its sub-clusters, and the function had no
+//! `reg.id` tie anyway. See `migrations/20260706120100_drop_graph_region_components.sql`.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -75,33 +78,11 @@ async fn create_cogmap(pool: &sqlx::PgPool, name: &str, telos_resource: Uuid) ->
     .expect("create cogmap")
 }
 
-/// 768-dim zero pgvector text literal — determinism of the region/component's
-/// centroid does not matter for these functions (they don't cosine-rank).
+/// 768-dim zero pgvector text literal — determinism of the region's
+/// centroid does not matter for this function (it doesn't cosine-rank).
 fn zero_vec768() -> String {
     let v = vec!["0"; 768];
     format!("[{}]", v.join(","))
-}
-
-async fn insert_component(
-    pool: &sqlx::PgPool,
-    cogmap: Uuid,
-    lens: Uuid,
-    member_ids: &[Uuid],
-    event: Uuid,
-) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_cogmap_components \
-             (cogmap_id, lens_id, fingerprint, member_ids, asserted_by_event_id, last_event_id) \
-         VALUES ($1, $2, $3, $4, $5, $5) RETURNING id",
-    )
-    .bind(cogmap)
-    .bind(lens)
-    .bind("test-fingerprint")
-    .bind(member_ids)
-    .bind(event)
-    .fetch_one(pool)
-    .await
-    .expect("insert component")
 }
 
 async fn insert_region(
@@ -143,11 +124,11 @@ async fn add_region_member(pool: &sqlx::PgPool, region: Uuid, member: Uuid, affi
     .expect("add region member");
 }
 
-/// A region with one component and three candidate members — one visible
-/// (with a doc_type), one visible but doc-type-less (must still surface, no
-/// INNER-JOIN erasure), and one NOT visible to the caller (must be excluded).
+/// A region with three candidate members — one visible (with a doc_type),
+/// one visible but doc-type-less (must still surface, no INNER-JOIN
+/// erasure), and one NOT visible to the caller (must be excluded).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn slice_functions_project_components_and_scope_members_by_visibility(pool: sqlx::PgPool) {
+async fn slice_functions_scope_members_by_visibility(pool: sqlx::PgPool) {
     let profile = mk_profile(&pool, "gts-tester").await;
     let event = any_event(&pool).await;
     let lens = telos_default_lens(&pool).await;
@@ -217,34 +198,6 @@ async fn slice_functions_project_components_and_scope_members_by_visibility(pool
     add_region_member(&pool, region, visible_typed, Some(0.9)).await;
     add_region_member(&pool, region, visible_untyped, Some(0.5)).await;
     add_region_member(&pool, region, not_visible, Some(0.1)).await;
-
-    let component = insert_component(
-        &pool,
-        cogmap,
-        lens,
-        &[visible_typed, visible_untyped],
-        event,
-    )
-    .await;
-
-    // ── graph_region_components ─────────────────────────────────────────
-    let components: Vec<(Uuid, i32)> =
-        sqlx::query_as("SELECT component_id, member_count FROM graph_region_components($1, $2)")
-            .bind(profile)
-            .bind(region)
-            .fetch_all(&pool)
-            .await
-            .expect("graph_region_components");
-    assert_eq!(
-        components.len(),
-        1,
-        "exactly the one component under the region's cogmap/lens: {components:?}"
-    );
-    assert_eq!(
-        components[0],
-        (component, 2),
-        "member_count = cardinality(member_ids)"
-    );
 
     // ── graph_region_members ────────────────────────────────────────────
     let members: Vec<(Uuid, String, Option<String>, Option<f64>)> =

@@ -6,11 +6,6 @@
 export type Bridge = { source_territory: string, target_territory: string, edge_count: number, };
 
 /**
- * A sub-cluster (component) within a territory.
- */
-export type Component = { id: string, member_count: number, };
-
-/**
  * A high-degree standalone node surfaced where its cogmap home has no region
  * (sparsity rule). `doc_type` is optional/free-form.
  */
@@ -46,10 +41,10 @@ export type TerritoryKind = "region" | "context" | "cogmap";
 export type TerritoryOverview = { territories: Array<Territory>, orphan_nodes: Array<OrphanNode>, bridges: Array<Bridge>, };
 
 /**
- * R3 territory drill-in: region label, components + top-N members (visibility-scoped).
+ * R3 territory drill-in: region label + top-N members (visibility-scoped).
  */
 export type TerritorySlice = { region_id: string, 
 /**
  * The region's human label (`kb_cogmap_regions.label`); may be null.
  */
-label: string | null, components: Array<Component>, members: Array<RegionMember>, };
+label: string | null, members: Array<RegionMember>, };

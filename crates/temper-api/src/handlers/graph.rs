@@ -97,6 +97,36 @@ pub async fn neighborhood_slice(
     .map(Json)
 }
 
+/// POST /api/cogmaps/{id}/graph/slice — R4 cogmap-scoped neighborhood slice.
+#[utoipa::path(
+    post,
+    path = "/api/cogmaps/{id}/graph/slice",
+    tag = "Graph",
+    params(("id" = Uuid, Path, description = "Cogmap id to scope the slice to")),
+    request_body = SliceRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Cogmap neighborhood slice", body = AtlasSubgraph),
+        (status = 400, description = "Empty seed set"),
+        (status = 404, description = "Cogmap not readable by this profile")
+    )
+)]
+pub async fn cogmap_neighborhood_slice(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cogmap_id): Path<Uuid>,
+    Json(req): Json<SliceRequest>,
+) -> ApiResult<Json<AtlasSubgraph>> {
+    graph_service::cogmap_neighborhood_slice(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        cogmap_id,
+        req,
+    )
+    .await
+    .map(Json)
+}
+
 /// Query parameters for `GET /api/teams/{id}/graph/search`.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct AtlasSearchQuery {

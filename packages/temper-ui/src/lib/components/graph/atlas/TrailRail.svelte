@@ -290,22 +290,22 @@
 		border-top: 1px dashed rgba(255, 255, 255, 0.1);
 	}
 	.ev-payload > div {
-		display: grid;
-		grid-template-columns: 90px 1fr;
-		gap: 4px 10px;
-		padding: 2px 0;
+		display: block;
+		margin-bottom: 6px;
 	}
-	.ev-payload dt,
+	.ev-payload dt {
+		margin: 0;
+		font-family: monospace;
+		font-size: 10px;
+		color: #6a727e;
+		letter-spacing: 0.08em;
+		opacity: 0.6;
+		margin-bottom: 1px;
+	}
 	.ev-payload dd {
 		margin: 0;
 		font-family: monospace;
 		font-size: 10.5px;
-	}
-	.ev-payload dt {
-		color: #6a727e;
-		letter-spacing: 0.08em;
-	}
-	.ev-payload dd {
 		color: #c3ccd8;
 		word-break: break-word;
 	}

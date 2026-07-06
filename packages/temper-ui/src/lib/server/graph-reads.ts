@@ -30,6 +30,9 @@ export const regionSlicePath = (regionId: string): string => `/api/graph/regions
 
 export const neighborhoodSlicePath = (teamId: string): string => `/api/teams/${teamId}/graph/slice`;
 
+export const cogmapNeighborhoodSlicePath = (cogmapId: string): string =>
+	`/api/cogmaps/${cogmapId}/graph/slice`;
+
 export const trailPath = (kind: ElementKind, id: string): string =>
 	`/api/graph/elements/${kind}/${id}/trail`;
 
@@ -66,6 +69,12 @@ export const readNeighborhood = (
 	teamId: string,
 	req: SliceRequest
 ): Promise<AtlasSubgraph> => apiPost<AtlasSubgraph>(neighborhoodSlicePath(teamId), token, req);
+
+export const readCogmapNeighborhood = (
+	token: string,
+	cogmapId: string,
+	req: SliceRequest
+): Promise<AtlasSubgraph> => apiPost<AtlasSubgraph>(cogmapNeighborhoodSlicePath(cogmapId), token, req);
 
 export const readTrail = (token: string, kind: ElementKind, id: string): Promise<EventTrail> =>
 	apiGet<EventTrail>(trailPath(kind, id), token);

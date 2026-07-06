@@ -79,6 +79,7 @@
 			r={t.r}
 			kind={t.kind}
 			label={t.label}
+			memberCount={t.member_count}
 			onEnter={t.kind === 'region' ? () => drillTerritory(t.id) : undefined}
 			ghost={isEmptyTerritory(t)}
 		/>

@@ -75,8 +75,7 @@ pub use graph_atlas::{
 pub use graph_home::{AtlasHome, HomeCogmap, HomeTeam};
 pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
 pub use graph_territory::{
-    Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
-    TerritorySlice,
+    Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
 };
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};

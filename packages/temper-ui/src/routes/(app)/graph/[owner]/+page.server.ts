@@ -16,6 +16,7 @@ import type { EdgeKind } from '$lib/types/generated/graph';
 import { ApiError } from '$lib/server/api';
 import {
 	readAtlasHome,
+	readCogmapNeighborhood,
 	readCogmapPanorama,
 	readNeighborhood,
 	readRegionSlice,
@@ -90,10 +91,17 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		// door was entered from). Falls back to a generic label if not visible there
 		// (e.g. a public/system cogmap outside your membership — refined in Beat 2).
 		// The home read is independent of the tier read, so run them concurrently.
-		const [territories, slice, home] = await Promise.all([
+		const [territories, slice, home, neighborhood] = await Promise.all([
 			tier === 0 ? readCogmapPanorama(token, cogmapId) : Promise.resolve(null),
 			tier === 1 && focus.kind === 'territory' ? sliceOrPanorama(token, focus.id, url) : Promise.resolve(null),
-			readAtlasHome(token)
+			readAtlasHome(token),
+			tier === 2 && focus.kind === 'node'
+				? readCogmapNeighborhood(token, cogmapId, {
+						seeds: [focus.id],
+						depth: NEIGHBORHOOD_DEPTH,
+						edge_kinds: [] as EdgeKind[]
+					})
+				: Promise.resolve(null)
 		]);
 		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
 		// Name the territory hop in the crumb — mirrors the team branch below (reuses
@@ -102,6 +110,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		const crumbTerritory = territorySeg
 			? await crumbTerritoryLabel(token, territorySeg.id, slice)
 			: null;
+
+		// TrailRail parity: R5 trail + resource row are profile-scoped (not team-scoped),
+		// so the same selection block as the team branch works inside a cogmap door.
+		const selection = selectedElement(focus, url);
+		const trail =
+			selection.kind === 'edge'
+				? await readTrail(token, 'edge', selection.id)
+				: selection.kind === 'node'
+					? await readTrail(token, 'node', selection.id)
+					: null;
+		const resourceRow = selection.kind === 'node' ? await readResourceRow(token, selection.id) : null;
+
 		return {
 			owner: params.owner,
 			teamId: null,
@@ -114,10 +134,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			cogmaps: null,
 			territories,
 			slice,
-			neighborhood: null,
-			selection: { kind: 'none' as const },
-			trail: null,
-			resourceRow: null,
+			neighborhood,
+			selection,
+			trail,
+			resourceRow,
 			filters: defaultFilters,
 			focusPath,
 			crumbTerritory
