@@ -43,8 +43,22 @@ struct ElementEventRow {
     event_id: Uuid,
     kind: String,
     actor_entity_id: Uuid,
+    actor_name: String,
     occurred_at: chrono::DateTime<chrono::Utc>,
     metadata: serde_json::Value,
+    payload: serde_json::Value,
+}
+
+/// Strip heavy inline fields from a payload before it rides in the trail response.
+/// `resource_created` embeds the full `blocks[]` (content) — useless in a trail and
+/// potentially large — so drop it; the summary still shows title/doc_type.
+fn trim_payload(kind: &str, mut payload: serde_json::Value) -> serde_json::Value {
+    if kind == "resource_created" {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.remove("blocks");
+        }
+    }
+    payload
 }
 
 /// R5 element event-trail: the time-ordered history of events for a single node
@@ -68,8 +82,9 @@ pub async fn element_trail(
             sqlx::query_as!(
                 ElementEventRow,
                 r#"SELECT event_id AS "event_id!", kind AS "kind!",
-                          actor_entity_id AS "actor_entity_id!",
-                          occurred_at AS "occurred_at!", metadata AS "metadata!"
+                          actor_entity_id AS "actor_entity_id!", actor_name AS "actor_name!",
+                          occurred_at AS "occurred_at!", metadata AS "metadata!",
+                          payload AS "payload!"
                      FROM element_trail_edge($1, $2)"#,
                 *profile_id,
                 element_id,
@@ -81,8 +96,9 @@ pub async fn element_trail(
             sqlx::query_as!(
                 ElementEventRow,
                 r#"SELECT event_id AS "event_id!", kind AS "kind!",
-                          actor_entity_id AS "actor_entity_id!",
-                          occurred_at AS "occurred_at!", metadata AS "metadata!"
+                          actor_entity_id AS "actor_entity_id!", actor_name AS "actor_name!",
+                          occurred_at AS "occurred_at!", metadata AS "metadata!",
+                          payload AS "payload!"
                      FROM element_trail_node($1, $2)"#,
                 *profile_id,
                 element_id,
@@ -104,10 +120,12 @@ pub async fn element_trail(
                 .map(str::to_string);
             ElementEvent {
                 event_id: row.event_id,
-                kind: row.kind,
                 actor_entity_id: row.actor_entity_id,
+                actor_name: row.actor_name,
                 occurred_at: row.occurred_at.to_rfc3339(),
                 confidence,
+                payload: trim_payload(&row.kind, row.payload),
+                kind: row.kind,
             }
         })
         .collect();

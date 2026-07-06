@@ -26,15 +26,21 @@ pub enum ElementKind {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ElementEvent {
     pub event_id: Uuid,
-    /// Canonical event-type name (kb_event_types.name), e.g. "relationship.asserted".
+    /// Canonical event-type name (kb_event_types.name), e.g. "relationship_asserted".
     pub kind: String,
     /// The authoring agent entity (kb_events.emitter_entity_id).
     pub actor_entity_id: Uuid,
+    /// Humanized actor name (kb_entities.name for the emitter entity).
+    pub actor_name: String,
     /// ISO-8601 emission time (kb_events.occurred_at).
     pub occurred_at: String,
     /// ConfidenceBand from event metadata, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<String>,
+    /// The event's replay-sufficient payload (kb_events.payload). Schemaless per
+    /// event-type; the UI renders it as an expandable key/value block. `resource_created`
+    /// has its heavy inline `blocks` array stripped server-side.
+    pub payload: serde_json::Value,
 }
 
 /// A time-ordered event trail for one node or edge.

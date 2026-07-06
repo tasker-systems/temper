@@ -10,6 +10,9 @@ mod common;
 
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
+use temper_core::types::element_trail::ElementKind;
+use temper_core::types::ids::ProfileId;
+use temper_services::services::event_service::element_trail;
 use uuid::Uuid;
 
 type TrailRow = (Uuid, String, Uuid, DateTime<Utc>, Value);
@@ -378,5 +381,77 @@ async fn edge_trail_denied_when_an_endpoint_is_private(pool: sqlx::PgPool) {
     assert!(
         rows.is_empty(),
         "edge trail denied when an endpoint is private, despite a readable home: {rows:?}"
+    );
+}
+
+/// N3: the trail carries the replay-sufficient `payload` and a humanized
+/// `actor_name` through `event_service::element_trail` (not just the raw SQL
+/// functions) — and `resource_created`'s heavy inline `blocks[]` is stripped
+/// server-side before it rides in the response, while the rest of that
+/// payload (e.g. `resource_id`) survives.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn node_trail_carries_payload_and_actor(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "npt-tester").await;
+    let entity = mk_entity(&pool, profile, "npt-actor").await;
+    let context = mk_owned_context(&pool, profile, "npt-context").await;
+
+    let resource = create_resource(&pool, "npt resource", "temper://npt/resource").await;
+    home_resource(&pool, resource, context, profile).await;
+
+    insert_event(
+        &pool,
+        "resource_created",
+        entity,
+        json!({
+            "resource_id": resource,
+            "doc_type": "note",
+            "blocks": [{"seq": 0, "content": "heavy inline content that should not ride the trail"}],
+        }),
+        json!({}),
+    )
+    .await;
+
+    insert_event(
+        &pool,
+        "property_set",
+        entity,
+        json!({
+            "owner": {"table": "kb_resources", "id": resource},
+            "property_key": "temper-stage",
+            "value": "done",
+        }),
+        json!({}),
+    )
+    .await;
+
+    let trail = element_trail(&pool, ProfileId::from(profile), ElementKind::Node, resource)
+        .await
+        .expect("element_trail");
+
+    let prop = trail
+        .events
+        .iter()
+        .find(|e| e.kind == "property_set")
+        .expect("property_set event present");
+    assert_eq!(prop.payload["property_key"], json!("temper-stage"));
+    assert!(
+        !prop.actor_name.is_empty(),
+        "actor_name is the humanized emitter name: {prop:?}"
+    );
+    assert_eq!(prop.actor_name, "npt-actor");
+
+    let created = trail
+        .events
+        .iter()
+        .find(|e| e.kind == "resource_created")
+        .expect("resource_created event present");
+    assert!(
+        created.payload.get("blocks").is_none(),
+        "blocks must be trimmed from resource_created payload: {created:?}"
+    );
+    assert_eq!(
+        created.payload["resource_id"],
+        json!(resource),
+        "non-blocks fields survive trimming: {created:?}"
     );
 }
