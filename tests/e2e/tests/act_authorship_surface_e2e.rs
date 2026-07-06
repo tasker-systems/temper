@@ -75,6 +75,8 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
         .expect("profile pre-flight")
         .id;
     common::enable_invite_only(&pool, principal).await;
+    // Self-attributed open now requires WRITE on the originating map (F2); root-team read is not enough.
+    common::grant_cogmap_write(&pool, L0_COGMAP, principal).await;
     app.client
         .contexts()
         .create("act-api", None)
@@ -195,6 +197,8 @@ async fn cli_edge_assert_under_invocation_stamps_authorship(pool: sqlx::PgPool) 
         .expect("profile pre-flight")
         .id;
     common::enable_invite_only(&pool, principal).await;
+    // Self-attributed open now requires WRITE on the originating map (F2); root-team read is not enough.
+    common::grant_cogmap_write(&pool, L0_COGMAP, principal).await;
     app.client
         .contexts()
         .create("act-cli", None)
