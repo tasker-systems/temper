@@ -168,6 +168,22 @@ async fn join_cogmap_team(pool: &sqlx::PgPool, cogmap: Uuid, team: Uuid) {
         .expect("join cogmap to team");
 }
 
+/// Add a `kb_resources` member to a region's interior at the given affinity
+/// (nearness to centroid — `graph_region_territories`'s representative-label
+/// LATERAL orders by this, descending).
+async fn insert_region_member(pool: &sqlx::PgPool, region: Uuid, member: Uuid, affinity: f64) {
+    sqlx::query(
+        "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+             VALUES ($1, 'kb_resources', $2, $3)",
+    )
+    .bind(region)
+    .bind(member)
+    .bind(affinity)
+    .execute(pool)
+    .await
+    .expect("insert region member");
+}
+
 /// 768-dim zero pgvector text literal — determinism of the region row's
 /// centroid does not matter for these functions (they don't cosine-rank).
 fn zero_vec768() -> String {
@@ -365,5 +381,70 @@ async fn territory_functions_project_regions_orphans_contexts_and_bridges(pool: 
         bridges[0],
         (lo, hi, 1),
         "the orphan-to-cross_target edge is the one cross-territory bridge, counted once"
+    );
+}
+
+/// B1: an unlabeled region derives its label from its top VISIBLE member's
+/// title — a private, higher-affinity member's title must never leak into the
+/// label, even though it would sort first on affinity alone.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn unlabeled_region_derives_top_visible_member_title(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "b1-tester").await;
+    let team = create_team(&pool, "b1-team").await;
+    add_member(&pool, team, profile).await;
+    let event = any_event(&pool).await;
+    let lens = telos_default_lens(&pool).await;
+
+    let telos = create_resource(&pool, "telos b1", "temper://b1/telos").await;
+    let cogmap = create_cogmap(&pool, "cogmap-b1", telos).await;
+    join_cogmap_team(&pool, cogmap, team).await;
+
+    // Unlabeled region — label IS NULL, exercising the COALESCE fallback.
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions \
+             (cogmap_id, lens_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id) \
+         VALUES ($1, $2, $3::vector, $4, NULL, $5, $6, $6) RETURNING id",
+    )
+    .bind(cogmap)
+    .bind(lens)
+    .bind(zero_vec768())
+    .bind(0.5_f64)
+    .bind(2_i32)
+    .bind(event)
+    .fetch_one(&pool)
+    .await
+    .expect("insert unlabeled region");
+
+    // Visible member: homed with `profile` as owner/originator — satisfies
+    // resources_visible_to's owned/originated branch (see home_resource's doc
+    // comment above) regardless of team/cogmap reach.
+    let visible_member = create_resource(&pool, "Alpha topic", "temper://b1/alpha").await;
+    home_resource(&pool, visible_member, "kb_cogmaps", cogmap, profile).await;
+
+    // Private member: deliberately left un-homed and un-granted — it satisfies
+    // no branch of resources_visible_to, so it is never visible to `profile`
+    // despite outranking the visible member on affinity (0.99 > 0.9).
+    let private_member = create_resource(&pool, "secret", "temper://b1/secret").await;
+
+    insert_region_member(&pool, region, visible_member, 0.9).await;
+    insert_region_member(&pool, region, private_member, 0.99).await;
+
+    let rows: Vec<(Uuid, Option<String>)> =
+        sqlx::query_as("SELECT region_id, label FROM graph_region_territories($1, $2, $3)")
+            .bind(profile)
+            .bind(team)
+            .bind(lens)
+            .fetch_all(&pool)
+            .await
+            .expect("graph_region_territories");
+
+    let (_, label) = rows
+        .iter()
+        .find(|(rid, _)| *rid == region)
+        .expect("unlabeled region present in territories");
+    assert_eq!(
+        label.as_deref(),
+        Some("Alpha topic"),
+        "derives the top VISIBLE member's title, never the higher-affinity private one"
     );
 }
