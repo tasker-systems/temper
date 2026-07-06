@@ -82,6 +82,8 @@ async fn api_nonauthored_writes_under_invocation_stamp_authorship(pool: sqlx::Pg
     let app = common::setup(pool.clone()).await;
     let principal = app.client.profile().get().await.expect("profile").id;
     common::enable_invite_only(&pool, principal).await;
+    // Self-attributed open now requires WRITE on the originating map (F2); root-team read is not enough.
+    common::grant_cogmap_write(&pool, L0_COGMAP, principal).await;
     app.client
         .contexts()
         .create("nonauth-api", None)
@@ -239,6 +241,8 @@ async fn cli_delete_under_invocation_stamps_authorship(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
     let principal = app.client.profile().get().await.expect("profile").id;
     common::enable_invite_only(&pool, principal).await;
+    // Self-attributed open now requires WRITE on the originating map (F2); root-team read is not enough.
+    common::grant_cogmap_write(&pool, L0_COGMAP, principal).await;
     app.client
         .contexts()
         .create("nonauth-cli", None)

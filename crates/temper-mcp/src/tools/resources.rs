@@ -419,9 +419,11 @@ pub async fn create_resource(
                 })?
                 .0;
             let cogmap = temper_core::types::ids::CogmapId::from(map);
-            // Auth before writes: producer gate (service seam → team-cogmap membership).
-            // Shares the one `cogmap_service::authorable_by_profile` seam with the HTTP handler;
-            // no inline SQL on the surface.
+            // Auth before writes: producer gate (service seam → an explicit `can_write` grant on the
+            // map; `cogmap_authorable_by_profile`, NOT membership — membership confers read only, per
+            // the Q-A flip). Shares the one `cogmap_service::authorable_by_profile` seam with the HTTP
+            // handler; no inline SQL on the surface. This is a fast-fail pre-check — `DbBackend::
+            // create_resource` re-enforces the same predicate on the shared write path (F1).
             let ok = temper_services::services::cogmap_service::authorable_by_profile(
                 pool, profile_id, cogmap,
             )

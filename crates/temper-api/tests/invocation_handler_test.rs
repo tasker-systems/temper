@@ -31,6 +31,8 @@ async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
         .execute(&pool)
         .await
         .expect("approve test profile");
+    // Self-attributed open now requires WRITE on the originating map (F2) — root-join confers read only.
+    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
     let profile_id = ProfileId::from(profile);
     let backend = DbBackend::new(pool.clone(), profile_id);
 
@@ -134,4 +136,70 @@ async fn open_on_unreadable_cogmap_is_forbidden(pool: PgPool) {
         absent.is_none(),
         "unknown invocation must be None: {absent:?}"
     );
+}
+
+/// F2 — a SELF-ATTRIBUTED open (`parent_cogmap: None`) requires WRITE on the originating map, not just
+/// read. An approved profile is root-joined to L0 (read) but holds no write grant: its self-attributed
+/// open is denied. Granting explicit cogmap-write then lets the same open succeed. Closes the
+/// reader-posts-inert-envelopes ledger-noise vector.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn self_attributed_open_requires_write(pool: PgPool) {
+    let profile = common::fixtures::create_test_profile(&pool, "reader@example.com").await;
+    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
+        .bind(profile)
+        .execute(&pool)
+        .await
+        .expect("approve test profile");
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    // Read-only (root-joined) profile → self-attributed open denied.
+    let denied = backend
+        .open_invocation(OpenInvocation {
+            trigger_kind: "manual".to_string(),
+            originating_cogmap: CogmapId::from(L0_COGMAP),
+            parent_cogmap: None,
+            origin: Surface::ApiHttp,
+        })
+        .await;
+    assert!(
+        matches!(denied, Err(temper_core::error::TemperError::Forbidden)),
+        "self-attributed open by a read-only principal must be Forbidden: {denied:?}"
+    );
+
+    // Grant explicit write → the same open now succeeds.
+    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
+    backend
+        .open_invocation(OpenInvocation {
+            trigger_kind: "manual".to_string(),
+            originating_cogmap: CogmapId::from(L0_COGMAP),
+            parent_cogmap: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("self-attributed open with write must succeed");
+}
+
+/// F2 — a DELEGATED open (`parent_cogmap: Some`) needs only READ on the originating map; the substrate's
+/// parent→originating lineage is the control for delegated sub-agents, so a read-only principal (no write
+/// grant) may open a delegated envelope where it could not open a self-attributed one.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn delegated_open_needs_only_read(pool: PgPool) {
+    let profile = common::fixtures::create_test_profile(&pool, "delegate@example.com").await;
+    sqlx::query("UPDATE kb_profiles SET system_access = 'approved' WHERE id = $1")
+        .bind(profile)
+        .execute(&pool)
+        .await
+        .expect("approve test profile");
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    // Read-only principal, but delegated (parent set) → read gate suffices → succeeds.
+    backend
+        .open_invocation(OpenInvocation {
+            trigger_kind: "manual".to_string(),
+            originating_cogmap: CogmapId::from(L0_COGMAP),
+            parent_cogmap: Some(CogmapId::from(L0_COGMAP)),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("delegated open by a read-only principal must succeed");
 }

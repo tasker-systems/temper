@@ -82,6 +82,8 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
         .expect("profile pre-flight")
         .id;
     common::enable_invite_only(&pool, principal).await;
+    // Self-attributed open now requires WRITE on the originating map (F2); root-team read is not enough.
+    common::grant_cogmap_write(&pool, L0_COGMAP, principal).await;
 
     // A context to create into.
     app.client
