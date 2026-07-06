@@ -116,11 +116,46 @@ function walk(node, keyHint) {
 	return node;
 }
 
+// Beat 2b: ensure the harness can render node content even from a pre-backend capture.
+// Synthesize an excerpt on neighborhood nodes and a payload + actor_name on trail events
+// when a (pre-backend) capture lacks them. Deterministic, personal-data-free.
+function ensureNodeContent(view) {
+	if (view && view.neighborhood && Array.isArray(view.neighborhood.nodes)) {
+		view.neighborhood.nodes.forEach((n, i) => {
+			if (n.excerpt === undefined)
+				n.excerpt =
+					i % 3 === 0
+						? null
+						: `${synthText('excerpt' + i)} — ${synthText('excerpt-tail' + i)}.`;
+		});
+	}
+	if (view && view.trail && Array.isArray(view.trail.events)) {
+		view.trail.events.forEach((e, i) => {
+			if (e.actor_name === undefined) e.actor_name = i % 2 === 0 ? 'system' : synthText('actor' + i);
+			if (e.payload === undefined)
+				e.payload =
+					e.kind === 'property_set'
+						? { property_key: 'temper-stage', value: 'in-progress', weight: 1 }
+						: e.kind === 'relationship_asserted'
+							? { label: 'derived_from', target: { id: view.neighborhood?.nodes?.[0]?.id ?? '0' } }
+							: { note: synthText('payload' + i) };
+		});
+	}
+	return view;
+}
+
 const raw = JSON.parse(readFileSync(inPath, 'utf8'));
 const sanitized = {};
 for (const [scenario, view] of Object.entries(raw)) {
 	if (scenario === '_meta') continue; // dropped; replaced with a neutral stamp below
 	sanitized[scenario] = walk(view, scenario);
+}
+// Second pass, after every scenario's real data has been walked: synthesize the new
+// Beat 2b fields. Kept out of the walk loop above so the excerpt/payload synthText()
+// calls (which mint brand-new first-seen strings) can never interleave with — and
+// thereby shift the seed counter for — a later scenario's real title/text sanitization.
+for (const scenario of Object.keys(sanitized)) {
+	ensureNodeContent(sanitized[scenario]);
 }
 sanitized._meta = {
 	synthetic: true,

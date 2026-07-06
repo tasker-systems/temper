@@ -95,6 +95,21 @@ describe('committed atlas fixtures', () => {
 		expect(view.resourceRow).not.toBeNull();
 	});
 
+	it('nodeSelected neighborhood nodes carry an excerpt field', () => {
+		const view = scenario('nodeSelected');
+		const withExcerpt = view.neighborhood?.nodes.filter((n) => typeof n.excerpt === 'string') ?? [];
+		expect(withExcerpt.length).toBeGreaterThan(0);
+	});
+
+	it('nodeSelected trail events carry payload + actor_name', () => {
+		const events = scenario('nodeSelected').trail?.events ?? [];
+		expect(events.length).toBeGreaterThan(0);
+		for (const e of events) {
+			expect(e).toHaveProperty('payload');
+			expect(typeof e.actor_name).toBe('string');
+		}
+	});
+
 	it('leaks no personal data from the original capture', () => {
 		// Denylist of real strings/ids that appeared in the personal capture this bundle
 		// was sanitized from. A raw capture committed by mistake would trip this.

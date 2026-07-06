@@ -705,63 +705,72 @@
 					"title": "Cobalt lucid atlas meadow lattice",
 					"doc_type": "task",
 					"home": "context",
-					"degree": 5
+					"degree": 5,
+					"excerpt": null
 				},
 				{
 					"id": "0191d0c0-0058-7000-8000-000000000058",
 					"title": "Lucid atlas",
 					"doc_type": "commitment",
 					"home": "cogmap",
-					"degree": 5
+					"degree": 5,
+					"excerpt": "Lattice cedar marble delta cobalt — Thicket beacon prairie verdant meridian signal."
 				},
 				{
 					"id": "0191d0c0-0059-7000-8000-000000000059",
 					"title": "Signal ember ripple",
 					"doc_type": "theme",
 					"home": "cogmap",
-					"degree": 10
+					"degree": 10,
+					"excerpt": "Anchor cascade kestrel harbor orbit quartz summit — Meadow lattice."
 				},
 				{
 					"id": "0191d0c0-005c-7000-8000-00000000005c",
 					"title": "Meridian signal ember ripple thicket beacon",
 					"doc_type": "theme",
 					"home": "cogmap",
-					"degree": 7
+					"degree": 7,
+					"excerpt": null
 				},
 				{
 					"id": "0191d0c0-005d-7000-8000-00000000005d",
 					"title": "Orbit quartz summit willow anchor cascade kestrel",
 					"doc_type": "session",
 					"home": "context",
-					"degree": 4
+					"degree": 4,
+					"excerpt": "Ripple thicket beacon — Willow anchor cascade kestrel."
 				},
 				{
 					"id": "0191d0c0-005e-7000-8000-00000000005e",
 					"title": "Delta cobalt",
 					"doc_type": "task",
 					"home": "context",
-					"degree": 2
+					"degree": 2,
+					"excerpt": "Atlas meadow lattice cedar marble — Ember ripple thicket beacon prairie verdant."
 				},
 				{
 					"id": "0191d0c0-005f-7000-8000-00000000005f",
 					"title": "Verdant meridian signal",
 					"doc_type": "session",
 					"home": "context",
-					"degree": 3
+					"degree": 3,
+					"excerpt": null
 				},
 				{
 					"id": "0191d0c0-0060-7000-8000-000000000060",
 					"title": "Harbor orbit quartz summit",
 					"doc_type": "domain",
 					"home": "cogmap",
-					"degree": 5
+					"degree": 5,
+					"excerpt": "Summit willow anchor cascade kestrel harbor orbit — Lucid atlas."
 				},
 				{
 					"id": "0191d0c0-0061-7000-8000-000000000061",
 					"title": "Marble delta cobalt lucid atlas",
 					"doc_type": "session",
 					"home": "context",
-					"degree": 5
+					"degree": 5,
+					"excerpt": "Signal ember ripple — Quartz summit willow anchor."
 				}
 			],
 			"edges": [
@@ -869,19 +878,35 @@
 					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
 					"kind": "resource_created",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
 				},
 				{
 					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
 					"kind": "property_set",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
 				},
 				{
 					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
 					"kind": "property_set",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
 				}
 			]
 		},
@@ -951,63 +976,72 @@
 					"title": "Cobalt lucid atlas meadow lattice",
 					"doc_type": "task",
 					"home": "context",
-					"degree": 5
+					"degree": 5,
+					"excerpt": null
 				},
 				{
 					"id": "0191d0c0-0058-7000-8000-000000000058",
 					"title": "Lucid atlas",
 					"doc_type": "commitment",
 					"home": "cogmap",
-					"degree": 5
+					"degree": 5,
+					"excerpt": "Lattice cedar marble delta cobalt — Thicket beacon prairie verdant meridian signal."
 				},
 				{
 					"id": "0191d0c0-0059-7000-8000-000000000059",
 					"title": "Signal ember ripple",
 					"doc_type": "theme",
 					"home": "cogmap",
-					"degree": 10
+					"degree": 10,
+					"excerpt": "Anchor cascade kestrel harbor orbit quartz summit — Meadow lattice."
 				},
 				{
 					"id": "0191d0c0-005c-7000-8000-00000000005c",
 					"title": "Meridian signal ember ripple thicket beacon",
 					"doc_type": "theme",
 					"home": "cogmap",
-					"degree": 7
+					"degree": 7,
+					"excerpt": null
 				},
 				{
 					"id": "0191d0c0-005d-7000-8000-00000000005d",
 					"title": "Orbit quartz summit willow anchor cascade kestrel",
 					"doc_type": "session",
 					"home": "context",
-					"degree": 4
+					"degree": 4,
+					"excerpt": "Ripple thicket beacon — Willow anchor cascade kestrel."
 				},
 				{
 					"id": "0191d0c0-005e-7000-8000-00000000005e",
 					"title": "Delta cobalt",
 					"doc_type": "task",
 					"home": "context",
-					"degree": 2
+					"degree": 2,
+					"excerpt": "Atlas meadow lattice cedar marble — Ember ripple thicket beacon prairie verdant."
 				},
 				{
 					"id": "0191d0c0-005f-7000-8000-00000000005f",
 					"title": "Verdant meridian signal",
 					"doc_type": "session",
 					"home": "context",
-					"degree": 3
+					"degree": 3,
+					"excerpt": null
 				},
 				{
 					"id": "0191d0c0-0060-7000-8000-000000000060",
 					"title": "Harbor orbit quartz summit",
 					"doc_type": "domain",
 					"home": "cogmap",
-					"degree": 5
+					"degree": 5,
+					"excerpt": "Summit willow anchor cascade kestrel harbor orbit — Lucid atlas."
 				},
 				{
 					"id": "0191d0c0-0061-7000-8000-000000000061",
 					"title": "Marble delta cobalt lucid atlas",
 					"doc_type": "session",
 					"home": "context",
-					"degree": 5
+					"degree": 5,
+					"excerpt": "Signal ember ripple — Quartz summit willow anchor."
 				}
 			],
 			"edges": [
@@ -1115,19 +1149,35 @@
 					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
 					"kind": "resource_created",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
 				},
 				{
 					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
 					"kind": "property_set",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
 				},
 				{
 					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
 					"kind": "property_set",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
 				}
 			]
 		},
@@ -1671,19 +1721,35 @@
 					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
 					"kind": "resource_created",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
 				},
 				{
 					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
 					"kind": "property_set",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
 				},
 				{
 					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
 					"kind": "property_set",
 					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-					"occurred_at": "2026-07-05T00:03:08.777170+00:00"
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
 				}
 			]
 		},
