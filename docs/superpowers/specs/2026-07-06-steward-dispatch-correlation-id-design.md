@@ -66,8 +66,11 @@ breaks.
 
 ### Correlation id
 
-- **Mint** `correlationId = uuidv7()` at the top of the cron `run` handler (consistent with the
-  repo's UUID v7 convention). uuidv7 is time-sortable, so ids sort by tick time in log search.
+- **Mint** `correlationId = crypto.randomUUID()` at the top of the cron `run` handler (Node 24
+  native, zero-dep). A **v4** UUID is deliberate here: a *log* correlation key needs uniqueness, not
+  v7 time-sortability — log timestamps already order the trace, and the fast-follow's UUID column
+  accepts any UUID. (The steward toolchain ships no uuid package; pulling one in for sortability we
+  don't need is not worth the dependency.)
 - **Log it first, before the outbound fetch:** `[steward-dispatch] tick {correlationId} starting`.
   This is the anchor line — every later line and every failure references it.
 

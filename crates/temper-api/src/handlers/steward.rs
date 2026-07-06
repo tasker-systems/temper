@@ -7,6 +7,7 @@
 //! handler just dispatches and lets the backend return 403/404.
 
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -142,8 +143,24 @@ pub async fn candidates(
 pub async fn dispatch(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(req): Json<DispatchTickRequest>,
 ) -> ApiResult<Json<DispatchTickResponse>> {
+    // Correlation trace (design 2026-07-06-steward-dispatch-correlation-id): the steward cron mints a
+    // per-tick id and sends it as `x-steward-correlation-id`. Log it — plus Vercel's own inbound
+    // `x-vercel-id` — on entry, so this outbound-from-the-cron request (which lands in temper-api's
+    // logs, not the steward-agent's) is joinable to the originating tick across the two apps. Both are
+    // optional; a caller without them logs `<none>`.
+    let correlation_id = headers
+        .get("x-steward-correlation-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("<none>");
+    let vercel_id = headers
+        .get("x-vercel-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("<none>");
+    tracing::info!(correlation_id, vercel_id, "steward dispatch received");
+
     let cmd = StewardDispatchTick {
         threshold: req.threshold,
         cap: req.cap,
