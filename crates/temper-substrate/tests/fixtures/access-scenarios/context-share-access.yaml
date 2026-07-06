@@ -86,9 +86,12 @@ checks:
   - { check: edge_visible_to, profile: alice, edge: pub1-pub2, expect: true }
   - { check: edge_visible_to, profile: bob,   edge: pub1-pub2, expect: false }  # endpoints public, HOME unshared
   - { check: edge_visible_to, profile: alice, edge: rdoc-rnote, expect: true }  # cogmap-homed control
-  # S6 — write axis (WS2): can_modify_resource. Context-share is read-reach only, NOT a write path.
+  # S6 — write axis (WS2): can_modify_resource. A context SHARE is read-reach only, never a write path.
+  # But the container-write cascade (2026-07-06 spec) makes a member of the OWNING team a writer of a
+  # team-owned context, cascading to its nodes — the symmetric write analog of context_visible_to's
+  # team-owner READ arm. So the write path here is ownership, not the share.
   - { check: can_modify, profile: carol, resource: rdoc, expect: true }    # owner can modify
-  - { check: can_modify, profile: alice, resource: rdoc, expect: false }   # reaches rdoc for READ via the share, no write grant
+  - { check: can_modify, profile: alice, resource: rdoc, expect: true }    # team-a OWNS research → alice (member) authors it → cascade to rdoc
   - { check: can_modify, profile: bob,   resource: rdoc, expect: false }   # cannot even see rdoc
   - { check: can_modify, profile: bob,   resource: wdoc, expect: true }    # explicit profile WRITE grant
   - { check: can_modify, profile: carol, resource: wdoc, expect: false }   # no grant, not owner, scratch unshared
