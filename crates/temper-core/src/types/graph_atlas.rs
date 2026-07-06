@@ -36,6 +36,12 @@ pub struct AtlasNode {
     pub degree: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub salience: Option<f64>,
+    /// First-paragraph body preview (≤280 chars, word-boundary truncated), from the
+    /// R4 slice's `first_chunk` via `compute_excerpt`. `None` when the node has no
+    /// body, or on any read that doesn't source a first chunk. Renders as the
+    /// EXCERPT block in the TrailRail and the hover-card snippet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
 }
 
 /// A directed edge on the Atlas canvas. `label` is nullable (matches
@@ -120,11 +126,13 @@ mod tests {
             home: NodeHome::Cogmap,
             degree: 3,
             salience: Some(0.8),
+            excerpt: None,
         };
         let json = serde_json::to_string(&n).unwrap();
         let back: AtlasNode = serde_json::from_str(&json).unwrap();
         assert_eq!(n, back);
         assert!(json.contains("\"home\":\"cogmap\""));
         assert!(!json.contains("doc_type")); // None is skipped
+        assert!(!json.contains("excerpt")); // None is skipped
     }
 }

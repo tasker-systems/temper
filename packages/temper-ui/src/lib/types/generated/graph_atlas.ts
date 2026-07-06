@@ -14,7 +14,14 @@ export type AtlasEdge = { id: string, source: string, target: string, edge_kind:
  * `degree` is the node's total visible edge count (sizing hint). `salience`
  * is region-derived and may be `None` in the neighborhood tier.
  */
-export type AtlasNode = { id: string, title: string, doc_type: string | null, home: NodeHome, degree: number, salience: number | null, };
+export type AtlasNode = { id: string, title: string, doc_type: string | null, home: NodeHome, degree: number, salience: number | null, 
+/**
+ * First-paragraph body preview (≤280 chars, word-boundary truncated), from the
+ * R4 slice's `first_chunk` via `compute_excerpt`. `None` when the node has no
+ * body, or on any read that doesn't source a first chunk. Renders as the
+ * EXCERPT block in the TrailRail and the hover-card snippet.
+ */
+excerpt: string | null, };
 
 /**
  * A team-scoped search hit on the Atlas canvas. `node_id` is `kb_resources.id`
