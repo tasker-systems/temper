@@ -452,14 +452,13 @@ pub async fn create_resource(
     };
 
     // Build slug from title if not provided
-    let slug = input.slug.unwrap_or_else(|| {
-        input
-            .title
-            .to_lowercase()
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-            .trim_matches('-')
-            .to_owned()
-    });
+    // Derive the slug from the title via the one canonical slugifier, whose
+    // output is validate_slug-conformant (ASCII, runs collapsed) — an inline
+    // copy previously kept non-ASCII letters and made create fail validation
+    // on a non-ASCII title (bug B2, 2026-07-06).
+    let slug = input
+        .slug
+        .unwrap_or_else(|| temper_workflow::operations::sluggify(&input.title));
 
     let origin_uri = input
         .origin_uri
