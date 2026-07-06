@@ -1,0 +1,24 @@
+name: "Cognitive Maps for Storyteller"
+telos_title: "Cognitive Maps for Storyteller — telos"
+telos:
+  statement: >-
+    Understand where and how temper's cognitive maps could manage the information the
+    storyteller system works with — the knowledge held by its agent-personas (storykeeper,
+    narrator, world agent, and others) and the living state of its characters and plot
+    beats. This map sits at the intersection of temper's cognitive-map tooling and
+    storyteller's narrative needs; nodes name the design concepts of that fit, judged for
+    their bearing on it — never universally.
+  questions:
+    - question: "What information must each storyteller agent-persona hold, and what shape would a cogmap give it?"
+      context: "storykeeper, narrator, world agent — each persona's knowledge, mapped."
+    - question: "What would the telos of a character map, a world map, or a plot-beat map be?"
+      context: "what makes a concept salient in each — the differentiating purpose."
+    - question: "How would temper's authored-4 / provenance / region model map onto narrative state that changes constantly?"
+      context: "fitting a distillation-and-supersession model to fast-moving story state."
+    - question: "Where do temper's cogmap primitives fit the narrative domain cleanly, and where do they strain?"
+      context: "the honest fit-and-friction assessment."
+    - question: "What must temper's cogmap model gain for narrative information management to be viable?"
+      context: "the gap register — what is missing today."
+  framing:
+    - "Nodes carry a derived_from edge to their source(s); regions emerge only from materialize."
+    - "Where a source concept is already a node in a visible neighboring map, link to it (a cross-map reference) rather than re-distilling it."
