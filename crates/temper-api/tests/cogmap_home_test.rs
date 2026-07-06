@@ -24,6 +24,12 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::home::HomeAnchor;
+use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_services::backend::DbBackend;
+use temper_workflow::operations::{Backend, CreateResource, Surface};
+use temper_workflow::types::managed_meta::ManagedMeta;
+
 // ── helpers ───────────────────────────────────────────────────────────────────────
 
 /// The seed's system emitter — every cogmap genesis is fired under an entity. Always present.
@@ -925,5 +931,64 @@ async fn cogmap_search_includes_peer_resource_on_shared_map(pool: PgPool) {
     assert!(
         rows.is_empty(),
         "non-member cogmap search must be empty; got {rows:?}"
+    );
+}
+
+// ── (F1) the create-into-cogmap gate lives on the BACKEND, not only the surfaces ─────
+
+/// F1 — `DbBackend::create_resource` denies a non-granted principal on a `Cogmap` home DIRECTLY, not
+/// only via the surface pre-checks. This is the belt-and-suspenders the surfaces (mcp create tool, api
+/// ingest) also enforce: the shared write path must not trust callers to pre-check (one new caller away
+/// from a silent bypass — the SAML `is_active` failure mode). A granted principal succeeds; the denial
+/// writes no home row (auth before writes).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_into_cogmap_denied_at_backend_for_nongranted(pool: PgPool) {
+    let email = format!("f1-backend-{}@example.com", Uuid::new_v4());
+    let (profile, _ctx) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let cogmap = birth_cogmap(&pool, profile, "f1-map").await;
+
+    fn cmd(cogmap: Uuid, slug: &str) -> CreateResource {
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Cogmap(CogmapId::from(cogmap)),
+            title: format!("F1 backend {slug}"),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: Some(format!("test://f1-{slug}")),
+            chunks_packed: None,
+            content_hash: None,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        }
+    }
+
+    // Baseline: genesis already homes the map's telos resource, so measure the delta, not an absolute.
+    let baseline = homes_in_cogmap(&pool, cogmap).await;
+
+    // No write grant on the map → the backend command itself denies (not just the surface).
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let denied = backend.create_resource(cmd(cogmap, "denied")).await;
+    assert!(
+        matches!(denied, Err(temper_core::error::TemperError::Forbidden)),
+        "backend create into a cogmap without a write grant must be Forbidden: {denied:?}"
+    );
+    assert_eq!(
+        homes_in_cogmap(&pool, cogmap).await,
+        baseline,
+        "denied create must write no home row (auth before writes)"
+    );
+
+    // Grant explicit cogmap write → the same backend create now succeeds and homes the resource.
+    grant_cogmap_write(&pool, cogmap, profile).await;
+    backend
+        .create_resource(cmd(cogmap, "granted"))
+        .await
+        .expect("backend create into a cogmap WITH a write grant must succeed");
+    assert_eq!(
+        homes_in_cogmap(&pool, cogmap).await,
+        baseline + 1,
+        "granted create writes exactly one new cogmap home row"
     );
 }

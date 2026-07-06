@@ -38,6 +38,8 @@ async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ContextId) 
         .execute(pool)
         .await
         .expect("approve test profile");
+    // Self-attributed invocation-open on L0 now requires WRITE (F2) — grant it so `open_inv` succeeds.
+    common::fixtures::grant_cogmap_write(pool, L0_COGMAP, profile).await;
     (
         DbBackend::new(pool.clone(), ProfileId::from(profile)),
         ContextId::from(context),

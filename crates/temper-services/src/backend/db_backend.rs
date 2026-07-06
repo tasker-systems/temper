@@ -374,6 +374,28 @@ impl DbBackend {
         }
     }
 
+    /// Auth-before-writes gate for authoring INTO a cognitive map: the acting profile must hold an
+    /// explicit write grant on the map (`cogmap_authorable_by_profile` =
+    /// `profile_explicit_grant(...,'write','kb_cogmaps',...)` — cogmaps have no owner, so authority is
+    /// wholly explicit). Two callers: the backend-side create-into-cogmap gate (F1 — belt-and-suspenders
+    /// for the same predicate the surfaces pre-check, so the shared write path denies even a caller that
+    /// skipped the surface) and the self-attributed `invocation_open` gate (F2). Deny → `Forbidden` (403).
+    async fn check_cogmap_authorable(&self, cogmap_id: uuid::Uuid) -> Result<(), TemperError> {
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT cogmap_authorable_by_profile($1, $2)",
+            *self.profile_id,
+            cogmap_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
+        if can.unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(TemperError::Forbidden)
+        }
+    }
+
     /// The source resource an edge mutation is authorized against. Production gates edge
     /// retype/reweight/fold on "can modify the SOURCE resource" (`handlers::edges` → 403 "Cannot modify
     /// source resource"); the parity-era write path only ever asserts resource→resource edges, so the
@@ -813,6 +835,14 @@ impl Backend for DbBackend {
         // Correlation-integrity gate for any claimed invocation — additive to the create authz above,
         // before any mutation (auth-before-write). No-op when the act carries no invocation.
         self.check_act_invocation(cmd.act.invocation).await?;
+        // F1 — backend-side create-into-cogmap gate (auth before writes). The surfaces (mcp create
+        // tool, api ingest) pre-check `cogmap_authorable_by_profile` too, but the shared write path
+        // must not trust them: a gate that lives only on the surfaces is one new caller away from a
+        // silent bypass (the SAML `is_active` failure mode `docs/auth` exists to prevent). Cogmap-only
+        // — create-into-context is not gated here (a deliberate scope guard; see the cascade spec).
+        if let HomeAnchor::Cogmap(m) = &cmd.home {
+            self.check_cogmap_authorable(uuid::Uuid::from(*m)).await?;
+        }
         // Map the command's HomeAnchor to the substrate's AnchorRef so CreateParams.home
         // accepts either a context or a cognitive map without further branching downstream.
         let home = match cmd.home {
@@ -1587,17 +1617,31 @@ impl Backend for DbBackend {
     }
 
     /// Open an agent-invocation envelope, returning the server-minted invocation id. AUTH BEFORE
-    /// WRITE: the acting profile must be able to read the originating cogmap (`check_can_read_cogmap`)
-    /// — deny → 403, before any `writes::` call. The substrate's `invocation_open` enforces the
-    /// parent→originating delegation gate internally when `parent` is set, so it is not re-checked
-    /// here. The id is minted by `writes::open_invocation` (server-mint v1, never caller-supplied).
+    /// WRITE, split by delegation (F2):
+    /// * **self-attributed** (`parent_cogmap` is `None`): the acting profile must be able to AUTHOR the
+    ///   originating cogmap (`check_cogmap_authorable`, an explicit write grant). Claiming a slot on a
+    ///   map's accountability ledger under one's own name is an authoring act — read-to-open would let a
+    ///   mere reader post self-attributed (inert) envelopes as ledger noise. In production the only
+    ///   self-attributed opener is the steward, which holds write on its map, so this regresses no real
+    ///   caller.
+    /// * **delegated** (`parent_cogmap` is `Some`): the READ gate (`check_can_read_cogmap`) suffices; the
+    ///   substrate's `invocation_open` enforces the parent→originating delegation lineage internally, so
+    ///   a parent that authored may delegate an open the sub-agent principal need not itself hold write for.
+    ///
+    /// Deny → 403, before any `writes::` call. The id is minted by `writes::open_invocation`
+    /// (server-mint v1, never caller-supplied).
     async fn open_invocation(
         &self,
         cmd: OpenInvocation,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
-        // Auth before any write: the acting profile must be able to read the originating cogmap.
-        self.check_can_read_cogmap(uuid::Uuid::from(cmd.originating_cogmap))
-            .await?;
+        // Auth before any write: self-attributed opens require write on the originating cogmap;
+        // delegated opens require only read (delegation lineage is checked in the substrate).
+        let originating = uuid::Uuid::from(cmd.originating_cogmap);
+        if cmd.parent_cogmap.is_none() {
+            self.check_cogmap_authorable(originating).await?;
+        } else {
+            self.check_can_read_cogmap(originating).await?;
+        }
 
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await

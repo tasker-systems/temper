@@ -24,6 +24,25 @@ use sqlx::PgPool;
 /// fixed-UUID System resource against tables/columns the substrate retired.
 pub async fn clean_and_seed(_pool: &PgPool) {}
 
+/// Grant a profile explicit `can_write` on a cognitive map — the post-Q-A authoring capability
+/// (`cogmap_authorable_by_profile` = an explicit `kb_access_grants` write row; membership confers
+/// read, not write). Used where a test principal must AUTHOR a map it can otherwise only read
+/// (e.g. opening a self-attributed invocation on L0, which read-only root-join does not permit).
+/// `granted_by` is the grantee itself (a fixture bootstrap standing in for a real delegated grant).
+pub async fn grant_cogmap_write(pool: &PgPool, cogmap: uuid::Uuid, profile: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, $2) \
+         ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING",
+    )
+    .bind(cogmap)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("grant cogmap write");
+}
+
 /// Create a test profile and return its UUID.
 pub async fn create_test_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
     let (profile_id, _context_id) = create_test_profile_with_context(pool, email).await;
