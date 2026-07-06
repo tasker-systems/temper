@@ -20,7 +20,18 @@ Spec: `docs/superpowers/specs/2026-07-06-cogmap-telos-differentiation-experiment
 
 ## Genesis IDs (Tasks 1–4)
 
-_pending — Task 1 (team id), Task 3 (MAP2_ID/MAP2_TELOS_ID, MAP3_ID/MAP3_TELOS_ID), Task 4 (bind/grant + isolation-gate output)._
+**Task 1 — experiment team**
+- `EXPERIMENT_TEAM_ID` = `019f38b4-aad5-7aa2-9b58-c9d831d35c18` (slug `cogmap-experiment`)
+- Roster: `j-cole-taylor` (owner) only. Steward `agent-y23aq…` absent ✓
+
+**Task 3 — genesis**
+- **Map 2 — Storyteller System Design:** `MAP2_ID` = `019f38b4-de02-7bd1-b96f-075e8ca95b0a`, `MAP2_TELOS_ID` = `019f38b4-de02-7bd1-b96f-076d34898c90`. Charter read-back: 1 statement + 5 questions + 2 framing ✓
+- **Map 3 — Cognitive Maps for Storyteller:** `MAP3_ID` = `019f38b5-2048-7902-8159-c208f55ec3f9`, `MAP3_TELOS_ID` = `019f38b5-2048-7902-8159-c21cc85045bb`. Charter read-back: 1 statement + 5 questions + 2 framing ✓
+
+**Task 4 — bind + grant + isolation gate**
+- `cogmap_bind` Map 2 → experiment team: `bound: true`; Map 3 → experiment team: `bound: true`. Bound to the experiment team ONLY.
+- `cogmap_grant` write→`@j-cole-taylor`: `granted: false` (idempotent no-op). **Definitive check:** `cogmap_authorable_by_profile(019d4add, MAP2)` = `t`, `(…, MAP3)` = `t` — the author is write-capable via admin.
+- **ISOLATION GATE ✓** — `steward_candidate_cogmaps(agent-y23aq…)` after binding = exactly `{00000000-…0005-…0001 (L0), 019f2391 (steward map)}`, identical to the Task-0 baseline. Explicit exclusion: `map2_in_stewards_reach = f`, `map3_in_stewards_reach = f`. The steward cannot see or sweep the new maps.
 
 ## Phase 1 authoring (Task 5)
 
