@@ -83,6 +83,10 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
 
 - **[authorization-seam.md](./authorization-seam.md)** — the two-level chain, `AuthzError`,
   the typestate, the router-tier split, per-surface transport mapping, and the parity test.
+- **[cognitive-map-authoring.md](./cognitive-map-authoring.md)** — the *per-resource* axis:
+  who may author into a cogmap or modify a resource. The three predicates
+  (`cogmap_authorable_by_profile` / `can_modify_resource` / `anchor_readable_by_profile`),
+  the full per-op gate map, agent-vs-human principals, and the known hardening gaps (F1–F3).
 - **[jwt-verification.md](./jwt-verification.md)** — `JwksKeyStore`, RS256 (Auth0/OIDC) and
   EdDSA (the SAML Authorization Server), the per-surface audience split, and the email
   resolution ladder.
