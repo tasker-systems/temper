@@ -12,8 +12,32 @@ describe('trailModel', () => {
 			{ event_id: 'b', kind: 'relationship.reweighted', actor_entity_id: 'u1', occurred_at: '2026-02-01T00:00:00Z', confidence: 'high', actor_name: 'system', payload: {} }
 		]);
 		const rows = trailModel(t);
-		expect(rows[0]).toMatchObject({ kind: 'Reweighted', occurredAt: '2026-02-01T00:00:00Z', confidence: 'high' });
-		expect(rows[1]).toMatchObject({ kind: 'Asserted', confidence: null });
+		expect(rows[0]).toMatchObject({
+			kind: 'Reweighted',
+			rawKind: 'relationship.reweighted',
+			occurredAt: '2026-02-01T00:00:00Z',
+			confidence: 'high',
+			actorName: 'system',
+			payload: {}
+		});
+		expect(rows[1]).toMatchObject({ kind: 'Asserted', rawKind: 'relationship.asserted', confidence: null });
+	});
+	it('passes through rawKind, actorName, and payload untouched', () => {
+		const t = trail([
+			{
+				event_id: 'a',
+				kind: 'property_set',
+				actor_entity_id: 'u1',
+				occurred_at: '2026-01-01T00:00:00Z',
+				confidence: null,
+				actor_name: 'Cole Taylor',
+				payload: { property_key: 'stage', value: 'in-progress' }
+			}
+		]);
+		const row = trailModel(t)[0];
+		expect(row.rawKind).toBe('property_set');
+		expect(row.actorName).toBe('Cole Taylor');
+		expect(row.payload).toEqual({ property_key: 'stage', value: 'in-progress' });
 	});
 	it('normalizes missing confidence to null', () => {
 		const t = trail([{ event_id: 'a', kind: 'block.created', actor_entity_id: 'u', occurred_at: '2026-01-01T00:00:00Z', confidence: undefined as unknown as null, actor_name: 'system', payload: {} }]);

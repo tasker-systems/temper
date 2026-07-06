@@ -7,9 +7,14 @@ export interface TrailRow {
 	 *  render on those fields collides and crashes the panel; key on this. */
 	id: string;
 	kind: string;
+	/** Canonical, underscore-form event kind (e.g. "relationship_asserted") —
+	 *  untouched by humanizeKind — for summarizeEvent's payload-shape switch. */
+	rawKind: string;
 	actor: string;
+	actorName: string;
 	occurredAt: string;
 	confidence: string | null;
+	payload: unknown;
 }
 
 /** Humanize an R5 EventTrail into display rows, newest-first. `kind` is the
@@ -21,9 +26,12 @@ export function trailModel(trail: EventTrail): TrailRow[] {
 		.map((e) => ({
 			id: e.event_id,
 			kind: humanizeKind(e.kind),
+			rawKind: e.kind,
 			actor: e.actor_entity_id,
+			actorName: e.actor_name,
 			occurredAt: e.occurred_at,
-			confidence: e.confidence ?? null
+			confidence: e.confidence ?? null,
+			payload: e.payload
 		}));
 }
 
