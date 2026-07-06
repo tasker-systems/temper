@@ -349,6 +349,102 @@ pub async fn neighborhood_slice(
     Ok(AtlasSubgraph { nodes, edges })
 }
 
+/// A2 — cogmap-scoped R4 neighborhood slice: the cogmap-door analog of
+/// `neighborhood_slice`. Composes `graph_traverse_cogmap_scoped` (cogmap-clamped,
+/// edge-kind-filtered BFS) with `graph_atlas_nodes_cogmap` (node projection over
+/// the same cogmap scope) to build the induced Atlas subgraph. Deny-as-absence
+/// (404) when the profile cannot read the cogmap — mirrors `cogmap_panorama`.
+pub async fn cogmap_neighborhood_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    cogmap_id: Uuid,
+    req: SliceRequest,
+) -> ApiResult<AtlasSubgraph> {
+    if req.seeds.is_empty() {
+        return Err(ApiError::BadRequest("seeds must be non-empty".into()));
+    }
+    // Deny-as-absence: profile must read the cogmap.
+    let readable: bool = sqlx::query_scalar("SELECT cogmap_readable_by_profile($1, $2)")
+        .bind(profile_id.as_uuid())
+        .bind(cogmap_id)
+        .fetch_one(pool)
+        .await?;
+    if !readable {
+        return Err(ApiError::NotFound);
+    }
+
+    let depth = req.depth.min(MAX_DEPTH) as i32;
+
+    // Walk: returns the edges of the induced subgraph. EdgeKind/Polarity decode
+    // natively via their `sqlx::Type` derive (same mechanism as fetch_subgraph_edges
+    // above), so req.edge_kinds binds directly as an `edge_kind[]` array param —
+    // no `::text` cast round-trip.
+    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
+        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
+         FROM graph_traverse_cogmap_scoped($1, $2, $3, $4, $5)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(cogmap_id)
+    .bind(&req.seeds)
+    .bind(depth)
+    .bind(&req.edge_kinds)
+    .fetch_all(pool)
+    .await?;
+
+    let edges: Vec<AtlasEdge> = walked
+        .iter()
+        .map(
+            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
+                id: *id,
+                source: *source,
+                target: *target,
+                edge_kind: *edge_kind,
+                polarity: *polarity,
+                label: label.clone(),
+                weight: *weight,
+            },
+        )
+        .collect();
+
+    // Node id set = seeds ∪ all walked endpoints.
+    let mut node_ids: Vec<Uuid> = req.seeds.clone();
+    for (_, s, t, ..) in &walked {
+        node_ids.push(*s);
+        node_ids.push(*t);
+    }
+
+    let nodes: Vec<AtlasNode> = sqlx::query_as::<
+        _,
+        (Uuid, String, Option<String>, String, i32, Option<String>),
+    >(
+        "SELECT id, title, doc_type, home, degree, first_chunk FROM graph_atlas_nodes_cogmap($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(cogmap_id)
+    .bind(&node_ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(
+        |(id, title, doc_type, home, degree, first_chunk)| AtlasNode {
+            id,
+            title,
+            doc_type,
+            home: if home == "cogmap" {
+                NodeHome::Cogmap
+            } else {
+                NodeHome::Context
+            },
+            degree,
+            salience: None, // neighborhood-tier salience deferred (no per-node source yet)
+            excerpt: first_chunk.as_deref().and_then(compute_excerpt),
+        },
+    )
+    .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
+}
+
 /// C3 — team-scoped Atlas search. Service-direct read. Deny-as-absence (404)
 /// when the profile cannot view the team. Ranking + visibility inherited from
 /// `unified_search`; hits bounded to `resources_in_team_scope`.
