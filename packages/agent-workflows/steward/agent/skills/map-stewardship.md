@@ -28,13 +28,15 @@ for source in delta.new_or_changed:
     for f in facets(node): temper__facet_set(node, f, act)
 
 # Before closing, self-check: every act this tick carried invocation_id + confidence.
-temper__steward_advance_watermark(cogmap, delta.max_event_id)
+# LAST and ONCE — a real kb_events.id (delta.max_event_id), never a resource_id.
+temper__steward_advance_watermark(cogmap, delta.max_event_id)   # see "Advancing the watermark"
 temper__invocation_close(inv, outcome)
 ```
 
 ## Choosing a node label
 
-Per-source labels cite ~one source; synthesized labels span many (see granularity).
+Per-source labels *tend to* cite one source; synthesized labels *tend to* span many
+(see granularity) — a soft tendency, not a rule.
 
 | Label | Kind | Use it for |
 |-------|------|-----------|
@@ -54,12 +56,22 @@ tail. Prefer a recognized label when one is honest. `concern` vs `question`: a
 concern is a held tension, a question is an open ask. `concept` vs `theme`: a theme
 is broader, organizing many concepts.
 
-## Granularity
+## Granularity — a soft tendency, not a rule
 
-- **Per-source** (`fact`/`memory`/`decision`): one node cites ~one source — a single
-  `derived_from` edge.
+Labels lean toward a characteristic granularity, but this is a **tendency, never a
+gate**. A node of *any* label may cite multiple sources when the distillation honestly
+draws on several — a `decision` synthesized from two sources is correct, not a violation.
+
+- **Per-source** (`fact`/`memory`/`decision`): *usually* cites one source — a single
+  `derived_from` edge — because the observation typically comes from one place. But set
+  as many `derived_from` edges (and `sources`) as the node honestly distills from.
 - **Synthesized** (`concept`/`question`/`theme`/`concern`/`principle`/`commitment`/
-  `domain`): one node spans many sources — many `derived_from` edges into it.
+  `domain`): *usually* spans many sources — many `derived_from` edges into it — though a
+  synthesized node distilled from a single rich source is also fine.
+
+Match the edge/source count to what the node actually distills, not to its label. Never
+force-fit the split, and never reject or down-rank a node for carrying "too many" or "too
+few" sources for its label — the count follows the distillation.
 
 ## Source attribution (block provenance)
 
@@ -69,8 +81,9 @@ block (`kb_block_provenance`), which lights up the map's reinforcement and regio
 It runs *alongside* the `derived_from` edge, not instead of it — the edge is the graph-level lineage,
 `sources` is the block-level lineage, and they carry the **same** source set.
 
-- **Per-source node** (`fact`/`memory`/`decision`): `sources=[the one source id]` — the same id you
-  give its single `derived_from` edge.
+- **Per-source node** (`fact`/`memory`/`decision`): `sources=[the source id(s)]` — the same id(s) you
+  give its `derived_from` edge(s). Usually one, but a per-source node that honestly distills two
+  sources carries both (see Granularity — the count follows the distillation, not the label).
 - **Synthesized node** (`concept`/`question`/…): `sources=[every source id you distilled from]` —
   the same set as the many `derived_from` edges you assert into it. Order is attribution order.
 - **External source** (a web page, an issue/PR URL — not one of the team's own resources): pass the
@@ -82,9 +95,35 @@ It runs *alongside* the `derived_from` edge, not instead of it — the edge is t
 The rule of thumb: **whatever gets a `derived_from` edge goes in `sources`.** If you assert N
 `derived_from` edges into a node, its `sources` list has those same N ids.
 
-## Edge conventions
+## Stamping an authored node — provenance meta + origin_uri
 
-The structural `edge_kind` carries affinity; the free-text `label` carries meaning.
+Every authored node carries the same provenance trio in **`managed_meta`** (the typed
+home) — uniformly, on *every* `create_resource`, not just some ticks:
+
+- `temper-provenance: "llm-discovered"`
+- `temper-llm-model: "<your model>"` — the model authoring this tick (e.g. `MiniMax-M3`).
+- `temper-llm-run: "<this run's id>"` — the `invocation_id` from `invocation_open` is the
+  stable choice, so the node's frontmatter joins back to the run that authored it.
+
+Put provenance in `managed_meta` (typed keys) — **never** in an ad-hoc `open_meta` blob
+(e.g. a hand-rolled `open_meta.facet`). Reserve `temper__facet_set` for a node's
+*semantic* properties (a resolved question, a stance marker), not for provenance.
+
+Set the same model on the **act** envelope too — `model` alongside `invocation_id` /
+`confidence` / `reasoning`. The act records who authored each edge/facet; the node's
+`managed_meta` records it on the node. Keep the two in agreement.
+
+**`origin_uri`:** leave it **unset**. It defaults to `mcp://agent/<uuid>`, which is the
+convention. Never hand-slug `mcp://steward/…` — a hand-built origin_uri drifts from the
+default form for no gain.
+
+## Edge conventions — the rich-description layer
+
+The structural `edge_kind` (`express`/`contains`/`leads_to`/`near`) carries only coarse
+affinity. The **`label` + `polarity` + `weight`** are the rich-description layer that
+carries the actual semantics — the same way a node's facets enrich its bare type. Set
+all three, meaningfully, on **every** edge. A bare structural kind with a generic label
+and a constant weight is an under-described edge — exactly what to avoid.
 
 | Semantic label | edge_kind | polarity | Use |
 |----------------|-----------|----------|-----|
@@ -93,6 +132,32 @@ The structural `edge_kind` carries affinity; the free-text `label` carries meani
 | `part_of` | `contains` | inverse | whole–part. |
 | `answers` | `leads_to` | forward | a fact/concept answers a question. |
 | `supports` / `contradicts` | `leads_to` | forward / inverse | stance between nodes. |
+
+**Weight** (0.0–1.0) is your graded strength/confidence in the relationship — never a
+constant. A `derived_from` to the source a node distills is strong (~1.0); a `supports`
+you're sure of sits high (~0.8); a `relates_to` affinity you're noting but not leaning on
+is weak (~0.4–0.6). A map where every edge is `1.0` has thrown the weight signal away.
+
+**Polarity** is the direction of the relation, chosen deliberately: `supports` and
+`answers` are forward; `contradicts` is inverse; `part_of` is inverse (the part points at
+the whole).
+
+Worked examples — label + polarity + weight, each with the act envelope:
+
+    # a concept answers an open question — strong, directional
+    temper__assert_relationship(concept → question, edge_kind="leads_to", polarity="forward",
+        label="answers", weight=0.9, invocation_id=inv.id, confidence="confident",
+        reasoning="answers: this concept resolves the question's open ask")
+
+    # two nodes in tension — inverse polarity carries "contradicts"
+    temper__assert_relationship(node_a → node_b, edge_kind="leads_to", polarity="inverse",
+        label="contradicts", weight=0.7, invocation_id=inv.id, confidence="probable",
+        reasoning="contradicts: a's stance reverses b's")
+
+    # a loose thematic affinity — real but weak
+    temper__assert_relationship(node → theme, edge_kind="near", polarity="forward",
+        label="relates_to", weight=0.45, invocation_id=inv.id, confidence="tentative",
+        reasoning="relates_to: tangential thematic overlap, noted not leaned on")
 
 ## "Materially changed"
 
@@ -136,3 +201,19 @@ Same envelope on every call — not just `create`:
 `invocation_id` and `confidence`. If you authored a node, edge, or facet without
 them, you broke the accountability chain — the acts exist but nothing ties them to
 this run. Close with an outcome summarizing nodes / edges / facets / folds.
+
+## Advancing the watermark — last, once, to a real event id
+
+`steward_advance_watermark` is the **final** act of a tick, and it fires **exactly once**:
+
+- **Sequence — after everything, never mid-run.** Advance only once *all* authored-4 acts
+  are done, immediately before `invocation_close`. The watermark marks the whole delta as
+  ingested; firing it partway through claims sources you have not distilled yet. Do not
+  call it between `create_resource` batches or before your edges and facets land.
+- **Id hygiene — a `kb_events.id`, not a `resource_id`.** Advance to the `max_event_id`
+  from *this* tick's `steward_ingest_delta` — a real row in `kb_events` the session
+  observed. A node or edge id you just created is **not** an event row; passing one 404s as
+  "event … not found". The watermark is an *event* cursor, not a resource cursor.
+
+Concretely: hold `delta.max_event_id` from the top of the tick, do every act, then pass
+that same `max_event_id` to `steward_advance_watermark` right before you close.

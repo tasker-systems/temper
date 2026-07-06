@@ -23,13 +23,25 @@ import { requireEnv, temperToken } from "../lib/temper-auth.js";
  * `TEMPER_API_URL` (the REST base) — distinct from `TEMPER_MCP_URL`.
  *
  * Logging: the tick logs its outcome (claimed count) and any failure, so a no-op or a broken tick is
- * visible in the steward-agent logs instead of vanishing inside `waitUntil`.
+ * visible in the steward-agent logs instead of vanishing inside `waitUntil`. Each tick mints a
+ * `correlationId` and threads it across the app boundary — logged here, sent as `x-steward-correlation-id`
+ * to `/dispatch` (temper-api logs it on entry), so the cron → dispatch chain shares one key in the logs
+ * of BOTH Vercel apps even when a hop fails before any DB row exists (the load-bearing, infra-resilient
+ * trace). We also log the `/dispatch` response's `x-vercel-id` as a bridge into Vercel's per-request view.
+ * Design: docs/superpowers/specs/2026-07-06-steward-dispatch-correlation-id-design.md
  */
 export default defineSchedule({
   cron: "0 * * * *", // hourly, UTC; the server's threshold + single-flight gate what actually runs
   async run({ receive, waitUntil, appAuth }) {
     waitUntil(
       (async () => {
+        // One id per tick, threaded cron → /dispatch → the agent session so the whole chain shares a
+        // single join key across the two Vercel apps. `crypto.randomUUID` (v4) is sufficient — a
+        // correlation key needs uniqueness, not v7 sortability; log timestamps order the trace. Logged
+        // BEFORE the outbound fetch so a hop that dies (cold-start 500, fetch-never-lands, a receive()
+        // that throws) is still pinned to this id via the catch below.
+        const correlationId = crypto.randomUUID();
+        console.log(`[steward-dispatch] tick ${correlationId} starting`);
         try {
           const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
           const token = await temperToken();
@@ -43,6 +55,7 @@ export default defineSchedule({
               headers: {
                 authorization: `Bearer ${token}`,
                 "content-type": "application/json",
+                "x-steward-correlation-id": correlationId,
               },
               // Empty body → server defaults (ingest threshold + dispatch cap).
               body: "{}",
@@ -53,13 +66,19 @@ export default defineSchedule({
             throw new Error(`dispatch failed: ${res.status} ${await res.text()}`);
           }
 
+          // Bridge to Vercel's own request id for the infra-side view of this hop (design item 3).
+          const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
+
           const { claimed } = (await res.json()) as {
             claimed: { id: string; cogmap_id: string }[];
           };
 
           console.log(
-            `[steward-dispatch] claimed ${claimed.length} job(s)` +
-              (claimed.length ? `: ${claimed.map((j) => j.cogmap_id).join(", ")}` : " (no drift)"),
+            `[steward-dispatch] tick ${correlationId}: claimed ${claimed.length} job(s)` +
+              (claimed.length
+                ? `: ${claimed.map((j) => `${j.id}→${j.cogmap_id}`).join(", ")}`
+                : " (no drift)") +
+              ` (dispatch vercel-id ${dispatchVercelId})`,
           );
 
           // Fan out: one independent, fresh-context agent session per claimed job, each carrying a
@@ -70,7 +89,8 @@ export default defineSchedule({
                 target: {},
                 auth: appAuth,
                 message:
-                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id}). ` +
+                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id}; ` +
+                  `correlation ${correlationId}). ` +
                   `This map was already selected by the deterministic drift sweep, so its ingest delta ` +
                   `has cleared threshold — you do not need to re-check it. Pass this SINGLE cogmap id ` +
                   `as the \`cogmap\` argument to every temper tool. Load the map-stewardship skill, ` +
@@ -81,7 +101,7 @@ export default defineSchedule({
             ),
           );
         } catch (err) {
-          console.error("[steward-dispatch] tick failed:", err);
+          console.error(`[steward-dispatch] tick ${correlationId} failed:`, err);
           throw err;
         }
       })(),
