@@ -9,6 +9,7 @@ import {
 	buildEdgeSelectUrl,
 	buildFiltersUrl,
 	buildHomeUrl,
+	buildPanoramaUrl,
 	buildScopeUrl,
 	clearSelectionUrl,
 	deriveTier,
@@ -96,6 +97,22 @@ describe('cogmap addressing', () => {
 	});
 	it('buildHomeUrl clears cogmap too', () => {
 		expect(buildHomeUrl(url('?cogmap=c9'))).not.toContain('cogmap=');
+	});
+	it('buildPanoramaUrl clears focus + sel but KEEPS team scope (stale-territory degrade)', () => {
+		const p = new URL(
+			buildPanoramaUrl(url('?team=t1&focus=territory:r9&sel=edge:e2')),
+			'https://x'
+		).searchParams;
+		expect(p.get('focus')).toBeNull();
+		expect(p.get('sel')).toBeNull();
+		expect(p.get('team')).toBe('t1');
+	});
+	it('buildPanoramaUrl keeps cogmap scope + filters', () => {
+		const out = buildPanoramaUrl(url('?cogmap=c9&focus=territory:r9&lens_id=L1'));
+		const p = new URL(out, 'https://x').searchParams;
+		expect(p.get('cogmap')).toBe('c9');
+		expect(p.get('lens_id')).toBe('L1');
+		expect(out).not.toContain('focus=');
 	});
 });
 

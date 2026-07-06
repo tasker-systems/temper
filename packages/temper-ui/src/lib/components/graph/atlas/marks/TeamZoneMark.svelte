@@ -14,7 +14,7 @@
 </script>
 
 <g
-	class="team-zone"
+	class="team-zone atlas-focusable"
 	role="button"
 	tabindex="0"
 	onclick={onEnter}
@@ -41,4 +41,13 @@
 	/>
 	<text x={x + 10} y={y + 18} fill={TEAM_ZONE.label} font-size="11" font-weight="600">▸ {name} ⏎</text>
 	<text x={x + 10} y={y + 32} fill={TEAM_ZONE.sub} font-size="9">{resourceCount} nodes</text>
+	<rect
+		class="focus-ring"
+		x={x - 3}
+		y={y - 3}
+		width={width + 6}
+		height={height + 6}
+		rx="12"
+		stroke-width="2"
+	/>
 </g>

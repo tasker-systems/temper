@@ -1,7 +1,9 @@
 // +page.server.ts
+import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import type { GraphFilters } from '$lib/graph/atlas/nav';
 import {
+	buildPanoramaUrl,
 	deriveTier,
 	parseCogmap,
 	parseFilters,
@@ -11,6 +13,7 @@ import {
 	selectedElement
 } from '$lib/graph/atlas/nav';
 import type { EdgeKind } from '$lib/types/generated/graph';
+import { ApiError } from '$lib/server/api';
 import {
 	readAtlasHome,
 	readCogmapPanorama,
@@ -21,8 +24,49 @@ import {
 	readTerritories,
 	readTrail
 } from '$lib/server/graph-reads';
+import type { TerritorySlice } from '$lib/types/generated/graph_territory';
 
 const NEIGHBORHOOD_DEPTH = 2;
+
+const isNotFound = (e: unknown): boolean => e instanceof ApiError && e.status === 404;
+
+/**
+ * Read a focused territory's slice, degrading gracefully when it has been
+ * re-materialized out from under the URL. Region ids are ephemeral (the steward
+ * re-sweeps cogmap clusters), so a bookmarked / back-navigated / long-open
+ * territory URL can 404. On 404 we redirect to the current scope's panorama
+ * rather than 500 the whole page; a genuine 5xx still surfaces.
+ */
+async function sliceOrPanorama(token: string, regionId: string, url: URL): Promise<TerritorySlice> {
+	try {
+		return await readRegionSlice(token, regionId);
+	} catch (e) {
+		if (isNotFound(e)) throw redirect(303, buildPanoramaUrl(url));
+		throw e;
+	}
+}
+
+/**
+ * Resolve the breadcrumb label for a path territory. At Tier 1 the primary slice
+ * is already loaded and reused; at Tier 2 (a node leaf under a territory) we fetch
+ * the ancestor's slice just for its label. That ancestor can be a stale region id —
+ * but the node view itself is still valid (node ids are stable), so on 404 we keep
+ * the view and let the crumb fall back to its generic label rather than 500 or bounce
+ * the user off a working page.
+ */
+async function crumbTerritoryLabel(
+	token: string,
+	segId: string,
+	slice: TerritorySlice | null
+): Promise<{ id: string; label: string | null }> {
+	if (slice && slice.region_id === segId) return { id: segId, label: slice.label };
+	try {
+		return { id: segId, label: (await readRegionSlice(token, segId)).label };
+	} catch (e) {
+		if (isNotFound(e)) return { id: segId, label: null };
+		throw e;
+	}
+}
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const token = locals.accessToken!;
@@ -48,17 +92,15 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		// The home read is independent of the tier read, so run them concurrently.
 		const [territories, slice, home] = await Promise.all([
 			tier === 0 ? readCogmapPanorama(token, cogmapId) : Promise.resolve(null),
-			tier === 1 && focus.kind === 'territory' ? readRegionSlice(token, focus.id) : Promise.resolve(null),
+			tier === 1 && focus.kind === 'territory' ? sliceOrPanorama(token, focus.id, url) : Promise.resolve(null),
 			readAtlasHome(token)
 		]);
 		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
 		// Name the territory hop in the crumb — mirrors the team branch below (reuses
 		// the already-loaded slice at Tier 1; fetches the path territory's slice for
-		// its label at Tier 2).
+		// its label at Tier 2, tolerating a stale region id).
 		const crumbTerritory = territorySeg
-			? slice && slice.region_id === territorySeg.id
-				? { id: territorySeg.id, label: slice.label }
-				: { id: territorySeg.id, label: (await readRegionSlice(token, territorySeg.id)).label }
+			? await crumbTerritoryLabel(token, territorySeg.id, slice)
 			: null;
 		return {
 			owner: params.owner,
@@ -111,7 +153,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const scope = await readTeamScope(token, teamId);
 
 	const territories = tier === 0 ? await readTerritories(token, teamId, filters.lensId) : null;
-	const slice = tier === 1 && focus.kind === 'territory' ? await readRegionSlice(token, focus.id) : null;
+	const slice =
+		tier === 1 && focus.kind === 'territory' ? await sliceOrPanorama(token, focus.id, url) : null;
 	const neighborhood =
 		tier === 2 && focus.kind === 'node'
 			? await readNeighborhood(token, teamId, {
@@ -132,12 +175,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 	// Name the territory hop in the crumb. Tier 1 already loaded the slice (carries
 	// label); at Tier 2 fetch the path territory's slice for its label (reuses the
-	// gated R3 read — over-fetches members, acceptable for one label).
-	const crumbTerritory = territorySeg
-		? slice && slice.region_id === territorySeg.id
-			? { id: territorySeg.id, label: slice.label }
-			: { id: territorySeg.id, label: (await readRegionSlice(token, territorySeg.id)).label }
-		: null;
+	// gated R3 read — over-fetches members, acceptable for one label), tolerating a
+	// stale region id.
+	const crumbTerritory = territorySeg ? await crumbTerritoryLabel(token, territorySeg.id, slice) : null;
 
 	return {
 		owner: params.owner,

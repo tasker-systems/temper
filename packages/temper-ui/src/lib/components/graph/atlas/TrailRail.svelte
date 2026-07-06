@@ -23,7 +23,12 @@
 	const edge = $derived(
 		selection.kind === 'edge' && subgraph ? (subgraph.edges.find((e) => e.id === selection.id) ?? null) : null
 	);
-	const hue = $derived(node ? docTypeHue(node.doc_type ?? null) : edge ? '#c9b183' : '#8a929e');
+	// A resource leaf with no mapped neighbors has no subgraph node — fall back to the
+	// resourceRow so title / doc-type / meta still render off the loaded row + trail.
+	const isNode = $derived(selection.kind === 'node');
+	const nodeTitle = $derived(node?.title ?? resourceRow?.title ?? null);
+	const nodeDocType = $derived(node?.doc_type ?? resourceRow?.doc_type_name ?? null);
+	const hue = $derived(isNode ? docTypeHue(nodeDocType) : edge ? '#c9b183' : '#8a929e');
 	const neighbors = $derived(node && subgraph ? atlasNeighbors(node.id, subgraph.nodes, subgraph.edges) : []);
 	const rows = $derived(trail ? trailModel(trail) : []);
 
@@ -41,10 +46,10 @@
 {#if selection.kind !== 'none'}
 	<aside class="trail-rail" style="--hue: {hue};" data-testid="trail-rail">
 		<header>
-			<span class="marker">{edge ? 'EDGE' : 'NODE'} · {node?.doc_type ?? edge?.edge_kind ?? ''}</span>
+			<span class="marker">{edge ? 'EDGE' : 'NODE'} · {nodeDocType ?? edge?.edge_kind ?? ''}</span>
 			<button class="close" onclick={close}>CLOSE ✕</button>
 		</header>
-		<h2 class="title">{node?.title ?? (edge ? `${edge.edge_kind}` : '')}</h2>
+		<h2 class="title">{nodeTitle ?? (edge ? `${edge.edge_kind}` : '')}</h2>
 
 		{#if node && neighbors.length}
 			<section class="neighbors">
@@ -59,7 +64,7 @@
 			</section>
 		{/if}
 
-		{#if node && resourceRow}
+		{#if isNode && resourceRow}
 			<section class="meta">
 				<div><span class="k">CONTEXT</span><span>{resourceRow.context_slug ?? '—'}</span></div>
 				{#if resourceRow.cogmap_name}

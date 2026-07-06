@@ -198,3 +198,14 @@ export function buildHomeUrl(base: URL): string {
 		p.delete('focus');
 	});
 }
+
+/** Drop back to the panorama of the current scope: clear `focus` (→ Tier 0) and any
+ *  edge selection, but keep the active team/cogmap and filters. Used to degrade
+ *  gracefully when a focused territory has been re-materialized out from under the URL
+ *  (its region id now 404s) — the cluster is gone, so land the user on the current map. */
+export function buildPanoramaUrl(base: URL): string {
+	return withParams(base, (p) => {
+		p.delete('focus');
+		p.delete('sel');
+	});
+}

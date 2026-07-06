@@ -20,7 +20,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <g
-	class="edge"
+	class="edge atlas-focusable"
 	role={onSelect ? 'button' : undefined}
 	tabindex={onSelect ? 0 : undefined}
 	aria-label={edge.label ?? edge.edge_kind}
@@ -29,6 +29,8 @@
 	style={onSelect ? 'cursor:pointer' : undefined}
 >
 	<line {x1} {y1} {x2} {y2} stroke="transparent" stroke-width="10" />
+	<!-- Focus halo behind the visible stroke so the edge colour stays on top. -->
+	<line class="focus-ring" {x1} {y1} {x2} {y2} stroke-width={s.width + 5} stroke-linecap="round" />
 	<line
 		{x1}
 		{y1}

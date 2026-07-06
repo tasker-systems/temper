@@ -23,7 +23,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <g
-	class="territory"
+	class="territory atlas-focusable"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
 	aria-label={displayLabel ?? kind}
@@ -57,4 +57,5 @@
 			{displayLabel}
 		</text>
 	{/if}
+	<circle class="focus-ring" cx={x} cy={y} r={radius + 4} stroke-width="2" />
 </g>
