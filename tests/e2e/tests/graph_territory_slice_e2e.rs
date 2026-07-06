@@ -211,9 +211,12 @@ async fn slice_returns_members_for_readers_and_denies_outsiders(pool: sqlx::PgPo
         members.iter().any(|m| m["id"] == member_res.to_string()),
         "the visible region member is present: {body:?}"
     );
-    assert!(
-        body["components"].as_array().is_some(),
-        "components key present (possibly empty)"
+    // A3: the slice no longer carries a components array; members are the
+    // only interior grain. Exactly the one region member inserted above.
+    assert_eq!(
+        members.len(),
+        1,
+        "exactly the one visible region member surfaces: {body:?}"
     );
 
     // Outsider — 404 (deny-as-absence; not a member of the region's cogmap team).

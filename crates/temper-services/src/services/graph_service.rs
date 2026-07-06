@@ -16,8 +16,7 @@ use temper_core::types::graph_atlas::{
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeTeam};
 use temper_core::types::graph_territory::{
-    Bridge, Component, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview,
-    TerritorySlice,
+    Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
@@ -610,9 +609,9 @@ pub async fn cogmap_panorama(
     })
 }
 
-/// R3 Tier-1 territory drill-in: a region's components plus its
-/// visibility-scoped interior members. Deny-as-absence — the region must
-/// exist, be unfolded, and be readable by the caller, else `NotFound`.
+/// R3 Tier-1 territory drill-in: a region's visibility-scoped interior
+/// members. Deny-as-absence — the region must exist, be unfolded, and be
+/// readable by the caller, else `NotFound`.
 pub async fn territory_slice(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -632,17 +631,6 @@ pub async fn territory_slice(
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)?;
-
-    let components: Vec<Component> = sqlx::query_as::<_, (Uuid, i32)>(
-        "SELECT component_id, member_count FROM graph_region_components($1, $2)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(region_id)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(id, member_count)| Component { id, member_count })
-    .collect();
 
     const MEMBER_LIMIT: usize = 100;
     let members: Vec<RegionMember> =
@@ -666,7 +654,6 @@ pub async fn territory_slice(
     Ok(TerritorySlice {
         region_id,
         label,
-        components,
         members,
     })
 }

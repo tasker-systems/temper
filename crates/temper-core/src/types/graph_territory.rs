@@ -95,18 +95,7 @@ pub struct RegionMember {
     pub affinity: Option<f64>,
 }
 
-/// A sub-cluster (component) within a territory.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct Component {
-    pub id: Uuid,
-    pub member_count: i32,
-}
-
-/// R3 territory drill-in: region label, components + top-N members (visibility-scoped).
+/// R3 territory drill-in: region label + top-N members (visibility-scoped).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,6 +105,5 @@ pub struct TerritorySlice {
     pub region_id: Uuid,
     /// The region's human label (`kb_cogmap_regions.label`); may be null.
     pub label: Option<String>,
-    pub components: Vec<Component>,
     pub members: Vec<RegionMember>,
 }
