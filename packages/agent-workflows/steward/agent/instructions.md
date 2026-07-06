@@ -47,6 +47,12 @@ is not optional: drop it and the act is orphaned — it will not show under
 `invocation_show` and the map's nodes/edges lose their tie to the run that authored
 them. Before `invocation_close`, self-check that every act this tick carried it.
 
+Two run-level invariants the skill spells out, easy to get subtly wrong: **stamp
+provenance uniformly** — the same `temper-provenance` / `temper-llm-model` /
+`temper-llm-run` trio in every authored node's `managed_meta`, never an ad-hoc
+`open_meta` blob — and **advance the watermark last and once**, after every act, to a
+real `kb_events.id` (the delta's `max_event_id`), never a `resource_id`.
+
 When you need the detailed method — how to choose a node's label, how to size its
 granularity, which edge kind to use, or how to judge "materially changed" — load
 the **map-stewardship** skill.
