@@ -63,8 +63,45 @@ Two fresh **Sonnet-5** subagents, parallel, from empty, hypothesis withheld. Ide
 
 ## Phase 2 cross-map (Task 6)
 
-_pending._
+**Linking pass** (fresh Sonnet-5, Map 2 now visible) — invocation `019f38f3-6b27-7b21-aac2-2cec2ebcc126`
+- **16 cross-map edges** Map 3 → Map 2, graded 0.6–0.95, meaningful labels (`analyzes`/`maps_onto`/`validates`/`mirrors`/`parallels`/`concerns`).
+- **5 candidates considered and rejected** with sound reasoning (followed body content over title matches) — discriminating, not padding.
+- **Linking-instinct finding:** high-quality when *directed*; but Phase 1 already showed it is **not spontaneous** (the Phase-1 agent read scope narrowly and never searched neighbors). So: cross-map linking is a *capability*, not an *instinct* — it needs explicit direction.
+
+**Inert-edge probe** — after `cogmap_materialize` (Map 3: 12 regions/66 events; Map 2: 32 regions/108 events; both succeeded, no error on the cross-map edges):
+- 16 cross-map edges (source ∈ Map 3, target ∈ Map 2, homed in Map 3).
+- Map-2 targets that became **Map-3 region members: 0** → the edges are structurally **inert** at Map 3's region/salience layer.
+- Those same targets that are **Map-2 region members: 12** → the value lives in Map 2, unreachable from Map 3 via the edge.
+- **Conclusion:** an agent can author high-quality cross-map edges; materialize accepts them; they contribute nothing to regions/salience on either side. This is the D4 gap, measured.
+
+**Wayfind demonstration** (`temper search --wayfind`, client-side query embed) — the one real cross-map path:
+- Region salience is healthy: Map 3 regions `telos_alignment` 0.84–0.90, `salience` up to 2.29 (strong charter alignment).
+- Default `--regions 3` returned `[]` (too narrow across 4 visible maps — the top-3 pooled regions were dominated by other maps / didn't clear for the query). **Tuning note / minor finding.**
+- `--regions 20`, narrative query → pooled **Map 2 + Map 3 together, ranked by relevance**: Map 2 "Narrative Gravity: Scenes as Gravitational Bodies" adjacent to Map 3 "Narrative gravity as a runtime-recomputed field" (same concept, two teloi), plus Map 3 gap-register/turn-cadence interleaved with Map 2 design nodes.
+- `--regions 20`, temper query → Map 3 telos adjacent to L0 "What Temper Is". Cross-map, confirmed.
+- **Conclusion:** cross-map value is realized at *query time via wayfind* (query relevance + each region's own-telos salience), never via cross-map edges or a cross-map telos. The `lens` is single-map by construction; wayfind pools lens-produced regions across the visible-map union.
 
 ## Phase 3 findings (Task 7)
 
-_pending._
+- **Invocation open-item resolved:** the "extra" invocation per map is `admin_genesis` (genesis auto-opens one). Map 2 = genesis + 1 authoring; Map 3 = genesis + authoring + linking. Accountability chain intact, no anomaly.
+- **D3 findings resource:** `019f38ff-024a-7002-8a16-95cff1d65184` (research, `@me/temper`).
+- **019f373f fed:** experiment-input section appended (correction + teachability rubric + cross-map guidance + bug pointers + worked-example note).
+
+### Deliverables
+- **D1** Map 2 live + materialized (37 nodes, 32 regions).
+- **D2** Map 3 live + materialized (13 nodes, 12 regions).
+- **D3** findings research `019f38ff-024a`.
+- **D4** cross-map gap-spec (below).
+- Bug tasks **B1** `019f38f4-3dec`, **B2** `019f38f4-506f`; follow-on capability task `019f37fb` (democratize cogmap creation).
+
+### D4 — cross-map gap-spec (stated, not built)
+
+**Finding.** Cross-map value in temper today is realized **only at query time via wayfind** (visibility-union pooling of each map's lens-produced regions, ranked by query relevance + own-telos salience). It is **never** realized at authoring time:
+- **Cross-map edges are inert** — asserted, materialize-accepted, but contribute nothing to regions/salience/wayfind (measured: 16 edges → 0 region contribution).
+- **No cross-map telos projection** — `telos_alignment` is hard-scoped to a region's own map (`canonical_functions.sql:461-471`); the `lens` is single-map by construction.
+
+**The open design question:** should cross-map *edges* (or a cross-map *telos projection*) ever carry value — e.g. a Map-3 fit-node's `analyzes`→Map-2 link surfacing Map 2 context when reading Map 3 — or is **wayfind-pooling the intended and sufficient** cross-map mechanism, with cross-map edges kept as pure graph-level annotation? Deferred; no implementation. If pursued, the first sub-question is what a cross-map edge *should do* at materialize time (today its off-map target simply isn't a region member).
+
+**Minor tuning note.** Wayfind default `--regions 3` is too narrow to surface across several visible maps (returned empty until `--regions 20`). Worth revisiting the default / making cross-map recall more robust.
+
+### (a) verdict — CONFIRMED. The prize is banked: a distinct telos demonstrably causes an agent to capture distinct, purpose-relevant concepts from identical sources.
