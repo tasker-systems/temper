@@ -9,8 +9,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyFate {
     /// A `kb_properties` row, key + value verbatim — the workflow fields (`temper-stage`/`-mode`/
-    /// `-effort`/`-status`/`-seq`) and provenance fields (`temper-llm-run`/`-provenance`/`-branch`/
-    /// `-pr`). Open (user/doc-type-schema) keys land here too, carried unconditionally by the property
+    /// `-effort`/`-status`/`-seq`) and provenance fields (`temper-llm-model`/`-llm-run`/`-provenance`/
+    /// `-branch`/`-pr`). Open (user/doc-type-schema) keys land here too, carried unconditionally by the property
     /// pass; the managed-vs-open distinction is restored at read time via [`is_managed_property_key`].
     Property,
     /// Dropped — authoritative state already carries it: `temper-title` is `kb_resources.title`,
@@ -27,7 +27,7 @@ pub enum KeyFate {
 
 /// The managed manifest keys whose §7 fate is [`KeyFate::Property`] — the workflow fields
 /// (`temper-stage`/`-mode`/`-effort`/`-status`/`-seq`) and the provenance fields
-/// (`temper-llm-run`/`-provenance`/`-branch`/`-pr`). Single source of truth for both directions of the
+/// (`temper-llm-model`/`-llm-run`/`-provenance`/`-branch`/`-pr`). Single source of truth for both directions of the
 /// fate: the forward [`key_fate`] classifier matches on it, and the read path
 /// ([`crate::readback::meta`]) uses [`is_managed_property_key`] to tell a managed workflow/provenance
 /// key apart from an open (user-defined) one — a distinction [`key_fate`] alone cannot make, because it
@@ -45,6 +45,7 @@ pub const MANAGED_PROPERTY_KEYS: &[&str] = &[
     "temper-effort",
     "temper-status",
     "temper-seq",
+    "temper-llm-model",
     "temper-llm-run",
     "temper-provenance",
     "temper-branch",
@@ -91,6 +92,7 @@ mod tests {
             "temper-effort",
             "temper-status",
             "temper-seq",
+            "temper-llm-model",
             "temper-llm-run",
             "temper-provenance",
             "temper-branch",
@@ -102,6 +104,15 @@ mod tests {
                 "{k} is a MANAGED property key"
             );
         }
+
+        // Regression (bug B1, 2026-07-06): `temper-llm-model` is a managed provenance key — it must
+        // read back as MANAGED, not open. It was omitted from MANAGED_PROPERTY_KEYS, so the read-side
+        // inverse classifier (`is_managed_property_key`) sent the model stamp to open_meta while the
+        // rest of the provenance trio landed in managed_meta. It is the 16th of G7's managed keys.
+        assert!(
+            super::is_managed_property_key("temper-llm-model"),
+            "temper-llm-model is a managed provenance key, not an open key"
+        );
         assert_eq!(key_fate("temper-goal"), KeyFate::Edge);
         assert_eq!(key_fate("temper-type"), KeyFate::ReconcileToDocType);
         // An unknown managed key carries as a property (conservative — never a silent drop).
