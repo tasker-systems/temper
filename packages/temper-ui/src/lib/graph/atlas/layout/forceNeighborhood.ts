@@ -21,6 +21,8 @@ export interface ForceNode extends SimulationNodeDatum {
 	home: AtlasNode['home'];
 	degree: number;
 	isSeed: boolean;
+	/** Server-derived first-paragraph preview (see `AtlasNode.excerpt`); null when absent. */
+	excerpt: string | null;
 	x: number;
 	y: number;
 }
@@ -52,6 +54,7 @@ export function forceNeighborhood(
 		home: n.home,
 		degree: n.degree,
 		isSeed: seedSet.has(n.id),
+		excerpt: n.excerpt,
 		x: size.width / 2 + Math.cos((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120,
 		y: size.height / 2 + Math.sin((i / Math.max(1, nodeCount)) * 2 * Math.PI) * 120
 	}));

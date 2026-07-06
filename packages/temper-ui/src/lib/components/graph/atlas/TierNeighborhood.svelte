@@ -73,6 +73,8 @@
 		seed={n.isSeed}
 		anchored={anchors.has(n.id)}
 		dim={isDocTypeDimmed(n.docType, docTypes)}
+		edges={n.degree}
+		excerpt={n.excerpt ?? null}
 		onEnter={() => drill(n.id)}
 	/>
 {/each}
