@@ -28,7 +28,12 @@ pub struct PreparedChunk {
     pub chunk_index: i32,
     pub content_hash: String,
     pub content: String,
-    pub embedding: Vec<f32>,
+    /// The chunk's bge-768 vector, or `None` when embedding is **deferred** (the async-embed write
+    /// path — [`prepare_block_deferred`]): the chunk text + hash persist synchronously and the vector
+    /// is backfilled off-request. `None` serializes to an absent sidecar `embedding` key, which the
+    /// `_insert_chunk` projector maps to a NULL `kb_chunks.embedding` (issue #299). A genuinely
+    /// embedded chunk is always `Some(<768-dim>)`.
+    pub embedding: Option<Vec<f32>>,
     /// Production render metadata (§8 carry-as-is): the heading breadcrumb this chunk sits under and
     /// its heading depth, persisted onto `kb_chunks` so a downstream read reconstructs headed markdown
     /// identically to production. `None` for the scenario-authoring path (no production headings) —
@@ -118,7 +123,7 @@ pub fn prepare_block_from_chunks(
                 chunk_index: c.chunk_index,
                 content_hash: c.content_hash,
                 content: c.content,
-                embedding: c.embedding,
+                embedding: Some(c.embedding),
                 header_path,
                 heading_depth,
             }
@@ -164,7 +169,7 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
                     chunk_index,
                     content_hash,
                     content,
-                    embedding,
+                    embedding: Some(embedding),
                     header_path,
                     heading_depth,
                 }
@@ -178,6 +183,47 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         chunks,
         incorporated: Vec::new(),
     })
+}
+
+/// Prepare one block **without embedding** — the async-embed twin of [`prepare_block`] (issue #299).
+/// Chunks the prose with the same ONNX-free `plan_chunks` and maps headings identically, but emits
+/// `embedding: None` on every chunk instead of running `embed_texts`. The chunk text, content hashes,
+/// and body merkle are therefore byte-identical to `prepare_block`'s for the same prose — only the
+/// vectors are absent — so a deferred create persists a fully FTS-searchable resource, and a later
+/// backfill fills `kb_chunks.embedding` from the same chunk text. ONNX-free, so it never pays model
+/// load on the request path.
+pub fn prepare_block_deferred(seq: i32, role: Option<&str>, prose: &str) -> PreparedBlock {
+    let chunks = plan_chunks(prose)
+        .into_iter()
+        .map(
+            |(chunk_index, content_hash, content, header_path, heading_depth)| {
+                // Identical heading mapping to `prepare_block`: depth 0 / empty breadcrumb ⇒ unheaded
+                // preamble (NULL columns); a real heading ⇒ persist depth + breadcrumb.
+                let (header_path, heading_depth) = if heading_depth == 0 || header_path.is_empty() {
+                    (None, None)
+                } else {
+                    (Some(header_path), Some(heading_depth as i16))
+                };
+                PreparedChunk {
+                    chunk_id: ChunkId::from(Uuid::now_v7()),
+                    chunk_index,
+                    content_hash,
+                    content,
+                    // Deferred: no vector yet. Backfilled off-request; NULL at the projector.
+                    embedding: None,
+                    header_path,
+                    heading_depth,
+                }
+            },
+        )
+        .collect();
+    PreparedBlock {
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq,
+        role: role.map(str::to_owned),
+        chunks,
+        incorporated: Vec::new(),
+    }
 }
 
 /// Lowercase hex sha256 of a string's UTF-8 bytes — the Rust twin of Postgres's
@@ -404,6 +450,50 @@ mod tests {
         assert_eq!(body_hash_from_chunk_hashes(&[]), body_hash_for_body(""));
     }
 
+    // prepare_block_deferred chunks like prepare_block but emits `embedding: None` on every chunk —
+    // the ONNX-free write half of the async-embed path. Content, hashes, index, and headings are
+    // populated exactly as the embedded path would; only the vector is absent.
+    #[test]
+    fn prepare_block_deferred_emits_null_embeddings_with_full_text() {
+        let block = prepare_block_deferred(0, None, "A short deferred-embedding note.");
+        assert_eq!(block.chunks.len(), 1, "short prose ⇒ one chunk");
+        let c = &block.chunks[0];
+        assert!(c.embedding.is_none(), "deferred chunk carries no vector");
+        assert_eq!(c.chunk_index, 0);
+        assert_eq!(c.content_hash.len(), 64, "sha256 hex is 64 chars");
+        assert!(c.content.contains("deferred-embedding"));
+        // Unheaded preamble ⇒ NULL heading columns, same as prepare_block.
+        assert_eq!(c.header_path, None);
+        assert_eq!(c.heading_depth, None);
+    }
+
+    // A deferred block's chunk hashes reproduce the SAME body merkle as chunking the prose inline —
+    // deferral changes only the vector, never the resource's body_hash identity, so dedup/readback
+    // stay consistent whether a create embedded on-request or off.
+    #[test]
+    fn prepare_block_deferred_merkle_matches_inline_chunking() {
+        let prose =
+            "First paragraph of the note.\n\n## Details\n\nSecond paragraph with more text.";
+        let deferred = prepare_block_deferred(0, None, prose);
+        let deferred_hashes: Vec<String> = deferred
+            .chunks
+            .iter()
+            .map(|c| c.content_hash.clone())
+            .collect();
+        assert_eq!(
+            body_hash_from_block_chunk_hashes(&[deferred_hashes]),
+            body_hash_for_body(prose),
+            "deferred chunking must yield the same body merkle as inline chunking"
+        );
+    }
+
+    // Empty prose ⇒ no chunks (same as prepare_block's empty-prose arm), so a deferred create of an
+    // empty body writes a contentless block the write layer will reject upstream.
+    #[test]
+    fn prepare_block_deferred_empty_prose_yields_no_chunks() {
+        assert!(prepare_block_deferred(0, None, "").chunks.is_empty());
+    }
+
     // prepare_block_from_chunks carries the supplied embedding verbatim and maps headings like
     // prepare_block (depth 0 / empty breadcrumb ⇒ NULL; a real heading ⇒ Some).
     #[test]
@@ -435,14 +525,14 @@ mod tests {
         assert_eq!(block.chunks[0].header_path, None);
         assert_eq!(block.chunks[0].heading_depth, None);
         // embedding carried verbatim (no re-embed)
-        assert_eq!(block.chunks[0].embedding, vec![0.5; 4]);
+        assert_eq!(block.chunks[0].embedding, Some(vec![0.5; 4]));
         // a real heading is carried
         assert_eq!(
             block.chunks[1].header_path.as_deref(),
             Some("Intro > Goals")
         );
         assert_eq!(block.chunks[1].heading_depth, Some(2));
-        assert_eq!(block.chunks[1].embedding, vec![0.25; 4]);
+        assert_eq!(block.chunks[1].embedding, Some(vec![0.25; 4]));
     }
 
     #[test]
@@ -488,7 +578,7 @@ mod tests {
                 chunk_index: 0,
                 content_hash: "ab".repeat(32),
                 content: "hi".into(),
-                embedding: vec![0.1, 0.2, 0.3],
+                embedding: Some(vec![0.1, 0.2, 0.3]),
                 header_path: None,
                 heading_depth: None,
             }],
