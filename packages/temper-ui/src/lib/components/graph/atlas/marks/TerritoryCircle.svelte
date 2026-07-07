@@ -44,6 +44,17 @@
 	const lines = $derived(displayLabel ? wrapLabel(displayLabel, perLineCap) : []);
 	const FONT = 11;
 	const LINE_H = 12;
+
+	// Accessible name: for a region, fold the hover-card metadata (resources · salience ·
+	// coherence) into the label so a keyboard/screen-reader user gets the non-spatial
+	// equivalent of the field — the hover card itself is pointer-events:none decoration.
+	const ariaLabel = $derived(
+		isRegion && displayLabel
+			? `${displayLabel} — ${memberCount} ${memberCount === 1 ? 'resource' : 'resources'}` +
+				(salience != null ? `, salience ${salience.toFixed(2)}` : '') +
+				(coherence != null ? `, coherence ${Math.round(coherence * 100)}%` : '')
+			: (displayLabel ?? kind)
+	);
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -51,7 +62,7 @@
 	class="territory atlas-focusable"
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
-	aria-label={displayLabel ?? kind}
+	aria-label={ariaLabel}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
 	onmouseenter={() => (hovered = true)}
