@@ -60,7 +60,8 @@ pub fn analytics(cogmap_ref: &str, fmt: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (admin-only).
+/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (system-admin, or a team
+/// manager who administers the map).
 ///
 /// The team is resolved to its id CLIENT-SIDE (slug → id via the teams list, or a bare UUID); the
 /// wire shape is id-based (mirroring `team add-member`).
