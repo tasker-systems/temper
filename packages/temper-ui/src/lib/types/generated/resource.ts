@@ -10,10 +10,10 @@ import type { ResourceId } from "./ResourceId";
  */
 export type ContentResponse = { resource_id: ResourceId, markdown: string, 
 /**
- * Typed server-side managed_meta from kb_resource_manifests. The
- * typed fields name everything temper knows about; any extras the
- * server stored round-trip through `ManagedMeta::extra`.
- * Used by CLI sync pull to reconstruct complete frontmatter.
+ * Typed server-side managed_meta from kb_resource_manifests — the closed
+ * Property vocabulary. Only the named `temper-*` keys are represented;
+ * there is no catch-all. Used by CLI sync pull to reconstruct complete
+ * frontmatter (identity/type/home come from the resource row, not here).
  */
 managed_meta: ManagedMeta | null, 
 /**
