@@ -49,11 +49,9 @@ fn resolve_create_body(
 /// `content_hash` and `chunks_packed`, they are forwarded directly. Otherwise
 /// runs `compute_body_chunks` to fill them.
 ///
-/// **Symmetric defense (CLAUDE.md "Phase 5's symmetric defense pattern"):**
-/// always serializes managed_meta to JSON and runs
-/// `ensure_managed_identity_keys` with `cmd.title` + `Some(cmd.slug)` from the
-/// typed cmd, so the wire payload's `temper-title` and `temper-slug` always
-/// derive from the same typed source as the server-side receive-side fill.
+/// **Identity is first-class:** `title` and `slug` travel as top-level payload
+/// fields from the typed `cmd`; `managed_meta` is Property-only and is never
+/// injected with identity keys.
 ///
 /// **`origin_uri`:** empty string today — server constructs the canonical
 /// URI from `(owner, context, doctype, slug)`.
@@ -62,8 +60,6 @@ pub(crate) fn cmd_to_ingest_payload(
     cmd: &CreateResource,
     context_ref: &str,
 ) -> Result<IngestPayload> {
-    use temper_workflow::operations::ensure_managed_identity_keys;
-
     // Resolve body content (verbatim when provided; placeholder otherwise).
     let content = resolve_create_body(cmd.body.as_ref(), &cmd.title);
 
@@ -78,13 +74,12 @@ pub(crate) fn cmd_to_ingest_payload(
         }
     };
 
-    // Serialize managed_meta to JSON and inject canonical identity keys from
-    // the typed cmd — symmetric defense per CLAUDE.md. Always emit Some(...);
-    // the identity keys make it non-default by construction.
-    let mut managed_value = serde_json::to_value(&cmd.managed_meta)
-        .map_err(|e| TemperError::Project(format!("serialize managed_meta: {e}")))?;
-    ensure_managed_identity_keys(&mut managed_value, &cmd.title, Some(&cmd.slug));
-    let managed_meta = Some(managed_value);
+    // managed_meta is Property-only; identity travels first-class as the payload's
+    // top-level title/slug (set below). No identity injection into managed_meta.
+    let managed_meta = Some(
+        serde_json::to_value(&cmd.managed_meta)
+            .map_err(|e| TemperError::Project(format!("serialize managed_meta: {e}")))?,
+    );
 
     let open_meta = cmd
         .open_meta
@@ -335,38 +330,23 @@ mod tests {
 
     #[cfg(feature = "test-embed")]
     #[test]
-    fn cmd_to_ingest_payload_always_injects_identity_keys() {
-        // Symmetric defense (CLAUDE.md): even when caller-supplied managed_meta
-        // is default, the wire payload must carry `temper-title` and `temper-slug`
-        // injected from the typed cmd.
-        let mut cmd = sample_cmd();
-        cmd.managed_meta = ManagedMeta::default();
+    fn cmd_to_ingest_payload_carries_identity_top_level_not_in_managed_meta() {
+        // Identity is first-class: title/slug travel as top-level payload fields
+        // from the typed cmd, and managed_meta is Property-only — it must NOT carry
+        // `temper-title` / `temper-slug` (they left the vocabulary in Phase 2).
+        let cmd = sample_cmd();
         let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
-        let mm = payload
-            .managed_meta
-            .expect("identity keys make managed_meta non-default by construction");
-        assert_eq!(mm["temper-title"], "Test task");
-        assert_eq!(mm["temper-slug"], "2026-05-18-test");
-    }
-
-    #[cfg(feature = "test-embed")]
-    #[test]
-    fn cmd_to_ingest_payload_identity_keys_from_typed_source_not_caller_managed_meta() {
-        // If a future refactor passes a managed_meta with title/slug that differs
-        // from the cmd's typed title/slug, the typed cmd wins — preventing drift.
-        let mut cmd = sample_cmd();
-        cmd.managed_meta.title = Some("Drift!".to_string());
-        cmd.managed_meta.slug = Some("drift-slug".to_string());
-        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
-        let mm = payload.managed_meta.expect("present");
+        assert_eq!(payload.title, "Test task", "identity title is top-level");
         assert_eq!(
-            mm["temper-title"], "Test task",
-            "typed cmd.title wins over managed_meta.title"
+            payload.slug, "2026-05-18-test",
+            "identity slug is top-level"
         );
-        assert_eq!(
-            mm["temper-slug"], "2026-05-18-test",
-            "typed cmd.slug wins over managed_meta.slug"
-        );
+        if let Some(mm) = &payload.managed_meta {
+            assert!(
+                mm.get("temper-title").is_none() && mm.get("temper-slug").is_none(),
+                "managed_meta must be Property-only, no identity keys; got: {mm}"
+            );
+        }
     }
 
     fn sample_update() -> UpdateResource {

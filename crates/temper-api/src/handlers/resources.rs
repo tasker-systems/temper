@@ -254,26 +254,11 @@ pub async fn update(
         content_block: req.content_block,
     });
 
-    // Identity travels first-class on the cmd (title/slug below). The fold into
-    // managed_meta is transitional and removed in the injector-retirement step.
-    let title_top = req.title.clone();
-    let slug_top = req.slug.clone();
-    // Fold top-level title/slug into managed_meta so the translator can extract
-    // them uniformly. Only materialise Some(managed) when there's actually
-    // something to fold (avoids routing a no-op through the meta branch).
-    let managed_meta = match (req.title, req.slug, req.managed_meta) {
-        (None, None, m) => m,
-        (t, s, m) => {
-            let mut merged = m.unwrap_or_default();
-            if t.is_some() {
-                merged.title = t;
-            }
-            if s.is_some() {
-                merged.slug = s;
-            }
-            Some(merged)
-        }
-    };
+    // Identity travels first-class on the cmd (title/slug); managed_meta is
+    // Property-only and passes through untouched.
+    let title_top = req.title;
+    let slug_top = req.slug;
+    let managed_meta = req.managed_meta;
 
     // Resolve context_to ref (if present) to a ContextId, gated by principal visibility.
     // parse_context_ref rejects bare names → ApiError::BadRequest (Decision 1).

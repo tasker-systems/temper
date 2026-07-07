@@ -467,26 +467,11 @@ pub async fn create_resource(
 
     let content = input.content.unwrap_or_default();
 
-    // Inject canonical temper-title / temper-slug into managed_meta JSONB so
-    // the local canonical form matches what the server will hash. Symmetric
-    // with the CLI send-side wiring in build_ingest_payload (Phase 5 Task 3).
-    let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
-        })?;
-    temper_workflow::operations::ensure_managed_identity_keys(
-        &mut managed_meta_value,
-        &input.title,
-        Some(&slug),
-    );
-
-    // Dispatch through DbBackend so MCP shares the unified write path with
-    // HTTP. The send-side ensure_managed_identity_keys above ran on the
-    // JSONB form; deserialize back to the typed ManagedMeta the cmd carries
-    // (extras bucket preserves unknown keys; serde renames re-emit canonical
-    // temper-* keys on round-trip).
-    let managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
+    // Identity travels first-class on the cmd (title/slug below); managed_meta is
+    // Property-only. The caller-supplied managed_meta passes through untouched —
+    // the DbBackend validation pipeline injects identity into the validation
+    // document from the typed title/slug.
+    let managed_meta = input.managed_meta.unwrap_or_default();
 
     // Create always writes a single new body block; per-block addressing is an update-only concern.
     let body = provenance_body(Some(content), input.sources, None)?;
@@ -702,51 +687,11 @@ pub async fn update_resource(
     let profile_id = ProfileId::from(profile.id);
     let resource_id = ResourceId::from(input.id);
 
-    // Send-side canonical-key injection (Phase 5 symmetric defense). When the
-    // caller is also touching title or slug, fetch existing.title for the
-    // canonical-key fill so the wire payload's temper-title / temper-slug
-    // match what the receive-side will write. Pure meta-only updates skip
-    // the fetch — the backend update's receive-side ensure call fills
-    // canonical keys from the stored title/slug for us.
-    let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
-        })?;
-    if input.title.is_some() || input.slug.is_some() || input.content.is_some() {
-        let existing = substrate_read::show_select(
-            pool,
-            ProfileId::from(profile.id),
-            ResourceId::from(input.id),
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-        })?;
-        let title = input.title.clone().unwrap_or(existing.title);
-        // slug is §7-dissolved from ResourceRow; derive from effective title when the
-        // caller hasn't supplied one explicitly.
-        let slug = input
-            .slug
-            .clone()
-            .unwrap_or_else(|| temper_workflow::operations::sluggify(&title));
-        temper_workflow::operations::ensure_managed_identity_keys(
-            &mut managed_meta_value,
-            &title,
-            Some(slug.as_str()),
-        );
-    }
-
-    // Build the typed cmd. Mirror title/slug onto ManagedMeta so the
-    // translator's manifest-merge path picks them up from cmd.managed_meta
-    // alongside any caller-supplied managed_meta keys.
-    let mut managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
-    if input.title.is_some() {
-        managed_meta.title = input.title.clone();
-    }
-    if input.slug.is_some() {
-        managed_meta.slug = input.slug.clone();
-    }
+    // Identity travels first-class on the cmd (title/slug below); managed_meta is
+    // Property-only. The caller-supplied managed_meta passes through untouched —
+    // the DbBackend validation pipeline injects identity into the validation
+    // document from the effective title/slug (cmd.title / current row).
+    let managed_meta = input.managed_meta.unwrap_or_default();
 
     let act = input
         .act
