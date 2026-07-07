@@ -571,13 +571,16 @@ pub enum ResourceAction {
 
 #[derive(Subcommand)]
 pub enum ContextAction {
-    /// Add a context to subscriptions
-    Add {
-        /// Context name to add
+    /// Subscribe to a context locally so `temper pull` materializes it. Local
+    /// config only — this does NOT create the context on the server (use
+    /// `context create`) and has no server/RBAC effect.
+    Subscribe {
+        /// Context name to subscribe to
         name: String,
     },
-    /// Remove a context from subscriptions
-    Remove { name: String },
+    /// Unsubscribe from a context locally (drops it from the local pull set).
+    /// Local config only — no server effect.
+    Unsubscribe { name: String },
     /// Create a new context on the server
     Create {
         /// Context name to create
@@ -587,7 +590,7 @@ pub enum ContextAction {
         #[arg(long)]
         owner: Option<String>,
     },
-    /// List configured contexts
+    /// List the contexts you can see on the server (with owner ref + resource counts)
     List,
     /// Share a context into a team's read-reach (admin-only). The context ref is a UUID or the
     /// `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted.

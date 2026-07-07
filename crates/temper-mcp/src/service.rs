@@ -530,6 +530,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Share a context into a team's read-reach (system-admin only). Every member of the team gains read access to the context's resources. Idempotent — safe to call when the share already exists. Pass the context and team by UUID (from list_contexts and your team listing)."
+    )]
+    async fn share_context(
+        &self,
+        Parameters(input): Parameters<tools::contexts::ShareContextInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::share_context(self, input).await
+    }
+
+    #[tool(
+        description = "Unshare a context from a team (system-admin only), removing the team's read-reach into it. No-op safe when there is no share to remove. Pass the context and team by UUID."
+    )]
+    async fn unshare_context(
+        &self,
+        Parameters(input): Parameters<tools::contexts::ShareContextInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::unshare_context(self, input).await
+    }
+
+    #[tool(
         description = "List all available document types with schema summaries. Returns id, name, has_schema, and required_fields for each type. Use describe_doc_type for full schema details."
     )]
     async fn list_doc_types(
