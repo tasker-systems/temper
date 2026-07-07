@@ -222,7 +222,7 @@ pub struct ResourceUpdateRequest {
     /// `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent
     /// write path, exactly like `act` below). Skipping keeps the generated TS honest —
     /// the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource`
-    /// import. (Precedent: `act`, and the `extra` bucket in `managed_meta.rs`.)
+    /// import. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,

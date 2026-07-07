@@ -83,9 +83,9 @@ pub struct ManagedMeta {
 pub struct ResourceMetaResponse {
     /// UUID of the resource
     pub resource_id: ResourceId,
-    /// Typed managed (temper-*) frontmatter from the manifest. The
-    /// typed fields cover everything temper knows about; any extras
-    /// the server stored round-trip through `ManagedMeta::extra`.
+    /// Typed managed (temper-*) frontmatter from the manifest — the closed
+    /// Property vocabulary. Only the named `temper-*` keys are represented;
+    /// there is no catch-all (a stored non-Property key is not surfaced here).
     /// `None` only if the manifest row predates meta population.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_meta: Option<ManagedMeta>,
@@ -127,10 +127,10 @@ pub struct ResourceMetaListResponse {
 pub struct MetaUpdatePayload {
     /// UUID of the resource being updated
     pub resource_id: ResourceId,
-    /// Typed managed (temper-*) frontmatter. The typed fields cover
-    /// everything temper knows about; extras round-trip through
-    /// `ManagedMeta::extra` without loss. Hash stability is preserved
-    /// because `managed_hash` is computed over the canonicalized form.
+    /// Typed managed (temper-*) frontmatter — the closed Property vocabulary.
+    /// Only the named `temper-*` keys are accepted; there is no catch-all.
+    /// Hash stability is preserved because `managed_hash` is computed over the
+    /// canonicalized form.
     pub managed_meta: ManagedMeta,
     /// Serialized open (user-defined) frontmatter fields. Intentionally
     /// untyped — the open tier is the free-form bucket. Edge-relevant

@@ -53,10 +53,12 @@ pub struct CreateResourceInput {
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,
-    /// Managed (temper-*) frontmatter — a **closed, temper-owned vocabulary**.
-    /// Only the typed temper-* keys are accepted; an unknown key is rejected.
-    /// Caller-defined ("bring-your-own") fields belong in `open_meta`, the
-    /// free-form tier.
+    /// Managed workflow/provenance frontmatter — a **closed, temper-owned
+    /// vocabulary** of optional `temper-*` keys: stage/mode/effort/status/seq/
+    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`/`slug`), type
+    /// (`doc_type_name`), and home (`context_ref`/`cogmap`) are first-class
+    /// fields on this input, not metadata. An unknown key is rejected;
+    /// caller-defined ("bring-your-own") fields belong in `open_meta`.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
@@ -134,10 +136,12 @@ pub struct UpdateResourceInput {
     /// block. The block must belong to the resource and be non-folded. Requires `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_block: Option<Uuid>,
-    /// Managed (temper-*) frontmatter — a **closed, temper-owned vocabulary**.
-    /// Only the typed temper-* keys are accepted; an unknown key is rejected.
-    /// Caller-defined ("bring-your-own") fields belong in `open_meta`, the
-    /// free-form tier.
+    /// Managed workflow/provenance frontmatter — a **closed, temper-owned
+    /// vocabulary** of optional `temper-*` keys: stage/mode/effort/status/seq/
+    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`/`slug`), type
+    /// (`doc_type_name`), and home (`context_ref`/`cogmap`) are first-class
+    /// fields on this input, not metadata. An unknown key is rejected;
+    /// caller-defined ("bring-your-own") fields belong in `open_meta`.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
@@ -155,12 +159,12 @@ pub struct UpdateResourceInput {
 /// (managed_meta / open_meta) without re-chunking or re-embedding the
 /// body. This is the MCP peer of `PUT /api/resources/{id}/meta`.
 ///
-/// `managed_meta` is typed: agents get a schema-validated shape for
-/// the fields temper knows about, and the `extra` flatten bucket on
-/// `ManagedMeta` accepts any additional keys (doc-type-schema fields
-/// like `date`, plus forward-compat unknowns) without dropping them.
-/// `open_meta` stays a free-form JSON value by design — the open tier
-/// is intentionally untyped.
+/// `managed_meta` is a **closed, temper-owned vocabulary** — exactly the
+/// optional `temper-*` Property keys (stage/mode/effort/status/seq/branch/pr/
+/// llm-model/llm-run/provenance). Unknown keys are rejected; this path is
+/// Property-only — identity (`title`/`slug`), type, and home are NOT accepted
+/// here (change them via `update_resource`). `open_meta` stays a free-form JSON
+/// value by design — the open tier is intentionally untyped.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateResourceMetaInput {
     /// UUID of the resource to update.
