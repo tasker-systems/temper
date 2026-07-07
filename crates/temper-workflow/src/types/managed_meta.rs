@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,22 +6,19 @@ use temper_core::types::ids::ResourceId;
 
 /// Temper-governed frontmatter fields for a vault resource.
 ///
+/// This is a **closed, temper-owned vocabulary**: every managed key has a
+/// typed field below. There is no catch-all — a key not named here is not a
+/// managed key. Caller-defined ("bring-your-own") fields belong in `open_meta`,
+/// the free-form tier. Deserialization rejects unknown keys
+/// (`#[serde(deny_unknown_fields)]`) so a mis-filed key fails loudly at the
+/// wire boundary instead of silently migrating tiers.
+///
 /// All fields use `temper-*` YAML/JSON key names via `serde(rename)`.
 /// `None` fields are omitted from serialized output.
-///
-/// The `extra` bucket collects any keys the typed fields above don't
-/// name — most notably doc-type-schema fields like `date` (sessions)
-/// and any server-injected fields the ingest pipeline populates. This
-/// makes `ManagedMeta` a round-trip-lossless representation of the
-/// JSONB column: deserialize → re-serialize produces byte-equivalent
-/// JSON (up to canonicalization) no matter what lives in the blob.
-///
-/// Without this bucket, the default serde "ignore unknown fields"
-/// behavior would silently drop anything not in the typed set, which
-/// would break hash stability across a typed round-trip.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "managed_meta.ts"))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ManagedMeta {
@@ -96,17 +91,6 @@ pub struct ManagedMeta {
     /// contract for managed-tier keys.
     #[serde(rename = "temper-slug", skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
-
-    /// Any additional keys not named by the typed fields above. Includes
-    /// doc-type-schema fields the registry knows about (e.g. `date` for
-    /// sessions) and any future temper-managed fields added before this
-    /// struct catches up. Critically, this bucket is what keeps the
-    /// typed round-trip lossless — without it, serde silently drops
-    /// unknown fields on deserialize.
-    #[serde(flatten)]
-    #[cfg_attr(feature = "typescript", ts(skip))]
-    #[cfg_attr(feature = "mcp", schemars(skip))]
-    pub extra: HashMap<String, Value>,
 }
 
 /// Response body for the metadata-only GET endpoint.
@@ -309,28 +293,36 @@ mod tests {
     }
 
     #[test]
-    fn managed_meta_extras_bucket_round_trips_unknown_fields() {
-        // The flatten extras bucket is what makes the typed representation
-        // lossless: a field the server wrote but the typed struct doesn't
-        // name (e.g. `date` on a session) must survive a full round-trip.
+    fn managed_meta_rejects_unknown_keys() {
+        // `managed_meta` is a closed, temper-owned vocabulary. A key the typed
+        // struct does not name (e.g. `date`, or a caller-invented tag) is not a
+        // managed key and must be rejected, not silently absorbed.
         let json = r#"{"temper-type":"session","temper-title":"test","date":"2026-04-13"}"#;
-        let parsed: ManagedMeta = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.doc_type.as_deref(), Some("session"));
-        assert_eq!(parsed.title.as_deref(), Some("test"));
-        assert_eq!(
-            parsed.extra.get("date"),
-            Some(&serde_json::json!("2026-04-13")),
-            "unknown fields must land in the extras bucket",
+        let err = serde_json::from_str::<ManagedMeta>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("date"),
+            "rejection must name the offending key, got: {err}"
         );
 
-        // Re-serialize and deserialize again — `date` must survive.
-        let reserialized = serde_json::to_string(&parsed).unwrap();
-        let reparsed: ManagedMeta = serde_json::from_str(&reserialized).unwrap();
-        assert_eq!(
-            reparsed.extra.get("date"),
-            Some(&serde_json::json!("2026-04-13")),
-            "round-trip must preserve extras",
+        // A caller-invented key is likewise rejected.
+        assert!(
+            serde_json::from_str::<ManagedMeta>(r#"{"my-tag":"x"}"#).is_err(),
+            "arbitrary caller keys belong in open_meta, not managed_meta"
         );
+    }
+
+    #[test]
+    fn managed_meta_accepts_the_closed_vocabulary() {
+        // Every typed managed key deserializes cleanly — the readback/projection
+        // shape (only vocabulary keys) still round-trips.
+        let json = r#"{"temper-type":"task","temper-stage":"backlog","temper-mode":"build",
+            "temper-effort":"small","temper-seq":3,"temper-branch":"b","temper-pr":"p",
+            "temper-status":"active","temper-provenance":"llm-discovered",
+            "temper-llm-model":"claude","temper-llm-run":"01947b5c-0000-0000-0000-000000000000",
+            "temper-title":"T","temper-slug":"t"}"#;
+        let parsed: ManagedMeta = serde_json::from_str(json).expect("closed vocabulary must parse");
+        assert_eq!(parsed.stage.as_deref(), Some("backlog"));
+        assert_eq!(parsed.slug.as_deref(), Some("t"));
     }
 
     #[test]

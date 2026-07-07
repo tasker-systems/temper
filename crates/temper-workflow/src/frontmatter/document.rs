@@ -243,8 +243,7 @@ impl Frontmatter {
     /// frontmatter in a single typed call.
     ///
     /// Only fields that are `Some` in `meta` are written; `None` fields are
-    /// left untouched (existing values survive). Fields in `meta.extra` are
-    /// applied last, keyed by their original string names.
+    /// left untouched (existing values survive).
     ///
     /// This is the bridge between a typed `ManagedMeta` value and the
     /// `Frontmatter` mutation API — callers do not need to know which
@@ -300,10 +299,6 @@ impl Frontmatter {
         }
         if let Some(ref v) = meta.slug {
             self.set_raw_field("temper-slug", serde_json::Value::String(v.clone()));
-        }
-        // Apply extra bucket last — these are passthrough fields.
-        for (key, value) in &meta.extra {
-            self.set_raw_field(key, value.clone());
         }
     }
 
