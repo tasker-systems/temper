@@ -41,3 +41,14 @@ export function researchTint(scope: string): string {
 	const h = hashScope(scope);
 	return `hsl(${12 + (h % 8) * 6} 74% 56%)`; // 8 buckets across a red-orange→amber band
 }
+
+/** Half-life (days) for the recency-glow exponential decay curve. Tunable knob —
+ *  refine on the `/dev/atlas` harness against real `last_active_at` spreads. */
+export const RECENCY_HALFLIFE_DAYS = 14;
+
+/** Liveness glow [0,1] from last-active age; `now` (ms) injected for deterministic tests. */
+export function recencyGlow(lastActiveAt: string | null, now: number): number {
+	if (!lastActiveAt) return 0;
+	const ageDays = Math.max(0, (now - Date.parse(lastActiveAt)) / 86_400_000);
+	return Math.min(1, Math.exp(-ageDays / RECENCY_HALFLIFE_DAYS));
+}

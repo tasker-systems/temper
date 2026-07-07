@@ -14,6 +14,9 @@
 		buildHomeLensUrl,
 		clearHomeLensUrl,
 		buildCogmapUrl,
+		parseScopeFilter,
+		buildScopeFilterUrl,
+		clearScopeFilterUrl,
 		type HomeLens
 	} from '$lib/graph/atlas/nav';
 	import {
@@ -22,7 +25,8 @@
 		layoutHomeLens
 	} from '$lib/graph/atlas/layout/homeLayout';
 	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
-	import { intensityFor, buildTint, researchTint } from '$lib/graph/atlas/homeTint';
+	import { intensityFor, buildTint, researchTint, recencyGlow } from '$lib/graph/atlas/homeTint';
+	import { deriveScopeChips } from '$lib/graph/atlas/scopeChips';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 
 	interface Props {
@@ -43,6 +47,7 @@
 	const resolved = $derived<Lens | null>(committed ?? hover);
 
 	const CTA_H = 104; // header band reserved for the two verb-CTAs
+	const ctaY = 22;
 	const fieldSize = $derived({ width, height: Math.max(120, height - CTA_H) });
 
 	const buildPos = $derived(layoutHomeLens(buildLensTerritories(home), fieldSize));
@@ -55,6 +60,65 @@
 	// (cool blue→indigo), research off owner_ref (warm red-orange→amber).
 	const ownerRefById = $derived(new Map(home.build.map((c) => [c.id, c.owner_ref])));
 	const researchScopeById = $derived(new Map(home.research.map((m) => [m.id, m.owner_ref])));
+	// Recency glow (build only, §Beat C): last-active timestamp per build context, fed
+	// through the pure `recencyGlow` curve at render time (`now` = Date.now()).
+	const lastActiveById = $derived(new Map(home.build.map((c) => [c.id, c.last_active_at])));
+
+	// Scope-filter chips (Beat C): once a lens is committed, narrow its field to one
+	// owner-scope via `?scope`. The chip set is derived from the COMMITTED lens's own
+	// bodies (build chips off home.build, research chips off home.research) so the
+	// chip-row never shows scopes that aren't in the lens currently on screen.
+	const scope = $derived(parseScopeFilter($page.url));
+	const chipRefs = $derived(
+		committed === 'research'
+			? deriveScopeChips(home.research)
+			: committed === 'build'
+				? deriveScopeChips(home.build)
+				: []
+	);
+	const chipTint = (ref: string): string => (committed === 'research' ? researchTint(ref) : buildTint(ref));
+
+	// Client-side narrow: an active `?scope` restricts the rendered field to bodies
+	// owned by that scope; `null` (the un-narrowed "All" state) renders everything.
+	const buildPosFiltered = $derived(buildPos.filter((t) => scope == null || ownerRefById.get(t.id) === scope));
+	const researchPosFiltered = $derived(
+		researchPos.filter((t) => scope == null || researchScopeById.get(t.id) === scope)
+	);
+
+	// Chip-row geometry — tunable knobs, refine on the `/dev/atlas` harness. Pills sit
+	// in the header band between the back-link (ctaY+40) and the field cutoff (CTA_H).
+	const CHIP_Y = ctaY + 66;
+	const CHIP_H = 20;
+	const CHIP_GAP = 6;
+	function chipWidth(label: string): number {
+		return Math.max(40, label.length * 6.5 + 20);
+	}
+	interface ChipLayout {
+		label: string;
+		ref: string | null; // null = the "All" chip (clears the narrow)
+		x: number;
+		w: number;
+	}
+	const chipLayout = $derived.by<ChipLayout[]>(() => {
+		let x = 20;
+		const out: ChipLayout[] = [];
+		for (const label of ['All', ...chipRefs]) {
+			const w = chipWidth(label);
+			out.push({ label, ref: label === 'All' ? null : label, x, w });
+			x += w + CHIP_GAP;
+		}
+		return out;
+	});
+
+	// Narrow to one scope, or clear back to the full lens (clicking "All", or
+	// re-clicking the already-active chip, both clear — a toggle-off affordance).
+	function selectScope(ref: string | null) {
+		if (ref === null || ref === scope) {
+			goto(clearScopeFilterUrl($page.url), { keepFocus: true, noScroll: true });
+		} else {
+			goto(buildScopeFilterUrl($page.url, ref), { keepFocus: true, noScroll: true });
+		}
+	}
 
 	// Group opacity per lens: rest = hazy union of both; previewing = the other fades
 	// behind; committed = the other is gone.
@@ -97,7 +161,6 @@
 	const ctaW = $derived(Math.min(340, width * 0.34));
 	const buildX = $derived(width / 2 - ctaW - 14);
 	const researchX = $derived(width / 2 + 14);
-	const ctaY = 22;
 
 	function isActive(lens: Lens): boolean {
 		return resolved === lens;
@@ -170,13 +233,55 @@
 	</g>
 {/if}
 
+<!-- Scope-filter chip-row: narrows the committed lens's field to one owner-scope. -->
+{#if committed}
+	<g class="chip-row">
+		{#each chipLayout as chip (chip.label)}
+			{@const active = chip.ref === scope || (chip.ref === null && scope === null)}
+			{@const tint = chip.ref ? chipTint(chip.ref) : '#8b93a5'}
+			<g
+				role="button"
+				tabindex="0"
+				class="atlas-focusable chip"
+				aria-label={`Filter to ${chip.label}`}
+				aria-pressed={active}
+				onclick={() => selectScope(chip.ref)}
+				onkeydown={(e) =>
+					(e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), selectScope(chip.ref))}
+				style="cursor:pointer"
+			>
+				<rect
+					x={chip.x}
+					y={CHIP_Y}
+					width={chip.w}
+					height={CHIP_H}
+					rx={CHIP_H / 2}
+					fill={active ? tint : 'rgba(255,255,255,0.02)'}
+					fill-opacity={active ? 0.2 : 1}
+					stroke={tint}
+					stroke-opacity={active ? 0.9 : 0.35}
+					stroke-width={active ? 1.5 : 1}
+				/>
+				<text
+					x={chip.x + chip.w / 2}
+					y={CHIP_Y + CHIP_H / 2 + 4}
+					text-anchor="middle"
+					fill={active ? tint : '#8b93a5'}
+					font-size="11"
+					font-weight={active ? '700' : '500'}>{chip.label}</text
+				>
+			</g>
+		{/each}
+	</g>
+{/if}
+
 <!-- The field: both lens layouts, cross-faded by lensOpacity -->
 <g transform={`translate(0, ${CTA_H})`}>
 	<g
 		opacity={lensOpacity('build')}
 		style={`transition: opacity 260ms ease; pointer-events: ${committed === 'build' ? 'auto' : 'none'}`}
 	>
-		{#each buildPos as t (t.id)}
+		{#each buildPosFiltered as t (t.id)}
 			<TerritoryCircle
 				x={t.x}
 				y={t.y}
@@ -187,6 +292,7 @@
 				showLabel={resolved === 'build'}
 				intensity={intensityFor(t.member_count, buildMax)}
 				tint={buildTint(ownerRefById.get(t.id) ?? '@me')}
+				glow={recencyGlow(lastActiveById.get(t.id) ?? null, Date.now())}
 				onEnter={committed === 'build'
 					? () => enterContext(ownerRefById.get(t.id) ?? '@me')
 					: undefined}
@@ -197,7 +303,7 @@
 		opacity={lensOpacity('research')}
 		style={`transition: opacity 260ms ease; pointer-events: ${committed === 'research' ? 'auto' : 'none'}`}
 	>
-		{#each researchPos as t (t.id)}
+		{#each researchPosFiltered as t (t.id)}
 			<TerritoryCircle
 				x={t.x}
 				y={t.y}
@@ -212,7 +318,7 @@
 			/>
 		{/each}
 	</g>
-		<!-- Empty-state for a committed lens with nothing in it. -->
+		<!-- Empty-state for a committed lens with nothing in it (before any scope narrow). -->
 		{#if committed === 'build' && buildPos.length === 0}
 			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
 				You don't have any contexts to build in yet.
@@ -220,6 +326,14 @@
 		{:else if committed === 'research' && researchPos.length === 0}
 			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
 				There are no cognitive maps you can reach yet.
+			</text>
+		{:else if committed === 'build' && buildPosFiltered.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				No contexts in "{scope}" — try "All".
+			</text>
+		{:else if committed === 'research' && researchPosFiltered.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				No cognitive maps in "{scope}" — try "All".
 			</text>
 		{/if}
 </g>

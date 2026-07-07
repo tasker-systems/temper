@@ -23,6 +23,10 @@
 		/** Optional tint override (defaults to the kind's tint). Home uses this to shade
 		 *  build contexts by owner-scope (@me vs +team) without a new kind. */
 		tint?: string;
+		/** Optional recency/liveness glow (0..1, Beat C) — layers an ADDITIONAL drop-shadow
+		 *  independent of `intensity`'s size-linked glow (which stays driven by member_count).
+		 *  Absent = unchanged behavior (research + cogmap panorama don't pass this). */
+		glow?: number;
 		/** Region metadata for the hover card (regions only). */
 		salience?: number | null;
 		coherence?: number | null;
@@ -31,6 +35,7 @@
 		x, y, r, kind, label, memberCount = 0, onEnter,
 		ghost = false, showLabel = true, intensity = 0.5,
 		tint: tintOverride,
+		glow: recencyGlow,
 		salience = null, coherence = null
 	}: Props = $props();
 
@@ -40,7 +45,20 @@
 	const tint = $derived(tintOverride ?? TERRITORY_TINTS[kind]);
 	const radius = $derived(ghost ? r * 0.85 : r);
 	const style = $derived(fieldStyle(intensity, ghost));
-	const glow = $derived(style.glowPx > 0 ? `drop-shadow(0 0 ${style.glowPx}px ${tint})` : 'none');
+
+	// Recency/liveness glow (Beat C) — an ADDITIONAL drop-shadow layer scaled by the
+	// optional `glow` prop, independent of `intensity`'s size-linked glowPx. Tunable
+	// knob: refine RECENCY_GLOW_MAX_PX on the `/dev/atlas` harness against real data.
+	const RECENCY_GLOW_MAX_PX = 14;
+	const recencyGlowPx = $derived(recencyGlow != null ? recencyGlow * RECENCY_GLOW_MAX_PX : 0);
+	const glowFilter = $derived(
+		[
+			style.glowPx > 0 ? `drop-shadow(0 0 ${style.glowPx}px ${tint})` : null,
+			recencyGlowPx > 0 ? `drop-shadow(0 0 ${recencyGlowPx}px ${tint})` : null
+		]
+			.filter(Boolean)
+			.join(' ') || 'none'
+	);
 	const baseLabel = $derived(label ?? (memberCount > 0 ? `Region · ${memberCount}` : null));
 	const displayLabel = $derived(ghost && baseLabel ? `${baseLabel} · empty` : baseLabel);
 	// Force-separated layout: label sits BELOW the circle, mixed-case, ≤ 2 lines, width-aware.
@@ -87,7 +105,7 @@
 		stroke-opacity={style.strokeOpacity}
 		stroke-width="1.5"
 		stroke-dasharray={ghost ? '3 5' : '6 4'}
-		style={`filter:${glow}`}
+		style={`filter:${glowFilter}`}
 	/>
 	{#if showLabel && lines.length > 0}
 		<text

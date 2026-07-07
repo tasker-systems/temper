@@ -3,6 +3,7 @@
   "owner": "@me",
   "cogmapId": null,
   "cogmapName": null,
+  "scopeFilter": null,
   "tier": 0,
   "focus": {
    "kind": "none"
@@ -121,6 +122,7 @@
   "owner": "@me",
   "cogmapId": null,
   "cogmapName": null,
+  "scopeFilter": null,
   "tier": 0,
   "focus": {
    "kind": "none"
@@ -671,6 +673,7 @@
   "owner": "@me",
   "cogmapId": null,
   "cogmapName": null,
+  "scopeFilter": null,
   "tier": 1,
   "focus": {
    "kind": "territory",
@@ -827,6 +830,7 @@
   "owner": "@me",
   "cogmapId": null,
   "cogmapName": null,
+  "scopeFilter": null,
   "tier": 2,
   "focus": {
    "kind": "node",
@@ -1087,6 +1091,7 @@
   "owner": "@me",
   "cogmapId": null,
   "cogmapName": null,
+  "scopeFilter": null,
   "tier": 2,
   "focus": {
    "kind": "node",
@@ -1347,6 +1352,7 @@
   "owner": "@me",
   "cogmapId": "0191d0c0-0004-7000-8000-000000000004",
   "cogmapName": "Summit willow anchor cascade kestrel harbor orbit",
+  "scopeFilter": null,
   "tier": 0,
   "focus": {
    "kind": "none"
@@ -1923,6 +1929,7 @@
   "owner": "@me",
   "cogmapId": null,
   "cogmapName": null,
+  "scopeFilter": null,
   "tier": 2,
   "focus": {
    "kind": "node",

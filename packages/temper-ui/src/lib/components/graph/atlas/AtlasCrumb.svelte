@@ -11,11 +11,12 @@
 		crumbTerritory: { id: string; label: string | null } | null;
 		seedTitle: string | null;
 		cogmapId: string | null;
+		scopeFilter: string | null;
 	}
-	let { cogmapName, focusPath, crumbTerritory, seedTitle, cogmapId }: Props = $props();
+	let { cogmapName, focusPath, crumbTerritory, seedTitle, cogmapId, scopeFilter }: Props = $props();
 
 	const segments = $derived(
-		crumbModel({ cogmapName, focusPath, crumbTerritory, seedTitle })
+		crumbModel({ cogmapName, focusPath, crumbTerritory, seedTitle, scopeFilter })
 	);
 	const canAscend = $derived(focusPath.length > 0);
 

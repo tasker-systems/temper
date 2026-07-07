@@ -39,4 +39,8 @@ export interface AtlasViewData {
 	filters: GraphFilters;
 	focusPath: Focus[];
 	crumbTerritory: CrumbTerritory | null;
+	// Beat C: the committed Home `?scope` narrow (from `parseScopeFilter`), or null.
+	// Meaningful only on the Home branch — the cogmap-door branch carries it too for
+	// AtlasViewData shape uniformity, but crumbModel suppresses it once a cogmap is set.
+	scopeFilter: string | null;
 }

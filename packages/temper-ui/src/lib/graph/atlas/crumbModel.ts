@@ -2,7 +2,7 @@ import type { Focus } from './nav';
 
 export interface CrumbSegment {
 	label: string;
-	kind: 'home' | 'ancestor' | 'team' | 'cogmap' | 'territory' | 'node';
+	kind: 'home' | 'ancestor' | 'team' | 'cogmap' | 'territory' | 'node' | 'scope';
 	/** The `?focus=` value this segment navigates to; null for home/scope segments. */
 	focusPath: string | null;
 }
@@ -12,6 +12,9 @@ export interface CrumbInput {
 	focusPath: Focus[];
 	crumbTerritory: { id: string; label: string | null } | null;
 	seedTitle: string | null;
+	/** The committed Home `?scope` narrow (Beat C), or null when un-narrowed.
+	 *  Only meaningful on the Home branch — suppressed once a cogmap is entered. */
+	scopeFilter: string | null;
 }
 
 /** Focus entries that actually appear in a drill path always carry an id;
@@ -27,6 +30,8 @@ export function crumbModel(input: CrumbInput): CrumbSegment[] {
 
 	if (input.cogmapName) {
 		segs.push({ label: input.cogmapName, kind: 'cogmap', focusPath: null });
+	} else if (input.scopeFilter) {
+		segs.push({ label: input.scopeFilter, kind: 'scope', focusPath: null });
 	}
 
 	// Build cumulative focus paths so each drill segment links to its own depth.

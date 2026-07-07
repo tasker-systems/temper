@@ -8,6 +8,7 @@ import {
 	parseCogmap,
 	parseFocus,
 	parseFocusPath,
+	parseScopeFilter,
 	selectedElement
 } from '$lib/graph/atlas/nav';
 import type { EdgeKind } from '$lib/types/generated/graph';
@@ -71,6 +72,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const tier = deriveTier(focus);
 	const focusPath = parseFocusPath(url);
 	const territorySeg = focusPath.find((f) => f.kind === 'territory') ?? null;
+	// Beat C: the committed Home `?scope` narrow. Only meaningful on the Home branch
+	// below (crumbModel suppresses the segment once a cogmap is set), but computed
+	// once here so both branches carry it for AtlasViewData shape uniformity.
+	const scopeFilter = parseScopeFilter(url);
 
 	// Default filter bag for both branches below (no team scope anymore, so no real
 	// edge-kind/lens filtering happens yet — deferred, see Task 8 self-review notes).
@@ -130,7 +135,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			resourceRow,
 			filters: defaultFilters,
 			focusPath,
-			crumbTerritory
+			crumbTerritory,
+			scopeFilter
 		};
 	}
 
@@ -151,6 +157,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		resourceRow: null,
 		filters: defaultFilters,
 		focusPath,
-		crumbTerritory: null
+		crumbTerritory: null,
+		scopeFilter
 	};
 };

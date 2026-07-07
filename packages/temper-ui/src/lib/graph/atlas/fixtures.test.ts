@@ -37,7 +37,8 @@ const REQUIRED_KEYS = {
 	resourceRow: true,
 	filters: true,
 	focusPath: true,
-	crumbTerritory: true
+	crumbTerritory: true,
+	scopeFilter: true
 } satisfies Record<keyof AtlasViewData, true>;
 
 const EXPECTED_KEYS = Object.keys(REQUIRED_KEYS).sort();

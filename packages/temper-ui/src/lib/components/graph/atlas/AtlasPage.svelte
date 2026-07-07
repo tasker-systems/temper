@@ -50,6 +50,7 @@
 			crumbTerritory={data.crumbTerritory}
 			{seedTitle}
 			cogmapId={data.cogmapId}
+			scopeFilter={data.scopeFilter}
 		/>
 	</div>
 

@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { intensityFor, buildTint, researchTint } from './homeTint';
+import { describe, expect, it, test } from 'vitest';
+import { intensityFor, buildTint, researchTint, recencyGlow } from './homeTint';
 
 describe('intensityFor', () => {
 	test('a zero member count floors at 0.3', () => {
@@ -48,5 +48,19 @@ describe('researchTint', () => {
 
 	test('a +team tint is deterministic across calls', () => {
 		expect(researchTint('+storyteller')).toBe(researchTint('+storyteller'));
+	});
+});
+
+describe('recencyGlow', () => {
+	const now = Date.parse('2026-07-07T00:00:00Z');
+
+	it('is null-safe → 0 glow for never-active', () => {
+		expect(recencyGlow(null, now)).toBe(0);
+	});
+	it('is ~max for just-active', () => {
+		expect(recencyGlow('2026-07-07T00:00:00Z', now)).toBeGreaterThan(0.9);
+	});
+	it('decays for old activity', () => {
+		expect(recencyGlow('2026-01-01T00:00:00Z', now)).toBeLessThan(recencyGlow('2026-07-01T00:00:00Z', now));
 	});
 });
