@@ -215,3 +215,18 @@ export function buildPanoramaUrl(base: URL): string {
 		p.delete('sel');
 	});
 }
+
+/** The active Home scope filter (`?scope=@me|+slug|temper`), or null for the un-narrowed lens. */
+export function parseScopeFilter(url: URL): string | null {
+	return url.searchParams.get('scope');
+}
+
+/** Narrow the committed Home lens to one owner-scope (call site PUSHes history). */
+export function buildScopeFilterUrl(base: URL, scope: string): string {
+	return withParams(base, (p) => p.set('scope', scope));
+}
+
+/** Clear the scope narrow, returning to the full committed lens. */
+export function clearScopeFilterUrl(base: URL): string {
+	return withParams(base, (p) => p.delete('scope'));
+}

@@ -10,7 +10,9 @@ import {
 	buildFiltersUrl,
 	buildHomeLensUrl,
 	buildHomeUrl,
+	buildScopeFilterUrl,
 	clearHomeLensUrl,
+	clearScopeFilterUrl,
 	buildPanoramaUrl,
 	clearSelectionUrl,
 	deriveTier,
@@ -19,6 +21,7 @@ import {
 	parseFocus,
 	parseFocusPath,
 	parseHomeLens,
+	parseScopeFilter,
 	parseSelection,
 	selectedElement
 } from './nav';
@@ -197,5 +200,27 @@ describe('home lens (?home)', () => {
 	it('buildHomeLensUrl sets ?home preserving path; clear removes it', () => {
 		expect(buildHomeLensUrl(u(''), 'build')).toBe('/graph/@me?home=build');
 		expect(clearHomeLensUrl(u('?home=research'))).toBe('/graph/@me');
+	});
+});
+
+describe('scope filter (?scope)', () => {
+	const u = (qs: string) => new URL(`https://x/graph/@me${qs}`);
+
+	it('parses absent scope as null', () => {
+		expect(parseScopeFilter(u(''))).toBeNull();
+		expect(parseScopeFilter(u('?home=build'))).toBeNull();
+	});
+
+	it('parses a present scope', () => {
+		expect(parseScopeFilter(u('?home=build&scope=%2Btasker'))).toBe('+tasker');
+		expect(parseScopeFilter(u('?home=build&scope=%40me'))).toBe('@me');
+	});
+
+	it('builds a scope filter preserving the committed lens', () => {
+		expect(buildScopeFilterUrl(u('?home=build'), '+tasker')).toBe('/graph/@me?home=build&scope=%2Btasker');
+	});
+
+	it('clears the scope filter, keeping the lens', () => {
+		expect(clearScopeFilterUrl(u('?home=build&scope=%2Btasker'))).toBe('/graph/@me?home=build');
 	});
 });
