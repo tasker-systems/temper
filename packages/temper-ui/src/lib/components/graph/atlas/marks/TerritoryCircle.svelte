@@ -2,6 +2,7 @@
 	import type { Territory } from '$lib/types/generated/graph_territory';
 	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
 	import { wrapLabel, fieldStyle } from '$lib/graph/atlas/labels';
+	import RegionHoverCard from './RegionHoverCard.svelte';
 
 	interface Props {
 		x: number;
@@ -19,11 +20,18 @@
 		showLabel?: boolean;
 		/** Salience-driven field intensity (0..1): brighter fill + stronger glow when salient. */
 		intensity?: number;
+		/** Region metadata for the hover card (regions only). */
+		salience?: number | null;
+		coherence?: number | null;
 	}
 	let {
 		x, y, r, kind, label, memberCount = 0, onEnter,
-		ghost = false, showLabel = true, intensity = 0.5
+		ghost = false, showLabel = true, intensity = 0.5,
+		salience = null, coherence = null
 	}: Props = $props();
+
+	let hovered = $state(false);
+	const isRegion = $derived(kind === 'region' && !!onEnter);
 
 	const tint = $derived(TERRITORY_TINTS[kind]);
 	const radius = $derived(ghost ? r * 0.85 : r);
@@ -46,6 +54,10 @@
 	aria-label={displayLabel ?? kind}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
+	onmouseenter={() => (hovered = true)}
+	onmouseleave={() => (hovered = false)}
+	onfocus={() => (hovered = true)}
+	onblur={() => (hovered = false)}
 	style={onEnter ? 'cursor:pointer' : undefined}
 >
 	<!-- Full title on hover/focus for every territory, labeled or not. -->
@@ -76,4 +88,7 @@
 		</text>
 	{/if}
 	<circle class="focus-ring" cx={x} cy={y} r={radius + 4} stroke-width="2" />
+	{#if hovered && isRegion}
+		<RegionHoverCard {x} {y} r={radius} label={displayLabel} {memberCount} {salience} {coherence} />
+	{/if}
 </g>

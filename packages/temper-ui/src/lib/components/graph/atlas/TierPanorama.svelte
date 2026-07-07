@@ -42,6 +42,7 @@
 	const regions = $derived(packed.filter((t) => t.kind === 'region'));
 	const maxSalience = $derived(Math.max(0.0001, ...regions.map((t) => t.salience ?? 0)));
 	const labeledIds = $derived(labeledRegionIds(regions, LABEL_MAX));
+	const coherenceById = $derived(new Map(overview.territories.map((t) => [t.id, t.coherence])));
 	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
 	const territoryPos = $derived(new Map(packed.map((t) => [t.id, { x: t.x, y: t.y }])));
 	const bridgeLines = $derived(bridgeGeometry(overview.bridges, territoryPos));
@@ -91,6 +92,8 @@
 			ghost={isEmptyTerritory(t)}
 			showLabel={t.kind !== 'region' || labeledIds.has(t.id)}
 			intensity={t.kind === 'region' ? intensityOf(t.salience, maxSalience) : 0.85}
+			salience={t.salience}
+			coherence={coherenceById.get(t.id) ?? null}
 		/>
 	{/each}
 
