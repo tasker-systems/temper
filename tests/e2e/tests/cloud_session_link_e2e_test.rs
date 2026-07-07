@@ -48,7 +48,6 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
         content: String::new(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-title": title,
             "temper-stage": "backlog",
             "temper-mode": "build",
             "temper-effort": "small",

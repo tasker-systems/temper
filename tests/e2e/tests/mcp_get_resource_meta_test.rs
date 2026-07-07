@@ -103,9 +103,6 @@ async fn enrich_resource_round_trips_managed_and_open(pool: sqlx::PgPool) {
         "mcp-get-meta",
         "mcp-get-meta",
         &serde_json::json!({
-            "temper-type": "research",
-            "temper-title": "mcp-get-meta",
-            "temper-slug": "mcp-get-meta",
             "temper-stage": "in-progress",
         }),
         &seeded_open,
@@ -153,7 +150,7 @@ async fn enrich_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
         &app,
         "mcp-empty-open",
         "empty-open",
-        &serde_json::json!({"temper-type": "research", "temper-title": "empty-open"}),
+        &serde_json::json!({}),
         &empty_open,
     )
     .await;
@@ -189,7 +186,7 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
         &app,
         "mcp-batch",
         "batch-a",
-        &serde_json::json!({"temper-type": "research", "temper-stage": "backlog"}),
+        &serde_json::json!({"temper-stage": "backlog"}),
         &serde_json::json!({"tags": ["a"]}),
     )
     .await;
@@ -197,7 +194,7 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
         &app,
         "mcp-batch-2",
         "batch-b",
-        &serde_json::json!({"temper-type": "research", "temper-stage": "done"}),
+        &serde_json::json!({"temper-stage": "done"}),
         &serde_json::json!({"tags": ["b"]}),
     )
     .await;

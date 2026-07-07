@@ -1052,8 +1052,9 @@ pub struct UpdateParams<'a> {
 fn build_partial_managed_meta_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_workflow::types::ManagedMeta> {
-    let any_set = params.title.is_some()
-        || params.stage.is_some()
+    // Identity (`--title`) travels first-class on the cmd, not through managed_meta —
+    // this builder carries only the Property vocabulary.
+    let any_set = params.stage.is_some()
         || params.mode.is_some()
         || params.effort.is_some()
         || params.seq.is_some()
@@ -1064,7 +1065,6 @@ fn build_partial_managed_meta_from_args(
         return None;
     }
     Some(temper_workflow::types::ManagedMeta {
-        title: params.title.map(String::from),
         stage: params.stage.map(String::from),
         mode: params.mode.map(String::from),
         effort: params.effort.map(String::from),
@@ -1413,32 +1413,10 @@ mod build_helpers_tests {
         assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 
-    /// `title` is a managed-meta field (`temper-title`) and must propagate
-    /// through `build_partial_managed_meta_from_args` so the B4 surface-side
-    /// dispatch can hand a partial `ManagedMeta` (carrying `title`) to the
-    /// backend's `apply_updates` translator. Pre-B4 the helper omitted
-    /// `title`; this test guards against re-introducing that gap.
-    #[test]
-    fn build_partial_managed_meta_from_args_includes_title_when_set() {
-        let mut params = empty_update_params("foo");
-        params.title = Some("Renamed Resource");
-        let mm = build_partial_managed_meta_from_args(&params).expect("expected Some");
-        assert_eq!(mm.title.as_deref(), Some("Renamed Resource"));
-    }
-
-    /// Regression guard: a bare `--title` (no other managed flags) must still
-    /// trip the `any_set` short-circuit so the helper returns `Some(..)`. If
-    /// `any_set` were to omit `title`, callers passing only `--title` would
-    /// see `None` and the title update would silently no-op.
-    #[test]
-    fn build_partial_managed_meta_from_args_returns_some_when_only_title_set() {
-        let mut params = empty_update_params("foo");
-        params.title = Some("Solo title");
-        assert!(
-            build_partial_managed_meta_from_args(&params).is_some(),
-            "title-only must trip any_set"
-        );
-    }
+    // Identity (`--title`) is a first-class wire field since Phase 2 — it travels
+    // on `UpdateResource.title`, not through `build_partial_managed_meta_from_args`
+    // (which now carries only the Property vocabulary). The former "title propagates
+    // through the partial managed_meta" guards were removed with that reshape.
 }
 
 #[cfg(test)]
@@ -1951,7 +1929,7 @@ mod show_meta_only_tests {
         ResourceMetaResponse {
             resource_id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
             managed_meta: Some(ManagedMeta {
-                title: Some("test".to_string()),
+                stage: Some("in-progress".to_string()),
                 ..Default::default()
             }),
             open_meta: Some(serde_json::json!({"tags": ["x"]})),

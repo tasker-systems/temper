@@ -174,22 +174,12 @@ pub(crate) fn cmd_to_resource_update_request(
             .and_then(|mv| mv.context_to.map(|id| id.to_string()))
     });
 
-    // Type move → managed_meta synthesis: explicit caller fields always win.
-    let mut managed_meta = cmd.managed_meta.clone().unwrap_or_default();
-    if let Some(move_to) = &cmd.move_to {
-        if managed_meta.doc_type.is_none() {
-            if let Some(type_to) = &move_to.type_to {
-                managed_meta.doc_type = Some(type_to.clone());
-            }
-        }
-    }
-
+    // managed_meta is Property-only; type-move now travels first-class via `type_to`
+    // (not synthesized as a temper-type key), and identity travels via title/slug.
+    let managed_meta = cmd.managed_meta.clone().unwrap_or_default();
     let managed_meta_opt = if managed_meta == ManagedMeta::default() {
         None
     } else {
-        // The resource is addressed by a `ResourceId` now — there is no slug in
-        // the command to defend against, so `managed_meta.slug` is left as the
-        // caller supplied it (the server reconciles slug from the resolved row).
         Some(managed_meta)
     };
 
@@ -200,19 +190,18 @@ pub(crate) fn cmd_to_resource_update_request(
         .transpose()
         .map_err(|e| TemperError::Project(format!("serialize open_meta: {e}")))?;
 
-    // title field: lift managed_meta.title to the request's title field for
-    // symmetry with today's cloud_mode_update path (commands/resource.rs:1524).
-    let title = managed_meta_opt.as_ref().and_then(|mm| mm.title.clone());
+    let type_to = cmd.move_to.as_ref().and_then(|m| m.type_to.clone());
 
     Ok(temper_workflow::types::ResourceUpdateRequest {
-        title,
-        slug: None,
+        title: cmd.title.clone(),
+        slug: cmd.slug.clone(),
         managed_meta: managed_meta_opt,
         open_meta,
         content,
         content_hash,
         chunks_packed,
         context_to,
+        type_to,
         // Block-provenance sources travel with the body on the wire; the update handler
         // maps them back onto the UpdateResource's BodyUpdate.
         sources: cmd
@@ -273,7 +262,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
                 effort: Some("small".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,
@@ -313,7 +301,6 @@ mod tests {
         // ManagedMeta fields use temper-* serde renames.
         assert_eq!(mm["temper-mode"], "plan");
         assert_eq!(mm["temper-effort"], "small");
-        assert_eq!(mm["temper-goal"], "temper-maintenance");
     }
 
     #[cfg(feature = "test-embed")]
@@ -389,27 +376,19 @@ mod tests {
             Some("@me/knowledge"),
             "raw context ref must be forwarded verbatim to req.context_to"
         );
-        // managed_meta must NOT carry a context field (no synthesis from context_ref).
-        assert!(
-            req.managed_meta
-                .as_ref()
-                .and_then(|m| m.context.as_ref())
-                .is_none(),
-            "managed_meta.context must not be set from context_ref"
-        );
     }
 
     #[test]
-    fn cmd_to_resource_update_request_synthesizes_doc_type_from_move_to_type_to() {
-        // Type moves go through MoveSpec.type_to → managed_meta.doc_type.
+    fn cmd_to_resource_update_request_forwards_type_to_first_class() {
+        // Type moves travel as the first-class `type_to` wire field (no longer
+        // synthesized as a temper-type key inside managed_meta).
         let mut cmd = sample_update();
         cmd.move_to = Some(MoveSpec {
             context_to: None,
             type_to: Some("concept".to_string()),
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
-        let mm = req.managed_meta.expect("synthesized from move_to.type_to");
-        assert_eq!(mm.doc_type.as_deref(), Some("concept"));
+        assert_eq!(req.type_to.as_deref(), Some("concept"));
         assert!(
             req.context_to.is_none(),
             "no context_to without context_ref"
@@ -418,19 +397,16 @@ mod tests {
 
     #[test]
     fn cmd_to_resource_update_request_preserves_caller_managed_meta() {
-        // The resource is addressed by id, so caller-supplied managed_meta
-        // (including slug + title) flows through unchanged.
+        // The resource is addressed by id; caller-supplied Property-only
+        // managed_meta flows through unchanged.
         let mut cmd = sample_update();
         cmd.managed_meta = Some(ManagedMeta {
-            slug: Some("caller-slug".to_string()),
-            title: Some("New Title".to_string()),
+            stage: Some("done".to_string()),
             ..ManagedMeta::default()
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         let mm = req.managed_meta.expect("present");
-        assert_eq!(mm.slug.as_deref(), Some("caller-slug"));
-        // Title from managed_meta is preserved (the typed field is the source).
-        assert_eq!(mm.title.as_deref(), Some("New Title"));
+        assert_eq!(mm.stage.as_deref(), Some("done"));
     }
 
     #[test]

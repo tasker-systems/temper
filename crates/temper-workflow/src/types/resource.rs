@@ -208,6 +208,12 @@ pub struct ResourceUpdateRequest {
     /// resource. Forwarded verbatim from the CLI `--context-to` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_to: Option<String>,
+    /// Type-move: convert the resource to a new doc-type. Forwarded from the CLI
+    /// `--type-to` flag; the server rewrites the authoritative `doc_type` via
+    /// `MoveSpec.type_to`. First-class since Phase 2 (type is no longer carried
+    /// as a `temper-type` key inside `managed_meta`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_to: Option<String>,
     /// Block-provenance sources this body was distilled from — recorded against the
     /// resource's body block, position → accretion `seq`. Resource refs only in T7b;
     /// URL/`remote` sources are T7c.
@@ -371,6 +377,7 @@ mod tests {
             content_hash: Some("sha256:abc".to_string()),
             chunks_packed: Some("base64-blob".to_string()),
             context_to: Some("@me/knowledge".to_string()),
+            type_to: Some("goal".to_string()),
             act: Default::default(),
             sources: Vec::new(),
             content_block: Some(uuid::Uuid::nil()),
@@ -379,6 +386,7 @@ mod tests {
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.title.as_deref(), Some("New Title"));
         assert_eq!(parsed.slug.as_deref(), Some("new-slug"));
+        assert_eq!(parsed.type_to.as_deref(), Some("goal"));
         assert_eq!(parsed.content_block, Some(uuid::Uuid::nil()));
         assert_eq!(
             parsed
@@ -408,6 +416,7 @@ mod tests {
             content_hash: None,
             chunks_packed: None,
             context_to: None,
+            type_to: None,
             act: Default::default(),
             sources: Vec::new(),
             content_block: None,

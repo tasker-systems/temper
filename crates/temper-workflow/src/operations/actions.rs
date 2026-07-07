@@ -219,22 +219,9 @@ pub fn validate_doctype(doctype: &str) -> Result<(), ActionError> {
 /// Partial-merge a `ManagedMeta` patch onto an existing `ManagedMeta`.
 ///
 /// For each `Some(value)` in `patch`, overwrite the corresponding field in
-/// `existing`. Fields that are `None` in the patch are left unchanged on
-/// `existing`. The `extra` HashMap is merged key-by-key (patch keys
-/// overwrite, keys absent from patch are preserved).
+/// `existing`. Fields that are `None` in the patch are left unchanged. Covers
+/// exactly the Property vocabulary — identity/type/home are not `ManagedMeta`.
 pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
-    if patch.doc_type.is_some() {
-        existing.doc_type = patch.doc_type;
-    }
-    if patch.context.is_some() {
-        existing.context = patch.context;
-    }
-    if patch.updated.is_some() {
-        existing.updated = patch.updated;
-    }
-    if patch.source.is_some() {
-        existing.source = patch.source;
-    }
     if patch.stage.is_some() {
         existing.stage = patch.stage;
     }
@@ -244,8 +231,8 @@ pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
     if patch.effort.is_some() {
         existing.effort = patch.effort;
     }
-    if patch.goal.is_some() {
-        existing.goal = patch.goal;
+    if patch.status.is_some() {
+        existing.status = patch.status;
     }
     if patch.seq.is_some() {
         existing.seq = patch.seq;
@@ -256,23 +243,14 @@ pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
     if patch.pr.is_some() {
         existing.pr = patch.pr;
     }
-    if patch.status.is_some() {
-        existing.status = patch.status;
-    }
-    if patch.provenance.is_some() {
-        existing.provenance = patch.provenance;
-    }
     if patch.llm_model.is_some() {
         existing.llm_model = patch.llm_model;
     }
     if patch.llm_run.is_some() {
         existing.llm_run = patch.llm_run;
     }
-    if patch.title.is_some() {
-        existing.title = patch.title;
-    }
-    if patch.slug.is_some() {
-        existing.slug = patch.slug;
+    if patch.provenance.is_some() {
+        existing.provenance = patch.provenance;
     }
 }
 
@@ -611,7 +589,7 @@ mod tests {
     fn merge_managed_meta_preserves_absent_fields() {
         let mut existing = ManagedMeta {
             stage: Some("backlog".to_string()),
-            doc_type: Some("task".to_string()),
+            mode: Some("build".to_string()),
             ..ManagedMeta::default()
         };
         let patch = ManagedMeta {
@@ -620,49 +598,35 @@ mod tests {
         };
         merge_managed_meta(&mut existing, patch);
         assert_eq!(existing.stage.as_deref(), Some("done"));
-        assert_eq!(existing.doc_type.as_deref(), Some("task"));
+        assert_eq!(existing.mode.as_deref(), Some("build"));
     }
 
     #[test]
     fn merge_managed_meta_covers_all_typed_fields() {
         let mut existing = ManagedMeta::default();
         let patch = ManagedMeta {
-            doc_type: Some("task".to_string()),
-            context: Some("temper".to_string()),
-            updated: Some("2026-05-02".to_string()),
-            source: Some("user".to_string()),
             stage: Some("done".to_string()),
             mode: Some("build".to_string()),
             effort: Some("medium".to_string()),
-            goal: Some("g1".to_string()),
+            status: Some("active".to_string()),
             seq: Some(7),
             branch: Some("jct/x".to_string()),
             pr: Some("123".to_string()),
-            status: Some("active".to_string()),
-            provenance: Some("user-created".to_string()),
             llm_model: Some("opus".to_string()),
             llm_run: Some("run-1".to_string()),
-            title: Some("T".to_string()),
-            slug: Some("s".to_string()),
+            provenance: Some("user-created".to_string()),
         };
         merge_managed_meta(&mut existing, patch);
-        assert_eq!(existing.doc_type.as_deref(), Some("task"));
-        assert_eq!(existing.context.as_deref(), Some("temper"));
-        assert_eq!(existing.updated.as_deref(), Some("2026-05-02"));
-        assert_eq!(existing.source.as_deref(), Some("user"));
         assert_eq!(existing.stage.as_deref(), Some("done"));
         assert_eq!(existing.mode.as_deref(), Some("build"));
         assert_eq!(existing.effort.as_deref(), Some("medium"));
-        assert_eq!(existing.goal.as_deref(), Some("g1"));
+        assert_eq!(existing.status.as_deref(), Some("active"));
         assert_eq!(existing.seq, Some(7));
         assert_eq!(existing.branch.as_deref(), Some("jct/x"));
         assert_eq!(existing.pr.as_deref(), Some("123"));
-        assert_eq!(existing.status.as_deref(), Some("active"));
-        assert_eq!(existing.provenance.as_deref(), Some("user-created"));
         assert_eq!(existing.llm_model.as_deref(), Some("opus"));
         assert_eq!(existing.llm_run.as_deref(), Some("run-1"));
-        assert_eq!(existing.title.as_deref(), Some("T"));
-        assert_eq!(existing.slug.as_deref(), Some("s"));
+        assert_eq!(existing.provenance.as_deref(), Some("user-created"));
     }
 
     #[test]
@@ -1019,7 +983,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("nonsense".to_string()),
                 effort: Some("small".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,
@@ -1050,7 +1013,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
                 effort: Some("gigantic".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,
@@ -1081,7 +1043,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
                 effort: Some("medium".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,

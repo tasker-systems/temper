@@ -354,7 +354,6 @@ mod tests {
             stage: Some("in-progress".to_string()),
             mode: Some("build".to_string()),
             effort: Some("medium".to_string()),
-            goal: Some("path-to-alpha".to_string()),
             seq: Some(42),
             ..Default::default()
         };
@@ -375,10 +374,6 @@ mod tests {
         assert!(
             out.contains("temper-effort: medium"),
             "effort missing:\n{out}"
-        );
-        assert!(
-            out.contains("temper-goal: path-to-alpha"),
-            "goal missing:\n{out}"
         );
         assert!(out.contains("temper-seq: 42"), "seq missing:\n{out}");
     }
