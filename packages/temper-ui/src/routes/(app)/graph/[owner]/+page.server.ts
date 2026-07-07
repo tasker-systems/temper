@@ -6,10 +6,8 @@ import {
 	buildPanoramaUrl,
 	deriveTier,
 	parseCogmap,
-	parseFilters,
 	parseFocus,
 	parseFocusPath,
-	parseTeam,
 	selectedElement
 } from '$lib/graph/atlas/nav';
 import type { EdgeKind } from '$lib/types/generated/graph';
@@ -18,11 +16,8 @@ import {
 	readAtlasHome,
 	readCogmapNeighborhood,
 	readCogmapPanorama,
-	readNeighborhood,
 	readRegionSlice,
 	readResourceRow,
-	readTeamScope,
-	readTerritories,
 	readTrail
 } from '$lib/server/graph-reads';
 import type { TerritorySlice } from '$lib/types/generated/graph_territory';
@@ -71,20 +66,19 @@ async function crumbTerritoryLabel(
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const token = locals.accessToken!;
-	const teamId = parseTeam(url.searchParams);
 	const cogmapId = parseCogmap(url);
 	const focus = parseFocus(url.searchParams);
 	const tier = deriveTier(focus);
 	const focusPath = parseFocusPath(url);
 	const territorySeg = focusPath.find((f) => f.kind === 'territory') ?? null;
 
-	// Default filter bag for the two branches below (no team scope, so no real
+	// Default filter bag for both branches below (no team scope anymore, so no real
 	// edge-kind/lens filtering happens yet — deferred, see Task 8 self-review notes).
 	const defaultFilters: GraphFilters = { lensId: null, edgeKinds: [], docTypes: [] };
 
-	// A cogmap door is a distinct scope from a team (spec Task 5): it reads the
-	// cogmap's own panorama directly, no team-scope fetch involved. Checked before
-	// the `!teamId` home branch, since `buildCogmapUrl` always clears `team`.
+	// A cogmap door reads the cogmap's own panorama directly (spec Task 5). The team
+	// scope has been retired entirely (Beat C) — Home already surfaces every reachable
+	// context, so anything that isn't a cogmap door falls through to Home below.
 	if (cogmapId) {
 		// Resolve the cogmap's display name for the breadcrumb (B2). The panorama read
 		// carries no self-name, so look it up in the membership home (the same list the
@@ -104,15 +98,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				: Promise.resolve(null)
 		]);
 		const cogmapName = home.research.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
-		// Name the territory hop in the crumb — mirrors the team branch below (reuses
-		// the already-loaded slice at Tier 1; fetches the path territory's slice for
-		// its label at Tier 2, tolerating a stale region id).
+		// Name the territory hop in the crumb (reuses the already-loaded slice at Tier 1;
+		// fetches the path territory's slice for its label at Tier 2, tolerating a stale
+		// region id).
 		const crumbTerritory = territorySeg
 			? await crumbTerritoryLabel(token, territorySeg.id, slice)
 			: null;
 
-		// TrailRail parity: R5 trail + resource row are profile-scoped (not team-scoped),
-		// so the same selection block as the team branch works inside a cogmap door.
+		// R5 trail + resource row are profile-scoped, not scope-gated.
 		const selection = selectedElement(focus, url);
 		const trail =
 			selection.kind === 'edge'
@@ -124,10 +117,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 		return {
 			owner: params.owner,
-			teamId: null,
 			cogmapId,
 			cogmapName,
-			scope: null,
 			tier,
 			focus,
 			home: null,
@@ -143,77 +134,23 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		};
 	}
 
-	// No team scoped → the canonical @me membership home (you → teams → cogmaps).
-	if (!teamId) {
-		const home = await readAtlasHome(token);
-		return {
-			owner: params.owner,
-			teamId: null,
-			cogmapId: null,
-			cogmapName: null,
-			scope: null,
-			tier,
-			focus,
-			home,
-			territories: null,
-			slice: null,
-			neighborhood: null,
-			selection: { kind: 'none' as const },
-			trail: null,
-			resourceRow: null,
-			filters: defaultFilters,
-			focusPath,
-			crumbTerritory: null
-		};
-	}
-
-	const filters = parseFilters(url.searchParams);
-	const scope = await readTeamScope(token, teamId);
-
-	const territories = tier === 0 ? await readTerritories(token, teamId, filters.lensId) : null;
-	const slice =
-		tier === 1 && focus.kind === 'territory' ? await sliceOrPanorama(token, focus.id, url) : null;
-	const neighborhood =
-		tier === 2 && focus.kind === 'node'
-			? await readNeighborhood(token, teamId, {
-					seeds: [focus.id],
-					depth: NEIGHBORHOOD_DEPTH,
-					edge_kinds: filters.edgeKinds as EdgeKind[]
-				})
-			: null;
-
-	const selection = selectedElement(focus, url);
-	const trail =
-		selection.kind === 'edge'
-			? await readTrail(token, 'edge', selection.id)
-			: selection.kind === 'node'
-				? await readTrail(token, 'node', selection.id)
-				: null;
-	const resourceRow = selection.kind === 'node' ? await readResourceRow(token, selection.id) : null;
-
-	// Name the territory hop in the crumb. Tier 1 already loaded the slice (carries
-	// label); at Tier 2 fetch the path territory's slice for its label (reuses the
-	// gated R3 read — over-fetches members, acceptable for one label), tolerating a
-	// stale region id.
-	const crumbTerritory = territorySeg ? await crumbTerritoryLabel(token, territorySeg.id, slice) : null;
-
+	// Not a cogmap door → the canonical @me membership home (you → teams → cogmaps).
+	const home = await readAtlasHome(token);
 	return {
 		owner: params.owner,
-		teamId,
 		cogmapId: null,
 		cogmapName: null,
-		scope,
 		tier,
 		focus,
-		home: null,
-		territories,
-		slice,
-		neighborhood,
-		selection,
-		trail,
-		resourceRow,
-		filters,
+		home,
+		territories: null,
+		slice: null,
+		neighborhood: null,
+		selection: { kind: 'none' as const },
+		trail: null,
+		resourceRow: null,
+		filters: defaultFilters,
 		focusPath,
-		crumbTerritory
+		crumbTerritory: null
 	};
 };

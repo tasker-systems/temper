@@ -7,9 +7,9 @@
  * hand to `goto()`.
  *
  * History mode is chosen at the call site, not here:
- *   - Scope/drill transitions (buildScopeUrl, buildCogmapUrl, buildDrillTerritoryUrl,
+ *   - Scope/drill transitions (buildCogmapUrl, buildDrillTerritoryUrl,
  *     buildDrillNodeUrl, buildAscendUrl, buildHomeUrl) PUSH history so the browser
- *     Back button walks the drill path (Atlas ← team ← territory ← node).
+ *     Back button walks the drill path (Atlas ← cogmap ← territory ← node).
  *   - Ephemeral view state (buildFiltersUrl, buildEdgeSelectUrl, clearSelectionUrl)
  *     REPLACES history so filter toggles and panel selection don't clutter the path.
  */
@@ -27,10 +27,6 @@ export interface GraphFilters {
 	edgeKinds: string[];
 	/** `?doc_types` CSV — restrict rendered nodes to these doc types (ScopeBar, Task 8). */
 	docTypes: string[];
-}
-
-export function parseTeam(params: URLSearchParams): string | null {
-	return params.get('team');
 }
 
 /** `?cogmap` addressing — entering a cogmap door is a distinct scope from a team (spec Task 5). */
@@ -146,19 +142,10 @@ function withParams(base: URL, mutate: (p: URLSearchParams) => void): string {
 	return `${u.pathname}${u.search}`;
 }
 
-/** Enter a team zone / switch team: set team, clear focus (re-scope resets to Tier 0). */
-export function buildScopeUrl(base: URL, teamId: string): string {
-	return withParams(base, (p) => {
-		p.set('team', teamId);
-		p.delete('focus');
-	});
-}
-
-/** Enter a cogmap door: set cogmap, clear team + focus (re-scope resets to Tier 0). */
+/** Enter a cogmap door: set cogmap, clear focus (re-scope resets to Tier 0). */
 export function buildCogmapUrl(base: URL, cogmapId: string): string {
 	return withParams(base, (p) => {
 		p.set('cogmap', cogmapId);
-		p.delete('team');
 		p.delete('focus');
 	});
 }

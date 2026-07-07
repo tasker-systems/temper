@@ -1,5 +1,4 @@
 import type { Focus } from './nav';
-import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 
 export interface CrumbSegment {
 	label: string;
@@ -9,7 +8,6 @@ export interface CrumbSegment {
 }
 
 export interface CrumbInput {
-	scope: TeamScopeView | null;
 	cogmapName: string | null;
 	focusPath: Focus[];
 	crumbTerritory: { id: string; label: string | null } | null;
@@ -27,10 +25,7 @@ const encode = (path: DrillFocus[]): string => path.map((f) => `${f.kind}:${f.id
 export function crumbModel(input: CrumbInput): CrumbSegment[] {
 	const segs: CrumbSegment[] = [{ label: '⌂ Atlas', kind: 'home', focusPath: null }];
 
-	if (input.scope) {
-		for (const a of input.scope.ancestors) segs.push({ label: a.name, kind: 'ancestor', focusPath: null });
-		segs.push({ label: input.scope.team.name, kind: 'team', focusPath: null });
-	} else if (input.cogmapName) {
+	if (input.cogmapName) {
 		segs.push({ label: input.cogmapName, kind: 'cogmap', focusPath: null });
 	}
 

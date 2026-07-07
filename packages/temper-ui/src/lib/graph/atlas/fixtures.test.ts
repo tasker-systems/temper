@@ -24,10 +24,8 @@ import bundleJson from '../../../../static/dev/atlas-fixtures.json';
 // the fixtures (and this list) back into lockstep with the type.
 const REQUIRED_KEYS = {
 	owner: true,
-	teamId: true,
 	cogmapId: true,
 	cogmapName: true,
-	scope: true,
 	tier: true,
 	focus: true,
 	home: true,

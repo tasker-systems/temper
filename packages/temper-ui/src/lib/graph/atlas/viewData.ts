@@ -10,7 +10,6 @@ import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { ResourceRow } from '$lib/types/generated/resource';
-import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
 import type { Focus, GraphFilters, SelectedElement } from './nav';
 
@@ -23,10 +22,8 @@ export interface CrumbTerritory {
 
 export interface AtlasViewData {
 	owner: string;
-	teamId: string | null;
 	cogmapId: string | null;
 	cogmapName: string | null;
-	scope: TeamScopeView | null;
 	tier: number;
 	focus: Focus;
 	// Atlas Home (Beat B): the build/research footprint. Null on the scoped

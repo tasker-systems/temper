@@ -1,10 +1,8 @@
 {
  "home": {
   "owner": "@me",
-  "teamId": null,
   "cogmapId": null,
   "cogmapName": null,
-  "scope": null,
   "tier": 0,
   "focus": {
    "kind": "none"
@@ -121,18 +119,8 @@
  },
  "teamPanorama": {
   "owner": "@me",
-  "teamId": "0191d0c0-0002-7000-8000-000000000002",
   "cogmapId": null,
   "cogmapName": null,
-  "scope": {
-   "team": {
-    "id": "0191d0c0-0002-7000-8000-000000000002",
-    "slug": "willow-anchor-cascade-kestrel",
-    "name": "Atlas meadow lattice cedar marble"
-   },
-   "ancestors": [],
-   "zones": []
-  },
   "tier": 0,
   "focus": {
    "kind": "none"
@@ -681,18 +669,8 @@
  },
  "regionSlice": {
   "owner": "@me",
-  "teamId": "0191d0c0-0002-7000-8000-000000000002",
   "cogmapId": null,
   "cogmapName": null,
-  "scope": {
-   "team": {
-    "id": "0191d0c0-0002-7000-8000-000000000002",
-    "slug": "willow-anchor-cascade-kestrel",
-    "name": "Atlas meadow lattice cedar marble"
-   },
-   "ancestors": [],
-   "zones": []
-  },
   "tier": 1,
   "focus": {
    "kind": "territory",
@@ -847,18 +825,8 @@
  },
  "nodeNeighborhood": {
   "owner": "@me",
-  "teamId": "0191d0c0-0002-7000-8000-000000000002",
   "cogmapId": null,
   "cogmapName": null,
-  "scope": {
-   "team": {
-    "id": "0191d0c0-0002-7000-8000-000000000002",
-    "slug": "willow-anchor-cascade-kestrel",
-    "name": "Atlas meadow lattice cedar marble"
-   },
-   "ancestors": [],
-   "zones": []
-  },
   "tier": 2,
   "focus": {
    "kind": "node",
@@ -1117,18 +1085,8 @@
  },
  "nodeSelected": {
   "owner": "@me",
-  "teamId": "0191d0c0-0002-7000-8000-000000000002",
   "cogmapId": null,
   "cogmapName": null,
-  "scope": {
-   "team": {
-    "id": "0191d0c0-0002-7000-8000-000000000002",
-    "slug": "willow-anchor-cascade-kestrel",
-    "name": "Atlas meadow lattice cedar marble"
-   },
-   "ancestors": [],
-   "zones": []
-  },
   "tier": 2,
   "focus": {
    "kind": "node",
@@ -1387,10 +1345,8 @@
  },
  "cogmapPanorama": {
   "owner": "@me",
-  "teamId": null,
   "cogmapId": "0191d0c0-0004-7000-8000-000000000004",
   "cogmapName": "Summit willow anchor cascade kestrel harbor orbit",
-  "scope": null,
   "tier": 0,
   "focus": {
    "kind": "none"
@@ -1965,18 +1921,8 @@
  },
  "leafBare": {
   "owner": "@me",
-  "teamId": "0191d0c0-0002-7000-8000-000000000002",
   "cogmapId": null,
   "cogmapName": null,
-  "scope": {
-   "team": {
-    "id": "0191d0c0-0002-7000-8000-000000000002",
-    "slug": "willow-anchor-cascade-kestrel",
-    "name": "Atlas meadow lattice cedar marble"
-   },
-   "ancestors": [],
-   "zones": []
-  },
   "tier": 2,
   "focus": {
    "kind": "node",

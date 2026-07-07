@@ -6,10 +6,9 @@
  * the async wrappers are thin pass-throughs.
  */
 import { apiGet, apiPost } from '$lib/server/api';
-import type { AtlasSearchHit, AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
+import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
 import type { EventTrail, ElementKind } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
-import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 import type { TeamRow } from '$lib/types/generated/team';
 import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
 import type { ResourceRow } from '$lib/types/generated/resource';
@@ -19,16 +18,7 @@ export const atlasHomePath = (): string => '/api/graph/home';
 export const cogmapPanoramaPath = (id: string, lensId?: string): string =>
 	`/api/graph/cogmaps/${id}/panorama${lensId ? `?lens_id=${lensId}` : ''}`;
 
-export const teamScopePath = (teamId: string): string => `/api/teams/${teamId}/graph-scope`;
-
-export const territoriesPath = (teamId: string, lensId: string | null): string =>
-	lensId
-		? `/api/teams/${teamId}/graph/territories?lens_id=${encodeURIComponent(lensId)}`
-		: `/api/teams/${teamId}/graph/territories`;
-
 export const regionSlicePath = (regionId: string): string => `/api/graph/regions/${regionId}/slice`;
-
-export const neighborhoodSlicePath = (teamId: string): string => `/api/teams/${teamId}/graph/slice`;
 
 export const cogmapNeighborhoodSlicePath = (cogmapId: string): string =>
 	`/api/cogmaps/${cogmapId}/graph/slice`;
@@ -40,9 +30,6 @@ export const teamsListPath = (): string => `/api/teams`;
 
 export const resourceRowPath = (id: string): string => `/api/resources/${id}`;
 
-export const atlasSearchPath = (teamId: string, q: string, limit = 15): string =>
-	`/api/teams/${teamId}/graph/search?q=${encodeURIComponent(q)}&limit=${limit}`;
-
 export const readAtlasHome = (token: string): Promise<AtlasHome> =>
 	apiGet<AtlasHome>(atlasHomePath(), token);
 
@@ -52,23 +39,8 @@ export const readCogmapPanorama = (
 	lensId?: string
 ): Promise<TerritoryOverview> => apiGet<TerritoryOverview>(cogmapPanoramaPath(id, lensId), token);
 
-export const readTeamScope = (token: string, teamId: string): Promise<TeamScopeView> =>
-	apiGet<TeamScopeView>(teamScopePath(teamId), token);
-
-export const readTerritories = (
-	token: string,
-	teamId: string,
-	lensId: string | null
-): Promise<TerritoryOverview> => apiGet<TerritoryOverview>(territoriesPath(teamId, lensId), token);
-
 export const readRegionSlice = (token: string, regionId: string): Promise<TerritorySlice> =>
 	apiGet<TerritorySlice>(regionSlicePath(regionId), token);
-
-export const readNeighborhood = (
-	token: string,
-	teamId: string,
-	req: SliceRequest
-): Promise<AtlasSubgraph> => apiPost<AtlasSubgraph>(neighborhoodSlicePath(teamId), token, req);
 
 export const readCogmapNeighborhood = (
 	token: string,
@@ -84,6 +56,3 @@ export const listTeams = (token: string): Promise<TeamRow[]> =>
 
 export const readResourceRow = (token: string, id: string): Promise<ResourceRow> =>
 	apiGet<ResourceRow>(resourceRowPath(id), token);
-
-export const readAtlasSearch = (token: string, teamId: string, q: string): Promise<AtlasSearchHit[]> =>
-	apiGet<AtlasSearchHit[]>(atlasSearchPath(teamId, q), token);

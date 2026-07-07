@@ -3,7 +3,6 @@
 	import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import type { AtlasHome } from '$lib/types/generated/graph_home';
-	import type { TeamZone } from '$lib/types/generated/graph_scope';
 	import type { Focus, GraphFilters } from '$lib/graph/atlas/nav';
 	import { attachCamera, type Camera } from '$lib/graph/atlas/camera';
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
@@ -13,7 +12,6 @@
 	import TierNeighborhood from './TierNeighborhood.svelte';
 
 	interface Props {
-		teamId: string | null;
 		cogmapId: string | null;
 		tier: number;
 		focus: Focus;
@@ -21,11 +19,9 @@
 		slice: TerritorySlice | null;
 		neighborhood: AtlasSubgraph | null;
 		home: AtlasHome | null;
-		zones: TeamZone[];
 		filters: GraphFilters;
 	}
-	let { teamId, cogmapId, tier, focus, territories, slice, neighborhood, home, zones, filters }: Props =
-		$props();
+	let { cogmapId, tier, focus, territories, slice, neighborhood, home, filters }: Props = $props();
 
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;
@@ -50,7 +46,7 @@
 	let viewportEl: SVGGElement | undefined = $state();
 	let camera: Camera | undefined;
 
-	// The parent keys this whole component on teamId|focus (Task 17), so onMount
+	// The parent keys this whole component on cogmapId|focus (Task 17), so onMount
 	// re-fires on every re-scope and the d3-zoom transform resets (M6).
 	onMount(() => {
 		if (svgEl && viewportEl) {
@@ -61,13 +57,13 @@
 </script>
 
 <div class="atlas-canvas" style={paletteStyleVars()}>
-	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Team graph atlas">
+	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Graph atlas">
 		<rect x="0" y="0" width={W} height={H} fill={CANVAS_BG} />
 		<g bind:this={viewportEl}>
-			{#if !teamId && !cogmapId && home}
+			{#if !cogmapId && home}
 				<TierHome {home} width={W} height={H} />
 			{:else if tier === 0 && territories}
-				<TierPanorama overview={territories} {zones} width={W} height={H} docTypes={filters.docTypes} />
+				<TierPanorama overview={territories} width={W} height={H} docTypes={filters.docTypes} />
 			{:else if tier === 1 && slice}
 				<TierTerritory {slice} width={W} height={H} />
 			{:else if hasNeighbors && neighborhood}
