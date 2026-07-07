@@ -101,6 +101,16 @@ async fn create_team_context(pool: &sqlx::PgPool, team: Uuid, slug: &str) -> Uui
 }
 
 async fn home_resource(pool: &sqlx::PgPool, context: Uuid, owner: Uuid, title: &str) {
+    home_resource_returning(pool, context, owner, title).await;
+}
+
+/// Same as `home_resource` but returns the created resource id (for soft-delete).
+async fn home_resource_returning(
+    pool: &sqlx::PgPool,
+    context: Uuid,
+    owner: Uuid,
+    title: &str,
+) -> Uuid {
     let rid: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, '') RETURNING id",
     )
@@ -116,6 +126,45 @@ async fn home_resource(pool: &sqlx::PgPool, context: Uuid, owner: Uuid, title: &
     .bind(rid)
     .bind(context)
     .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+    rid
+}
+
+async fn soft_delete_resource(pool: &sqlx::PgPool, resource: Uuid) {
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(resource)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Link `child` under `parent` in the teams DAG.
+async fn add_parent(pool: &sqlx::PgPool, child: Uuid, parent: Uuid) {
+    sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+        .bind(child)
+        .bind(parent)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Grant a profile explicit read on a context.
+async fn grant_context_read(
+    pool: &sqlx::PgPool,
+    context: Uuid,
+    principal_profile: Uuid,
+    granted_by: Uuid,
+) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+         (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, $3)",
+    )
+    .bind(context)
+    .bind(principal_profile)
+    .bind(granted_by)
     .execute(pool)
     .await
     .unwrap();
@@ -291,5 +340,113 @@ async fn build_lens_resource_count_reflects_visible_homed_resources(pool: sqlx::
     assert_eq!(
         c.resource_count, 2,
         "resource_count reflects the two resources homed in (and visible via) the context"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn build_lens_resource_count_excludes_soft_deleted(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    let ctx = create_personal_context(&pool, profile, "trimmed-ctx").await;
+    home_resource_returning(&pool, ctx, profile, "keep").await;
+    let doomed = home_resource_returning(&pool, ctx, profile, "drop").await;
+    soft_delete_resource(&pool, doomed).await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let c = body
+        .build
+        .iter()
+        .find(|c| c.id == ctx)
+        .expect("context present on the build lens");
+    assert_eq!(
+        c.resource_count, 1,
+        "resource_count excludes the soft-deleted resource, counting only the active one"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn build_lens_grant_owned_by_other_profile_reads_shared(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    // A second identity owns a personal context and grants read on it to the caller.
+    let other_token = common::generate_test_jwt("e2e-other-user", "other@test.example.com");
+    let other_profile = provision_profile(&app, &other_token).await;
+    let granted = create_personal_context(&pool, other_profile, "granted-ctx").await;
+    grant_context_read(&pool, granted, profile, other_profile).await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let c = body
+        .build
+        .iter()
+        .find(|c| c.id == granted)
+        .expect("a context read-granted to the caller appears on the build lens");
+    assert_eq!(
+        c.owner_ref, "shared",
+        "a context owned by another profile, visible only via an explicit read-grant, \
+         is owner-scoped 'shared' — not @me, not +team"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn research_lens_ancestor_held_cogmap_derives_ancestor_team(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    // Caller is a member of the CHILD only; the cogmap is joined to the PARENT,
+    // reachable only via the ancestor up-walk.
+    let parent = create_team(&pool, "home-parent").await;
+    let child = create_team(&pool, "home-child").await;
+    add_parent(&pool, child, parent).await;
+    add_member(&pool, child, profile).await;
+
+    let map = create_cogmap(&pool, "ancestor-held").await;
+    join_cogmap(&pool, map, parent).await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let c = body
+        .research
+        .iter()
+        .find(|c| c.name == "ancestor-held")
+        .expect("a cogmap held by an ancestor team is visible on the research lens");
+    assert_eq!(
+        c.owner_ref, "+home-parent",
+        "held-by scope derives the ancestor team that made the map reachable, \
+         not the universal 'temper' marker"
+    );
+    assert!(
+        c.team_ids.contains(&parent),
+        "team_ids includes the ancestor team the map is joined to"
     );
 }

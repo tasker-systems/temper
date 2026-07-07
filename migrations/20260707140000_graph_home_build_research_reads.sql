@@ -16,14 +16,43 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Build lens: the profile's contexts — personal + team — each with its visible
--- resource count and decorated owner-scope. The SET is gated by the FULL canonical
--- predicate `context_visible_to` (self-owned OR effective-team-owned OR team-shared
--- OR explicit read grant), so it never leaks and never under-shows. Per-context
--- count is scoped through `resources_visible_to` so a private resource the caller
--- can't see never inflates a count.
+-- resource count and decorated owner-scope. The candidate SET is built
+-- membership-join-first — a UNION mirroring the branches `context_visible_to`
+-- admits (self-owned OR effective-team-owned OR team-shared OR explicit read
+-- grant) — so we never scan all of kb_contexts. That candidate set is STILL gated
+-- by the FULL canonical predicate `context_visible_to` as defense-in-depth: the
+-- union is a proven superset (same branches), so the gate can only confirm, never
+-- over-show — it never leaks and never under-shows. Per-context count is scoped
+-- through `resources_visible_to` AND filtered to `is_active` resources, so neither
+-- an invisible nor a soft-deleted resource ever inflates a count.
 CREATE FUNCTION graph_home_contexts(p_profile uuid)
 RETURNS TABLE(context_id uuid, name text, owner_ref text, resource_count int)
 LANGUAGE sql STABLE AS $$
+    WITH reachable_teams AS (
+        SELECT DISTINCT a.team_id
+        FROM profile_effective_teams(p_profile) e
+        CROSS JOIN LATERAL team_ancestors(e.team_id) a
+    ),
+    -- Membership-join-first candidate set: the UNION of the branches
+    -- `context_visible_to` admits, so we never scan all of kb_contexts. The
+    -- canonical gate is still applied below as defense-in-depth — the union is a
+    -- proven superset (same branches), so the gate can only confirm, never over-show.
+    candidates AS (
+        SELECT c.id FROM kb_contexts c
+         WHERE c.owner_table = 'kb_profiles' AND c.owner_id = p_profile
+        UNION
+        SELECT c.id FROM kb_contexts c
+         JOIN profile_effective_teams(p_profile) pet ON pet.team_id = c.owner_id
+         WHERE c.owner_table = 'kb_teams'
+        UNION
+        SELECT tc.context_id FROM kb_team_contexts tc
+         JOIN profile_effective_teams(p_profile) pet ON pet.team_id = tc.team_id
+        UNION
+        SELECT g.subject_id FROM kb_access_grants g
+         WHERE g.subject_table = 'kb_contexts' AND g.can_read
+           AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = p_profile)
+              OR (g.principal_table = 'kb_teams'    AND g.principal_id IN (SELECT team_id FROM reachable_teams)) )
+    )
     SELECT c.id, c.name,
            CASE
                WHEN c.owner_table = 'kb_profiles' AND c.owner_id = p_profile THEN '@me'
@@ -35,8 +64,10 @@ LANGUAGE sql STABLE AS $$
            (SELECT count(*)
             FROM kb_resource_homes h
             JOIN resources_visible_to(p_profile) v ON v.resource_id = h.resource_id
+            JOIN kb_resources rr ON rr.id = h.resource_id AND rr.is_active
             WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id)::int AS resource_count
-    FROM kb_contexts c
+    FROM candidates cand
+    JOIN kb_contexts c ON c.id = cand.id
     LEFT JOIN kb_teams owner_team ON c.owner_table = 'kb_teams' AND owner_team.id = c.owner_id
     LEFT JOIN LATERAL (
         -- team this context is shared INTO that the profile effectively belongs to
