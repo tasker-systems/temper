@@ -319,7 +319,9 @@ pub enum ResourceAction {
         /// Work effort: small, medium, large (task only)
         #[arg(long)]
         effort: Option<String>,
-        /// Override auto-generated slug (goal only)
+        /// Override the auto-generated slug. The slug is derived from the title
+        /// by default; this flag is the only way to override it (a slug in
+        /// managed frontmatter is inert).
         #[arg(long)]
         slug: Option<String>,
         /// Link this session to a task by slug (session only). Asserts a
@@ -441,7 +443,8 @@ pub enum ResourceAction {
         /// Set derived-from reference (repeatable)
         #[arg(long)]
         derived_from: Vec<String>,
-        // --- Task-specific fields ---
+        // --- Managed (temper-*) fields: a closed vocabulary; caller-defined
+        //     tags/relationships are open-tier (see --tags/--relates-to above) ---
         /// Task stage (backlog, in-progress, done, cancelled)
         #[arg(long)]
         stage: Option<String>,
