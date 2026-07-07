@@ -33,6 +33,10 @@ pub struct Territory {
     pub member_count: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub salience: Option<f64>,
+    /// Region content cohesion (`content_cohesion`: mean member-to-centroid cosine).
+    /// Sizes nothing — surfaced in the region hover card. None for contexts/cogmaps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coherence: Option<f64>,
     /// Cogmap/context this territory belongs to (for drill-in addressing).
     pub anchor_id: Uuid,
 }

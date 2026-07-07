@@ -448,3 +448,77 @@ async fn unlabeled_region_derives_top_visible_member_title(pool: sqlx::PgPool) {
         "derives the top VISIBLE member's title, never the higher-affinity private one"
     );
 }
+
+/// Beat A / Task 1: the cogmap-scoped `graph_cogmap_territories` read gains the
+/// same B1 derived-label discipline as `graph_region_territories` — an unlabeled
+/// region derives its label from its top VISIBLE member's title, never a
+/// higher-affinity private member's — AND now also returns the region's
+/// `content_cohesion` as `coherence`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_territories_derive_label_and_return_coherence(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "beata-tester").await;
+    let team = create_team(&pool, "beata-team").await;
+    add_member(&pool, team, profile).await;
+    let event = any_event(&pool).await;
+    let lens = telos_default_lens(&pool).await;
+
+    let telos = create_resource(&pool, "telos beata", "temper://beata/telos").await;
+    let cogmap = create_cogmap(&pool, "cogmap-beata", telos).await;
+    join_cogmap_team(&pool, cogmap, team).await;
+
+    // Unlabeled region — label IS NULL, non-null salience AND content_cohesion.
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions \
+             (cogmap_id, lens_id, centroid, salience, content_cohesion, label, member_count, \
+              asserted_by_event_id, last_event_id) \
+         VALUES ($1, $2, $3::vector, $4, $5, NULL, $6, $7, $7) RETURNING id",
+    )
+    .bind(cogmap)
+    .bind(lens)
+    .bind(zero_vec768())
+    .bind(0.5_f64)
+    .bind(0.73_f64)
+    .bind(2_i32)
+    .bind(event)
+    .fetch_one(&pool)
+    .await
+    .expect("insert unlabeled region");
+
+    // Visible member: homed with `profile` as owner/originator — satisfies
+    // resources_visible_to's owned/originated branch regardless of team/cogmap reach.
+    let visible_member = create_resource(&pool, "Alpha Concept", "temper://beata/alpha").await;
+    home_resource(&pool, visible_member, "kb_cogmaps", cogmap, profile).await;
+
+    // Private member: deliberately left un-homed and un-granted — it satisfies
+    // no branch of resources_visible_to, so it is never visible to `profile`
+    // despite outranking the visible member on affinity (0.99 > 0.9).
+    let private_member = create_resource(&pool, "secret", "temper://beata/secret").await;
+
+    insert_region_member(&pool, region, visible_member, 0.9).await;
+    insert_region_member(&pool, region, private_member, 0.99).await;
+
+    let rows: Vec<(Uuid, Option<String>, Option<f64>)> = sqlx::query_as(
+        "SELECT region_id, label, coherence FROM graph_cogmap_territories($1, $2, $3)",
+    )
+    .bind(profile)
+    .bind(cogmap)
+    .bind(lens)
+    .fetch_all(&pool)
+    .await
+    .expect("graph_cogmap_territories");
+
+    let (_, label, coherence) = rows
+        .iter()
+        .find(|(rid, _, _)| *rid == region)
+        .expect("region present in cogmap territories");
+    assert_eq!(
+        label.as_deref(),
+        Some("Alpha Concept"),
+        "derives the top VISIBLE member's title, never the higher-affinity private one"
+    );
+    assert_eq!(
+        *coherence,
+        Some(0.73),
+        "coherence surfaces the region's content_cohesion"
+    );
+}

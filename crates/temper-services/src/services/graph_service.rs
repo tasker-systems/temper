@@ -552,6 +552,7 @@ pub async fn territory_overview(
             label,
             member_count,
             salience: Some(salience),
+            coherence: None,
             anchor_id: cogmap_id,
         });
     }
@@ -570,6 +571,7 @@ pub async fn territory_overview(
             label: Some(label),
             member_count,
             salience: None,
+            coherence: None,
             anchor_id: context_id,
         });
     }
@@ -654,27 +656,29 @@ pub async fn cogmap_panorama(
         }
     };
 
-    let territories: Vec<Territory> = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64)>(
-        "SELECT region_id, cogmap_id, label, member_count, salience \
-             FROM graph_cogmap_territories($1, $2, $3)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(cogmap_id)
-    .bind(lens)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(
-        |(region_id, cogmap_id, label, member_count, salience)| Territory {
-            id: region_id,
-            kind: TerritoryKind::Region,
-            label,
-            member_count,
-            salience: Some(salience),
-            anchor_id: cogmap_id,
-        },
-    )
-    .collect();
+    let territories: Vec<Territory> =
+        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64, Option<f64>)>(
+            "SELECT region_id, cogmap_id, label, member_count, salience, coherence \
+                 FROM graph_cogmap_territories($1, $2, $3)",
+        )
+        .bind(profile_id.as_uuid())
+        .bind(cogmap_id)
+        .bind(lens)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(
+            |(region_id, cogmap_id, label, member_count, salience, coherence)| Territory {
+                id: region_id,
+                kind: TerritoryKind::Region,
+                label,
+                member_count,
+                salience: Some(salience),
+                coherence,
+                anchor_id: cogmap_id,
+            },
+        )
+        .collect();
 
     const ORPHAN_LIMIT: usize = 50;
     let orphan_nodes: Vec<OrphanNode> =

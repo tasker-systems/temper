@@ -26,6 +26,11 @@ export type RegionMember = { id: string, title: string, doc_type: string | null,
  */
 export type Territory = { id: string, kind: TerritoryKind, label: string | null, member_count: number, salience: number | null, 
 /**
+ * Region content cohesion (`content_cohesion`: mean member-to-centroid cosine).
+ * Sizes nothing — surfaced in the region hover card. None for contexts/cogmaps.
+ */
+coherence: number | null, 
+/**
  * Cogmap/context this territory belongs to (for drill-in addressing).
  */
 anchor_id: string, };
