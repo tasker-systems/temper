@@ -134,8 +134,9 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
 /// structured `managed_meta` / `open_meta` fields on the same response.
 /// This function rebuilds the canonical on-disk form by combining:
 /// - identity fields from the `ResourceRow` (id, context, created, title, slug, owner)
-/// - typed managed_meta fields from `content.managed_meta` (stage, mode,
-///   effort, goal, seq, branch, pr, status, plus any `extra` keys)
+/// - typed managed_meta fields from `content.managed_meta` — the closed
+///   Property vocabulary (stage, mode, effort, status, seq, branch, pr,
+///   llm-model, llm-run, provenance)
 /// - free-form open_meta fields from `content.open_meta` (tags,
 ///   relationships, anything user-defined)
 /// - `temper-updated` set from the server's authoritative timestamp so the

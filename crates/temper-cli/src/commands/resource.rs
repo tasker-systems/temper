@@ -1226,8 +1226,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     // 4. Build the UpdateResource cmd.
     // context_to travels as a raw ref via context_ref (the API handler resolves
-    // it server-side); type_to goes through MoveSpec so the translator can set
-    // managed_meta.doc_type on the wire.
+    // it server-side); type_to goes through MoveSpec and travels first-class on
+    // the wire (type is no longer a managed_meta key).
     let cmd = UpdateResource {
         resource: id,
         title: params.title.map(String::from),

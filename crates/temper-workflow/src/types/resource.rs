@@ -240,7 +240,7 @@ pub struct ResourceUpdateRequest {
     ///
     /// `ts(skip)`-ped: ts-rs cannot codegen a `#[serde(flatten)]` field, and the SvelteKit UI
     /// never sends authorship — so the generated TypeScript type omits it (precedent: the
-    /// `extra` bucket in `managed_meta.rs`).
+    /// `sources`/`act` fields on `ResourceCreateRequest`, likewise `ts(skip)`-ped).
     #[serde(default, flatten)]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub act: temper_core::types::authorship::ActInput,
@@ -264,10 +264,10 @@ pub struct ContentChunk {
 pub struct ContentResponse {
     pub resource_id: ResourceId,
     pub markdown: String,
-    /// Typed server-side managed_meta from kb_resource_manifests. The
-    /// typed fields name everything temper knows about; any extras the
-    /// server stored round-trip through `ManagedMeta::extra`.
-    /// Used by CLI sync pull to reconstruct complete frontmatter.
+    /// Typed server-side managed_meta from kb_resource_manifests — the closed
+    /// Property vocabulary. Only the named `temper-*` keys are represented;
+    /// there is no catch-all. Used by CLI sync pull to reconstruct complete
+    /// frontmatter (identity/type/home come from the resource row, not here).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_meta: Option<ManagedMeta>,
     /// Server-side open_meta from kb_resource_manifests. Intentionally

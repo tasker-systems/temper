@@ -139,9 +139,10 @@ pub(crate) fn cmd_to_ingest_payload(
 /// somehow present it is also forwarded as a UUID string. Bare names are
 /// rejected 400 by the server (Decision 1).
 ///
-/// **Type move:** when `move_to.type_to` is set and `managed_meta.doc_type`
-/// is not, synthesizes `managed_meta.doc_type` so the server row reflects
-/// the new doc-type. Explicit caller-supplied values always win.
+/// **Type move:** `move_to.type_to` travels first-class as the request's
+/// `type_to` field (never synthesized into `managed_meta` — type left the
+/// managed vocabulary in Phase 2); the server rewrites the authoritative
+/// doc-type from it.
 ///
 /// **Body-trio:** computed only when `cmd.body` is `Some`. Short-circuits
 /// when `BodyUpdate` already carries pre-computed `content_hash` and
