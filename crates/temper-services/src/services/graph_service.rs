@@ -6,17 +6,18 @@
 //! actual traversal so we inherit visibility scoping, cycle detection, and
 //! edge-type filtering.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
-    AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
+    AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
-    Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
+    OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
@@ -252,108 +253,11 @@ async fn fetch_subgraph_edges(
     Ok(edges)
 }
 
-/// R4 — team-scoped parameterized neighborhood slice. Service-direct read.
-///
-/// Composes `graph_traverse_scoped` (team-clamped, edge-kind-filtered BFS) with
-/// `graph_atlas_nodes` (node projection over the same team scope) to build the
-/// induced Atlas subgraph. Deny-as-absence (404) when the profile cannot view
-/// the team (not a member of it or a descendant) — mirrors `team_service::graph_scope`.
-pub async fn neighborhood_slice(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    team_id: Uuid,
-    req: SliceRequest,
-) -> ApiResult<AtlasSubgraph> {
-    if req.seeds.is_empty() {
-        return Err(ApiError::BadRequest("seeds must be non-empty".into()));
-    }
-    // Deny-as-absence: profile must read the team (member of it or a descendant).
-    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
-        .bind(profile_id.as_uuid())
-        .bind(team_id)
-        .fetch_one(pool)
-        .await?;
-    if !viewable {
-        return Err(ApiError::NotFound);
-    }
-
-    let depth = req.depth.min(MAX_DEPTH) as i32;
-
-    // Walk: returns the edges of the induced subgraph. EdgeKind/Polarity decode
-    // natively via their `sqlx::Type` derive (same mechanism as fetch_subgraph_edges
-    // above), so req.edge_kinds binds directly as an `edge_kind[]` array param —
-    // no `::text` cast round-trip.
-    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
-        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
-         FROM graph_traverse_scoped($1, $2, $3, $4, $5)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(team_id)
-    .bind(&req.seeds)
-    .bind(depth)
-    .bind(&req.edge_kinds)
-    .fetch_all(pool)
-    .await?;
-
-    let edges: Vec<AtlasEdge> = walked
-        .iter()
-        .map(
-            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
-                id: *id,
-                source: *source,
-                target: *target,
-                edge_kind: *edge_kind,
-                polarity: *polarity,
-                label: label.clone(),
-                weight: *weight,
-            },
-        )
-        .collect();
-
-    // Node id set = seeds ∪ all walked endpoints.
-    let mut node_ids: Vec<Uuid> = req.seeds.clone();
-    for (_, s, t, ..) in &walked {
-        node_ids.push(*s);
-        node_ids.push(*t);
-    }
-
-    let nodes: Vec<AtlasNode> = sqlx::query_as::<
-        _,
-        (Uuid, String, Option<String>, String, i32, Option<String>),
-    >(
-        "SELECT id, title, doc_type, home, degree, first_chunk FROM graph_atlas_nodes($1, $2, $3)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(team_id)
-    .bind(&node_ids)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(
-        |(id, title, doc_type, home, degree, first_chunk)| AtlasNode {
-            id,
-            title,
-            doc_type,
-            home: if home == "cogmap" {
-                NodeHome::Cogmap
-            } else {
-                NodeHome::Context
-            },
-            degree,
-            salience: None, // neighborhood-tier salience deferred (no per-node source yet)
-            excerpt: first_chunk.as_deref().and_then(compute_excerpt),
-        },
-    )
-    .collect();
-
-    Ok(AtlasSubgraph { nodes, edges })
-}
-
-/// A2 — cogmap-scoped R4 neighborhood slice: the cogmap-door analog of
-/// `neighborhood_slice`. Composes `graph_traverse_cogmap_scoped` (cogmap-clamped,
-/// edge-kind-filtered BFS) with `graph_atlas_nodes_cogmap` (node projection over
-/// the same cogmap scope) to build the induced Atlas subgraph. Deny-as-absence
-/// (404) when the profile cannot read the cogmap — mirrors `cogmap_panorama`.
+/// A2 — cogmap-scoped R4 neighborhood slice. Composes `graph_traverse_cogmap_scoped`
+/// (cogmap-clamped, edge-kind-filtered BFS) with `graph_atlas_nodes_cogmap` (node
+/// projection over the same cogmap scope) to build the induced Atlas subgraph.
+/// Deny-as-absence (404) when the profile cannot read the cogmap — mirrors
+/// `cogmap_panorama`.
 pub async fn cogmap_neighborhood_slice(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -443,180 +347,6 @@ pub async fn cogmap_neighborhood_slice(
     .collect();
 
     Ok(AtlasSubgraph { nodes, edges })
-}
-
-/// C3 — team-scoped Atlas search. Service-direct read. Deny-as-absence (404)
-/// when the profile cannot view the team. Ranking + visibility inherited from
-/// `unified_search`; hits bounded to `resources_in_team_scope`.
-pub async fn atlas_search(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    team_id: Uuid,
-    query: &str,
-    limit: i64,
-) -> ApiResult<Vec<AtlasSearchHit>> {
-    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
-        .bind(profile_id.as_uuid())
-        .bind(team_id)
-        .fetch_one(pool)
-        .await?;
-    if !viewable {
-        return Err(ApiError::NotFound);
-    }
-
-    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>, Option<Uuid>, f32, f32, f32, f32)>(
-        "SELECT node_id, title, doc_type, home, region_id, combined_score, fts_score, vector_score, graph_score \
-         FROM atlas_search($1, $2, $3, $4)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(team_id)
-    .bind(query)
-    .bind(limit.clamp(1, 50) as i32)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                node_id,
-                title,
-                doc_type,
-                home,
-                region_id,
-                combined_score,
-                fts_score,
-                vector_score,
-                graph_score,
-            )| {
-                AtlasSearchHit {
-                    node_id,
-                    title,
-                    doc_type,
-                    home: if home.as_deref() == Some("cogmap") {
-                        NodeHome::Cogmap
-                    } else {
-                        NodeHome::Context
-                    },
-                    region_id,
-                    combined_score,
-                    fts_score,
-                    vector_score,
-                    graph_score,
-                }
-            },
-        )
-        .collect())
-}
-
-/// R2 — Tier-0 territory overview for a team scope. Service-direct read.
-pub async fn territory_overview(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    team_id: Uuid,
-    lens_id: Option<Uuid>,
-) -> ApiResult<TerritoryOverview> {
-    let viewable: bool = sqlx::query_scalar("SELECT team_viewable_by($1, $2)")
-        .bind(profile_id.as_uuid())
-        .bind(team_id)
-        .fetch_one(pool)
-        .await?;
-    if !viewable {
-        return Err(ApiError::NotFound);
-    }
-
-    // Default lens = the global 'telos-default' (cogmap_id IS NULL).
-    let lens: Uuid = match lens_id {
-        Some(l) => l,
-        None => sqlx::query_scalar(
-            "SELECT id FROM kb_cogmap_lenses WHERE name = 'telos-default' AND cogmap_id IS NULL LIMIT 1",
-        )
-        .fetch_one(pool)
-        .await?,
-    };
-
-    let mut territories: Vec<Territory> = Vec::new();
-
-    let regions = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, i32, f64)>(
-        "SELECT region_id, cogmap_id, label, member_count, salience FROM graph_region_territories($1, $2, $3)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(team_id)
-    .bind(lens)
-    .fetch_all(pool)
-    .await?;
-    for (region_id, cogmap_id, label, member_count, salience) in regions {
-        territories.push(Territory {
-            id: region_id,
-            kind: TerritoryKind::Region,
-            label,
-            member_count,
-            salience: Some(salience),
-            coherence: None,
-            anchor_id: cogmap_id,
-        });
-    }
-
-    let contexts = sqlx::query_as::<_, (Uuid, String, i32)>(
-        "SELECT context_id, label, member_count FROM graph_context_territories($1, $2)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(team_id)
-    .fetch_all(pool)
-    .await?;
-    for (context_id, label, member_count) in contexts {
-        territories.push(Territory {
-            id: context_id,
-            kind: TerritoryKind::Context,
-            label: Some(label),
-            member_count,
-            salience: None,
-            coherence: None,
-            anchor_id: context_id,
-        });
-    }
-
-    const ORPHAN_LIMIT: usize = 50;
-    let orphan_nodes: Vec<OrphanNode> =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, i32, Uuid, Option<String>)>(
-            "SELECT id, title, doc_type, degree, anchor_id, anchor_label FROM graph_orphan_salient_nodes($1, $2)",
-        )
-        .bind(profile_id.as_uuid())
-        .bind(team_id)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .take(ORPHAN_LIMIT)
-        .map(|(id, title, doc_type, degree, anchor_id, anchor_label)| OrphanNode {
-            id,
-            title,
-            doc_type,
-            degree,
-            anchor_id,
-            anchor_label,
-        })
-        .collect();
-
-    let bridges: Vec<Bridge> = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
-        "SELECT source_territory, target_territory, edge_count FROM graph_territory_bridges($1, $2)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(team_id)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(source_territory, target_territory, edge_count)| Bridge {
-        source_territory,
-        target_territory,
-        edge_count,
-    })
-    .collect();
-
-    Ok(TerritoryOverview {
-        territories,
-        orphan_nodes,
-        bridges,
-    })
 }
 
 /// Cogmap-scoped panorama (enter-a-cogmap). Deny-as-absence via
@@ -764,19 +494,25 @@ pub async fn territory_slice(
 pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<AtlasHome> {
     // build lens — the contexts the profile can build in (personal + team), each
     // sized + owner-scoped. Visibility-gated inside graph_home_contexts.
-    let build: Vec<HomeContext> = sqlx::query_as::<_, (Uuid, String, String, i32)>(
-        "SELECT context_id, name, owner_ref, resource_count FROM graph_home_contexts($1)",
+    let build: Vec<HomeContext> = sqlx::query_as::<
+        _,
+        (Uuid, String, String, i32, Option<DateTime<Utc>>),
+    >(
+        "SELECT context_id, name, owner_ref, resource_count, last_active_at FROM graph_home_contexts($1)",
     )
     .bind(profile_id.as_uuid())
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(id, name, owner_ref, resource_count)| HomeContext {
-        id,
-        name,
-        owner_ref,
-        resource_count,
-    })
+    .map(
+        |(id, name, owner_ref, resource_count, last_active_at)| HomeContext {
+            id,
+            name,
+            owner_ref,
+            resource_count,
+            last_active_at,
+        },
+    )
     .collect();
 
     // research lens — the cogmaps the profile can reach, with a derived held-by scope.

@@ -26,7 +26,7 @@
 -- through `resources_visible_to` AND filtered to `is_active` resources, so neither
 -- an invisible nor a soft-deleted resource ever inflates a count.
 CREATE FUNCTION graph_home_contexts(p_profile uuid)
-RETURNS TABLE(context_id uuid, name text, owner_ref text, resource_count int)
+RETURNS TABLE(context_id uuid, name text, owner_ref text, resource_count int, last_active_at timestamptz)
 LANGUAGE sql STABLE AS $$
     WITH reachable_teams AS (
         SELECT DISTINCT a.team_id
@@ -65,7 +65,15 @@ LANGUAGE sql STABLE AS $$
             FROM kb_resource_homes h
             JOIN resources_visible_to(p_profile) v ON v.resource_id = h.resource_id
             JOIN kb_resources rr ON rr.id = h.resource_id AND rr.is_active
-            WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id)::int AS resource_count
+            WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id)::int AS resource_count,
+           -- Same counted set as resource_count above (identical FROM/JOIN/WHERE), so
+           -- recency can never reflect a resource the caller can't see or one that's
+           -- been soft-deleted — the two always agree on what's "in" the context.
+           (SELECT max(rr.updated)
+            FROM kb_resource_homes h
+            JOIN resources_visible_to(p_profile) v ON v.resource_id = h.resource_id
+            JOIN kb_resources rr ON rr.id = h.resource_id AND rr.is_active
+            WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id) AS last_active_at
     FROM candidates cand
     JOIN kb_contexts c ON c.id = cand.id
     LEFT JOIN kb_teams owner_team ON c.owner_table = 'kb_teams' AND owner_team.id = c.owner_id

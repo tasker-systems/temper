@@ -18,4 +18,11 @@ export type HomeCogmap = { id: string, name: string, owner_ref: string, team_ids
  * sized by its visible resource count. `owner_ref` is the decorated owner-scope
  * (`@me`, `+team-slug`) — the Home build lens tints by it.
  */
-export type HomeContext = { id: string, name: string, owner_ref: string, resource_count: number, };
+export type HomeContext = { id: string, name: string, owner_ref: string, resource_count: number, 
+/**
+ * Most recent `updated` timestamp among the context's visible, active
+ * resources — visibility-scoped so a resource the caller can't see (or one
+ * that's been soft-deleted) never advances it. `None` when the context has
+ * no visible resources.
+ */
+last_active_at: string | null, };

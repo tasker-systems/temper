@@ -4,6 +4,7 @@
 //! `you` node is dropped (self implied). See
 //! docs/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -20,6 +21,11 @@ pub struct HomeContext {
     pub name: String,
     pub owner_ref: String,
     pub resource_count: i32,
+    /// Most recent `updated` timestamp among the context's visible, active
+    /// resources — visibility-scoped so a resource the caller can't see (or one
+    /// that's been soft-deleted) never advances it. `None` when the context has
+    /// no visible resources.
+    pub last_active_at: Option<DateTime<Utc>>,
 }
 
 /// A reachable cogmap as a home body (research lens). `owner_ref` is the derived

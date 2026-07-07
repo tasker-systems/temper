@@ -140,6 +140,22 @@ async fn soft_delete_resource(pool: &sqlx::PgPool, resource: Uuid) {
         .unwrap();
 }
 
+/// Stamp a resource's `updated` timestamp to a specific instant (for recency
+/// ordering tests). `kb_resources.updated` is the column `graph_home_contexts`'s
+/// `last_active_at` subquery reads (aliased `last_active_at` on the way out).
+async fn set_resource_updated_at(
+    pool: &sqlx::PgPool,
+    resource: Uuid,
+    updated_at: chrono::DateTime<chrono::Utc>,
+) {
+    sqlx::query("UPDATE kb_resources SET updated = $1 WHERE id = $2")
+        .bind(updated_at)
+        .bind(resource)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 /// Link `child` under `parent` in the teams DAG.
 async fn add_parent(pool: &sqlx::PgPool, child: Uuid, parent: Uuid) {
     sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
@@ -448,5 +464,68 @@ async fn research_lens_ancestor_held_cogmap_derives_ancestor_team(pool: sqlx::Pg
     assert!(
         c.team_ids.contains(&parent),
         "team_ids includes the ancestor team the map is joined to"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn build_lens_last_active_at_is_visibility_scoped(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    let ctx = create_personal_context(&pool, profile, "recency-ctx").await;
+
+    let t1 = chrono::Utc::now() - chrono::Duration::days(2);
+    let t2 = chrono::Utc::now() - chrono::Duration::days(1); // newer than t1
+
+    // R1: visible + active, stamped t1.
+    let visible = home_resource_returning(&pool, ctx, profile, "visible-r1").await;
+    set_resource_updated_at(&pool, visible, t1).await;
+
+    // R2: homed in the SAME context but soft-deleted — excluded from the
+    // resource_count join set, so its newer stamp (t2) must not leak into
+    // last_active_at either (the two subqueries share the same counted set).
+    let hidden = home_resource_returning(&pool, ctx, profile, "hidden-r2").await;
+    set_resource_updated_at(&pool, hidden, t2).await;
+    soft_delete_resource(&pool, hidden).await;
+
+    // A second context with no homed resources at all — last_active_at is None.
+    let empty_ctx = create_personal_context(&pool, profile, "empty-ctx").await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let c = body
+        .build
+        .iter()
+        .find(|c| c.id == ctx)
+        .expect("recency context present on the build lens");
+    let last_active_at = c
+        .last_active_at
+        .expect("context with a visible resource has a last_active_at");
+    assert!(
+        (last_active_at - t1).num_milliseconds().abs() < 1000,
+        "last_active_at reflects the visible resource's updated stamp (t1), got {last_active_at:?}"
+    );
+    assert!(
+        (last_active_at - t2).num_milliseconds().abs() > 1000,
+        "the soft-deleted resource's newer stamp (t2) must NOT leak into last_active_at, got {last_active_at:?}"
+    );
+
+    let empty = body
+        .build
+        .iter()
+        .find(|c| c.id == empty_ctx)
+        .expect("empty context present on the build lens");
+    assert_eq!(
+        empty.last_active_at, None,
+        "a context with no visible resources has last_active_at == None"
     );
 }
