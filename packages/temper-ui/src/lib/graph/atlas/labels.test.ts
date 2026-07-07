@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { labelAnchors, truncateLabel } from './labels';
+import { labelAnchors, truncateLabel, wrapLabel, intensityOf, fieldStyle, labeledRegionIds } from './labels';
 
 describe('labelAnchors', () => {
 	const nodes = [
@@ -25,4 +25,42 @@ describe('labelAnchors', () => {
 describe('truncateLabel', () => {
 	it('leaves short titles', () => expect(truncateLabel('Short', 20)).toBe('Short'));
 	it('truncates with an ellipsis', () => expect(truncateLabel('A very long node title here', 10)).toBe('A very lo…'));
+});
+
+describe('wrapLabel', () => {
+	it('keeps a short label on one line', () => expect(wrapLabel('Geology', 12)).toEqual(['Geology']));
+	it('wraps a long label to two lines', () => expect(wrapLabel('The gap register', 8)).toEqual(['The gap', 'register']));
+	it('ellipsis-truncates the final line when it overflows', () => {
+		const r = wrapLabel('Narrative gravity as a runtime-recomputed field', 10);
+		expect(r.length).toBe(2);
+		expect(r[1].endsWith('…')).toBe(true);
+	});
+	it('truncates a single over-long word to one line', () => expect(wrapLabel('N-dimensional', 8)).toEqual(['N-dimen…']));
+});
+
+describe('intensityOf', () => {
+	it('maps max salience to 1 and eases the tail down', () => {
+		expect(intensityOf(1, 1)).toBeCloseTo(1);
+		expect(intensityOf(0.5, 1)).toBeLessThan(0.5);
+		expect(intensityOf(null, 1)).toBe(0);
+	});
+	it('returns 0 when maxSalience is 0', () => expect(intensityOf(0.5, 0)).toBe(0));
+});
+
+describe('fieldStyle', () => {
+	it('brightens + glows with intensity, stays faint for ghosts', () => {
+		const hi = fieldStyle(1, false), lo = fieldStyle(0, false), gh = fieldStyle(1, true);
+		expect(hi.fillOpacity).toBeGreaterThan(lo.fillOpacity);
+		expect(hi.glowPx).toBeGreaterThan(lo.glowPx);
+		expect(gh.glowPx).toBe(0);
+	});
+});
+
+describe('labeledRegionIds', () => {
+	it('labels the top-K by salience', () => {
+		const ids = labeledRegionIds([{ id: 'a', salience: 0.1 }, { id: 'b', salience: 0.9 }, { id: 'c', salience: 0.5 }], 2);
+		expect(ids.has('b')).toBe(true);
+		expect(ids.has('c')).toBe(true);
+		expect(ids.has('a')).toBe(false);
+	});
 });
