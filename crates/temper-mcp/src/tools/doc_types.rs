@@ -224,6 +224,23 @@ mod tests {
             !example.contains_key("temper-slug"),
             "example should not contain system field temper-slug"
         );
+        // Identity (temper-title) is a first-class field, never a managed key.
+        assert!(
+            !example.contains_key("temper-title"),
+            "example must not surface identity key temper-title as managed meta"
+        );
+
+        // temper-goal left the vocabulary (Phase 2): it is no longer a schema
+        // property. list-by-goal returns as an edge in follow-up 019f3d55.
+        let props = response
+            .schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("task schema has properties");
+        assert!(
+            !props.contains_key("temper-goal"),
+            "temper-goal must be gone from the task schema properties"
+        );
     }
 
     #[test]

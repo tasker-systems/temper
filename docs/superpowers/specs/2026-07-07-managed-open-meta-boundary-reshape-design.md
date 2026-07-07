@@ -213,6 +213,86 @@ new shape.
 
 ---
 
+## Phase 2 — resolved shape (2026-07-07 light brainstorm)
+
+A grounded pass over the actual code fixed the shape of P2.2 (identity promotion) and resolved
+two forks the phase sketch left open. This section is the authority the Phase 2 implementation
+plan indexes into.
+
+### The shrink is bigger than title/slug — 7 fields leave, each with a destination
+
+`ManagedMeta` (`crates/temper-workflow/src/types/managed_meta.rs`) has 17 fields today. The
+Property-only target is exactly the 10 keys in `MANAGED_PROPERTY_KEYS` (`stage, mode, effort,
+status, seq, branch, pr, llm-model, llm-run, provenance`). So **7 fields are removed**, each to
+a real destination:
+
+| Leaving field | Fate | Destination |
+|---|---|---|
+| `temper-title` | `Die` | top-level `title` (already on create + update inputs) |
+| `temper-slug` | `Die` | top-level `slug` (already exists) |
+| `temper-type` | `ReconcileToDocType` | `doc_type_name` (create) / `move_to.type_to` (update) |
+| `temper-context` | `Die` | home `context_ref` / `cogmap` (already exists) |
+| `temper-goal` | `Edge` | **removed — see Fork 1** |
+| `temper-updated` | system (`TIER1_SYSTEM_FIELDS`) | server-managed — dropped from caller input |
+| `temper-source` | system (`TIER1_SYSTEM_FIELDS`) | origin-related — dropped from caller input |
+
+### Update write path is the core of P2.2
+
+`crates/temper-services/src/backend/db_backend.rs:980-1046` currently digs `temper-title` /
+`temper-type` **out of** `managed_meta` to drive the `kb_resources.title` column and the doctype.
+After promotion it reads identity from the top-level `cmd.title` / `cmd.slug` /
+`cmd.move_to.type_to`; `managed_meta` on update carries only Property patches. Retire:
+
+- `ensure_managed_identity_keys` (`crates/temper-workflow/src/operations/actions.rs:49-63`)
+  entirely — it only existed to hash-match the old managed_meta identity storage.
+- The MCP handler injection at `crates/temper-mcp/src/tools/resources.rs:477` (create) and the
+  title/slug mirror at `:743`.
+- `validate_managed_meta_pipeline`'s `identity_slug` injection simplifies: validation seeds
+  identity from the top-level source, not from keys injected into the managed value.
+
+The top-level `title`/`slug` fields on `UpdateResourceInput` **already exist** — today they are
+shadowed by the managed_meta mirroring. Promotion is mostly *deleting the shadow*.
+
+### Fork 1 — `temper-goal` (resolved: remove, defer the real feature)
+
+Grounded finding: on the **live** write path `temper-goal` is inert — Edge-fated, so
+`properties_from_meta` filters it out of `kb_properties`, and no live create/update consumer mints
+the edge (the "edge pass" is substrate seed/scenario synthesis, not live CRUD). So the CLI
+`--goal` flag and MCP `managed_meta.goal` currently write a key that becomes neither property nor
+edge.
+
+**Decision:** remove `temper-goal` from `ManagedMeta` and drop the inert CLI `--goal` write. Live
+goal-edges go through the relationship/edge path (`assert_relationship`). Promoting `goal` to a
+first-class field with **live** edge projection is a genuine new feature, captured as its own
+follow-up task (`019f3d55`), not smuggled into the boundary reshape. Phase 2 stays a pure
+reshape.
+
+### Fork 2 — meta-only PUT path (resolved: keep Property-only)
+
+With `ManagedMeta` shrunk, the meta-only path (`UpdateResourceMetaInput` /
+`PUT /api/resources/{id}/meta`, `resources.rs:164-177`) can no longer carry title/type.
+
+**Decision:** keep it Property-only (`managed_meta` + `open_meta`). Identity / type changes require
+the full `update_resource` path. The meta-only path stays exactly "patch workflow metadata without
+re-chunking the body." Its non-Option `managed_meta: ManagedMeta` shape is coherent — Property-only,
+still required-shaped.
+
+### Single-source (P2.4) — recommended shape
+
+`MANAGED_PROPERTY_KEYS` (`crates/temper-substrate/src/keys.rs:42-53`) is already the authoritative
+Property set, and `key_fate` matches on it. Add a compile-time drift-guard test asserting
+`ManagedMeta`'s Property `serde(rename)` set ⟺ `MANAGED_PROPERTY_KEYS` ⟺ `key_fate`'s Property arm
+all agree. Fold `split_managed_open` (`frontmatter/tiers.rs`) toward `MANAGED_PROPERTY_KEYS` where
+practical. This structurally forecloses the `temper-llm-model` drift class.
+
+### P2.5 also cleans up stale `extra`-bucket doc-comments
+
+Phase 1 removed the `ManagedMeta.extra` catch-all, but several doc-comments still describe it and
+must be corrected in-arc: `resources.rs:159-163` and `:486`; `managed_meta.rs:111-113` and
+`:155-158`.
+
+---
+
 ## Decisions & rationale
 
 - **Reject (A), not warn/reroute/carry.** The user's model is that `managed_meta` is

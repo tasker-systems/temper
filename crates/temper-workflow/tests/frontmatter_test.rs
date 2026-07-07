@@ -107,7 +107,7 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
     ),
     (
         "task_full",
-        "sha256:9680d621f3dcf03d90c8b5e9362fbd2849b37df232086d345f6794e86aa74fc0",
+        "sha256:239c2d8dd2c9ac76d5023cb56b6413f987c1b665b02e70aeca23d4b8230555bb",
         "sha256:998a5ed4c7ce3d2b6b453caa05a77c15590e69d63dd4d8d72fa313902fe143dc",
     ),
     (

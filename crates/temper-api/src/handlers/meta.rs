@@ -61,6 +61,10 @@ pub async fn update_meta(
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
+        // Meta-only path is Property-only (Fork 2): identity changes go through
+        // the full update path, never the /meta endpoint.
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(payload.managed_meta),
         open_meta: Some(payload.open_meta),

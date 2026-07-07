@@ -82,7 +82,7 @@ async fn seed_session(
         slug: slug.to_string(),
         content: body.to_string(),
         metadata: None,
-        managed_meta: Some(serde_json::json!({ "temper-title": title })),
+        managed_meta: Some(serde_json::json!({})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[chunk]).expect("encode session chunk")),
         act: Default::default(),
@@ -105,7 +105,6 @@ async fn seed_task(
     seq: i64,
 ) {
     let managed = serde_json::json!({
-        "temper-title": title,
         "temper-stage": stage,
         "temper-mode": "build",
         "temper-effort": "small",

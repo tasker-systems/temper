@@ -67,6 +67,45 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// A PATCH that changes only the title — via the top-level `title` field, no
+/// `managed_meta` identity key — updates the row's title. Guards the first-class
+/// identity path added in Phase 2 (identity travels top-level, not in managed_meta).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn patch_title_only_updates_row_title(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, resource_id) = setup_profile_and_resource(&app).await;
+
+    let resp = app
+        .client
+        .patch(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "title": "Renamed via top-level field" }))
+        .send()
+        .await
+        .expect("PATCH request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "title-only PATCH must succeed; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let got: Value = app
+        .client
+        .get(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("GET failed")
+        .json()
+        .await
+        .expect("expected JSON");
+    assert_eq!(
+        got["title"], "Renamed via top-level field",
+        "top-level title must land on the row"
+    );
+}
+
 /// PATCH with content but no content_hash succeeds (200). WS6 collapse retired
 /// the all-or-nothing 400 guard: the substrate computes the structural
 /// `body_hash` inline (`body_hash_for_body`, Task F), independent of the embed

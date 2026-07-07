@@ -254,36 +254,32 @@ pub async fn update(
         content_block: req.content_block,
     });
 
-    // Fold top-level title/slug into managed_meta so the translator can extract
-    // them uniformly. Only materialise Some(managed) when there's actually
-    // something to fold (avoids routing a no-op through the meta branch).
-    let managed_meta = match (req.title, req.slug, req.managed_meta) {
-        (None, None, m) => m,
-        (t, s, m) => {
-            let mut merged = m.unwrap_or_default();
-            if t.is_some() {
-                merged.title = t;
-            }
-            if s.is_some() {
-                merged.slug = s;
-            }
-            Some(merged)
-        }
-    };
+    // Identity travels first-class on the cmd (title/slug); managed_meta is
+    // Property-only and passes through untouched.
+    let title_top = req.title;
+    let slug_top = req.slug;
+    let managed_meta = req.managed_meta;
 
-    // Resolve context_to ref (if present) to a ContextId, gated by principal visibility.
-    // parse_context_ref rejects bare names → ApiError::BadRequest (Decision 1).
-    let move_to = if let Some(ref ctx_ref) = req.context_to {
+    // A move is a context re-home (`context_to`) and/or a type conversion (`type_to`),
+    // both now first-class wire fields. Resolve context_to (visibility-gated;
+    // parse_context_ref rejects bare names → 400, Decision 1); pass type_to through.
+    let context_to = if let Some(ref ctx_ref) = req.context_to {
         let r = parse_context_ref(ctx_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-        let context_id = context_service::resolve_context_ref(
-            &state.pool,
-            ProfileId::from(auth.0.profile.id),
-            &r,
+        Some(
+            context_service::resolve_context_ref(
+                &state.pool,
+                ProfileId::from(auth.0.profile.id),
+                &r,
+            )
+            .await?,
         )
-        .await?;
+    } else {
+        None
+    };
+    let move_to = if context_to.is_some() || req.type_to.is_some() {
         Some(MoveSpec {
-            context_to: Some(context_id),
-            type_to: None,
+            context_to,
+            type_to: req.type_to.clone(),
         })
     } else {
         None
@@ -293,6 +289,8 @@ pub async fn update(
 
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
+        title: title_top,
+        slug: slug_top,
         body,
         managed_meta,
         open_meta: req.open_meta,

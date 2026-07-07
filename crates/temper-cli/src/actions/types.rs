@@ -15,8 +15,6 @@ pub struct TaskInfo {
     pub slug: String,
     #[serde(rename = "temper-context")]
     pub context: String,
-    #[serde(default, rename = "temper-goal")]
-    pub goal: Option<String>,
     #[serde(rename = "temper-stage")]
     pub stage: String,
     #[serde(rename = "temper-mode")]

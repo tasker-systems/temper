@@ -30,38 +30,6 @@ pub enum ActionError {
     InvalidValue(String),
 }
 
-/// Inject canonical identity keys (`temper-title`, `temper-slug`) into a
-/// `managed_meta` JSONB value.
-///
-/// Called on both the send side (CLI / MCP build paths) before `compute_managed_hash`,
-/// and on the receive side (server ingest / update services) before persisting and
-/// hashing. Idempotent: running twice with the same inputs produces the same output.
-///
-/// `slug` is `Option` because `kb_resources.slug` is nullable — a resource born
-/// without a slug should not have a `temper-slug` key in its managed_meta JSONB
-/// (otherwise the column-NULL / JSONB-empty-string mismatch becomes a fresh drift).
-/// When `slug` is `None`, any existing `temper-slug` key is removed.
-///
-/// If `meta` is not a JSON object, it is replaced with a fresh object containing
-/// only the relevant identity keys. This handles the (unusual) case of a caller
-/// passing `Value::Null` or a primitive; downstream validation will reject it on
-/// shape grounds, but the helper does not silently drop the data.
-pub fn ensure_managed_identity_keys(meta: &mut Value, title: &str, slug: Option<&str>) {
-    if !meta.is_object() {
-        *meta = Value::Object(serde_json::Map::new());
-    }
-    let obj = meta.as_object_mut().expect("just-coerced to object");
-    obj.insert("temper-title".to_owned(), Value::String(title.to_owned()));
-    match slug {
-        Some(s) => {
-            obj.insert("temper-slug".to_owned(), Value::String(s.to_owned()));
-        }
-        None => {
-            obj.remove("temper-slug");
-        }
-    }
-}
-
 /// Apply managed-tier doctype-specific defaults to a `ManagedMeta` value,
 /// in place.
 ///
@@ -251,22 +219,9 @@ pub fn validate_doctype(doctype: &str) -> Result<(), ActionError> {
 /// Partial-merge a `ManagedMeta` patch onto an existing `ManagedMeta`.
 ///
 /// For each `Some(value)` in `patch`, overwrite the corresponding field in
-/// `existing`. Fields that are `None` in the patch are left unchanged on
-/// `existing`. The `extra` HashMap is merged key-by-key (patch keys
-/// overwrite, keys absent from patch are preserved).
+/// `existing`. Fields that are `None` in the patch are left unchanged. Covers
+/// exactly the Property vocabulary — identity/type/home are not `ManagedMeta`.
 pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
-    if patch.doc_type.is_some() {
-        existing.doc_type = patch.doc_type;
-    }
-    if patch.context.is_some() {
-        existing.context = patch.context;
-    }
-    if patch.updated.is_some() {
-        existing.updated = patch.updated;
-    }
-    if patch.source.is_some() {
-        existing.source = patch.source;
-    }
     if patch.stage.is_some() {
         existing.stage = patch.stage;
     }
@@ -276,8 +231,8 @@ pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
     if patch.effort.is_some() {
         existing.effort = patch.effort;
     }
-    if patch.goal.is_some() {
-        existing.goal = patch.goal;
+    if patch.status.is_some() {
+        existing.status = patch.status;
     }
     if patch.seq.is_some() {
         existing.seq = patch.seq;
@@ -288,23 +243,14 @@ pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
     if patch.pr.is_some() {
         existing.pr = patch.pr;
     }
-    if patch.status.is_some() {
-        existing.status = patch.status;
-    }
-    if patch.provenance.is_some() {
-        existing.provenance = patch.provenance;
-    }
     if patch.llm_model.is_some() {
         existing.llm_model = patch.llm_model;
     }
     if patch.llm_run.is_some() {
         existing.llm_run = patch.llm_run;
     }
-    if patch.title.is_some() {
-        existing.title = patch.title;
-    }
-    if patch.slug.is_some() {
-        existing.slug = patch.slug;
+    if patch.provenance.is_some() {
+        existing.provenance = patch.provenance;
     }
 }
 
@@ -643,7 +589,7 @@ mod tests {
     fn merge_managed_meta_preserves_absent_fields() {
         let mut existing = ManagedMeta {
             stage: Some("backlog".to_string()),
-            doc_type: Some("task".to_string()),
+            mode: Some("build".to_string()),
             ..ManagedMeta::default()
         };
         let patch = ManagedMeta {
@@ -652,49 +598,35 @@ mod tests {
         };
         merge_managed_meta(&mut existing, patch);
         assert_eq!(existing.stage.as_deref(), Some("done"));
-        assert_eq!(existing.doc_type.as_deref(), Some("task"));
+        assert_eq!(existing.mode.as_deref(), Some("build"));
     }
 
     #[test]
     fn merge_managed_meta_covers_all_typed_fields() {
         let mut existing = ManagedMeta::default();
         let patch = ManagedMeta {
-            doc_type: Some("task".to_string()),
-            context: Some("temper".to_string()),
-            updated: Some("2026-05-02".to_string()),
-            source: Some("user".to_string()),
             stage: Some("done".to_string()),
             mode: Some("build".to_string()),
             effort: Some("medium".to_string()),
-            goal: Some("g1".to_string()),
+            status: Some("active".to_string()),
             seq: Some(7),
             branch: Some("jct/x".to_string()),
             pr: Some("123".to_string()),
-            status: Some("active".to_string()),
-            provenance: Some("user-created".to_string()),
             llm_model: Some("opus".to_string()),
             llm_run: Some("run-1".to_string()),
-            title: Some("T".to_string()),
-            slug: Some("s".to_string()),
+            provenance: Some("user-created".to_string()),
         };
         merge_managed_meta(&mut existing, patch);
-        assert_eq!(existing.doc_type.as_deref(), Some("task"));
-        assert_eq!(existing.context.as_deref(), Some("temper"));
-        assert_eq!(existing.updated.as_deref(), Some("2026-05-02"));
-        assert_eq!(existing.source.as_deref(), Some("user"));
         assert_eq!(existing.stage.as_deref(), Some("done"));
         assert_eq!(existing.mode.as_deref(), Some("build"));
         assert_eq!(existing.effort.as_deref(), Some("medium"));
-        assert_eq!(existing.goal.as_deref(), Some("g1"));
+        assert_eq!(existing.status.as_deref(), Some("active"));
         assert_eq!(existing.seq, Some(7));
         assert_eq!(existing.branch.as_deref(), Some("jct/x"));
         assert_eq!(existing.pr.as_deref(), Some("123"));
-        assert_eq!(existing.status.as_deref(), Some("active"));
-        assert_eq!(existing.provenance.as_deref(), Some("user-created"));
         assert_eq!(existing.llm_model.as_deref(), Some("opus"));
         assert_eq!(existing.llm_run.as_deref(), Some("run-1"));
-        assert_eq!(existing.title.as_deref(), Some("T"));
-        assert_eq!(existing.slug.as_deref(), Some("s"));
+        assert_eq!(existing.provenance.as_deref(), Some("user-created"));
     }
 
     #[test]
@@ -844,6 +776,8 @@ mod tests {
     fn validate_update_accepts_uuid_ref() {
         let cmd = UpdateResource {
             resource: ResourceId(Uuid::nil()),
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: None,
@@ -853,69 +787,6 @@ mod tests {
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_update(&cmd).is_ok());
-    }
-
-    #[test]
-    fn ensure_managed_identity_keys_inserts_when_absent() {
-        let mut meta = serde_json::json!({"temper-stage": "backlog"});
-        ensure_managed_identity_keys(&mut meta, "My Title", Some("my-slug"));
-        assert_eq!(meta["temper-title"], "My Title");
-        assert_eq!(meta["temper-slug"], "my-slug");
-        assert_eq!(meta["temper-stage"], "backlog");
-    }
-
-    #[test]
-    fn ensure_managed_identity_keys_overwrites_existing() {
-        let mut meta = serde_json::json!({
-            "temper-title": "Stale",
-            "temper-slug": "stale-slug",
-        });
-        ensure_managed_identity_keys(&mut meta, "Fresh", Some("fresh-slug"));
-        assert_eq!(meta["temper-title"], "Fresh");
-        assert_eq!(meta["temper-slug"], "fresh-slug");
-    }
-
-    #[test]
-    fn ensure_managed_identity_keys_is_idempotent() {
-        let mut meta = serde_json::json!({});
-        ensure_managed_identity_keys(&mut meta, "T", Some("s"));
-        let after_first = meta.clone();
-        ensure_managed_identity_keys(&mut meta, "T", Some("s"));
-        assert_eq!(meta, after_first);
-    }
-
-    #[test]
-    fn ensure_managed_identity_keys_replaces_non_object_with_object() {
-        let mut meta = serde_json::Value::Null;
-        ensure_managed_identity_keys(&mut meta, "T", Some("s"));
-        assert!(meta.is_object());
-        assert_eq!(meta["temper-title"], "T");
-        assert_eq!(meta["temper-slug"], "s");
-    }
-
-    #[test]
-    fn ensure_managed_identity_keys_omits_slug_when_none() {
-        let mut meta = serde_json::json!({"temper-stage": "backlog"});
-        ensure_managed_identity_keys(&mut meta, "T", None);
-        assert_eq!(meta["temper-title"], "T");
-        assert!(
-            meta.get("temper-slug").is_none(),
-            "temper-slug must be absent when slug is None; got: {meta}"
-        );
-        assert_eq!(meta["temper-stage"], "backlog");
-    }
-
-    #[test]
-    fn ensure_managed_identity_keys_removes_existing_slug_when_none() {
-        let mut meta = serde_json::json!({
-            "temper-title": "T",
-            "temper-slug": "stale-slug",
-        });
-        ensure_managed_identity_keys(&mut meta, "T", None);
-        assert!(
-            meta.get("temper-slug").is_none(),
-            "existing temper-slug must be removed when slug is None; got: {meta}"
-        );
     }
 
     #[test]
@@ -1112,7 +983,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("nonsense".to_string()),
                 effort: Some("small".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,
@@ -1143,7 +1013,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
                 effort: Some("gigantic".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,
@@ -1174,7 +1043,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
                 effort: Some("medium".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,

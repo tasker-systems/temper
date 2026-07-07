@@ -208,6 +208,12 @@ pub struct ResourceUpdateRequest {
     /// resource. Forwarded verbatim from the CLI `--context-to` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_to: Option<String>,
+    /// Type-move: convert the resource to a new doc-type. Forwarded from the CLI
+    /// `--type-to` flag; the server rewrites the authoritative `doc_type` via
+    /// `MoveSpec.type_to`. First-class since Phase 2 (type is no longer carried
+    /// as a `temper-type` key inside `managed_meta`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_to: Option<String>,
     /// Block-provenance sources this body was distilled from — recorded against the
     /// resource's body block, position → accretion `seq`. Resource refs only in T7b;
     /// URL/`remote` sources are T7c.
@@ -216,7 +222,7 @@ pub struct ResourceUpdateRequest {
     /// `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent
     /// write path, exactly like `act` below). Skipping keeps the generated TS honest —
     /// the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource`
-    /// import. (Precedent: `act`, and the `extra` bucket in `managed_meta.rs`.)
+    /// import. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
@@ -234,7 +240,7 @@ pub struct ResourceUpdateRequest {
     ///
     /// `ts(skip)`-ped: ts-rs cannot codegen a `#[serde(flatten)]` field, and the SvelteKit UI
     /// never sends authorship — so the generated TypeScript type omits it (precedent: the
-    /// `extra` bucket in `managed_meta.rs`).
+    /// `sources`/`act` fields on `ResourceCreateRequest`, likewise `ts(skip)`-ped).
     #[serde(default, flatten)]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub act: temper_core::types::authorship::ActInput,
@@ -258,10 +264,10 @@ pub struct ContentChunk {
 pub struct ContentResponse {
     pub resource_id: ResourceId,
     pub markdown: String,
-    /// Typed server-side managed_meta from kb_resource_manifests. The
-    /// typed fields name everything temper knows about; any extras the
-    /// server stored round-trip through `ManagedMeta::extra`.
-    /// Used by CLI sync pull to reconstruct complete frontmatter.
+    /// Typed server-side managed_meta from kb_resource_manifests — the closed
+    /// Property vocabulary. Only the named `temper-*` keys are represented;
+    /// there is no catch-all. Used by CLI sync pull to reconstruct complete
+    /// frontmatter (identity/type/home come from the resource row, not here).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_meta: Option<ManagedMeta>,
     /// Server-side open_meta from kb_resource_manifests. Intentionally
@@ -371,6 +377,7 @@ mod tests {
             content_hash: Some("sha256:abc".to_string()),
             chunks_packed: Some("base64-blob".to_string()),
             context_to: Some("@me/knowledge".to_string()),
+            type_to: Some("goal".to_string()),
             act: Default::default(),
             sources: Vec::new(),
             content_block: Some(uuid::Uuid::nil()),
@@ -379,6 +386,7 @@ mod tests {
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.title.as_deref(), Some("New Title"));
         assert_eq!(parsed.slug.as_deref(), Some("new-slug"));
+        assert_eq!(parsed.type_to.as_deref(), Some("goal"));
         assert_eq!(parsed.content_block, Some(uuid::Uuid::nil()));
         assert_eq!(
             parsed
@@ -408,6 +416,7 @@ mod tests {
             content_hash: None,
             chunks_packed: None,
             context_to: None,
+            type_to: None,
             act: Default::default(),
             sources: Vec::new(),
             content_block: None,

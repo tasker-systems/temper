@@ -104,7 +104,7 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Create
 
 > Guided interactive task creation. Gathers context, title, mode, effort,
-> goal linkage, and acceptance criteria through conversation.
+> and acceptance criteria through conversation.
 
 1. If `--context @me/<ctx>` provided, use it. Otherwise list available contexts and ask.
 2. Ask: "What's the title or problem statement for this task?"
@@ -112,12 +112,10 @@ User-created guidance files. Read and apply any files found here.
    - "Is this (a) research/design/discovery (plan) or (b) implementation/building (build)?"
 4. Infer or ask effort:
    - "How big is this? (a) small — single session, (b) medium — multi-step but bounded, (c) large — multi-session, may need decomposition"
-5. List goals in context: `temper resource list --type goal --context @me/<ctx>`
-   - If goals exist, ask: "Link to a goal? [list] or (none)"
-6. Ask: "Any specific acceptance criteria or outcomes?" (optional — user can skip)
-7. Create the task (pipe the problem statement and acceptance criteria via stdin):
+5. Ask: "Any specific acceptance criteria or outcomes?" (optional — user can skip)
+6. Create the task (pipe the problem statement and acceptance criteria via stdin):
    ```bash
-   cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort> [--goal <slug>]
+   cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort>
    # <title>
 
    <problem statement from step 2>

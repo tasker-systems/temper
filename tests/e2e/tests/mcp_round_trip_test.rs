@@ -443,6 +443,8 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
 
     let cmd = UpdateResource {
         resource: resource.id,
+        title: None,
+        slug: None,
         body: Some(BodyUpdate {
             content: updated_content.to_string(),
             content_hash: Some(updated_hash.clone()),
@@ -553,7 +555,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         slug: "mcp-meta-parity".to_string(),
         content: content.to_string(),
         metadata: None,
-        managed_meta: Some(serde_json::json!({"temper-type": "research"})),
+        managed_meta: Some(serde_json::json!({})),
         open_meta: Some(serde_json::json!({"tags": ["mcp", "parity"]})),
         chunks_packed: Some(packed),
         act: Default::default(),
@@ -573,14 +575,16 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
 
     // Dispatch via DbBackend on Surface::Mcp — the same path
     // tools::resources::update_resource_meta uses in production.
+    // managed_meta is Property-only; identity (title) travels first-class on the cmd.
     let new_managed = ManagedMeta {
-        doc_type: Some("research".to_string()),
-        title: Some("MCP Meta Parity (updated)".to_string()),
+        stage: Some("done".to_string()),
         ..Default::default()
     };
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
     let cmd = UpdateResource {
         resource: ResourceId::from(*resource.id),
+        title: Some("MCP Meta Parity (updated)".to_string()),
+        slug: None,
         body: None,
         managed_meta: Some(new_managed),
         open_meta: Some(new_open),
@@ -634,7 +638,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         .expect("title after");
     assert_eq!(
         title_after, "MCP Meta Parity (updated)",
-        "title must cascade from managed_meta on the MCP path",
+        "first-class title must cascade to kb_resources on the MCP path",
     );
 }
 
@@ -679,7 +683,6 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
         content,
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-type": "task",
             "temper-stage": "in-progress",
             "temper-mode": "build",
             "temper-effort": "large",
@@ -699,6 +702,8 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     // Partial update: change ONLY the stage.
     let cmd = UpdateResource {
         resource: ResourceId::from(*resource.id),
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("done".to_string()),
@@ -781,7 +786,6 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
         content,
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-type": "task",
             "temper-stage": "backlog",
             "temper-mode": "build",
         })),
@@ -800,6 +804,8 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     // Update with a temper-stage value outside the task schema's enum.
     let cmd = UpdateResource {
         resource: ResourceId::from(*resource.id),
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("not-a-real-stage".to_string()),
@@ -880,9 +886,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         slug: "selector-route-doc".to_string(),
         content,
         metadata: None,
-        managed_meta: Some(
-            serde_json::json!({"temper-type": "research", "temper-stage": "in-progress"}),
-        ),
+        managed_meta: Some(serde_json::json!({"temper-stage": "in-progress"})),
         open_meta: Some(serde_json::json!({"tags": ["selector", "route"]})),
         chunks_packed: Some(packed),
         act: Default::default(),
@@ -1025,8 +1029,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         let content = format!("# {title}\n\n{body}");
         let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, title, &body)])
             .expect("pack chunks");
-        let managed =
-            serde_json::json!({"temper-type": doc_type_name, "temper-stage": "in-progress"});
+        let managed = serde_json::json!({"temper-stage": "in-progress"});
         let payload = temper_core::types::ingest::IngestPayload {
             title: title.to_string(),
             origin_uri: origin_uri.to_string(),

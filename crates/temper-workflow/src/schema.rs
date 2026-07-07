@@ -238,12 +238,7 @@ pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
     ];
 
     let extras: &[&str] = match DocType::from_str(doc_type)? {
-        DocType::Task => &[
-            "temper-stage",
-            "temper-mode",
-            "temper-effort",
-            "temper-goal",
-        ],
+        DocType::Task => &["temper-stage", "temper-mode", "temper-effort"],
         DocType::Goal => &["temper-status", "temper-seq"],
         DocType::Session
         | DocType::Research
@@ -488,7 +483,7 @@ mod tests {
     fn validate_field_value_no_constraints_accepts_any() {
         let schema_prop = serde_json::json!({ "type": "string" });
         assert_eq!(
-            validate_field_value("temper-goal", "anything-goes", &schema_prop),
+            validate_field_value("temper-branch", "anything-goes", &schema_prop),
             None,
             "field with no enum/integer constraint should always return None"
         );
@@ -582,7 +577,6 @@ mod tests {
         assert!(names.contains(&"temper-stage"));
         assert!(names.contains(&"temper-mode"));
         assert!(names.contains(&"temper-effort"));
-        assert!(names.contains(&"temper-goal"));
     }
 
     #[test]
@@ -810,7 +804,7 @@ temper-slug: "test-task"
     #[test]
     fn task_enum_values_unknown_field_is_empty() {
         assert!(
-            task_enum_values("temper-goal").is_empty(),
+            task_enum_values("temper-nonexistent").is_empty(),
             "a property with no string enum constraint should return an empty slice"
         );
     }

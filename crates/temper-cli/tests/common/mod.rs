@@ -62,7 +62,6 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             title,
             context: Some(context),
             cogmap: None,
-            goal: None,
             mode: None,
             effort: None,
             slug: Some(&slug),
@@ -88,7 +87,6 @@ pub fn create_task(
     config: &temper_cli::config::Config,
     context: &str,
     title: &str,
-    goal_slug: Option<&str>,
     mode: Option<&str>,
     effort: Option<&str>,
 ) -> String {
@@ -103,7 +101,6 @@ pub fn create_task(
             title,
             context: Some(context),
             cogmap: None,
-            goal: goal_slug,
             mode,
             effort,
             slug: Some(&slug),

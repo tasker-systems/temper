@@ -131,6 +131,8 @@ async fn update_under_invocation_stamps_the_property_act(pool: PgPool) {
     backend
         .update_resource(UpdateResource {
             resource,
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: Some(serde_json::json!({ "reviewed_by": "qa" })),
@@ -254,6 +256,8 @@ async fn nonauthored_act_claiming_unknown_invocation_is_not_found(pool: PgPool) 
     let result = backend
         .update_resource(UpdateResource {
             resource,
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: Some(serde_json::json!({ "k": "v" })),
@@ -309,6 +313,8 @@ async fn update_without_act_leaves_invocation_null(pool: PgPool) {
     backend
         .update_resource(UpdateResource {
             resource,
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: Some(serde_json::json!({ "reviewed_by": "qa" })),

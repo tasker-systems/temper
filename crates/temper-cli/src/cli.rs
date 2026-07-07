@@ -310,9 +310,6 @@ pub enum ResourceAction {
         /// resource in. Mutually exclusive with --context; specify exactly one.
         #[arg(long)]
         cogmap: Option<String>,
-        /// Parent goal slug (task only)
-        #[arg(long)]
-        goal: Option<String>,
         /// Work mode: plan or build (task only)
         #[arg(long)]
         mode: Option<String>,
@@ -454,9 +451,6 @@ pub enum ResourceAction {
         /// Task effort (small, medium, large)
         #[arg(long)]
         effort: Option<String>,
-        /// Task goal slug
-        #[arg(long)]
-        goal: Option<String>,
         /// Task sequence number
         #[arg(long)]
         seq: Option<i64>,
@@ -1238,6 +1232,57 @@ mod meta_only_flag_tests {
         assert!(
             Cli::try_parse_from(["temper", "resource", "show", "some-ref", "--type", "task",])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn create_and_update_reject_removed_goal_flag() {
+        use clap::Parser;
+        // temper-goal is KeyFate::Edge, not a managed property; the --goal write
+        // flag is removed (goal-as-edge deferred to task 019f3d55). clap must
+        // reject it on both create and update. The List --goal filter is unaffected.
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "create",
+                "--type",
+                "task",
+                "--title",
+                "T",
+                "--context",
+                "@me/temper",
+                "--goal",
+                "some-goal",
+            ])
+            .is_err(),
+            "--goal must be rejected on create"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "update",
+                "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+                "--goal",
+                "some-goal",
+            ])
+            .is_err(),
+            "--goal must be rejected on update"
+        );
+        // The List --goal filter stays valid (query param, out of scope).
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "list",
+                "--type",
+                "task",
+                "--goal",
+                "some-goal",
+            ])
+            .is_ok(),
+            "list --goal filter must remain valid"
         );
     }
 

@@ -72,10 +72,10 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         slug: "heal-me".to_string(),
         content: body.clone(),
         metadata: None,
-        // ManagedMeta uses serde(rename = "temper-*") on its typed fields;
-        // the ingest payload's managed_meta JSON must use the canonical
-        // `temper-stage` key so it deserializes into ManagedMeta::stage on
-        // the way back out (and not into the `extra` passthrough bucket).
+        // ManagedMeta uses serde(rename = "temper-*") on its typed fields and
+        // is a closed vocabulary (deny_unknown_fields); the ingest payload's
+        // managed_meta JSON must use the canonical `temper-stage` key so it
+        // deserializes into ManagedMeta::stage (a mis-named key is rejected).
         managed_meta: Some(serde_json::json!({"temper-stage": "draft"})),
         open_meta: Some(serde_json::json!({"tags": ["regression"]})),
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),

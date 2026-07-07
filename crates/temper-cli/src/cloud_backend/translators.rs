@@ -49,11 +49,9 @@ fn resolve_create_body(
 /// `content_hash` and `chunks_packed`, they are forwarded directly. Otherwise
 /// runs `compute_body_chunks` to fill them.
 ///
-/// **Symmetric defense (CLAUDE.md "Phase 5's symmetric defense pattern"):**
-/// always serializes managed_meta to JSON and runs
-/// `ensure_managed_identity_keys` with `cmd.title` + `Some(cmd.slug)` from the
-/// typed cmd, so the wire payload's `temper-title` and `temper-slug` always
-/// derive from the same typed source as the server-side receive-side fill.
+/// **Identity is first-class:** `title` and `slug` travel as top-level payload
+/// fields from the typed `cmd`; `managed_meta` is Property-only and is never
+/// injected with identity keys.
 ///
 /// **`origin_uri`:** empty string today — server constructs the canonical
 /// URI from `(owner, context, doctype, slug)`.
@@ -62,8 +60,6 @@ pub(crate) fn cmd_to_ingest_payload(
     cmd: &CreateResource,
     context_ref: &str,
 ) -> Result<IngestPayload> {
-    use temper_workflow::operations::ensure_managed_identity_keys;
-
     // Resolve body content (verbatim when provided; placeholder otherwise).
     let content = resolve_create_body(cmd.body.as_ref(), &cmd.title);
 
@@ -78,13 +74,12 @@ pub(crate) fn cmd_to_ingest_payload(
         }
     };
 
-    // Serialize managed_meta to JSON and inject canonical identity keys from
-    // the typed cmd — symmetric defense per CLAUDE.md. Always emit Some(...);
-    // the identity keys make it non-default by construction.
-    let mut managed_value = serde_json::to_value(&cmd.managed_meta)
-        .map_err(|e| TemperError::Project(format!("serialize managed_meta: {e}")))?;
-    ensure_managed_identity_keys(&mut managed_value, &cmd.title, Some(&cmd.slug));
-    let managed_meta = Some(managed_value);
+    // managed_meta is Property-only; identity travels first-class as the payload's
+    // top-level title/slug (set below). No identity injection into managed_meta.
+    let managed_meta = Some(
+        serde_json::to_value(&cmd.managed_meta)
+            .map_err(|e| TemperError::Project(format!("serialize managed_meta: {e}")))?,
+    );
 
     let open_meta = cmd
         .open_meta
@@ -144,9 +139,10 @@ pub(crate) fn cmd_to_ingest_payload(
 /// somehow present it is also forwarded as a UUID string. Bare names are
 /// rejected 400 by the server (Decision 1).
 ///
-/// **Type move:** when `move_to.type_to` is set and `managed_meta.doc_type`
-/// is not, synthesizes `managed_meta.doc_type` so the server row reflects
-/// the new doc-type. Explicit caller-supplied values always win.
+/// **Type move:** `move_to.type_to` travels first-class as the request's
+/// `type_to` field (never synthesized into `managed_meta` — type left the
+/// managed vocabulary in Phase 2); the server rewrites the authoritative
+/// doc-type from it.
 ///
 /// **Body-trio:** computed only when `cmd.body` is `Some`. Short-circuits
 /// when `BodyUpdate` already carries pre-computed `content_hash` and
@@ -179,22 +175,12 @@ pub(crate) fn cmd_to_resource_update_request(
             .and_then(|mv| mv.context_to.map(|id| id.to_string()))
     });
 
-    // Type move → managed_meta synthesis: explicit caller fields always win.
-    let mut managed_meta = cmd.managed_meta.clone().unwrap_or_default();
-    if let Some(move_to) = &cmd.move_to {
-        if managed_meta.doc_type.is_none() {
-            if let Some(type_to) = &move_to.type_to {
-                managed_meta.doc_type = Some(type_to.clone());
-            }
-        }
-    }
-
+    // managed_meta is Property-only; type-move now travels first-class via `type_to`
+    // (not synthesized as a temper-type key), and identity travels via title/slug.
+    let managed_meta = cmd.managed_meta.clone().unwrap_or_default();
     let managed_meta_opt = if managed_meta == ManagedMeta::default() {
         None
     } else {
-        // The resource is addressed by a `ResourceId` now — there is no slug in
-        // the command to defend against, so `managed_meta.slug` is left as the
-        // caller supplied it (the server reconciles slug from the resolved row).
         Some(managed_meta)
     };
 
@@ -205,19 +191,18 @@ pub(crate) fn cmd_to_resource_update_request(
         .transpose()
         .map_err(|e| TemperError::Project(format!("serialize open_meta: {e}")))?;
 
-    // title field: lift managed_meta.title to the request's title field for
-    // symmetry with today's cloud_mode_update path (commands/resource.rs:1524).
-    let title = managed_meta_opt.as_ref().and_then(|mm| mm.title.clone());
+    let type_to = cmd.move_to.as_ref().and_then(|m| m.type_to.clone());
 
     Ok(temper_workflow::types::ResourceUpdateRequest {
-        title,
-        slug: None,
+        title: cmd.title.clone(),
+        slug: cmd.slug.clone(),
         managed_meta: managed_meta_opt,
         open_meta,
         content,
         content_hash,
         chunks_packed,
         context_to,
+        type_to,
         // Block-provenance sources travel with the body on the wire; the update handler
         // maps them back onto the UpdateResource's BodyUpdate.
         sources: cmd
@@ -278,7 +263,6 @@ mod tests {
             managed_meta: ManagedMeta {
                 mode: Some("plan".to_string()),
                 effort: Some("small".to_string()),
-                goal: Some("temper-maintenance".to_string()),
                 ..ManagedMeta::default()
             },
             open_meta: None,
@@ -318,7 +302,6 @@ mod tests {
         // ManagedMeta fields use temper-* serde renames.
         assert_eq!(mm["temper-mode"], "plan");
         assert_eq!(mm["temper-effort"], "small");
-        assert_eq!(mm["temper-goal"], "temper-maintenance");
     }
 
     #[cfg(feature = "test-embed")]
@@ -335,43 +318,30 @@ mod tests {
 
     #[cfg(feature = "test-embed")]
     #[test]
-    fn cmd_to_ingest_payload_always_injects_identity_keys() {
-        // Symmetric defense (CLAUDE.md): even when caller-supplied managed_meta
-        // is default, the wire payload must carry `temper-title` and `temper-slug`
-        // injected from the typed cmd.
-        let mut cmd = sample_cmd();
-        cmd.managed_meta = ManagedMeta::default();
+    fn cmd_to_ingest_payload_carries_identity_top_level_not_in_managed_meta() {
+        // Identity is first-class: title/slug travel as top-level payload fields
+        // from the typed cmd, and managed_meta is Property-only — it must NOT carry
+        // `temper-title` / `temper-slug` (they left the vocabulary in Phase 2).
+        let cmd = sample_cmd();
         let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
-        let mm = payload
-            .managed_meta
-            .expect("identity keys make managed_meta non-default by construction");
-        assert_eq!(mm["temper-title"], "Test task");
-        assert_eq!(mm["temper-slug"], "2026-05-18-test");
-    }
-
-    #[cfg(feature = "test-embed")]
-    #[test]
-    fn cmd_to_ingest_payload_identity_keys_from_typed_source_not_caller_managed_meta() {
-        // If a future refactor passes a managed_meta with title/slug that differs
-        // from the cmd's typed title/slug, the typed cmd wins — preventing drift.
-        let mut cmd = sample_cmd();
-        cmd.managed_meta.title = Some("Drift!".to_string());
-        cmd.managed_meta.slug = Some("drift-slug".to_string());
-        let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
-        let mm = payload.managed_meta.expect("present");
+        assert_eq!(payload.title, "Test task", "identity title is top-level");
         assert_eq!(
-            mm["temper-title"], "Test task",
-            "typed cmd.title wins over managed_meta.title"
+            payload.slug, "2026-05-18-test",
+            "identity slug is top-level"
         );
-        assert_eq!(
-            mm["temper-slug"], "2026-05-18-test",
-            "typed cmd.slug wins over managed_meta.slug"
-        );
+        if let Some(mm) = &payload.managed_meta {
+            assert!(
+                mm.get("temper-title").is_none() && mm.get("temper-slug").is_none(),
+                "managed_meta must be Property-only, no identity keys; got: {mm}"
+            );
+        }
     }
 
     fn sample_update() -> UpdateResource {
         UpdateResource {
             resource: temper_core::types::ids::ResourceId(uuid::Uuid::nil()),
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: None,
@@ -407,27 +377,19 @@ mod tests {
             Some("@me/knowledge"),
             "raw context ref must be forwarded verbatim to req.context_to"
         );
-        // managed_meta must NOT carry a context field (no synthesis from context_ref).
-        assert!(
-            req.managed_meta
-                .as_ref()
-                .and_then(|m| m.context.as_ref())
-                .is_none(),
-            "managed_meta.context must not be set from context_ref"
-        );
     }
 
     #[test]
-    fn cmd_to_resource_update_request_synthesizes_doc_type_from_move_to_type_to() {
-        // Type moves go through MoveSpec.type_to → managed_meta.doc_type.
+    fn cmd_to_resource_update_request_forwards_type_to_first_class() {
+        // Type moves travel as the first-class `type_to` wire field (no longer
+        // synthesized as a temper-type key inside managed_meta).
         let mut cmd = sample_update();
         cmd.move_to = Some(MoveSpec {
             context_to: None,
             type_to: Some("concept".to_string()),
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
-        let mm = req.managed_meta.expect("synthesized from move_to.type_to");
-        assert_eq!(mm.doc_type.as_deref(), Some("concept"));
+        assert_eq!(req.type_to.as_deref(), Some("concept"));
         assert!(
             req.context_to.is_none(),
             "no context_to without context_ref"
@@ -436,19 +398,16 @@ mod tests {
 
     #[test]
     fn cmd_to_resource_update_request_preserves_caller_managed_meta() {
-        // The resource is addressed by id, so caller-supplied managed_meta
-        // (including slug + title) flows through unchanged.
+        // The resource is addressed by id; caller-supplied Property-only
+        // managed_meta flows through unchanged.
         let mut cmd = sample_update();
         cmd.managed_meta = Some(ManagedMeta {
-            slug: Some("caller-slug".to_string()),
-            title: Some("New Title".to_string()),
+            stage: Some("done".to_string()),
             ..ManagedMeta::default()
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         let mm = req.managed_meta.expect("present");
-        assert_eq!(mm.slug.as_deref(), Some("caller-slug"));
-        // Title from managed_meta is preserved (the typed field is the source).
-        assert_eq!(mm.title.as_deref(), Some("New Title"));
+        assert_eq!(mm.stage.as_deref(), Some("done"));
     }
 
     #[test]

@@ -4,39 +4,25 @@ import type { ResourceFacets } from "./resource";
 import type { ResourceId } from "./ResourceId";
 
 /**
- * Temper-governed frontmatter fields for a vault resource.
+ * Temper-governed **workflow + provenance** metadata for a vault resource.
+ *
+ * This is a **closed, temper-owned vocabulary** of exactly the `KeyFate::Property`
+ * keys — optional, smart-defaulted metadata. Identity (`title`/`slug`), type
+ * (`doc_type_name`), home (`context`/`cogmap`), and relationships (`goal`) are NOT
+ * metadata: they are first-class wire fields, never carried here. The Property field
+ * set is kept in lockstep with `temper_substrate::keys::MANAGED_PROPERTY_KEYS` by the
+ * drift-guard in `temper-services/tests/managed_meta_property_drift_test.rs`.
+ *
+ * There is no catch-all — a key not named here is not a managed key. Caller-defined
+ * ("bring-your-own") fields belong in `open_meta`, the free-form tier. Deserialization
+ * rejects unknown keys (`#[serde(deny_unknown_fields)]`) so a mis-filed key (including a
+ * former identity key like `temper-title`) fails loudly at the wire boundary instead of
+ * silently migrating tiers.
  *
  * All fields use `temper-*` YAML/JSON key names via `serde(rename)`.
  * `None` fields are omitted from serialized output.
- *
- * The `extra` bucket collects any keys the typed fields above don't
- * name — most notably doc-type-schema fields like `date` (sessions)
- * and any server-injected fields the ingest pipeline populates. This
- * makes `ManagedMeta` a round-trip-lossless representation of the
- * JSONB column: deserialize → re-serialize produces byte-equivalent
- * JSON (up to canonicalization) no matter what lives in the blob.
- *
- * Without this bucket, the default serde "ignore unknown fields"
- * behavior would silently drop anything not in the typed set, which
- * would break hash stability across a typed round-trip.
  */
 export type ManagedMeta = { 
-/**
- * Document type (e.g., "task", "goal", "research")
- */
-doc_type: string | null, 
-/**
- * Vault context / namespace
- */
-context: string | null, 
-/**
- * ISO 8601 timestamp of last managed update
- */
-updated: string | null, 
-/**
- * Source URL or reference
- */
-source: string | null, 
 /**
  * Task workflow stage (task only)
  */
@@ -50,9 +36,9 @@ mode: string | null,
  */
 effort: string | null, 
 /**
- * Parent goal reference (task only)
+ * Goal lifecycle status (goal only)
  */
-goal: string | null, 
+status: string | null, 
 /**
  * Sequence number for ordering (task/goal)
  */
@@ -66,14 +52,6 @@ branch: string | null,
  */
 pr: string | null, 
 /**
- * Goal lifecycle status (goal only)
- */
-status: string | null, 
-/**
- * How this resource was created (LLM-discovered or user-created)
- */
-provenance: string | null, 
-/**
  * Model that produced this resource
  */
 llm_model: string | null, 
@@ -82,15 +60,9 @@ llm_model: string | null,
  */
 llm_run: string | null, 
 /**
- * Human-readable title. Renamed to `temper-title` per the
- * temper-prefix contract for managed-tier keys.
+ * How this resource was created (LLM-discovered or user-created)
  */
-title: string | null, 
-/**
- * URL-safe slug. Renamed to `temper-slug` per the temper-prefix
- * contract for managed-tier keys.
- */
-slug: string | null, };
+provenance: string | null, };
 
 /**
  * Paginated meta-only response for resource list endpoints.
@@ -116,9 +88,9 @@ export type ResourceMetaResponse = {
  */
 resource_id: ResourceId, 
 /**
- * Typed managed (temper-*) frontmatter from the manifest. The
- * typed fields cover everything temper knows about; any extras
- * the server stored round-trip through `ManagedMeta::extra`.
+ * Typed managed (temper-*) frontmatter from the manifest — the closed
+ * Property vocabulary. Only the named `temper-*` keys are represented;
+ * there is no catch-all (a stored non-Property key is not surfaced here).
  * `None` only if the manifest row predates meta population.
  */
 managed_meta: ManagedMeta | null, 

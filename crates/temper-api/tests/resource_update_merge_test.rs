@@ -2,9 +2,9 @@
 //!
 //! Tests that PATCH /api/resources/{id} with managed_meta or open_meta
 //! performs a partial merge: `Some` fields overwrite stored values,
-//! `None` fields preserve the stored value. The extra bucket in
-//! `ManagedMeta` merges by key (incoming wins). The `managed_hash`
-//! must be recomputed after any managed_meta change.
+//! `None` fields preserve the stored value. `managed_meta` merges by
+//! Property key (incoming wins). The `managed_hash` must be recomputed
+//! after any managed_meta change.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -233,7 +233,7 @@ async fn managed_meta_partial_update_preserves_untouched_fields(pool: PgPool) {
 /// PATCH with managed_meta merges by key: an existing managed key survives when
 /// a different key is patched in.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn managed_meta_extra_bucket_merges_by_key(pool: PgPool) {
+async fn managed_meta_merges_by_property_key(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
     // Seed one Property-fate managed key.
