@@ -1,10 +1,11 @@
 <script lang="ts">
-	// TierHome — Beat B "build / research" verb-lens Home (SPIKE / Task 1 prototype).
-	// Two verb-CTAs over one Beat-A field panel: hazy rest → hover resolves a lens
+	// TierHome — Beat B "build / research" verb-lens Home.
+	// Two verb-CTAs over one Beat-A field panel: hazy union rest → hover resolves a lens
 	// (build = your contexts, research = the cogmaps you can reach) → click commits to
-	// that lens only → a back affordance returns to neutral. Local state during the
-	// spike (URL `?home` + real navigation are wired in Task 7). Reuses forceTerritories
-	// + TerritoryCircle so Home speaks the same field language as the panorama.
+	// that lens only (`?home` in the URL) → a back affordance returns to neutral. The
+	// committed lens is URL-derived; hover is an ephemeral local preview that keeps the
+	// field crisp across the (background) load round-trip. Reuses forceTerritories +
+	// TerritoryCircle so Home speaks the same field language as the panorama.
 	import type { AtlasHome } from '$lib/types/generated/graph_home';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
@@ -58,18 +59,18 @@
 		if (ownerRef === '@me') return 'hsl(200 44% 62%)';
 		let h = 0;
 		for (const ch of ownerRef) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-		return `hsl(${214 + (h % 5) * 12} 40% 64%)`;
+		return `hsl(${200 + (h % 8) * 8} 40% 64%)`; // 8 buckets across a cool blue→indigo band
 	}
 
-	// Research mirrors build in the WARM family: the universal/system kernel anchors at
-	// base cogmap-orange; each team drifts across a red-orange→amber band. Scope comes
-	// from the (spike) research owner_ref; a cogmap with no team is treated as universal.
-	const researchScopeById = $derived(new Map(home.research.map((m) => [m.id, m.owner_ref ?? 'temper'])));
+	// Research mirrors build in the WARM family: the universal/system kernel (owner_ref
+	// not starting '+') anchors at base cogmap-orange; each team drifts across a
+	// red-orange→amber band keyed by its +slug.
+	const researchScopeById = $derived(new Map(home.research.map((m) => [m.id, m.owner_ref])));
 	function researchTint(scope: string): string {
 		if (!scope.startsWith('+')) return 'hsl(34 80% 56%)'; // universal / system kernel
 		let h = 0;
 		for (const ch of scope) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-		return `hsl(${16 + (h % 5) * 9} 74% 56%)`;
+		return `hsl(${12 + (h % 8) * 6} 74% 56%)`; // 8 buckets across a red-orange→amber band
 	}
 
 	// Group opacity per lens: rest = hazy union of both; previewing = the other fades
@@ -81,12 +82,15 @@
 	}
 
 	function commit(lens: Lens) {
+		// Keep `hover` set: `goto` re-runs the load asynchronously, so until `committed`
+		// (URL-derived) catches up, the hover preview keeps the chosen lens crisp — no
+		// flash back to the hazy rest during the round-trip.
 		goto(buildHomeLensUrl($page.url, lens), { keepFocus: true, noScroll: true });
-		hover = null;
 	}
 	function toNeutral() {
-		goto(clearHomeLensUrl($page.url), { keepFocus: true, noScroll: true });
+		// Clear hover so the field returns to neutral immediately, not after the load.
 		hover = null;
+		goto(clearHomeLensUrl($page.url), { keepFocus: true, noScroll: true });
 	}
 
 	// Body navigation. Research → the cogmap panorama (Beat A). Build → the owner's
@@ -131,7 +135,7 @@
 		onfocus={() => (hover = lens)}
 		onblur={() => (hover = null)}
 		onclick={() => commit(lens)}
-		onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && commit(lens)}
+		onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), commit(lens))}
 		style="cursor:pointer"
 	>
 		<rect
@@ -176,7 +180,7 @@
 		class="atlas-focusable"
 		aria-label="Back to build / research choice"
 		onclick={toNeutral}
-		onkeydown={(e) => e.key === 'Enter' && toNeutral()}
+		onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toNeutral())}
 		style="cursor:pointer"
 	>
 		<text x="20" y={ctaY + 40} fill="#8b93a5" font-size="13">← back</text>
@@ -187,7 +191,7 @@
 <g transform={`translate(0, ${CTA_H})`}>
 	<g
 		opacity={lensOpacity('build')}
-		style={`transition: opacity 260ms ease; pointer-events: ${resolved === 'build' ? 'auto' : 'none'}`}
+		style={`transition: opacity 260ms ease; pointer-events: ${committed === 'build' ? 'auto' : 'none'}`}
 	>
 		{#each buildPos as t (t.id)}
 			<TerritoryCircle
@@ -200,7 +204,7 @@
 				showLabel={resolved === 'build'}
 				intensity={intensityFor(t.member_count, buildMax)}
 				tint={buildTint(ownerRefById.get(t.id) ?? '@me')}
-				onEnter={resolved === 'build'
+				onEnter={committed === 'build'
 					? () => enterContext(ownerRefById.get(t.id) ?? '@me')
 					: undefined}
 			/>
@@ -208,7 +212,7 @@
 	</g>
 	<g
 		opacity={lensOpacity('research')}
-		style={`transition: opacity 260ms ease; pointer-events: ${resolved === 'research' ? 'auto' : 'none'}`}
+		style={`transition: opacity 260ms ease; pointer-events: ${committed === 'research' ? 'auto' : 'none'}`}
 	>
 		{#each researchPos as t (t.id)}
 			<TerritoryCircle
@@ -221,8 +225,18 @@
 				showLabel={resolved === 'research'}
 				intensity={intensityFor(t.member_count, researchMax)}
 				tint={researchTint(researchScopeById.get(t.id) ?? 'temper')}
-				onEnter={resolved === 'research' ? () => enterCogmap(t.id) : undefined}
+				onEnter={committed === 'research' ? () => enterCogmap(t.id) : undefined}
 			/>
 		{/each}
 	</g>
+		<!-- Empty-state for a committed lens with nothing in it. -->
+		{#if committed === 'build' && buildPos.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				You don't have any contexts to build in yet.
+			</text>
+		{:else if committed === 'research' && researchPos.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				There are no cognitive maps you can reach yet.
+			</text>
+		{/if}
 </g>

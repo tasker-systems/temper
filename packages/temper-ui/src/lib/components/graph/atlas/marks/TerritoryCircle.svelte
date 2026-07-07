@@ -68,7 +68,7 @@
 	tabindex={onEnter ? 0 : undefined}
 	aria-label={ariaLabel}
 	onclick={onEnter}
-	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
+	onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onEnter?.())}
 	onmouseenter={() => (hovered = true)}
 	onmouseleave={() => (hovered = false)}
 	onfocus={() => (hovered = true)}

@@ -9,7 +9,6 @@
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
-import type { HomeLens } from './nav';
 import type { ResourceRow } from '$lib/types/generated/resource';
 import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
@@ -30,10 +29,10 @@ export interface AtlasViewData {
 	scope: TeamScopeView | null;
 	tier: number;
 	focus: Focus;
-	// Atlas Home (Beat B): the build/research footprint + committed lens. Null on the
-	// scoped (team/cogmap) branches, which don't render Home.
+	// Atlas Home (Beat B): the build/research footprint. Null on the scoped
+	// (team/cogmap) branches, which don't render Home. The committed lens is not
+	// carried here — TierHome derives it from the URL (`?home`).
 	home: AtlasHome | null;
-	homeLens: HomeLens | null;
 	territories: TerritoryOverview | null;
 	slice: TerritorySlice | null;
 	neighborhood: AtlasSubgraph | null;

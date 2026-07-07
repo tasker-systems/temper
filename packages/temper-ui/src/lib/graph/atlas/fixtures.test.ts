@@ -31,7 +31,6 @@ const REQUIRED_KEYS = {
 	tier: true,
 	focus: true,
 	home: true,
-	homeLens: true,
 	territories: true,
 	slice: true,
 	neighborhood: true,

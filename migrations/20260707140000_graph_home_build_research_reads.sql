@@ -28,7 +28,9 @@ LANGUAGE sql STABLE AS $$
            CASE
                WHEN c.owner_table = 'kb_profiles' AND c.owner_id = p_profile THEN '@me'
                WHEN c.owner_table = 'kb_teams' AND owner_team.slug IS NOT NULL THEN '+' || owner_team.slug
-               ELSE COALESCE('+' || shared.slug, '@me')
+               -- Owned by another profile but visible (team-share → that team; otherwise
+               -- an explicit read-grant) — label it 'shared', never mis-claim it as '@me'.
+               ELSE COALESCE('+' || shared.slug, 'shared')
            END AS owner_ref,
            (SELECT count(*)
             FROM kb_resource_homes h
@@ -57,8 +59,14 @@ CREATE FUNCTION graph_home_cogmaps(p_profile uuid)
 RETURNS TABLE(cogmap_id uuid, name text, owner_ref text, team_ids uuid[], region_count int, facet_count int)
 LANGUAGE sql STABLE AS $$
     WITH visible AS (SELECT cogmap_id FROM cogmap_visible_maps(p_profile) t(cogmap_id)),
+    -- reachable teams = self + ancestors (is_active), mirroring cogmap_visible_maps'
+    -- admit basis, so the derived held-by owner_ref / team_ids reflect the team that
+    -- actually made the map visible — an ancestor-held map reads as that team, not the
+    -- universal 'temper' marker, and soft-deleted teams confer nothing.
     member_teams AS (
-        SELECT tm.team_id FROM kb_team_members tm WHERE tm.profile_id = p_profile
+        SELECT DISTINCT a.team_id
+        FROM profile_effective_teams(p_profile) e
+        CROSS JOIN LATERAL team_ancestors(e.team_id) a
     )
     SELECT c.id, c.name,
            -- held-by scope: the alphabetically-first member team's slug, else the

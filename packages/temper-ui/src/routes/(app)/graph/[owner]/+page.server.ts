@@ -9,7 +9,6 @@ import {
 	parseFilters,
 	parseFocus,
 	parseFocusPath,
-	parseHomeLens,
 	parseTeam,
 	selectedElement
 } from '$lib/graph/atlas/nav';
@@ -132,7 +131,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			tier,
 			focus,
 			home: null,
-			homeLens: null,
 			territories,
 			slice,
 			neighborhood,
@@ -157,7 +155,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			tier,
 			focus,
 			home,
-			homeLens: parseHomeLens(url),
 			territories: null,
 			slice: null,
 			neighborhood: null,
@@ -209,7 +206,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		tier,
 		focus,
 		home: null,
-		homeLens: null,
 		territories,
 		slice,
 		neighborhood,

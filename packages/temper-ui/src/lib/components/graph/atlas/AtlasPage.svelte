@@ -5,6 +5,7 @@
 	import FilterPopover from '$lib/components/graph/atlas/FilterPopover.svelte';
 	import SearchAccelerator from '$lib/components/graph/atlas/SearchAccelerator.svelte';
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
+	import HomeA11yList from '$lib/components/graph/atlas/HomeA11yList.svelte';
 	import { selectedElement } from '$lib/graph/atlas/nav';
 	import type { AtlasViewData } from '$lib/graph/atlas/viewData';
 	import { navigating, page } from '$app/stores';
@@ -66,6 +67,9 @@
 	</div>
 
 	<div class="canvas-wrap">
+		{#if data.home}
+			<HomeA11yList home={data.home} />
+		{/if}
 		{#if isViewLoad}
 			<div class="loading-veil" role="status" aria-live="polite">Loading…</div>
 		{/if}

@@ -117,8 +117,7 @@
      "facet_count": 4
     }
    ]
-  },
-  "homeLens": null
+  }
  },
  "teamPanorama": {
   "owner": "@me",
@@ -678,8 +677,7 @@
   },
   "focusPath": [],
   "crumbTerritory": null,
-  "home": null,
-  "homeLens": null
+  "home": null
  },
  "regionSlice": {
   "owner": "@me",
@@ -845,8 +843,7 @@
    "id": "0191d0c0-001d-7000-8000-00000000001d",
    "label": null
   },
-  "home": null,
-  "homeLens": null
+  "home": null
  },
  "nodeNeighborhood": {
   "owner": "@me",
@@ -1116,8 +1113,7 @@
    }
   ],
   "crumbTerritory": null,
-  "home": null,
-  "homeLens": null
+  "home": null
  },
  "nodeSelected": {
   "owner": "@me",
@@ -1387,8 +1383,7 @@
    }
   ],
   "crumbTerritory": null,
-  "home": null,
-  "homeLens": null
+  "home": null
  },
  "cogmapPanorama": {
   "owner": "@me",
@@ -1966,8 +1961,7 @@
   },
   "focusPath": [],
   "crumbTerritory": null,
-  "home": null,
-  "homeLens": null
+  "home": null
  },
  "leafBare": {
   "owner": "@me",
@@ -2073,8 +2067,7 @@
    }
   ],
   "crumbTerritory": null,
-  "home": null,
-  "homeLens": null
+  "home": null
  },
  "_meta": {
   "synthetic": true,

@@ -100,6 +100,27 @@ async fn create_team_context(pool: &sqlx::PgPool, team: Uuid, slug: &str) -> Uui
     .unwrap()
 }
 
+async fn home_resource(pool: &sqlx::PgPool, context: Uuid, owner: Uuid, title: &str) {
+    let rid: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, '') RETURNING id",
+    )
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+         (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(rid)
+    .bind(context)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn home_returns_member_teams_and_shared_cogmap_edges(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -240,4 +261,35 @@ async fn build_lens_scopes_contexts_to_membership(pool: sqlx::PgPool) {
     assert_eq!(p.owner_ref, "@me");
     let t = body.build.iter().find(|c| c.id == team_ctx).unwrap();
     assert_eq!(t.owner_ref, "+ctx-in");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn build_lens_resource_count_reflects_visible_homed_resources(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    let ctx = create_personal_context(&pool, profile, "sized-ctx").await;
+    home_resource(&pool, ctx, profile, "r1").await;
+    home_resource(&pool, ctx, profile, "r2").await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let c = body
+        .build
+        .iter()
+        .find(|c| c.id == ctx)
+        .expect("sized context present on the build lens");
+    assert_eq!(
+        c.resource_count, 2,
+        "resource_count reflects the two resources homed in (and visible via) the context"
+    );
 }
