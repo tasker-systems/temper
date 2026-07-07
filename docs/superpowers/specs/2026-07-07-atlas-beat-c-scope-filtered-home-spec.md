@@ -130,36 +130,60 @@ required instead; it is not.)
 
 The retirement is narrower than "delete the panorama" first sounds — `TierPanorama` and the
 `Territory`/region machinery **survive for the cogmap axis** (`cogmap_panorama` is regions-only
-and still needs them). What dies is specifically the **team** mixing path.
+and still needs them). What dies is the **entire `?team` scope** — which orphans three surfaces,
+not one: the Tier-0 team overview, the Tier-2 **team neighborhood**, and the team-scoped
+**search accelerator**. (The last is re-homed in a later beat, not lost — see §9.) Region
+Tier-1/2 (`territory_slice` / `cogmap_neighborhood`) stay reachable through the cogmap door.
 
-**Backend (`temper-services` / SQL):**
+**Backend (`temper-services` / SQL / handlers):**
 - `graph_service.rs::territory_overview` (the team fn that appends both axes,
   `graph_service.rs:513-620`) — **delete**.
-- `graph_context_territories` SQL (only consumer was `territory_overview`) — **delete**.
-- `graph_region_territories` SQL — **verify** whether `cogmap_panorama` (`graph_service.rs:625-710`)
-  shares it. Keep if shared; delete if `cogmap_panorama` uses its own region query.
-- The `/api/teams/{id}/graph/territories` handler + route (`handlers/graph.rs`) — **delete**.
+- `graph_context_territories`, `graph_region_territories`, `graph_orphan_salient_nodes`,
+  `graph_territory_bridges` SQL — **delete** (all four are team-`territory_overview`-only;
+  **verified**: `cogmap_panorama` uses `graph_cogmap_territories` / `graph_cogmap_orphan_nodes`
+  and no bridges).
+- `team_service.rs::team_scope` (`:497`, produces `TeamScopeView`) + the
+  `/api/teams/{id}/graph-scope` handler (`handlers/teams.rs:240`) — **delete**.
+- The team territory-overview handler `/api/teams/{id}/graph/territories`, the team
+  neighborhood `/api/teams/{id}/graph/slice`, and the team search `/api/teams/{id}/graph/search`
+  handlers (`handlers/graph.rs` / `handlers/teams.rs`) — **delete**. (Team `unified_search`
+  entry retires with the search accelerator; the shared `unified_search` service itself stays —
+  it backs other search.)
 
 **Wire types (`temper-core` → generated):**
-- `TerritoryKind::Context` variant — **remove** (collapses toward regions-only for the surviving
-  cogmap panorama).
-- `graph_scope.rs`: `TeamZone`, `TeamScopeView`, `TeamRef` (team-scope only) — **delete** (verify
-  no other consumer).
+- `TerritoryKind` — **kept unchanged** (all three variants). The backend stops *emitting*
+  `Context` (team `territory_overview` is deleted; `cogmap_panorama` emits only `Region`), but
+  Home's **client-side** field layout still builds `Territory` objects with `kind: 'context'` /
+  `'cogmap'` (`homeLayout.ts`), and `TERRITORY_TINTS` is keyed by `TerritoryKind`. Removing a
+  variant would break Home's typecheck — so leave the enum intact; the backend just never emits
+  `Context` now.
+- `graph_scope.rs`: `TeamZone`, `TeamScopeView`, `TeamRef` (team-scope only) — **delete**
+  (**verified** consumers: `team_service`, `handlers/teams`, `crumbModel.ts`, `viewData.ts`,
+  `graph-reads.ts`, `AtlasCrumb.svelte` — all retired/edited here).
 - `Territory`, `TerritoryOverview`, `OrphanNode`, `Bridge`, `RegionMember`, `TerritorySlice` —
   **survive** (cogmap panorama + Tier 1/2).
 
 **Loader / server reads (temper-ui):**
 - The entire **`?team` scope branch** in `graph/[owner]/+page.server.ts:170-218` — **delete**.
-- `graph-reads.ts`: `readTeamScope`, `readTerritories`, `territoriesPath` — **delete**.
+- `graph-reads.ts`: `readTeamScope`/`teamScopePath`, `readTerritories`/`territoriesPath`,
+  `readNeighborhood`/`neighborhoodSlicePath`, `readAtlasSearch`/`atlasSearchPath` — **delete**
+  (all team-scoped). Keep `readCogmapNeighborhood`, `readCogmapPanorama`, `readRegionSlice`,
+  `readAtlasHome`, `readTrail`, `readResourceRow`.
 
 **Frontend (temper-ui):**
 - `TierPanorama.svelte` — **survives for cogmaps**, sheds the zone-handling (`enterZone`,
   `TeamZoneMark`) and the inert-context branch (`TierPanorama.svelte:82-98`). Simplify to
   regions-only.
 - `marks/TeamZoneMark.svelte` — **delete** (verify no cogmap use).
+- `SearchAccelerator.svelte` + the `_search/+server.ts` endpoint's team path — **delete** (search
+  is gated on `data.teamId` at `AtlasPage.svelte:63`; re-homed in a later beat, §9).
+- `AtlasPage.svelte` — drop the `{#if data.teamId}` search block and the `teamId` plumbing;
+  keep `cogmapId`.
+- `crumbModel.ts` / `viewData.ts` — drop the `scope: TeamScopeView | null` field and its crumb
+  derivation.
 - `AtlasCrumb.svelte` — the team crumb (`:35`, `buildScopeUrl`) → a lightweight **`Home ›
   +tasker`** scope crumb reflecting `?scope`.
-- `nav.ts` — `parseTeam` (`:32`), `buildScopeUrl` (team, `:149`) **retire**; **add** a `?scope`
+- `nav.ts` — `parseTeam` (`:32`), `buildScopeUrl` (team, `:149`) **retire**; **add** `?scope`
   builder + parser beside the `?home` builders.
 
 **URL frame:** `?team` disappears from the Atlas entirely. Scope becomes a **Home filter**
@@ -225,6 +249,13 @@ and still needs them). What dies is specifically the **team** mixing path.
   org-topology may want them later. Only the *zone-rendering UI* is deleted.
 - **Research gets no recency.** Recency is the north star's contexts-view signal (§4.8); research
   sizing stays `region_count` (B §10.3 deferred research enrichment).
+- **Re-home wayfinding search (its own follow-up beat).** Retiring `?team` orphans the
+  search accelerator (gated on `data.teamId`, `AtlasPage.svelte:63`) — the only place Atlas
+  search is wired. C **deletes** the team-scoped search wiring; a later beat re-homes wayfinding
+  search at a post-reshape scope (footprint-wide via `resources_visible_to(profile)`, and/or
+  per-cogmap), which needs a **net-new non-team search endpoint** and its own design. Folding it
+  into C would balloon the beat; the north star's wayfinding surface (§5) returns in that beat.
+  **Interim:** no search box in the Atlas between C landing and the re-home beat.
 - **Deferred:** org-topology / team-structure view (the retired downward zone-existence
   affordance, if ever wanted — admin/team-management surface, not the Atlas); per-cogmap
   resource/density sizing (B §10.3); context-view re-imagining (Beat E / Chunk D).
