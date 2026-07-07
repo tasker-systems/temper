@@ -284,14 +284,70 @@ fails fast at startup rather than silently running with no client secret.
 > action is required** — this is built in. The **OIDC path does not hit this** at all: its callback
 > completes as a `GET` redirect, which CSRF does not touch.
 
-## 7. Verify
+## 7. Connect MCP clients (Claude Desktop / Claude Code)
+
+The remote MCP server (`/mcp`) is served from the same deployment and authenticates against the
+Temper AS via OAuth. MCP clients discover the AS through RFC 8414 metadata and **require dynamic
+client registration (DCR)** — current Claude Code/Desktop ignore a client-side `client_id` and fall
+back to DCR regardless (upstream `anthropics/claude-code#26675`, `#38102`, `#68853`). The AS metadata
+advertises a `registration_endpoint` (`/oauth/register`), a thin proxy that echoes a pre-registered
+static `client_id`; it never persists client-supplied redirect URIs, so the `/oauth/authorize`
+open-redirect protection is unweakened. To enable it on a SAML instance:
+
+1. **Set `MCP_CLIENT_ID`** on the deployment to a client id that is **also a key in `AS_CLIENTS`**
+   (e.g. `temper-mcp`). Without `MCP_CLIENT_ID`, `/oauth/register` returns `503
+   temporarily_unavailable`.
+
+2. **Add that client to `AS_CLIENTS`** with the redirect URIs its clients use:
+
+   ```json
+   {
+     "temper-cli": ["https://<instance>/api/auth/cli-callback"],
+     "temper-ui":  ["https://<app-url>/auth/callback"],
+     "temper-mcp": [
+       "https://claude.ai/api/mcp/auth_callback",
+       "https://claude.com/api/mcp/auth_callback",
+       "http://127.0.0.1/callback"
+     ]
+   }
+   ```
+
+   The two HTTPS callbacks serve the Claude Desktop / web connector (fixed callbacks, exact match).
+   The **loopback entry serves Claude Code**: it runs a local callback server on an *ephemeral* port,
+   so the allowlist matches loopback redirect URIs by scheme + path with the port ignored — a
+   port-less `http://127.0.0.1/callback` entry matches `http://127.0.0.1:<random>/callback`. Loopback
+   matching is confined to the local machine and normalizes across loopback hosts (`127.0.0.1`,
+   `localhost`, `[::1]`), so one loopback entry covers whichever the client sends. Non-loopback
+   (HTTPS) redirect URIs are always exact-match.
+
+3. **Confirm audience/issuer alignment** so the AS-minted token validates at `/mcp` after login. The
+   AS mints `iss = AS_ISSUER`, `aud = AS_AUDIENCE`; the MCP middleware validates `iss` against
+   `AUTH_ISSUER` and `aud` against `MCP_AUDIENCE` (which falls back to `AUTH_AUDIENCE`). Require:
+
+   | AS mints | MCP validates against | Requirement |
+   | --- | --- | --- |
+   | `AS_ISSUER` | `AUTH_ISSUER` | `AS_ISSUER == AUTH_ISSUER` |
+   | `AS_AUDIENCE` | `MCP_AUDIENCE` (or `AUTH_AUDIENCE`) | `AS_AUDIENCE == MCP_AUDIENCE` |
+
+   These already hold on a correctly-configured SAML instance, since regular authenticated API calls
+   validate the same AS-minted tokens against `AUTH_ISSUER`/`AUTH_AUDIENCE`. If `MCP_AUDIENCE` is set
+   separately, it must equal `AS_AUDIENCE`.
+
+Then add the server to Claude Code and authenticate:
+
+```bash
+claude mcp add --transport http temper https://<instance>/mcp
+# then /mcp → authenticate
+```
+
+## 8. Verify
 
 1. `temper login` → a browser opens to your IdP; after SAML login the CLI receives a token.
 2. `temper whoami` (or any authenticated command) succeeds.
 3. A `kb_profiles` row and a `kb_profile_auth_links` row (with `auth_provider = saml:<idp-key>`) are
    created for the user on first login.
 
-## 8. Deactivating an account (authn control)
+## 9. Deactivating an account (authn control)
 
 Team membership is **authorization**; it does not control whether an account can log in. To stop
 an account from authenticating at all — regardless of what the IdP asserts — soft-delete the
