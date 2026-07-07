@@ -395,14 +395,45 @@ async fn resolve_search_scope(
     Ok((context_id, scope_ids))
 }
 
+/// Embed a text-only query server-side so the vector arm contributes for callers that can't run the
+/// ONNX model themselves (MCP clients, raw HTTP, agent workers). The CLI precomputes the vector and
+/// sends it in `SearchParams.embedding`, so this is a no-op for that path — as is a query that is
+/// empty/whitespace or already carries an embedding (issue #297).
+///
+/// The query is embedded with the SAME plain `embed_text` path the corpus was ingested with
+/// (`prepare_markdown → embed_texts`, no BGE "represent this sentence…" query prefix), keeping it in
+/// the stored chunks' vector space so scores stay comparable to the CLI's. Do not introduce a
+/// query-side prefix here without re-embedding the corpus.
+///
+/// Failure mode is fallback-with-warn: if the model errors (e.g. unavailable on an unexpected target),
+/// we log and proceed with FTS + graph only rather than turning a soft degradation into a hard 500 —
+/// partial results beat none, and this preserves the pre-#297 behavior on embed failure.
+fn embed_query_if_missing(params: &mut SearchParams) {
+    if params.embedding.is_some() {
+        return;
+    }
+    let query = match params.query.as_deref().map(str::trim) {
+        Some(q) if !q.is_empty() => q.to_string(),
+        _ => return,
+    };
+    match temper_ingest::embed::embed_text(&query) {
+        Ok(embedding) => params.embedding = Some(embedding),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "server-side query embedding failed; falling back to FTS + graph only"
+        ),
+    }
+}
+
 /// `search` — Surface A general search (Beat 2): one composed `unified_search` readback blending FTS +
 /// vector + graph into ranked, scored hits, then per-row display enrichment. Replaces the either/or,
 /// zero-score path. Visibility is enforced inside every candidate function (`resources_visible_to`).
 pub async fn search_select(
     pool: &PgPool,
     profile_id: ProfileId,
-    params: SearchParams,
+    mut params: SearchParams,
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
+    embed_query_if_missing(&mut params);
     let clamped = clamp_search_params(&params);
     let (context_id, scope_ids) = resolve_search_scope(pool, profile_id, &params).await?;
 
@@ -698,6 +729,41 @@ mod clamp_tests {
         let d = clamp_search_params(&SearchParams::default());
         assert_eq!(d.depth, 2, "default depth 2");
         assert_eq!(d.limit, 10, "default limit 10");
+    }
+
+    // `embed_query_if_missing` guards — the no-op cases never touch the ONNX model, so they run in the
+    // plain (non-embed) test job. The positive case (text → 768-dim vector) is proven end-to-end in the
+    // `test-embed` e2e regression `server_embeds_text_only_query_surfaces_semantic_only_hit`.
+    #[test]
+    fn embed_query_noop_when_embedding_already_present() {
+        let precomputed = vec![0.5_f32; 768];
+        let mut p = SearchParams {
+            query: Some("kubernetes deploys".into()),
+            embedding: Some(precomputed.clone()),
+            ..SearchParams::default()
+        };
+        embed_query_if_missing(&mut p);
+        assert_eq!(
+            p.embedding.as_deref(),
+            Some(precomputed.as_slice()),
+            "a precomputed embedding (CLI path) must pass through untouched"
+        );
+    }
+
+    #[test]
+    fn embed_query_noop_when_query_is_none_or_blank() {
+        for q in [None, Some(String::new()), Some("   \t\n".into())] {
+            let mut p = SearchParams {
+                query: q.clone(),
+                embedding: None,
+                ..SearchParams::default()
+            };
+            embed_query_if_missing(&mut p);
+            assert!(
+                p.embedding.is_none(),
+                "empty/whitespace/absent query must not trigger embedding (query={q:?})"
+            );
+        }
     }
 }
 
