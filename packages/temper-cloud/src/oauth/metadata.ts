@@ -6,7 +6,9 @@ export interface AsMetadata {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  registration_endpoint: string;
   jwks_uri: string;
+  scopes_supported: string[];
   response_types_supported: string[];
   grant_types_supported: string[];
   code_challenge_methods_supported: string[];
@@ -26,7 +28,19 @@ export interface Auth0AsMetadata {
   resource: string;
 }
 
-/** Builds RFC 8414 metadata for the Temper AS itself. Trims a trailing slash from `issuer`. */
+/**
+ * Builds RFC 8414 metadata for the Temper AS itself. Trims a trailing slash from `issuer`.
+ *
+ * `registration_endpoint` advertises the thin DCR proxy (`crates/temper-mcp/src/discovery.rs`,
+ * reachable at `/oauth/register` via the `vercel.json` catch-all) so MCP clients that require
+ * dynamic client registration — current Claude Code/Desktop ignore a configured static `client_id`
+ * and fall back to DCR regardless — can complete the OAuth handshake on SAML instances. The proxy
+ * only echoes the pre-registered `MCP_CLIENT_ID`; it never persists client-supplied redirect URIs,
+ * so the open-redirect protection at `/oauth/authorize` (`clients.ts`) is unweakened.
+ *
+ * `scopes_supported` matches the protected-resource metadata (`discovery.rs`) so a conformant client
+ * requesting `offline_access` gets a refresh token rather than re-authing on each access-token expiry.
+ */
 export function buildAsMetadata(issuer: string): AsMetadata {
   const iss = issuer.replace(/\/+$/, "");
 
@@ -34,7 +48,9 @@ export function buildAsMetadata(issuer: string): AsMetadata {
     issuer: iss,
     authorization_endpoint: `${iss}/oauth/authorize`,
     token_endpoint: `${iss}/oauth/token`,
+    registration_endpoint: `${iss}/oauth/register`,
     jwks_uri: `${iss}/oauth/jwks`,
+    scopes_supported: ["openid", "profile", "email", "offline_access"],
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
