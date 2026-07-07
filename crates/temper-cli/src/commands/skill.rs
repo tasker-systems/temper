@@ -60,6 +60,18 @@ static REFERENCE_FOOTER: &str = r#"
 | medium | Multi-step, bounded to a clear outcome |
 | large | Multi-session, may require decomposition |
 
+## Managed vs Open Frontmatter
+
+`managed_meta` is a **closed, temper-owned vocabulary** -- the `temper-*`
+workflow/provenance keys (stage, mode, effort, status, seq, branch, pr,
+llm-model, llm-run, provenance). It is optional metadata with smart defaults;
+you never *have* to send it. An unknown key under `managed_meta` is rejected --
+put caller-defined ("bring-your-own") fields in `open_meta`, the free-form tier.
+
+**Slug precedence:** the slug is derived from the title. To override it, pass
+the top-level `slug` (CLI `--slug`, MCP `slug`). A slug placed in managed
+frontmatter is inert.
+
 ## Discovery Workflow
 
 1. `temper search "<topic>"` -- find relevant documents and notes
@@ -735,6 +747,14 @@ mod tests {
         assert!(
             reference.contains("## Context Requirement"),
             "should have Context Requirement section"
+        );
+        assert!(
+            reference.contains("## Managed vs Open Frontmatter"),
+            "should have Managed vs Open Frontmatter section"
+        );
+        assert!(
+            reference.contains("closed, temper-owned vocabulary"),
+            "managed-meta section must state the closed-vocabulary contract"
         );
     }
 

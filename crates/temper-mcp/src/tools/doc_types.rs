@@ -231,4 +231,30 @@ mod tests {
         let result = describe_doc_type_impl("widget");
         assert!(result.is_err(), "unknown doc type should return an error");
     }
+
+    #[test]
+    fn describe_task_surfaces_managed_vocabulary() {
+        // A caller must be able to discover the managed vocabulary + its enum
+        // values before sending managed_meta — the closed vocabulary is only
+        // usable if it is discoverable.
+        let d = describe_doc_type_impl("task").expect("task is a known doc type");
+        let props = d
+            .schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("task schema has properties");
+        for key in ["temper-stage", "temper-mode", "temper-effort"] {
+            assert!(
+                props.contains_key(key),
+                "managed key {key} must be discoverable"
+            );
+        }
+        assert!(
+            d.enum_fields
+                .get("temper-stage")
+                .is_some_and(|v| v.contains(&"backlog".to_string())),
+            "temper-stage enum values must be discoverable, got: {:?}",
+            d.enum_fields.get("temper-stage")
+        );
+    }
 }

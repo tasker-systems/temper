@@ -306,11 +306,6 @@ pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
     if patch.slug.is_some() {
         existing.slug = patch.slug;
     }
-
-    // Merge extra HashMap key-by-key.
-    for (k, v) in patch.extra {
-        existing.extra.insert(k, v);
-    }
 }
 
 /// Partial-merge an open_meta patch onto an existing open_meta value.
@@ -661,23 +656,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_managed_meta_merges_extra_map() {
-        use serde_json::json;
-        let mut existing = ManagedMeta::default();
-        existing.extra.insert("k1".to_string(), json!("v1"));
-        existing.extra.insert("k2".to_string(), json!("v2"));
-
-        let mut patch = ManagedMeta::default();
-        patch.extra.insert("k2".to_string(), json!("patched"));
-        patch.extra.insert("k3".to_string(), json!("v3"));
-
-        merge_managed_meta(&mut existing, patch);
-        assert_eq!(existing.extra.get("k1"), Some(&json!("v1")));
-        assert_eq!(existing.extra.get("k2"), Some(&json!("patched")));
-        assert_eq!(existing.extra.get("k3"), Some(&json!("v3")));
-    }
-
-    #[test]
     fn merge_managed_meta_covers_all_typed_fields() {
         let mut existing = ManagedMeta::default();
         let patch = ManagedMeta {
@@ -698,7 +676,6 @@ mod tests {
             llm_run: Some("run-1".to_string()),
             title: Some("T".to_string()),
             slug: Some("s".to_string()),
-            extra: Default::default(),
         };
         merge_managed_meta(&mut existing, patch);
         assert_eq!(existing.doc_type.as_deref(), Some("task"));
