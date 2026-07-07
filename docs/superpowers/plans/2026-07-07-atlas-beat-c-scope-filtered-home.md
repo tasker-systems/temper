@@ -78,7 +78,7 @@ git commit -m "spike(atlas): Beat C Task 1 — lock scope-chip + recency-glow vi
 - Modify: `crates/temper-services/src/services/team_service.rs` (delete `team_scope`, `:497-556`, and its now-unused imports at `:20`)
 - Modify: `crates/temper-api/src/handlers/graph.rs` (delete the `/api/teams/{id}/graph/territories` + `/api/teams/{id}/graph/slice` handlers) and `crates/temper-api/src/handlers/teams.rs` (delete the `/api/teams/{id}/graph-scope` + `/api/teams/{id}/graph/search` handlers, `:232-240`) + their route registrations
 - Modify: `crates/temper-core/src/types/graph_scope.rs` (delete the whole file's types) + `crates/temper-core/src/types/mod.rs:76` (drop the `graph_scope` re-export + `mod graph_scope`)
-- Modify: `migrations/20260703130000_graph_atlas_chunk_b_reads.sql` — **do not edit** (shipped? check); instead add a **new** drop migration if these SQL fns shipped, else edit in place if branch-local (see Step 3)
+- **Do NOT touch any migration.** The four team SQL fns live in migrations SHIPPED to `main` (`20260703130000`, `20260706120300`) — immutable ([[feedback_shipped_migrations_immutable]]), and a `DROP FUNCTION` is non-additive: it would break temper's auto-deploying `main` in the migrate-ahead-of-deploy window ([[feedback_drop_function_non_additive_breaks_deploy_skew]]). This task deletes only the **Rust callers** so nothing references them; the fns stay as dead DB objects and are dropped in a **separate follow-up additive migration after C deploys** (captured in the ledger + spec §9).
 - Delete: `tests/e2e/tests/graph_territory_overview_sql_test.rs`
 - Test: `cargo make check` + the temper-services/temper-api unit suites stay green
 
@@ -88,18 +88,15 @@ git commit -m "spike(atlas): Beat C Task 1 — lock scope-chip + recency-glow vi
 
 > **Ordering note:** deleting the wire types here breaks the frontend generated-type consumers until Task 3. Because temper-core (Rust) and temper-ui (TS) build separately, the **Rust** workspace stays green after this task; the **TS** typecheck goes red until Task 3. If you require green-at-every-task including TS, swap Task 2 and Task 3 (do frontend teardown first). Recommended: **Task 3 before Task 2** so `bun run check` never goes red. This plan lists backend first for readability; execute FE teardown first.
 
-- [ ] **Step 1: Confirm the four team SQL fns are unshipped (branch-local) or shipped**
+- [ ] **Step 1: (resolved by controller) — the team SQL fns are SHIPPED; do not touch migrations**
 
-Run: `git log --oneline --all -- migrations/20260703130000_graph_atlas_chunk_b_reads.sql | head`
-Decide: if that migration is **branch-local + unshipped** (created on `jct/atlas-reshape`, never on `main`), you may delete the four fns by **editing it in place** + `cargo make db-reset`. If it **shipped to `main`**, you MUST instead add a **new** migration `migrations/<ts>_atlas_beat_c_drop_team_territory_fns.sql` with `DROP FUNCTION IF EXISTS graph_region_territories(uuid,uuid,uuid); DROP FUNCTION IF EXISTS graph_context_territories(uuid,uuid); DROP FUNCTION IF EXISTS graph_orphan_salient_nodes(uuid,uuid); DROP FUNCTION IF EXISTS graph_territory_bridges(uuid,uuid);` (never edit a shipped migration — `[[feedback_shipped_migrations_immutable]]`). The Chunk-A descendant-enumeration fns stay (spec §9 — dormant).
+The four fns are on `main` (confirmed by the controller). Leave all migrations untouched. The fns become dead (unreferenced) DB objects after this task and are dropped later in a separate additive migration. **No `cargo make db-reset`, no new migration in this task.**
 
 - [ ] **Step 2: Delete `territory_overview` and `team_scope`**
 
-Remove `graph_service.rs::territory_overview` (the whole fn, `:513-620`) and `team_service.rs::team_scope` (`:497-556`) plus any now-unused `use` (`TeamRef, TeamScopeView, TeamZone`, and the region/context/orphan/bridge query bindings). Leave `cogmap_panorama`, `territory_slice`, `atlas_home` untouched.
+Remove `graph_service.rs::territory_overview` (the whole fn, `:513-620`) and `team_service.rs::team_scope` (`:497-556`) plus any now-unused `use` (`TeamRef, TeamScopeView, TeamZone`, and the region/context/orphan/bridge query bindings). Leave `cogmap_panorama`, `territory_slice`, `atlas_home` untouched. (The SQL fns they called stay in the DB, now unreferenced — that's intentional.)
 
-- [ ] **Step 3: Delete the SQL fns (per Step 1 decision)**
-
-If branch-local: delete the four `CREATE FUNCTION graph_region_territories / graph_context_territories / graph_orphan_salient_nodes / graph_territory_bridges` blocks from `20260703130000_...sql` (and the derived-label `CREATE OR REPLACE graph_region_territories` in `20260706120300_region_territory_derived_label.sql` — that whole migration goes if it only redefined that fn), then `cargo make db-reset`. If shipped: add the new DROP migration from Step 1 and `cargo make db-setup`.
+- [ ] **Step 3: (skipped — see Step 1) no SQL/migration change**
 
 - [ ] **Step 4: Delete the handlers + routes + wire types**
 

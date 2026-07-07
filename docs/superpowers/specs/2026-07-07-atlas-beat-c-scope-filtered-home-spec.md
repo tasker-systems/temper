@@ -139,9 +139,13 @@ Tier-1/2 (`territory_slice` / `cogmap_neighborhood`) stay reachable through the 
 - `graph_service.rs::territory_overview` (the team fn that appends both axes,
   `graph_service.rs:513-620`) — **delete**.
 - `graph_context_territories`, `graph_region_territories`, `graph_orphan_salient_nodes`,
-  `graph_territory_bridges` SQL — **delete** (all four are team-`territory_overview`-only;
-  **verified**: `cogmap_panorama` uses `graph_cogmap_territories` / `graph_cogmap_orphan_nodes`
-  and no bridges).
+  `graph_territory_bridges` SQL — **stop referencing now, DROP later.** All four are
+  team-`territory_overview`-only (**verified**: `cogmap_panorama` uses `graph_cogmap_territories`
+  / `graph_cogmap_orphan_nodes` and no bridges), but they live in migrations **shipped to
+  `main`** — immutable, and a `DROP FUNCTION` is **non-additive** (would break temper's
+  auto-deploying `main` in the migrate-ahead-of-deploy window). So C deletes only the Rust caller
+  (`territory_overview`); the fns become dead DB objects and are dropped in a **separate additive
+  migration after C deploys** (§9).
 - `team_service.rs::team_scope` (`:497`, produces `TeamScopeView`) + the
   `/api/teams/{id}/graph-scope` handler (`handlers/teams.rs:240`) — **delete**.
 - The team territory-overview handler `/api/teams/{id}/graph/territories`, the team
@@ -256,6 +260,12 @@ Tier-1/2 (`territory_slice` / `cogmap_neighborhood`) stay reachable through the 
   per-cogmap), which needs a **net-new non-team search endpoint** and its own design. Folding it
   into C would balloon the beat; the north star's wayfinding surface (§5) returns in that beat.
   **Interim:** no search box in the Atlas between C landing and the re-home beat.
+- **Drop the orphaned team SQL fns (follow-up additive migration).** `graph_region_territories`,
+  `graph_context_territories`, `graph_orphan_salient_nodes`, `graph_territory_bridges` are left as
+  dead (unreferenced) DB objects by C because they sit in shipped migrations and a `DROP` is
+  non-additive ([[feedback_drop_function_non_additive_breaks_deploy_skew]]). Once C has deployed
+  everywhere (no code references them), a small additive migration `DROP FUNCTION IF EXISTS`s all
+  four. Sequencing safety, not new behavior.
 - **Deferred:** org-topology / team-structure view (the retired downward zone-existence
   affordance, if ever wanted — admin/team-management surface, not the Atlas); per-cogmap
   resource/density sizing (B §10.3); context-view re-imagining (Beat E / Chunk D).
