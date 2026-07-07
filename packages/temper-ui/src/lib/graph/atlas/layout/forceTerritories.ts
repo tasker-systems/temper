@@ -7,7 +7,20 @@ const LABEL_BAND = 26;
 const R_MIN = 11;
 const R_MAX = 42;
 
-interface SimTerritory extends SimulationNodeDatum, PositionedTerritory {}
+// Mirror forceNeighborhood.ForceNode: extend only SimulationNodeDatum and declare the
+// PositionedTerritory fields explicitly, so x/y stay required numbers (extending
+// PositionedTerritory directly conflicts with SimulationNodeDatum's optional x?/y?).
+interface SimTerritory extends SimulationNodeDatum {
+	id: string;
+	kind: PositionedTerritory['kind'];
+	label: string | null;
+	anchorId: string;
+	salience: number | null;
+	member_count: number;
+	r: number;
+	x: number;
+	y: number;
+}
 
 function territoryRadius(t: Territory, maxWeight: number): number {
 	const weight = t.kind === 'region' ? (t.salience ?? 0) : Math.max(1, t.member_count);

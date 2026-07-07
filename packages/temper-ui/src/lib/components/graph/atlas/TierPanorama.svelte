@@ -3,7 +3,8 @@
 	import { page } from '$app/stores';
 	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
-	import { packTerritories } from '$lib/graph/atlas/layout/packTerritories';
+	import { forceTerritories } from '$lib/graph/atlas/layout/forceTerritories';
+	import { intensityOf, labeledRegionIds } from '$lib/graph/atlas/labels';
 	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
 	import { bridgeGeometry } from '$lib/graph/atlas/layout/bridges';
 	import { buildScopeUrl, buildDrillTerritoryUrl, buildDrillNodeUrl } from '$lib/graph/atlas/nav';
@@ -34,7 +35,13 @@
 	const terrBox = $derived(hasTerr && hasCogmaps ? { width, height: bodyHeight * 0.55 } : { width, height: bodyHeight });
 	const cogmapBox = $derived(hasTerr && hasCogmaps ? { width, height: bodyHeight * 0.45 } : { width, height: bodyHeight });
 	const cogmapOffsetY = $derived(hasTerr && hasCogmaps ? bodyHeight * 0.55 : 0);
-	const packed = $derived(packTerritories(overview.territories, terrBox));
+	// Force-separated layout + salience field-effect: salience → size + glow/opacity so
+	// the panorama reads as a field; labels gated to the top-K salient regions.
+	const packed = $derived(forceTerritories(overview.territories, terrBox));
+	const LABEL_MAX = 10;
+	const regions = $derived(packed.filter((t) => t.kind === 'region'));
+	const maxSalience = $derived(Math.max(0.0001, ...regions.map((t) => t.salience ?? 0)));
+	const labeledIds = $derived(labeledRegionIds(regions, LABEL_MAX));
 	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
 	const territoryPos = $derived(new Map(packed.map((t) => [t.id, { x: t.x, y: t.y }])));
 	const bridgeLines = $derived(bridgeGeometry(overview.bridges, territoryPos));
@@ -82,6 +89,8 @@
 			memberCount={t.member_count}
 			onEnter={t.kind === 'region' ? () => drillTerritory(t.id) : undefined}
 			ghost={isEmptyTerritory(t)}
+			showLabel={t.kind !== 'region' || labeledIds.has(t.id)}
+			intensity={t.kind === 'region' ? intensityOf(t.salience, maxSalience) : 0.85}
 		/>
 	{/each}
 
@@ -90,7 +99,7 @@
 		{#each cogmaps as cm (cm.cogmapId)}
 			<g class="cogmap-territory">
 				<circle cx={cm.x} cy={cm.y} r={cm.r} fill={TERRITORY_TINTS.cogmap} fill-opacity="0.06" stroke={TERRITORY_TINTS.cogmap} stroke-opacity="0.4" stroke-width="1.5" stroke-dasharray="6 4" />
-				<text x={cm.x} y={cm.y - cm.r - 6} text-anchor="middle" fill={TERRITORY_TINTS.cogmap} font-size="11" font-weight="600" letter-spacing="1" style="text-transform:uppercase">{cm.label}</text>
+				<text x={cm.x} y={cm.y - cm.r - 6} text-anchor="middle" fill={TERRITORY_TINTS.cogmap} font-size="11" font-weight="600">{cm.label}</text>
 				{#each cm.facets as f (f.id)}
 					<OrphanNodeMark
 						x={f.x}
