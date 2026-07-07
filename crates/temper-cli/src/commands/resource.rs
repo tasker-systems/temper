@@ -164,7 +164,6 @@ pub struct CreateResourceArgs<'a> {
     /// Cognitive-map ref to home the resource in. Mutually exclusive with
     /// `context`; the surface enforces exactly-one.
     pub cogmap: Option<&'a str>,
-    pub goal: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub slug: Option<&'a str>,
@@ -200,7 +199,6 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         title,
         context,
         cogmap,
-        goal,
         mode,
         effort,
         slug,
@@ -306,7 +304,6 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         managed_meta: ManagedMeta {
             mode: mode.map(String::from),
             effort: effort.map(String::from),
-            goal: goal.map(String::from),
             ..ManagedMeta::default()
         },
         open_meta: None,
@@ -1021,7 +1018,6 @@ pub struct UpdateParams<'a> {
     pub stage: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
-    pub goal: Option<&'a str>,
     pub seq: Option<i64>,
     pub branch: Option<&'a str>,
     pub pr: Option<&'a str>,
@@ -1060,7 +1056,6 @@ fn build_partial_managed_meta_from_args(
         || params.stage.is_some()
         || params.mode.is_some()
         || params.effort.is_some()
-        || params.goal.is_some()
         || params.seq.is_some()
         || params.branch.is_some()
         || params.pr.is_some()
@@ -1073,7 +1068,6 @@ fn build_partial_managed_meta_from_args(
         stage: params.stage.map(String::from),
         mode: params.mode.map(String::from),
         effort: params.effort.map(String::from),
-        goal: params.goal.map(String::from),
         seq: params.seq,
         branch: params.branch.map(String::from),
         pr: params.pr.map(String::from),
@@ -1293,7 +1287,6 @@ fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result
         ("temper-stage", params.stage.map(String::from)),
         ("temper-mode", params.mode.map(String::from)),
         ("temper-effort", params.effort.map(String::from)),
-        ("temper-goal", params.goal.map(String::from)),
         ("temper-branch", params.branch.map(String::from)),
         ("temper-pr", params.pr.map(String::from)),
         ("temper-status", params.status.map(String::from)),
@@ -1357,7 +1350,6 @@ mod build_helpers_tests {
             stage: None,
             mode: None,
             effort: None,
-            goal: None,
             seq: None,
             branch: None,
             pr: None,
