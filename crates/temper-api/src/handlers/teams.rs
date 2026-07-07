@@ -8,7 +8,6 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use temper_core::types::graph_scope::TeamScopeView;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
@@ -219,26 +218,4 @@ pub async fn change_role(
     )
     .await
     .map(Json)
-}
-
-/// GET /api/teams/{id}/graph-scope — R1 team-graph-scope navigation frame.
-#[utoipa::path(
-    get,
-    path = "/api/teams/{id}/graph-scope",
-    tag = "Teams",
-    params(("id" = Uuid, Path, description = "Team id to scope the graph to")),
-    security(("bearer_auth" = [])),
-    responses(
-        (status = 200, description = "Team scope view", body = TeamScopeView),
-        (status = 404, description = "Team not viewable by this profile")
-    )
-)]
-pub async fn graph_scope(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(team_id): Path<Uuid>,
-) -> ApiResult<Json<TeamScopeView>> {
-    team_service::graph_scope(&state.pool, ProfileId::from(auth.0.profile.id), team_id)
-        .await
-        .map(Json)
 }

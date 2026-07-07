@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::types::graph_atlas::{AtlasSearchHit, AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
 use temper_core::types::graph_home::AtlasHome;
 use temper_core::types::graph_territory::{TerritoryOverview, TerritorySlice};
 use temper_core::types::ids::ProfileId;
@@ -67,36 +67,6 @@ pub async fn get_subgraph(
     Ok(Json(response))
 }
 
-/// POST /api/teams/{id}/graph/slice — R4 team-scoped parameterized neighborhood slice.
-#[utoipa::path(
-    post,
-    path = "/api/teams/{id}/graph/slice",
-    tag = "Graph",
-    params(("id" = Uuid, Path, description = "Team id to scope the slice to")),
-    request_body = SliceRequest,
-    security(("bearer_auth" = [])),
-    responses(
-        (status = 200, description = "Neighborhood slice", body = AtlasSubgraph),
-        (status = 400, description = "Empty seed set"),
-        (status = 404, description = "Team not viewable by this profile")
-    )
-)]
-pub async fn neighborhood_slice(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(team_id): Path<Uuid>,
-    Json(req): Json<SliceRequest>,
-) -> ApiResult<Json<AtlasSubgraph>> {
-    graph_service::neighborhood_slice(
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        team_id,
-        req,
-    )
-    .await
-    .map(Json)
-}
-
 /// POST /api/cogmaps/{id}/graph/slice — R4 cogmap-scoped neighborhood slice.
 #[utoipa::path(
     post,
@@ -122,79 +92,6 @@ pub async fn cogmap_neighborhood_slice(
         ProfileId::from(auth.0.profile.id),
         cogmap_id,
         req,
-    )
-    .await
-    .map(Json)
-}
-
-/// Query parameters for `GET /api/teams/{id}/graph/search`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct AtlasSearchQuery {
-    /// The search term (name-locate over the team-scoped visible graph).
-    pub q: String,
-    /// Max hits (default 15, capped 50 server-side).
-    pub limit: Option<i64>,
-}
-
-/// GET /api/teams/{id}/graph/search — C3 SearchAccelerator.
-#[utoipa::path(
-    get,
-    path = "/api/teams/{id}/graph/search",
-    tag = "Graph",
-    params(("id" = Uuid, Path, description = "Team id"), AtlasSearchQuery),
-    security(("bearer_auth" = [])),
-    responses(
-        (status = 200, description = "Search hits", body = [AtlasSearchHit]),
-        (status = 404, description = "Team not viewable by this profile")
-    )
-)]
-pub async fn atlas_search(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(team_id): Path<Uuid>,
-    Query(q): Query<AtlasSearchQuery>,
-) -> ApiResult<Json<Vec<AtlasSearchHit>>> {
-    graph_service::atlas_search(
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        team_id,
-        &q.q,
-        q.limit.unwrap_or(15),
-    )
-    .await
-    .map(Json)
-}
-
-/// Query parameters for `GET /api/teams/{id}/graph/territories`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct TerritoryQuery {
-    /// Optional lens override; defaults to the global `telos-default` lens.
-    pub lens_id: Option<Uuid>,
-}
-
-/// GET /api/teams/{id}/graph/territories — R2 Tier-0 panorama.
-#[utoipa::path(
-    get,
-    path = "/api/teams/{id}/graph/territories",
-    tag = "Graph",
-    params(("id" = Uuid, Path, description = "Team id"), TerritoryQuery),
-    security(("bearer_auth" = [])),
-    responses(
-        (status = 200, description = "Territory overview", body = TerritoryOverview),
-        (status = 404, description = "Team not viewable by this profile")
-    )
-)]
-pub async fn territory_overview(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(team_id): Path<Uuid>,
-    Query(q): Query<TerritoryQuery>,
-) -> ApiResult<Json<TerritoryOverview>> {
-    graph_service::territory_overview(
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        team_id,
-        q.lens_id,
     )
     .await
     .map(Json)

@@ -1,6 +1,6 @@
 //! R2 Tier-0 "territory overview" wire types — region + context territories,
 //! orphan salient nodes (sparsity fallback), and aggregated cross-territory
-//! bridges. See `graph_service::territory_overview`.
+//! bridges. See `graph_service::cogmap_panorama`.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

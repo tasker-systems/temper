@@ -24,7 +24,6 @@ pub mod facet_requests;
 pub mod graph;
 pub mod graph_atlas;
 pub mod graph_home;
-pub mod graph_scope;
 pub mod graph_territory;
 pub mod home;
 pub mod ids;
@@ -73,7 +72,6 @@ pub use graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
 };
 pub use graph_home::{AtlasHome, HomeCogmap, HomeContext};
-pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
 pub use graph_territory::{
     Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
 };
