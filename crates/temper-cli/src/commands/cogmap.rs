@@ -187,7 +187,8 @@ pub fn reconcile(
 }
 
 /// Genesis (create) a new cognitive map from the manifest at `manifest_path`. `--id` / `--name`
-/// override the manifest's `cogmap_id` / `name`; absent ids are minted client-side (stable, reproducible).
+/// override the manifest's `cogmap_id` / `name`. A supplied id is honored only for a system-admin;
+/// a non-admin always receives a server-minted id (reserved-id hardening).
 #[cfg(feature = "embed")]
 pub fn create(
     manifest_path: &str,

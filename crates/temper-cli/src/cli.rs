@@ -920,8 +920,9 @@ pub enum CogmapCmd {
     /// Genesis (create) a new cognitive map from a committed manifest.
     ///
     /// Reads the authored genesis manifest (name, telos title, optional ids + telos charter),
-    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (admin-gated, idempotent).
-    /// Ids absent from the manifest are minted client-side for a stable, reproducible identity.
+    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (open to any authenticated
+    /// profile; idempotent). Manifest/`--id` ids are honored only for a system-admin — a non-admin
+    /// always receives a server-minted id.
     Create {
         /// Path to the genesis manifest (YAML)
         #[arg(long)]

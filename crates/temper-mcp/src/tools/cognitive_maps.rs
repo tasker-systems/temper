@@ -183,9 +183,11 @@ pub struct CogmapCreateInput {
     pub telos_resource_id: Option<Uuid>,
 }
 
-/// Genesis (create) a new cognitive map. AUTH BEFORE WRITE: genesis is system-admin-only — the gate
-/// lives on the surface (the backend command does not gate), so the MCP tool checks `is_system_admin`
-/// here, mirroring the HTTP handler. The map is born with an EMPTY charter (see [`CogmapCreateInput`]).
+/// Genesis (create) a new cognitive map. Any authenticated profile may create a NON-RESERVED map and
+/// becomes its grant-holder (the backend mints a read+write+grant on the new map). The reserved-id
+/// guard lives in the backend: a caller-supplied `cogmap_id`/`telos_resource_id` is honored only for a
+/// system-admin, so a non-admin can never place a map at a chosen (e.g. reserved) id. The map is born
+/// with an EMPTY charter (see [`CogmapCreateInput`]).
 pub async fn cogmap_create(
     svc: &TemperMcpService,
     input: CogmapCreateInput,
@@ -193,17 +195,6 @@ pub async fn cogmap_create(
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
-
-    // Auth before write: genesis is system-admin-only.
-    let is_admin = access_service::is_system_admin(pool, profile_id)
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("admin check failed: {e}"), None))?;
-    if !is_admin {
-        return Err(rmcp::ErrorData::invalid_params(
-            "cognitive-map genesis requires system-admin".to_string(),
-            None,
-        ));
-    }
 
     let cmd = CreateCognitiveMap {
         request: CreateCogmapRequest {
