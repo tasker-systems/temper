@@ -1,26 +1,30 @@
-//! Wire types for the Atlas Home read (`GET /api/graph/home`) — the
-//! you→teams→cogmaps membership graph. See
-//! docs/superpowers/specs/2026-07-04-graph-atlas-atlas-home-design.md.
+//! Wire types for the Atlas Home read (`GET /api/graph/home`) — the JTBD
+//! **build / research** verb-lens footprint (Beat B). `build` = the contexts your
+//! work lives in (personal + team); `research` = the cogmaps you can reach. The
+//! `you` node is dropped (self implied). See
+//! docs/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A member team as a home door, with size hints.
+/// A context the profile can build in — personal (`@me`) or team — as a home body,
+/// sized by its visible resource count. `owner_ref` is the decorated owner-scope
+/// (`@me`, `+team-slug`) — the Home build lens tints by it.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph_home.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct HomeTeam {
+pub struct HomeContext {
     pub id: Uuid,
-    pub slug: String,
     pub name: String,
+    pub owner_ref: String,
     pub resource_count: i32,
-    pub cogmap_count: i32,
 }
 
-/// A visible cogmap as a home door. `team_ids` are the visible member teams this
-/// cogmap joins — i.e. the bipartite team→cogmap edges (a shared cogmap lists >1).
+/// A reachable cogmap as a home body (research lens). `owner_ref` is the derived
+/// "held-by" scope the research lens tints by — a team `+slug`, or `temper` for the
+/// universal/system kernel. `team_ids` are the visible member teams it joins.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph_home.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,18 +33,20 @@ pub struct HomeTeam {
 pub struct HomeCogmap {
     pub id: Uuid,
     pub name: String,
+    pub owner_ref: String,
     pub team_ids: Vec<Uuid>,
     pub region_count: i32,
     pub facet_count: i32,
 }
 
-/// The full membership home: you → member teams → visible cogmaps.
+/// The Atlas Home footprint, lensed by act: `build` = your contexts, `research` =
+/// the cogmaps you can reach. Drops the `you` node (self implied).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph_home.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct AtlasHome {
-    pub teams: Vec<HomeTeam>,
-    pub cogmaps: Vec<HomeCogmap>,
+    pub build: Vec<HomeContext>,
+    pub research: Vec<HomeCogmap>,
 }

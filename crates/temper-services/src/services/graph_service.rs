@@ -14,7 +14,7 @@ use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
 };
-use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeTeam};
+use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
     Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
 };
@@ -762,33 +762,36 @@ pub async fn territory_slice(
 /// No entry gate: the read is inherently self-scoped (member teams +
 /// cogmap_visible_maps), so it returns exactly what the caller may see.
 pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<AtlasHome> {
-    let teams: Vec<HomeTeam> = sqlx::query_as::<_, (Uuid, String, String, i32, i32)>(
-        "SELECT team_id, slug, name, resource_count, cogmap_count FROM graph_home_teams($1)",
+    // build lens — the contexts the profile can build in (personal + team), each
+    // sized + owner-scoped. Visibility-gated inside graph_home_contexts.
+    let build: Vec<HomeContext> = sqlx::query_as::<_, (Uuid, String, String, i32)>(
+        "SELECT context_id, name, owner_ref, resource_count FROM graph_home_contexts($1)",
     )
     .bind(profile_id.as_uuid())
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(id, slug, name, resource_count, cogmap_count)| HomeTeam {
+    .map(|(id, name, owner_ref, resource_count)| HomeContext {
         id,
-        slug,
         name,
+        owner_ref,
         resource_count,
-        cogmap_count,
     })
     .collect();
 
-    let cogmaps: Vec<HomeCogmap> = sqlx::query_as::<_, (Uuid, String, Vec<Uuid>, i32, i32)>(
-        "SELECT cogmap_id, name, team_ids, region_count, facet_count FROM graph_home_cogmaps($1)",
+    // research lens — the cogmaps the profile can reach, with a derived held-by scope.
+    let research: Vec<HomeCogmap> = sqlx::query_as::<_, (Uuid, String, String, Vec<Uuid>, i32, i32)>(
+        "SELECT cogmap_id, name, owner_ref, team_ids, region_count, facet_count FROM graph_home_cogmaps($1)",
     )
     .bind(profile_id.as_uuid())
     .fetch_all(pool)
     .await?
     .into_iter()
     .map(
-        |(id, name, team_ids, region_count, facet_count)| HomeCogmap {
+        |(id, name, owner_ref, team_ids, region_count, facet_count)| HomeCogmap {
             id,
             name,
+            owner_ref,
             team_ids,
             region_count,
             facet_count,
@@ -796,7 +799,7 @@ pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Atlas
     )
     .collect();
 
-    Ok(AtlasHome { teams, cogmaps })
+    Ok(AtlasHome { build, research })
 }
 
 #[cfg(test)]

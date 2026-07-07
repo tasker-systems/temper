@@ -190,6 +190,25 @@ export function buildAscendUrl(base: URL): string {
 	});
 }
 
+/** The Atlas Home lens (Beat B). Neutral (rest) is the absence of `?home`. */
+export type HomeLens = 'build' | 'research';
+
+/** The committed Home lens, or null for the neutral (rest) state. */
+export function parseHomeLens(url: URL): HomeLens | null {
+	const v = url.searchParams.get('home');
+	return v === 'build' || v === 'research' ? v : null;
+}
+
+/** Commit a Home lens (call site PUSHes history so Back returns to neutral). */
+export function buildHomeLensUrl(base: URL, lens: HomeLens): string {
+	return withParams(base, (p) => p.set('home', lens));
+}
+
+/** Return to the neutral Home selection (drop the committed lens). */
+export function clearHomeLensUrl(base: URL): string {
+	return withParams(base, (p) => p.delete('home'));
+}
+
 /** Return to the membership home: clear team, cogmap, and focus. */
 export function buildHomeUrl(base: URL): string {
 	return withParams(base, (p) => {

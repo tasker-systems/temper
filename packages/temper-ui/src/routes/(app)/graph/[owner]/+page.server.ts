@@ -9,6 +9,7 @@ import {
 	parseFilters,
 	parseFocus,
 	parseFocusPath,
+	parseHomeLens,
 	parseTeam,
 	selectedElement
 } from '$lib/graph/atlas/nav';
@@ -103,7 +104,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 					})
 				: Promise.resolve(null)
 		]);
-		const cogmapName = home.cogmaps.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
+		const cogmapName = home.research.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
 		// Name the territory hop in the crumb — mirrors the team branch below (reuses
 		// the already-loaded slice at Tier 1; fetches the path territory's slice for
 		// its label at Tier 2, tolerating a stale region id).
@@ -130,8 +131,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			scope: null,
 			tier,
 			focus,
-			teams: null,
-			cogmaps: null,
+			home: null,
+			homeLens: null,
 			territories,
 			slice,
 			neighborhood,
@@ -155,8 +156,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			scope: null,
 			tier,
 			focus,
-			teams: home.teams,
-			cogmaps: home.cogmaps,
+			home,
+			homeLens: parseHomeLens(url),
 			territories: null,
 			slice: null,
 			neighborhood: null,
@@ -207,8 +208,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		scope,
 		tier,
 		focus,
-		teams: null,
-		cogmaps: null,
+		home: null,
+		homeLens: null,
 		territories,
 		slice,
 		neighborhood,

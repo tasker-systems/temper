@@ -1,6 +1,8 @@
-//! HTTP e2e for GET /api/graph/home (Atlas Home membership read).
-//! Access-tier gate: a member sees their teams+cogmaps with counts; a shared
-//! cogmap lists multiple team_ids.
+//! HTTP e2e for GET /api/graph/home (Atlas Home build/research read, Beat B).
+//! Access-tier gate: `build` = the caller's visible contexts (personal + member
+//! team), owner-scoped; `research` = visible cogmaps with a derived held-by scope
+//! and member-team edges. Deny direction: a context/cogmap reachable only via a
+//! non-member team must not appear.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -74,6 +76,30 @@ async fn join_cogmap(pool: &sqlx::PgPool, cogmap: Uuid, team: Uuid) {
         .unwrap();
 }
 
+async fn create_personal_context(pool: &sqlx::PgPool, profile: Uuid, slug: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+    )
+    .bind(profile)
+    .bind(slug)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn create_team_context(pool: &sqlx::PgPool, team: Uuid, slug: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_teams', $1, $2, $2) RETURNING id",
+    )
+    .bind(team)
+    .bind(slug)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn home_returns_member_teams_and_shared_cogmap_edges(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -88,6 +114,9 @@ async fn home_returns_member_teams_and_shared_cogmap_edges(pool: sqlx::PgPool) {
     join_cogmap(&pool, shared, team_a).await;
     join_cogmap(&pool, shared, team_b).await;
 
+    // A personal context should surface on the build lens, owner-scoped `@me`.
+    create_personal_context(&pool, profile, "my-notes").await;
+
     let body: temper_core::types::graph_home::AtlasHome = app
         .reqwest_client
         .get(app.url("/api/graph/home"))
@@ -99,9 +128,14 @@ async fn home_returns_member_teams_and_shared_cogmap_edges(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    assert!(body.teams.iter().any(|t| t.slug == "home-a"));
+    assert!(
+        body.build
+            .iter()
+            .any(|c| c.name == "my-notes" && c.owner_ref == "@me"),
+        "personal context appears on the build lens as @me"
+    );
     let sc = body
-        .cogmaps
+        .research
         .iter()
         .find(|c| c.name == "shared-map")
         .expect("shared cogmap present");
@@ -109,6 +143,11 @@ async fn home_returns_member_teams_and_shared_cogmap_edges(pool: sqlx::PgPool) {
         sc.team_ids.len(),
         2,
         "shared cogmap lists both member teams"
+    );
+    assert!(
+        sc.owner_ref.starts_with('+'),
+        "a team-held cogmap derives a +team held-by scope, got {}",
+        sc.owner_ref
     );
 }
 
@@ -141,12 +180,12 @@ async fn home_excludes_cogmaps_visible_only_via_non_member_team(pool: sqlx::PgPo
         .unwrap();
 
     assert!(
-        !body.cogmaps.iter().any(|c| c.name == "only-y"),
+        !body.research.iter().any(|c| c.name == "only-y"),
         "cogmap joined only to a non-member team must not appear in the home response"
     );
 
     let mc = body
-        .cogmaps
+        .research
         .iter()
         .find(|c| c.name == "mixed")
         .expect("cogmap joined to a member team is present");
@@ -158,4 +197,47 @@ async fn home_excludes_cogmaps_visible_only_via_non_member_team(pool: sqlx::PgPo
         !mc.team_ids.contains(&team_y),
         "mixed cogmap's team_ids must not leak the non-member team's id"
     );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn build_lens_scopes_contexts_to_membership(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = provision_profile(&app, &app.token).await;
+
+    let team_in = create_team(&pool, "ctx-in").await;
+    let team_out = create_team(&pool, "ctx-out").await;
+    add_member(&pool, team_in, profile).await;
+    // Caller is deliberately NOT a member of team_out.
+
+    let personal = create_personal_context(&pool, profile, "personal-ctx").await;
+    let team_ctx = create_team_context(&pool, team_in, "member-team-ctx").await;
+    let hidden = create_team_context(&pool, team_out, "non-member-ctx").await;
+
+    let body: temper_core::types::graph_home::AtlasHome = app
+        .reqwest_client
+        .get(app.url("/api/graph/home"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let build_ids: Vec<Uuid> = body.build.iter().map(|c| c.id).collect();
+    assert!(build_ids.contains(&personal), "personal context is visible");
+    assert!(
+        build_ids.contains(&team_ctx),
+        "member-team context is visible"
+    );
+    assert!(
+        !build_ids.contains(&hidden),
+        "a context owned by a non-member team must NOT appear on the build lens"
+    );
+
+    // Owner-scope decoration.
+    let p = body.build.iter().find(|c| c.id == personal).unwrap();
+    assert_eq!(p.owner_ref, "@me");
+    let t = body.build.iter().find(|c| c.id == team_ctx).unwrap();
+    assert_eq!(t.owner_ref, "+ctx-in");
 }

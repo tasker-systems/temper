@@ -2,7 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
-	import type { HomeCogmap, HomeTeam, LensedHome } from '$lib/types/generated/graph_home';
+	import type { AtlasHome } from '$lib/types/generated/graph_home';
 	import type { TeamZone } from '$lib/types/generated/graph_scope';
 	import type { Focus, GraphFilters } from '$lib/graph/atlas/nav';
 	import { attachCamera, type Camera } from '$lib/graph/atlas/camera';
@@ -20,13 +20,11 @@
 		territories: TerritoryOverview | null;
 		slice: TerritorySlice | null;
 		neighborhood: AtlasSubgraph | null;
-		teams: HomeTeam[] | null;
-		cogmaps: HomeCogmap[] | null;
-		home?: LensedHome | null;
+		home: AtlasHome | null;
 		zones: TeamZone[];
 		filters: GraphFilters;
 	}
-	let { teamId, cogmapId, tier, focus, territories, slice, neighborhood, teams, cogmaps, home, zones, filters }: Props =
+	let { teamId, cogmapId, tier, focus, territories, slice, neighborhood, home, zones, filters }: Props =
 		$props();
 
 	const MIN_ZOOM = 0.3;

@@ -78,8 +78,6 @@
 				territories={data.territories}
 				slice={data.slice}
 				neighborhood={data.neighborhood}
-				teams={data.teams}
-				cogmaps={data.cogmaps}
 				home={data.home}
 				zones={data.scope?.zones ?? []}
 				filters={data.filters}

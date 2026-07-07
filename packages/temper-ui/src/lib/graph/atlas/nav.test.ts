@@ -8,7 +8,9 @@ import {
 	buildDrillTerritoryUrl,
 	buildEdgeSelectUrl,
 	buildFiltersUrl,
+	buildHomeLensUrl,
 	buildHomeUrl,
+	clearHomeLensUrl,
 	buildPanoramaUrl,
 	buildScopeUrl,
 	clearSelectionUrl,
@@ -17,6 +19,7 @@ import {
 	parseFilters,
 	parseFocus,
 	parseFocusPath,
+	parseHomeLens,
 	parseSelection,
 	parseTeam,
 	selectedElement
@@ -205,5 +208,19 @@ describe('focus-as-path', () => {
 			'/graph/@me?team=T&focus=territory%3AR'
 		);
 		expect(buildAscendUrl(url('?team=T&focus=territory:R'))).toBe('/graph/@me?team=T');
+	});
+});
+
+describe('home lens (?home)', () => {
+	const u = (s: string) => new URL(`https://x.test/graph/@me${s}`);
+	it('parseHomeLens: absent → null, valid → value, garbage → null', () => {
+		expect(parseHomeLens(u(''))).toBeNull();
+		expect(parseHomeLens(u('?home=build'))).toBe('build');
+		expect(parseHomeLens(u('?home=research'))).toBe('research');
+		expect(parseHomeLens(u('?home=nope'))).toBeNull();
+	});
+	it('buildHomeLensUrl sets ?home preserving path; clear removes it', () => {
+		expect(buildHomeLensUrl(u(''), 'build')).toBe('/graph/@me?home=build');
+		expect(clearHomeLensUrl(u('?home=research'))).toBe('/graph/@me');
 	});
 });

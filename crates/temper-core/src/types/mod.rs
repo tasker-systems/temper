@@ -72,7 +72,7 @@ pub use graph::{EdgeKind, Polarity};
 pub use graph_atlas::{
     AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
 };
-pub use graph_home::{AtlasHome, HomeCogmap, HomeTeam};
+pub use graph_home::{AtlasHome, HomeCogmap, HomeContext};
 pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
 pub use graph_territory::{
     Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,

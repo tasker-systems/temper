@@ -5,54 +5,46 @@
 	// that lens only → a back affordance returns to neutral. Local state during the
 	// spike (URL `?home` + real navigation are wired in Task 7). Reuses forceTerritories
 	// + TerritoryCircle so Home speaks the same field language as the panorama.
-	import type { LensedHome } from '$lib/types/generated/graph_home';
-	import type { Territory } from '$lib/types/generated/graph_territory';
-	import { forceTerritories } from '$lib/graph/atlas/layout/forceTerritories';
+	import type { AtlasHome } from '$lib/types/generated/graph_home';
+	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
+	import {
+		parseHomeLens,
+		buildHomeLensUrl,
+		clearHomeLensUrl,
+		buildCogmapUrl,
+		type HomeLens
+	} from '$lib/graph/atlas/nav';
+	import {
+		buildLensTerritories,
+		researchLensTerritories,
+		layoutHomeLens
+	} from '$lib/graph/atlas/layout/homeLayout';
 	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 
 	interface Props {
-		home: LensedHome;
+		home: AtlasHome;
 		width: number;
 		height: number;
 	}
 	let { home, width, height }: Props = $props();
 
-	type Lens = 'build' | 'research';
+	type Lens = HomeLens;
 
-	// Local lens machine (spike): committed wins, else hover, else neutral.
-	let committed = $state<Lens | null>(null);
+	// The committed lens lives in the URL (`?home`); Back returns to neutral. Hover is
+	// an ephemeral local preview. `goto` (not shallow pushState — which leaves `page.url`
+	// stale) updates `$page.url` reactively so the field resolves, and gives real Back
+	// history. Home data is lens-independent, so the load re-run is a cheap re-read.
+	const committed = $derived<Lens | null>(parseHomeLens($page.url));
 	let hover = $state<Lens | null>(null);
 	const resolved = $derived<Lens | null>(committed ?? hover);
 
 	const CTA_H = 104; // header band reserved for the two verb-CTAs
 	const fieldSize = $derived({ width, height: Math.max(120, height - CTA_H) });
 
-	// Map each lens's members to Territory shape so forceTerritories sizes them
-	// (context/cogmap kinds weight by member_count).
-	function buildTerritories(h: LensedHome): Territory[] {
-		return h.build.map((c) => ({
-			id: c.id,
-			kind: 'context' as const,
-			label: c.name,
-			member_count: c.resource_count,
-			salience: null,
-			anchor_id: c.id
-		}));
-	}
-	function researchTerritories(h: LensedHome): Territory[] {
-		return h.research.map((m) => ({
-			id: m.id,
-			kind: 'cogmap' as const,
-			label: m.name,
-			member_count: m.region_count,
-			salience: null,
-			anchor_id: m.id
-		}));
-	}
-
-	const buildPos = $derived(forceTerritories(buildTerritories(home), fieldSize));
-	const researchPos = $derived(forceTerritories(researchTerritories(home), fieldSize));
+	const buildPos = $derived(layoutHomeLens(buildLensTerritories(home), fieldSize));
+	const researchPos = $derived(layoutHomeLens(researchLensTerritories(home), fieldSize));
 
 	const buildMax = $derived(Math.max(1, ...home.build.map((c) => c.resource_count)));
 	const researchMax = $derived(Math.max(1, ...home.research.map((m) => m.region_count)));
@@ -89,12 +81,21 @@
 	}
 
 	function commit(lens: Lens) {
-		committed = lens;
+		goto(buildHomeLensUrl($page.url, lens), { keepFocus: true, noScroll: true });
 		hover = null;
 	}
 	function toNeutral() {
-		committed = null;
+		goto(clearHomeLensUrl($page.url), { keepFocus: true, noScroll: true });
 		hover = null;
+	}
+
+	// Body navigation. Research → the cogmap panorama (Beat A). Build → the owner's
+	// vault (temporary destination §10.4; Atlas-native contexts panorama is Beat C).
+	function enterContext(ownerRef: string) {
+		goto(`/vault/${ownerRef}`);
+	}
+	function enterCogmap(id: string) {
+		goto(buildCogmapUrl($page.url, id));
 	}
 
 	const TAGLINE: Record<Lens, string> = {
@@ -184,7 +185,10 @@
 
 <!-- The field: both lens layouts, cross-faded by lensOpacity -->
 <g transform={`translate(0, ${CTA_H})`}>
-	<g opacity={lensOpacity('build')} style="transition: opacity 260ms ease">
+	<g
+		opacity={lensOpacity('build')}
+		style={`transition: opacity 260ms ease; pointer-events: ${resolved === 'build' ? 'auto' : 'none'}`}
+	>
 		{#each buildPos as t (t.id)}
 			<TerritoryCircle
 				x={t.x}
@@ -196,10 +200,16 @@
 				showLabel={resolved === 'build'}
 				intensity={intensityFor(t.member_count, buildMax)}
 				tint={buildTint(ownerRefById.get(t.id) ?? '@me')}
+				onEnter={resolved === 'build'
+					? () => enterContext(ownerRefById.get(t.id) ?? '@me')
+					: undefined}
 			/>
 		{/each}
 	</g>
-	<g opacity={lensOpacity('research')} style="transition: opacity 260ms ease">
+	<g
+		opacity={lensOpacity('research')}
+		style={`transition: opacity 260ms ease; pointer-events: ${resolved === 'research' ? 'auto' : 'none'}`}
+	>
 		{#each researchPos as t (t.id)}
 			<TerritoryCircle
 				x={t.x}
@@ -211,6 +221,7 @@
 				showLabel={resolved === 'research'}
 				intensity={intensityFor(t.member_count, researchMax)}
 				tint={researchTint(researchScopeById.get(t.id) ?? 'temper')}
+				onEnter={resolved === 'research' ? () => enterCogmap(t.id) : undefined}
 			/>
 		{/each}
 	</g>

@@ -1,74 +1,42 @@
 /**
- * Canonical @me home layout (spec C2-D2, grown by the Atlas Home chunk): you →
- * teams → visible cogmaps, a three-column membership graph. Deterministic; pure.
+ * Home field layout (Beat B): map each lens's members to `Territory`s and lay them
+ * out with the shared, deterministic `forceTerritories`. Build = your contexts
+ * (sized by resource count); research = the cogmaps you can reach (sized by region
+ * count). Pure; the visual field-effect + per-scope tint live in TierHome.
  */
-import type { HomeCogmap, HomeTeam } from '$lib/types/generated/graph_home';
+import type { AtlasHome } from '$lib/types/generated/graph_home';
+import type { Territory } from '$lib/types/generated/graph_territory';
+import { forceTerritories } from './forceTerritories';
+import type { PositionedTerritory } from './packTerritories';
 
-export interface HomeNode {
-	id: string;
-	name: string;
-	x: number;
-	y: number;
-	kind: 'you' | 'team' | 'cogmap';
-}
-
-export interface HomeEdge {
-	fromX: number;
-	fromY: number;
-	toX: number;
-	toY: number;
-}
-
-export interface HomeGraph {
-	you: HomeNode;
-	teams: HomeNode[];
-	cogmaps: HomeNode[];
-	edges: HomeEdge[];
-	cogmapEdges: HomeEdge[];
-}
-
-function columnNodes(
-	items: { id: string; name: string }[],
-	x: number,
-	size: { width: number; height: number },
-	kind: 'team' | 'cogmap'
-): HomeNode[] {
-	const top = size.height * 0.12;
-	const span = size.height * 0.76;
-	const step = items.length > 1 ? span / (items.length - 1) : 0;
-	return items.map((it, i) => ({
-		id: it.id,
-		name: it.name,
-		x,
-		y: items.length === 1 ? size.height / 2 : top + i * step,
-		kind
+export function buildLensTerritories(home: AtlasHome): Territory[] {
+	return home.build.map((c) => ({
+		id: c.id,
+		kind: 'context',
+		label: c.name,
+		member_count: c.resource_count,
+		salience: null,
+		coherence: null,
+		anchor_id: c.id
 	}));
 }
 
-export function layoutHome(
-	teams: HomeTeam[],
-	cogmaps: HomeCogmap[],
+export function researchLensTerritories(home: AtlasHome): Territory[] {
+	return home.research.map((m) => ({
+		id: m.id,
+		kind: 'cogmap',
+		label: m.name,
+		member_count: m.region_count,
+		salience: null,
+		coherence: null,
+		anchor_id: m.id
+	}));
+}
+
+/** Named seam over `forceTerritories` (one lens at a time). Deterministic. */
+export function layoutHomeLens(
+	territories: Territory[],
 	size: { width: number; height: number }
-): HomeGraph {
-	const you: HomeNode = { id: 'you', name: 'you', x: size.width * 0.16, y: size.height / 2, kind: 'you' };
-	const teamX = size.width * 0.52;
-	const cogmapX = size.width * 0.86;
-
-	const teamNodes = columnNodes(teams, teamX, size, 'team');
-	const cogmapNodes = columnNodes(cogmaps, cogmapX, size, 'cogmap');
-
-	const edges: HomeEdge[] = teamNodes.map((t) => ({ fromX: you.x, fromY: you.y, toX: t.x, toY: t.y }));
-
-	const teamById = new Map(teamNodes.map((t) => [t.id, t]));
-	const cogmapById = new Map(cogmapNodes.map((c) => [c.id, c]));
-	const cogmapEdges: HomeEdge[] = [];
-	for (const c of cogmaps) {
-		const cNode = cogmapById.get(c.id)!;
-		for (const teamId of c.team_ids) {
-			const t = teamById.get(teamId);
-			if (t) cogmapEdges.push({ fromX: t.x, fromY: t.y, toX: cNode.x, toY: cNode.y });
-		}
-	}
-
-	return { you, teams: teamNodes, cogmaps: cogmapNodes, edges, cogmapEdges };
+): PositionedTerritory[] {
+	return forceTerritories(territories, size);
 }
