@@ -149,7 +149,7 @@ async fn patch_accepts_empty_body_trio(pool: PgPool) {
 
     let req_body = json!({
         "managed_meta": {
-            "stage": "done"
+            "temper-stage": "done"
         }
         // no content, content_hash, or chunks_packed
     });

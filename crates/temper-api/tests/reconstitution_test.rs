@@ -75,11 +75,11 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
         doc_type_name: "research".to_string(),
         slug: "reconstitution-test".to_string(),
         content: "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here.".to_string(),
-        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+        managed_meta: None,
         chunks_packed: Some(chunks_packed),
         content_hash: None,
         metadata: None,
-        open_meta: None,
+        open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         act: Default::default(),
         sources: Vec::new(),
     };
