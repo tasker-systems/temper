@@ -8,7 +8,7 @@
  */
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { EventTrail } from '$lib/types/generated/element_trail';
-import type { HomeCogmap, HomeTeam } from '$lib/types/generated/graph_home';
+import type { HomeCogmap, HomeTeam, LensedHome } from '$lib/types/generated/graph_home';
 import type { ResourceRow } from '$lib/types/generated/resource';
 import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
@@ -31,6 +31,10 @@ export interface AtlasViewData {
 	focus: Focus;
 	teams: HomeTeam[] | null;
 	cogmaps: HomeCogmap[] | null;
+	// SPIKE (Beat B): lensed build/research Home + committed lens. Optional so the
+	// non-home page-load branches need no change during the spike (Task 7 formalizes).
+	home?: LensedHome | null;
+	homeLens?: 'build' | 'research' | null;
 	territories: TerritoryOverview | null;
 	slice: TerritorySlice | null;
 	neighborhood: AtlasSubgraph | null;

@@ -5,6 +5,15 @@
  */
 export type AtlasHome = { teams: Array<HomeTeam>, cogmaps: Array<HomeCogmap>, };
 
+// SPIKE (Beat B Task 1): hand-added lensed Home shape; Task 2 regenerates this
+// from Rust (HomeContext + reshaped AtlasHome { build, research }).
+export type HomeContext = { id: string, name: string, owner_ref: string, resource_count: number, };
+// SPIKE: research cogmaps carry an optional scope indicator (`owner_ref`: a team
+// `+slug`, or a universal marker like `temper`) so the research lens can tint by
+// scope like build does. Surfaces a contract question for HomeCogmap (Task 6).
+export type ResearchCogmap = HomeCogmap & { owner_ref?: string };
+export type LensedHome = { build: Array<HomeContext>, research: Array<ResearchCogmap>, };
+
 /**
  * A visible cogmap as a home door. `team_ids` are the visible member teams this
  * cogmap joins — i.e. the bipartite team→cogmap edges (a shared cogmap lists >1).

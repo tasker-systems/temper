@@ -119,14 +119,22 @@ what the build lens needs: it returns *teams*, but the build field is a field of
    function / service change, wire the `ts-rs` types, and swap the harness back to
    real-shaped synthetic fixtures.
 
-**Provisional target shape** (to be finalized against the harness, not binding until then):
+**Target shape** (locked against the harness in Task 1 — the spike surfaced that
+research needs a scope indicator too, so `research` carries `owner_ref`):
 
 ```
 AtlasHome {
   build:    [ { id, name, owner_ref, resource_count } ],   // contexts, personal + team
-  research: [ { id, name, region_count } ],                // reachable cogmaps
+  research: [ { id, name, owner_ref, region_count } ],     // reachable cogmaps + held-by scope
 }
 ```
+
+**`research.owner_ref` is a derived "held-by" scope** — a team `+slug`, or a universal
+marker (e.g. `temper`) for the public/system kernel — **not** the raw `team_ids`. The
+research lens tints by it (universal = base warm anchor; each team = a warm-band hue),
+mirroring how build tints by context owner-scope. Deriving it from a cogmap's team
+membership (first/primary team, or `universal` when system/public) is the backend's job
+in Task 6.
 
 **Reuse, not duplication.** "Contexts visible to a profile, with sizes" is machinery Beat
 C also needs (its team panorama = contexts). Factor it as a shared service read so B's Home
@@ -210,19 +218,23 @@ Derived **after** the fixture locks the shape (§4). Expected:
   and — if e2e spawns the CLI — rebuild the bin first
   (`[[feedback_nextest_does_not_rebuild_spawned_temper_bin]]`).
 
-## 10. Open decisions to confirm (in review / on the harness)
+## 10. Decisions (locked on the harness — Task 1 spike)
 
-1. **Rest-state haze semantics** — is the undifferentiated field purely ambient
-   atmosphere, or a hazy union of *both* lenses' bodies that sharpen on hover? Lock on the
-   harness. Proposed: ambient/atmospheric, cheapest and clearest.
-2. **Scope grouping/tint on the build lens** — do personal vs team contexts get distinct
-   tints or spatial grouping, or one build color throughout? Harness-tuned. Proposed: one
-   build color + a subtle per-scope tint, no hard grouping.
-3. **Research sizing metric** — ship on `region_count` (available now); defer per-cogmap
-   resource-count / connection-density enrichment. **Confirm defer.**
-4. **Build-body destination** — until Beat C, clicking a context body lands on the vault
-   (`/vault/<owner>/<ctx>`). **Confirm** the temporary destination (Atlas-native contexts
-   panorama is C).
+1. **Rest-state haze = union-haze (LOCKED).** At rest the field renders a **hazy union of
+   *both* lenses' bodies** overlaid at low opacity (no labels); hover/commit resolves one
+   lens to crisp clarity and fades the other. The slight muddle is *intended*: "select →
+   focus attention → reveal clarity" visually foregrounds the page's purpose. Revisit only
+   if it wears badly in use.
+2. **Per-scope tint, no spatial grouping (LOCKED).** Bodies are tinted by owner-scope; the
+   force layout is **not** grouped by scope (organic single field). **Build** (cool family):
+   personal `@me` anchors at a base cool blue; each team drifts across a blue→indigo band
+   keyed by `owner_ref`. **Research** (warm family): the universal/system kernel anchors at
+   base orange; each team drifts across a warm band keyed by `owner_ref`. Tint override on
+   `TerritoryCircle` (`tint?` prop) carries it. Hue-spread is tunable; current spread ratified.
+3. **Research sizing = `region_count` (LOCKED defer).** Per-cogmap resource-count /
+   connection-density enrichment deferred.
+4. **Build-body destination = vault (LOCKED, temporary).** Until Beat C, clicking a context
+   body lands on `/vault/<owner>/<ctx>`; the Atlas-native contexts panorama is Beat C.
 
 ## 11. Scope boundaries / captured for later
 

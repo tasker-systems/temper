@@ -20,6 +20,9 @@
 		showLabel?: boolean;
 		/** Salience-driven field intensity (0..1): brighter fill + stronger glow when salient. */
 		intensity?: number;
+		/** Optional tint override (defaults to the kind's tint). Home uses this to shade
+		 *  build contexts by owner-scope (@me vs +team) without a new kind. */
+		tint?: string;
 		/** Region metadata for the hover card (regions only). */
 		salience?: number | null;
 		coherence?: number | null;
@@ -27,13 +30,14 @@
 	let {
 		x, y, r, kind, label, memberCount = 0, onEnter,
 		ghost = false, showLabel = true, intensity = 0.5,
+		tint: tintOverride,
 		salience = null, coherence = null
 	}: Props = $props();
 
 	let hovered = $state(false);
 	const isRegion = $derived(kind === 'region' && !!onEnter);
 
-	const tint = $derived(TERRITORY_TINTS[kind]);
+	const tint = $derived(tintOverride ?? TERRITORY_TINTS[kind]);
 	const radius = $derived(ghost ? r * 0.85 : r);
 	const style = $derived(fieldStyle(intensity, ghost));
 	const glow = $derived(style.glowPx > 0 ? `drop-shadow(0 0 ${style.glowPx}px ${tint})` : 'none');
