@@ -22,6 +22,7 @@
 		layoutHomeLens
 	} from '$lib/graph/atlas/layout/homeLayout';
 	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
+	import { intensityFor, buildTint, researchTint } from '$lib/graph/atlas/homeTint';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 
 	interface Props {
@@ -49,29 +50,11 @@
 
 	const buildMax = $derived(Math.max(1, ...home.build.map((c) => c.resource_count)));
 	const researchMax = $derived(Math.max(1, ...home.research.map((m) => m.region_count)));
-	const intensityFor = (mc: number, max: number) => 0.3 + 0.6 * Math.sqrt(Math.max(0, mc) / max);
 
-	// §10.2 subtle per-scope tint: personal (@me) anchors at a base cool blue; each
-	// team drifts to a distinct-but-cohesive hue in the blue→indigo band, so the two
-	// scopes (and different teams) read apart without a rainbow. Keyed by owner_ref.
+	// §10.2 subtle per-scope tint (see homeTint.ts): build tints key off owner_ref
+	// (cool blue→indigo), research off owner_ref (warm red-orange→amber).
 	const ownerRefById = $derived(new Map(home.build.map((c) => [c.id, c.owner_ref])));
-	function buildTint(ownerRef: string): string {
-		if (ownerRef === '@me') return 'hsl(200 44% 62%)';
-		let h = 0;
-		for (const ch of ownerRef) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-		return `hsl(${200 + (h % 8) * 8} 40% 64%)`; // 8 buckets across a cool blue→indigo band
-	}
-
-	// Research mirrors build in the WARM family: the universal/system kernel (owner_ref
-	// not starting '+') anchors at base cogmap-orange; each team drifts across a
-	// red-orange→amber band keyed by its +slug.
 	const researchScopeById = $derived(new Map(home.research.map((m) => [m.id, m.owner_ref])));
-	function researchTint(scope: string): string {
-		if (!scope.startsWith('+')) return 'hsl(34 80% 56%)'; // universal / system kernel
-		let h = 0;
-		for (const ch of scope) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-		return `hsl(${12 + (h % 8) * 6} 74% 56%)`; // 8 buckets across a red-orange→amber band
-	}
 
 	// Group opacity per lens: rest = hazy union of both; previewing = the other fades
 	// behind; committed = the other is gone.
