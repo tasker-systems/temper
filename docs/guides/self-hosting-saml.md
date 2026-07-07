@@ -272,6 +272,18 @@ OIDC_PUBLIC_CLIENT=true
 `AS_CLIENTS`. `OIDC_PUBLIC_CLIENT=true` is required for this secret-less path — without it, the UI
 fails fast at startup rather than silently running with no client secret.
 
+> **Single-origin ACS and CSRF (SAML only).** In the single-origin topology, `temper-ui` reverse-proxies
+> `/oauth` to the API, so the SAML ACS is reached at `<app-url>/oauth/saml/acs`. The SAML **HTTP-POST
+> binding** delivers the assertion as a browser-submitted form `POST` *from the IdP's origin* — a
+> legitimately cross-origin POST that SvelteKit's built-in origin CSRF check would otherwise reject with
+> `403 Cross-site POST form submissions are forbidden` before the proxy could forward it. `temper-ui`
+> handles this: the built-in check is disabled and the equivalent origin guard is re-implemented in
+> `hooks.server.ts` (scoped to the UI's own routes), after the proxied surface — including the ACS — has
+> already been short-circuited upstream. The ACS POST is authenticated by the SAML layer itself
+> (signature, audience, destination/recipient, replay guard), not by an `Origin` match. **No operator
+> action is required** — this is built in. The **OIDC path does not hit this** at all: its callback
+> completes as a `GET` redirect, which CSRF does not touch.
+
 ## 7. Verify
 
 1. `temper login` → a browser opens to your IdP; after SAML login the CLI receives a token.
