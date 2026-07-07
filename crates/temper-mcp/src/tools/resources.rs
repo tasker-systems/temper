@@ -53,10 +53,10 @@ pub struct CreateResourceInput {
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,
-    /// Managed (temper-*) frontmatter. Typed: the schema covers every key
-    /// temper governs and extras round-trip through `ManagedMeta::extra`.
-    /// A concrete object schema (rather than free-form JSON) keeps MCP
-    /// clients from string-encoding nested objects.
+    /// Managed (temper-*) frontmatter — a **closed, temper-owned vocabulary**.
+    /// Only the typed temper-* keys are accepted; an unknown key is rejected.
+    /// Caller-defined ("bring-your-own") fields belong in `open_meta`, the
+    /// free-form tier.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
@@ -134,10 +134,10 @@ pub struct UpdateResourceInput {
     /// block. The block must belong to the resource and be non-folded. Requires `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_block: Option<Uuid>,
-    /// Managed (temper-*) frontmatter. Typed: the schema covers every key
-    /// temper governs and extras round-trip through `ManagedMeta::extra`.
-    /// A concrete object schema (rather than free-form JSON) keeps MCP
-    /// clients from string-encoding nested objects.
+    /// Managed (temper-*) frontmatter — a **closed, temper-owned vocabulary**.
+    /// Only the typed temper-* keys are accepted; an unknown key is rejected.
+    /// Caller-defined ("bring-your-own") fields belong in `open_meta`, the
+    /// free-form tier.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
@@ -165,8 +165,9 @@ pub struct UpdateResourceInput {
 pub struct UpdateResourceMetaInput {
     /// UUID of the resource to update.
     pub id: Uuid,
-    /// New managed (temper-*) frontmatter. Typed fields cover every
-    /// key temper governs; extras round-trip through `ManagedMeta::extra`.
+    /// New managed (temper-*) frontmatter — a **closed, temper-owned
+    /// vocabulary**. Only the typed temper-* keys are accepted; an unknown key
+    /// is rejected. Caller-defined fields belong in `open_meta`.
     pub managed_meta: ManagedMeta,
     /// New open (user-defined) frontmatter as JSON.
     pub open_meta: serde_json::Value,
@@ -1058,6 +1059,24 @@ mod tests {
         let managed = input.managed_meta.expect("managed_meta present");
         assert_eq!(managed.stage.as_deref(), Some("backlog"));
         assert_eq!(managed.mode.as_deref(), Some("build"));
+    }
+
+    /// `managed_meta` is a closed vocabulary: an unknown key under it must be
+    /// rejected at input parse, not silently absorbed. Proves the closed
+    /// `ManagedMeta` type reaches the MCP tool boundary.
+    #[test]
+    fn create_input_rejects_unknown_managed_key() {
+        let raw = serde_json::json!({
+            "context_ref": "@me/temper",
+            "doc_type_name": "task",
+            "title": "T",
+            "managed_meta": { "my-tag": "x" },
+        });
+        let err = serde_json::from_value::<CreateResourceInput>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("my-tag"),
+            "unknown managed key must be rejected at input parse, got: {err}"
+        );
     }
 
     #[test]

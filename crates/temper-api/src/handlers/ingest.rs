@@ -73,8 +73,12 @@ pub async fn create(
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     // Parse failures (malformed JSON for ManagedMeta shape) surface as BadRequest.
     let managed_meta: ManagedMeta = match payload.managed_meta {
-        Some(v) => serde_json::from_value(v)
-            .map_err(|e| ApiError::BadRequest(format!("invalid managed_meta: {e}")))?,
+        Some(v) => serde_json::from_value(v).map_err(|e| {
+            ApiError::BadRequest(format!(
+                "invalid managed_meta: {e}. managed_meta is a closed vocabulary; \
+                 caller-defined keys belong in open_meta"
+            ))
+        })?,
         None => ManagedMeta::default(),
     };
 
@@ -136,10 +140,12 @@ pub async fn update(
 ) -> ApiResult<Json<ResourceRow>> {
     // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
     let managed_meta: Option<ManagedMeta> = match payload.managed_meta {
-        Some(v) => Some(
-            serde_json::from_value(v)
-                .map_err(|e| ApiError::BadRequest(format!("invalid managed_meta: {e}")))?,
-        ),
+        Some(v) => Some(serde_json::from_value(v).map_err(|e| {
+            ApiError::BadRequest(format!(
+                "invalid managed_meta: {e}. managed_meta is a closed vocabulary; \
+                 caller-defined keys belong in open_meta"
+            ))
+        })?),
         None => None,
     };
 
