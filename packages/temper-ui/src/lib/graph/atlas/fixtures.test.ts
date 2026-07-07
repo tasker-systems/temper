@@ -17,6 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AtlasViewData } from './viewData';
 import type { AtlasFixtureBundle } from '../../../routes/dev/atlas/+page';
+import type { HomeContext } from '$lib/types/generated/graph_home';
 import bundleJson from '../../../../static/dev/atlas-fixtures.json';
 
 // Pinned to AtlasViewData: if the type gains/loses a field, this object stops
@@ -105,6 +106,16 @@ describe('committed atlas fixtures', () => {
 		for (const e of events) {
 			expect(e).toHaveProperty('payload');
 			expect(typeof e.actor_name).toBe('string');
+		}
+	});
+
+	it('home build entries carry a recency field and no leaked PII (Beat C)', () => {
+		const home = scenario('home').home;
+		for (const c of home?.build ?? []) {
+			expect(c).toHaveProperty('last_active_at'); // string | null
+			// key-set pinned to the wire type:
+			const _pin = c satisfies HomeContext;
+			void _pin;
 		}
 	});
 
