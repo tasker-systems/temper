@@ -322,8 +322,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             }
         }
         Commands::Context { action } => match action {
-            ContextAction::Add { name } => temper_cli::commands::context_cmd::add(&name),
-            ContextAction::Remove { name } => temper_cli::commands::context_cmd::remove(&name),
+            ContextAction::Subscribe { name } => {
+                temper_cli::commands::context_cmd::subscribe(&name)
+            }
+            ContextAction::Unsubscribe { name } => {
+                temper_cli::commands::context_cmd::unsubscribe(&name)
+            }
             ContextAction::Create { name, owner } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
@@ -337,10 +341,11 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
-            ContextAction::List => {
-                let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::context_cmd::list(&config, output_format)
-            }
+            ContextAction::List => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::context_cmd::list(client, output_format).await
+                })
+            }),
             ContextAction::Share { context, team } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {

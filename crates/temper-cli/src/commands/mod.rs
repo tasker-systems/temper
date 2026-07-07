@@ -47,7 +47,7 @@ pub fn resolve_context_with_fallback<'a>(
     } else {
         crate::output::warning(format!(
             "Context \"{context}\" not found in vault. Using \"default\" context.\n  \
-             To create this context locally: temper context add {context}"
+             To subscribe to this context locally: temper context subscribe {context}"
         ));
         Cow::Borrowed("default")
     }

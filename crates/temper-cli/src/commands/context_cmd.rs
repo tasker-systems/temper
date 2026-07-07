@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::commands::resource::inject_context_ref;
-use crate::config::{self, Config};
+use crate::config;
 use crate::error::{Result, TemperError};
 use crate::output;
 use temper_core::context_ref::ContextOwnerRef;
@@ -30,8 +30,10 @@ fn parse_owner(owner: &str) -> Result<ContextOwnerRef> {
     }
 }
 
-/// Add a context to sync.subscriptions.contexts in the global config.
-pub fn add(name: &str) -> Result<()> {
+/// Subscribe to a context locally: add it to sync.subscriptions.contexts in the
+/// global config so `temper pull` materializes it. This is a local-only
+/// subscription toggle — it does not create or touch the context server-side.
+pub fn subscribe(name: &str) -> Result<()> {
     let config_path = config::global_config_path();
 
     config::safe_write(&config_path, |content| {
@@ -65,12 +67,13 @@ pub fn add(name: &str) -> Result<()> {
         result
     })?;
 
-    output::success(format!("Added context '{name}'"));
+    output::success(format!("Subscribed to context '{name}'"));
     Ok(())
 }
 
-/// Remove a context from sync.subscriptions.contexts in the global config.
-pub fn remove(name: &str) -> Result<()> {
+/// Unsubscribe from a context locally: remove it from
+/// sync.subscriptions.contexts in the global config. Local-only — no server effect.
+pub fn unsubscribe(name: &str) -> Result<()> {
     let config_path = config::global_config_path();
 
     config::safe_write(&config_path, |content| {
@@ -103,7 +106,7 @@ pub fn remove(name: &str) -> Result<()> {
         result
     })?;
 
-    output::success(format!("Removed context '{name}'"));
+    output::success(format!("Unsubscribed from context '{name}'"));
     Ok(())
 }
 
@@ -131,12 +134,29 @@ pub async fn create_remote(
     Ok(())
 }
 
-/// List configured contexts.
-pub fn list(config: &Config, fmt: crate::format::OutputFormat) -> Result<()> {
-    let mut names = config.contexts.clone();
-    names.sort();
+/// List the contexts visible to the caller on the server, each rendered with an
+/// injected `ref` field (`{owner_ref}/{slug}`) for copy-paste addressing. This is
+/// API-only — it reflects server state (owner + resource counts), not the local
+/// `context subscribe` set.
+pub async fn list(
+    client: &temper_client::TemperClient,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let contexts = client
+        .contexts()
+        .list()
+        .await
+        .map_err(crate::commands::client_err)?;
 
-    let rendered = crate::format::render(&names, fmt)?;
+    let mut rows = serde_json::to_value(&contexts)
+        .map_err(|e| crate::error::TemperError::Api(format!("context serialize: {e}")))?;
+    if let Some(arr) = rows.as_array_mut() {
+        for row in arr.iter_mut() {
+            inject_context_ref(row);
+        }
+    }
+
+    let rendered = crate::format::render(&rows, fmt)?;
     println!("{rendered}");
     Ok(())
 }
@@ -218,22 +238,40 @@ pub async fn unshare_remote(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn render_context_list_json_is_array_of_strings() {
-        let contexts = vec!["temper".to_string(), "knowledge".to_string()];
-        let out = crate::format::render(&contexts, crate::format::OutputFormat::Json)
-            .expect("json render");
-        assert!(out.contains("\"temper\""), "json: {out}");
-        assert!(out.contains("\"knowledge\""), "json: {out}");
-        assert!(out.starts_with('['), "json should be an array: {out}");
+    fn parse_owner_accepts_me_and_team() {
+        assert!(matches!(parse_owner("@me"), Ok(ContextOwnerRef::Me)));
+        match parse_owner("+platform") {
+            Ok(ContextOwnerRef::Team(slug)) => assert_eq!(slug, "platform"),
+            other => panic!("expected team owner, got {other:?}"),
+        }
     }
 
     #[test]
-    fn render_context_list_toon_contains_context_names() {
-        let contexts = vec!["temper".to_string(), "knowledge".to_string()];
-        let out = crate::format::render(&contexts, crate::format::OutputFormat::Toon)
-            .expect("toon render");
-        assert!(out.contains("temper"), "toon: {out}");
-        assert!(out.contains("knowledge"), "toon: {out}");
+    fn parse_owner_rejects_handle_and_empty_team() {
+        assert!(parse_owner("@someone").is_err());
+        assert!(parse_owner("+").is_err());
+    }
+
+    #[test]
+    fn list_render_injects_ref_from_owner_and_slug() {
+        // Mirror the API-only `list` render path: a context row carrying
+        // `owner_ref` + `slug` gets a decorated `ref` injected for addressing.
+        let mut row = serde_json::json!({
+            "owner_ref": "@alice",
+            "slug": "temper",
+            "name": "temper",
+            "resource_count": 3,
+        });
+        inject_context_ref(&mut row);
+        let out =
+            crate::format::render(&row, crate::format::OutputFormat::Json).expect("json render");
+        assert!(out.contains("\"ref\""), "expected injected ref: {out}");
+        assert!(
+            out.contains("@alice/temper"),
+            "expected decorated ref: {out}"
+        );
     }
 }
