@@ -254,6 +254,10 @@ pub async fn update(
         content_block: req.content_block,
     });
 
+    // Identity travels first-class on the cmd (title/slug below). The fold into
+    // managed_meta is transitional and removed in the injector-retirement step.
+    let title_top = req.title.clone();
+    let slug_top = req.slug.clone();
     // Fold top-level title/slug into managed_meta so the translator can extract
     // them uniformly. Only materialise Some(managed) when there's actually
     // something to fold (avoids routing a no-op through the meta branch).
@@ -293,6 +297,8 @@ pub async fn update(
 
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
+        title: title_top,
+        slug: slug_top,
         body,
         managed_meta,
         open_meta: req.open_meta,

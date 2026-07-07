@@ -1007,18 +1007,20 @@ impl Backend for DbBackend {
                 .and_then(|m| m.context_to.map(|id| id.to_string()))
                 .or_else(|| current.context_name.clone())
                 .unwrap_or_default();
-            // temper-title updates the kb_resources.title column when supplied; otherwise the
-            // current title carries (and seeds validation). temper-slug is §7-Die (not stored,
-            // so `current.slug` is None) — derive the canonical slug from the title so the
-            // `temper-slug`-required schemas don't FALSE-reject a valid update.
-            let incoming_title = incoming
-                .get("temper-title")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
+            // Identity is first-class on the cmd: `cmd.title` updates the
+            // kb_resources.title column when supplied; otherwise the current title
+            // carries (and seeds validation). Slug is §7-Die (not stored, so
+            // `current.slug` is None) — take `cmd.slug` when supplied, else derive
+            // the canonical slug from the effective title so the `temper-slug`-required
+            // schemas don't FALSE-reject a valid update.
+            let incoming_title = cmd.title.clone();
             let effective_title = incoming_title
                 .clone()
                 .unwrap_or_else(|| current.title.clone());
-            let effective_slug = temper_workflow::operations::sluggify(&effective_title);
+            let effective_slug = cmd
+                .slug
+                .clone()
+                .unwrap_or_else(|| temper_workflow::operations::sluggify(&effective_title));
 
             // Validate via the SHARED pipeline (see `validate_managed_meta_pipeline`) — the same
             // strip → defaults → identity → validate as create; PROPAGATE the typed BadRequest (an

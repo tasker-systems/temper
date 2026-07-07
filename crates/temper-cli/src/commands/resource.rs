@@ -1230,6 +1230,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // managed_meta.doc_type on the wire.
     let cmd = UpdateResource {
         resource: id,
+        title: params.title.map(String::from),
+        // CLI update has no --slug flag; the server derives the slug from an
+        // effective title change.
+        slug: None,
         body: resolved_body.map(|content| {
             let mut body = BodyUpdate::new(content);
             body.sources = resolved_sources;

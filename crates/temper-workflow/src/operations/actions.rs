@@ -844,6 +844,8 @@ mod tests {
     fn validate_update_accepts_uuid_ref() {
         let cmd = UpdateResource {
             resource: ResourceId(Uuid::nil()),
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: None,

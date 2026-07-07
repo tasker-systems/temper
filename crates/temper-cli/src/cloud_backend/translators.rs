@@ -372,6 +372,8 @@ mod tests {
     fn sample_update() -> UpdateResource {
         UpdateResource {
             resource: temper_core::types::ids::ResourceId(uuid::Uuid::nil()),
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: None,

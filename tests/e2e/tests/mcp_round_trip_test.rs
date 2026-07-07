@@ -443,6 +443,8 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
 
     let cmd = UpdateResource {
         resource: resource.id,
+        title: None,
+        slug: None,
         body: Some(BodyUpdate {
             content: updated_content.to_string(),
             content_hash: Some(updated_hash.clone()),
@@ -581,6 +583,8 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
     let cmd = UpdateResource {
         resource: ResourceId::from(*resource.id),
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(new_managed),
         open_meta: Some(new_open),
@@ -699,6 +703,8 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     // Partial update: change ONLY the stage.
     let cmd = UpdateResource {
         resource: ResourceId::from(*resource.id),
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("done".to_string()),
@@ -800,6 +806,8 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     // Update with a temper-stage value outside the task schema's enum.
     let cmd = UpdateResource {
         resource: ResourceId::from(*resource.id),
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("not-a-real-stage".to_string()),

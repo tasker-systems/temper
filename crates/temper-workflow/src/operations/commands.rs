@@ -88,6 +88,12 @@ pub struct MoveSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateResource {
     pub resource: ResourceId,
+    /// New title (identity). First-class: identity travels here, not inside
+    /// `managed_meta`. `None` leaves the current title unchanged.
+    pub title: Option<String>,
+    /// New slug (identity). `None` leaves it unchanged; the server derives a
+    /// slug from the effective title when a title change arrives without one.
+    pub slug: Option<String>,
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
@@ -311,6 +317,8 @@ mod tests {
     fn update_resource_all_optional_fields_default_none() {
         let cmd = UpdateResource {
             resource: ResourceId(uuid::Uuid::now_v7()),
+            title: None,
+            slug: None,
             body: None,
             managed_meta: None,
             open_meta: None,

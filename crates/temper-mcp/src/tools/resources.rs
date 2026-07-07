@@ -755,6 +755,8 @@ pub async fn update_resource(
     let body = provenance_body(input.content, input.sources, input.content_block)?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
+        title: input.title.clone(),
+        slug: input.slug.clone(),
         body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -815,6 +817,10 @@ pub async fn update_resource_meta(
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
+        // Meta-only path is Property-only (Fork 2): identity changes go through
+        // the full update_resource path, never here.
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
