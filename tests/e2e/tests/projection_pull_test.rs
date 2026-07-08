@@ -32,6 +32,7 @@ async fn seed_resource(
     };
     let slug = title.to_lowercase().replace(' ', "-");
     let payload = IngestPayload {
+        goal: None,
         title: title.to_string(),
         origin_uri: format!("test://{slug}"),
         context_ref: format!("@me/{context}"),

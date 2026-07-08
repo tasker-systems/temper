@@ -959,6 +959,7 @@ async fn create_into_cogmap_denied_at_backend_for_nongranted(pool: PgPool) {
             origin_uri: Some(format!("test://f1-{slug}")),
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: Surface::ApiHttp,
         }

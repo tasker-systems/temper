@@ -109,6 +109,7 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
     // Create a resource through the MCP tool, carrying the invocation + graded authorship.
     let svc = mcp_service(&pool).await;
     let input = temper_mcp::tools::resources::CreateResourceInput {
+        goal: None,
         context_ref: Some("@me/act-authorship-mcp".to_string()),
         cogmap: None,
         doc_type_name: "research".to_string(),

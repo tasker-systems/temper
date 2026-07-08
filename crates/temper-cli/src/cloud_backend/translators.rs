@@ -106,6 +106,9 @@ pub(crate) fn cmd_to_ingest_payload(
         context_ref,
         home_cogmap_id,
         doc_type_name: cmd.doctype.clone(),
+        // First-class goal link (already resolved to an id by the CLI surface); the ingest
+        // handler projects the live `advances`→goal edge after create.
+        goal: cmd.goal.map(uuid::Uuid::from),
         content_hash,
         slug: cmd.slug.clone(),
         content,
@@ -193,6 +196,16 @@ pub(crate) fn cmd_to_resource_update_request(
 
     let type_to = cmd.move_to.as_ref().and_then(|m| m.type_to.clone());
 
+    // Goal patch → wire tri-state: `Set` carries the resolved id in `goal`; `Clear` sets
+    // `clear_goal: true`; `None` leaves both absent (goal edge untouched).
+    let (goal, clear_goal) = match &cmd.goal {
+        Some(temper_workflow::operations::GoalPatch::Set(id)) => {
+            (Some(uuid::Uuid::from(*id)), None)
+        }
+        Some(temper_workflow::operations::GoalPatch::Clear) => (None, Some(true)),
+        None => (None, None),
+    };
+
     Ok(temper_workflow::types::ResourceUpdateRequest {
         title: cmd.title.clone(),
         slug: cmd.slug.clone(),
@@ -203,6 +216,8 @@ pub(crate) fn cmd_to_resource_update_request(
         chunks_packed,
         context_to,
         type_to,
+        goal,
+        clear_goal,
         // Block-provenance sources travel with the body on the wire; the update handler
         // maps them back onto the UpdateResource's BodyUpdate.
         sources: cmd
@@ -269,6 +284,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: Surface::CliCloud,
         }
@@ -347,6 +363,7 @@ mod tests {
             open_meta: None,
             move_to: None,
             context_ref: None,
+            goal: None,
             act: Default::default(),
             origin: Surface::CliCloud,
         }

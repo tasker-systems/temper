@@ -24,9 +24,10 @@ pub use actions::{
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{
     AdvanceStewardWatermark, AssertRelationship, CloseInvocation, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
-    MoveSpec, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
-    SearchResources, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, ListResources,
+    MaterializeOnThreshold, MoveSpec, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
+    ReweightRelationship, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
+    UpdateResource,
 };
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};

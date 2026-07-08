@@ -107,6 +107,9 @@ pub async fn create(
         body,
         managed_meta,
         open_meta: payload.open_meta,
+        // First-class goal link: the CLI/MCP resolved `--goal <ref>` to this id client-side; the
+        // backend projects the live `advances`→goal edge after create.
+        goal: payload.goal.map(ResourceId::from),
         origin_uri: Some(payload.origin_uri),
         chunks_packed: payload.chunks_packed,
         content_hash: payload.content_hash,
@@ -173,6 +176,9 @@ pub async fn update(
         body,
         managed_meta,
         open_meta: payload.open_meta,
+        // The ingest update path revises body/chunks only; goal links travel via the PATCH
+        // (`/api/resources/{id}`) surface, so nothing to project here.
+        goal: None,
         move_to: None,
         context_ref: None,
         act,

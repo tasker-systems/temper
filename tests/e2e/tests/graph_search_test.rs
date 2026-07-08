@@ -32,6 +32,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
     }];
 
     IngestPayload {
+        goal: None,
         title: title.to_string(),
         origin_uri: format!("test://e2e/{slug}"),
         context_ref: format!("@me/{context}"),

@@ -29,7 +29,7 @@ use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AssertRelationship, Backend, BodyUpdate, CloseInvocation,
-    CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+    CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
     ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
     RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
     StewardDispatchTick, Surface, UpdateResource,
@@ -72,6 +72,27 @@ fn map_edge_kind(k: graph::EdgeKind) -> temper_substrate::affinity::EdgeKind {
         graph::EdgeKind::LeadsTo => N::LeadsTo,
         graph::EdgeKind::Near => N::Near,
     }
+}
+
+/// The relationship label for a resource→goal edge — "this resource *advances* that goal",
+/// mirroring the session→task `advances` link (see `link_session_to_task`) one level up.
+/// Load-bearing: it is part of the edge idempotency key AND the `list --goal` filter
+/// predicate, so the create/update projection, the fold-lookup, and the list SQL must all
+/// agree on this exact string. `pub(crate)` so the `list --goal` filter
+/// (`substrate_read::filtered_visible_page`) binds the same label.
+pub(crate) const GOAL_EDGE_LABEL: &str = "advances";
+
+/// The endpoints + shape of an edge to assert from a source resource's home anchor
+/// (see `DbBackend::assert_edge_from_source_home`). A params struct so the helper stays
+/// within the argument-count budget (preferred over `#[expect(too_many_arguments)]`).
+struct SourceHomedEdge<'a> {
+    src: uuid::Uuid,
+    tgt: uuid::Uuid,
+    edge_kind: graph::EdgeKind,
+    polarity: graph::Polarity,
+    label: &'a str,
+    weight: f64,
+    emitter: EntityId,
 }
 
 /// graph::Polarity → temper-substrate's payloads::EdgePolarity.
@@ -333,12 +354,14 @@ impl DbBackend {
     /// `team_ancestors` resolve their unqualified references against the connection search_path (the one
     /// schema post-collapse), so no per-txn `SET LOCAL`.
     async fn check_can_modify_next(&self, new_id: uuid::Uuid) -> Result<(), TemperError> {
-        let can: Option<bool> = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
-            .bind(*self.profile_id)
-            .bind(new_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(api_err)?;
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT can_modify_resource($1, $2)",
+            *self.profile_id,
+            new_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
         if can.unwrap_or(false) {
             Ok(())
         } else {
@@ -396,15 +419,129 @@ impl DbBackend {
     /// source resource"); the parity-era write path only ever asserts resource→resource edges, so the
     /// source is always a `kb_resources` endpoint.
     async fn edge_source_resource(&self, edge_id: uuid::Uuid) -> Result<uuid::Uuid, TemperError> {
-        sqlx::query_scalar::<_, uuid::Uuid>(
+        sqlx::query_scalar!(
             "SELECT source_id FROM kb_edges \
              WHERE id = $1 AND source_table = 'kb_resources'",
+            edge_id,
         )
-        .bind(edge_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))
+    }
+
+    /// Assert an edge from `edge.src` to `edge.tgt`, homing it on the SOURCE resource's
+    /// anchor — a context for ordinary resources, or the cognitive map itself for
+    /// cogmap-homed nodes. Reads the source's home WITHOUT assuming a context (an
+    /// `anchor_table='kb_contexts'` filter returns zero rows for cogmap-homed sources).
+    ///
+    /// Auth on the source is the CALLER's responsibility — this helper does NOT gate.
+    /// Callers already hold it: `assert_relationship` runs its source modify-check first;
+    /// the create/update goal projection owns the resource under mutation. Shared so the
+    /// home-detect + kernel-vs-context branch lives in exactly one place.
+    async fn assert_edge_from_source_home(
+        &self,
+        edge: SourceHomedEdge<'_>,
+        act_ctx: EventContext,
+    ) -> Result<EdgeId, TemperError> {
+        let home = sqlx::query!(
+            "SELECT anchor_id, anchor_table FROM kb_resource_homes \
+             WHERE resource_id=$1 AND anchor_table IN ('kb_contexts', 'kb_cogmaps') \
+             LIMIT 1",
+            edge.src,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+        let (home_id, home_table) = (home.anchor_id, home.anchor_table);
+
+        let label = (!edge.label.is_empty()).then_some(edge.label);
+        let src = ResourceId::from(edge.src);
+        let tgt = ResourceId::from(edge.tgt);
+        let kind = map_edge_kind(edge.edge_kind);
+        let polarity = map_polarity(edge.polarity);
+        let weight = edge.weight;
+        let emitter = edge.emitter;
+        let edge = if home_table == "kb_cogmaps" {
+            writes::assert_kernel_edge_with(
+                &self.pool,
+                writes::KernelEdgeParams {
+                    cogmap: CogmapId::from(home_id),
+                    src,
+                    tgt,
+                    kind,
+                    polarity,
+                    label,
+                    weight,
+                    emitter,
+                },
+                act_ctx,
+            )
+            .await
+            .map_err(api_err)?
+        } else {
+            writes::assert_relationship_with(
+                &self.pool,
+                writes::AssertParams {
+                    src,
+                    tgt,
+                    kind,
+                    polarity,
+                    label,
+                    weight,
+                    home: ContextId::from(home_id),
+                    emitter,
+                },
+                act_ctx,
+            )
+            .await
+            .map_err(api_err)?
+        };
+        Ok(EdgeId::from(edge.uuid()))
+    }
+
+    /// Fold the source resource's outgoing `advances`→goal edges (at most one under the
+    /// one-goal-per-resource model; folds all defensively). Used by the update path to
+    /// retract (`GoalPatch::Clear`) or replace (`GoalPatch::Set`) a goal.
+    ///
+    /// The `doc_type='goal'` join is load-bearing: a single resource may hold BOTH a
+    /// session→task `advances` edge and a →goal `advances` edge (same kind+label), and
+    /// only the latter must be folded — so the target's doc-type property gates it.
+    async fn fold_goal_edges(
+        &self,
+        src_next: uuid::Uuid,
+        emitter: EntityId,
+        act_ctx: &EventContext,
+    ) -> Result<(), TemperError> {
+        let edge_ids: Vec<uuid::Uuid> = sqlx::query_scalar!(
+            "SELECT e.id FROM kb_edges e \
+             JOIN kb_properties p \
+               ON p.owner_table = 'kb_resources' AND p.owner_id = e.target_id \
+              AND p.property_key = 'doc_type' AND NOT p.is_folded \
+             WHERE e.source_table = 'kb_resources' AND e.source_id = $1 \
+               AND e.target_table = 'kb_resources' \
+               AND e.edge_kind = 'leads_to' AND e.label = $2 \
+               AND p.property_value #>> '{}' = 'goal' \
+               AND NOT e.is_folded",
+            src_next,
+            GOAL_EDGE_LABEL,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(api_err)?;
+
+        for eid in edge_ids {
+            writes::fold_relationship_with(
+                &self.pool,
+                EdgeId::from(eid),
+                Some("goal reassigned"),
+                emitter,
+                act_ctx.clone(),
+            )
+            .await
+            .map_err(api_err)?;
+        }
+        Ok(())
     }
 
     /// The diff+apply core of `reconcile_cognitive_map`, run INSIDE the `admin_reconcile` envelope on a
@@ -925,11 +1062,30 @@ impl Backend for DbBackend {
             sources,
         };
         let new_id = if defer {
-            writes::create_resource_deferred_with(&self.pool, params, act_ctx).await
+            writes::create_resource_deferred_with(&self.pool, params, act_ctx.clone()).await
         } else {
-            writes::create_resource_with(&self.pool, params, act_ctx).await
+            writes::create_resource_with(&self.pool, params, act_ctx.clone()).await
         }
         .map_err(api_err)?;
+
+        // Project the first-class goal link to a live `advances`→goal edge (issue 019f3d55). The
+        // new resource is the source (owned by the caller, so the shared assert helper's "auth is
+        // the caller's responsibility" contract holds); the edge homes on the resource's anchor.
+        if let Some(goal) = cmd.goal {
+            self.assert_edge_from_source_home(
+                SourceHomedEdge {
+                    src: new_id.uuid(),
+                    tgt: goal.into(),
+                    edge_kind: graph::EdgeKind::LeadsTo,
+                    polarity: graph::Polarity::Forward,
+                    label: GOAL_EDGE_LABEL,
+                    weight: 1.0,
+                    emitter,
+                },
+                act_ctx,
+            )
+            .await?;
+        }
 
         if defer {
             // Enqueue the off-request embed backfill. A failed enqueue must NOT fail the create — the
@@ -1107,11 +1263,38 @@ impl Backend for DbBackend {
             emitter,
         };
         if defer {
-            writes::update_resource_deferred_with(&self.pool, params, act_ctx).await
+            writes::update_resource_deferred_with(&self.pool, params, act_ctx.clone()).await
         } else {
-            writes::update_resource_with(&self.pool, params, act_ctx).await
+            writes::update_resource_with(&self.pool, params, act_ctx.clone()).await
         }
         .map_err(api_err)?;
+
+        // Project the goal-edge patch (issue 019f3d55). `Set` folds any existing `advances`→goal
+        // edge and asserts the new one (replace-in-place); `Clear` folds without re-asserting;
+        // `None` leaves the goal edge untouched. The modify-gate above is this update's own auth,
+        // so the shared assert helper's "caller owns auth" contract holds.
+        match cmd.goal {
+            Some(GoalPatch::Set(goal)) => {
+                self.fold_goal_edges(new_id, emitter, &act_ctx).await?;
+                self.assert_edge_from_source_home(
+                    SourceHomedEdge {
+                        src: new_id,
+                        tgt: goal.into(),
+                        edge_kind: graph::EdgeKind::LeadsTo,
+                        polarity: graph::Polarity::Forward,
+                        label: GOAL_EDGE_LABEL,
+                        weight: 1.0,
+                        emitter,
+                    },
+                    act_ctx,
+                )
+                .await?;
+            }
+            Some(GoalPatch::Clear) => {
+                self.fold_goal_edges(new_id, emitter, &act_ctx).await?;
+            }
+            None => {}
+        }
 
         if defer {
             // Enqueue the off-request backfill for the revised chunks. Resource-id single-flight means a
@@ -1229,75 +1412,34 @@ impl Backend for DbBackend {
 
         let tgt_next = uuid::Uuid::from(cmd.target);
 
-        // The edge homes wherever its SOURCE resource is homed — a context for ordinary resources,
-        // or the cognitive map itself for cogmap-homed nodes (a steward's authored-4 nodes). Read the
-        // source's home anchor WITHOUT assuming a context: an earlier `anchor_table='kb_contexts'`
-        // filter returned zero rows for cogmap-homed sources, so every steward edge assert failed with
-        // "no rows returned by a query that expected to return at least one row".
-        let (home_id, home_table): (uuid::Uuid, String) = sqlx::query_as(
-            "SELECT anchor_id, anchor_table FROM kb_resource_homes \
-             WHERE resource_id=$1 AND anchor_table IN ('kb_contexts', 'kb_cogmaps') \
-             LIMIT 1",
-        )
-        .bind(src_next)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
-
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
             .await
             .map_err(api_err)?;
-
-        let label = (!cmd.label.is_empty()).then_some(cmd.label.as_str());
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
             authorship: cmd.act.authorship,
         };
-        let src = ResourceId::from(src_next);
-        let tgt = ResourceId::from(tgt_next);
-        let kind = map_edge_kind(cmd.edge_kind);
-        let polarity = map_polarity(cmd.polarity);
-        let edge = if home_table == "kb_cogmaps" {
-            writes::assert_kernel_edge_with(
-                &self.pool,
-                writes::KernelEdgeParams {
-                    cogmap: CogmapId::from(home_id),
-                    src,
-                    tgt,
-                    kind,
-                    polarity,
-                    label,
+        // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
+        // projection via `assert_edge_from_source_home`. The source modify-gate above is this
+        // command's own auth; the helper does not re-gate.
+        let edge = self
+            .assert_edge_from_source_home(
+                SourceHomedEdge {
+                    src: src_next,
+                    tgt: tgt_next,
+                    edge_kind: cmd.edge_kind,
+                    polarity: cmd.polarity,
+                    label: &cmd.label,
                     weight: cmd.weight,
                     emitter,
                 },
                 act_ctx,
             )
-            .await
-            .map_err(api_err)?
-        } else {
-            writes::assert_relationship_with(
-                &self.pool,
-                writes::AssertParams {
-                    src,
-                    tgt,
-                    kind,
-                    polarity,
-                    label,
-                    weight: cmd.weight,
-                    home: ContextId::from(home_id),
-                    emitter,
-                },
-                act_ctx,
-            )
-            .await
-            .map_err(api_err)?
-        };
-        Ok(CommandOutput::new(temper_core::types::ids::EdgeId::from(
-            edge.uuid(),
-        )))
+            .await?;
+        Ok(CommandOutput::new(edge))
     }
 
     async fn retype_relationship(

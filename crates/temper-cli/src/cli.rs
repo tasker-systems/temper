@@ -321,6 +321,10 @@ pub enum ResourceAction {
         /// managed frontmatter is inert).
         #[arg(long)]
         slug: Option<String>,
+        /// Link this resource to a goal by ref (UUID or decorated `slug-<uuid>`).
+        /// Projects a live `advances`→goal edge from the new resource on create.
+        #[arg(long)]
+        goal: Option<String>,
         /// Link this session to a task by slug (session only). Asserts a
         /// session→task `advances` relationship after creation.
         #[arg(long)]
@@ -460,6 +464,15 @@ pub enum ResourceAction {
         /// Pull request URL
         #[arg(long)]
         pr: Option<String>,
+        /// Set (or replace) the resource's goal by ref (UUID or decorated `slug-<uuid>`).
+        /// Folds any existing `advances`→goal edge and asserts the new one. Conflicts
+        /// with --clear-goal.
+        #[arg(long, conflicts_with = "clear_goal")]
+        goal: Option<String>,
+        /// Clear the resource's goal — retract its `advances`→goal edge, leaving it
+        /// goal-less. Conflicts with --goal.
+        #[arg(long)]
+        clear_goal: bool,
         // --- Goal-specific fields ---
         /// Goal status (active, completed, paused, cancelled)
         #[arg(long)]
@@ -1238,11 +1251,10 @@ mod meta_only_flag_tests {
     }
 
     #[test]
-    fn create_and_update_reject_removed_goal_flag() {
+    fn goal_flag_is_first_class_on_create_update_and_list() {
         use clap::Parser;
-        // temper-goal is KeyFate::Edge, not a managed property; the --goal write
-        // flag is removed (goal-as-edge deferred to task 019f3d55). clap must
-        // reject it on both create and update. The List --goal filter is unaffected.
+        // task 019f3d55: `--goal` is now a first-class write flag on create/update (projects a
+        // live `advances`→goal edge) AND the long-standing list filter. All three must parse.
         assert!(
             Cli::try_parse_from([
                 "temper",
@@ -1255,10 +1267,10 @@ mod meta_only_flag_tests {
                 "--context",
                 "@me/temper",
                 "--goal",
-                "some-goal",
+                "some-goal-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
             ])
-            .is_err(),
-            "--goal must be rejected on create"
+            .is_ok(),
+            "--goal must be accepted on create"
         );
         assert!(
             Cli::try_parse_from([
@@ -1267,12 +1279,11 @@ mod meta_only_flag_tests {
                 "update",
                 "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
                 "--goal",
-                "some-goal",
+                "some-goal-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
             ])
-            .is_err(),
-            "--goal must be rejected on update"
+            .is_ok(),
+            "--goal must be accepted on update"
         );
-        // The List --goal filter stays valid (query param, out of scope).
         assert!(
             Cli::try_parse_from([
                 "temper",
@@ -1281,10 +1292,30 @@ mod meta_only_flag_tests {
                 "--type",
                 "task",
                 "--goal",
-                "some-goal",
+                "some-goal-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
             ])
             .is_ok(),
             "list --goal filter must remain valid"
+        );
+    }
+
+    #[test]
+    fn update_rejects_goal_and_clear_goal_together() {
+        use clap::Parser;
+        // --goal and --clear-goal are mutually exclusive (clap `conflicts_with`); supplying both
+        // is a parse error, so the tri-state can never arrive ambiguous at the backend.
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "update",
+                "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+                "--goal",
+                "some-goal-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+                "--clear-goal",
+            ])
+            .is_err(),
+            "--goal and --clear-goal must conflict"
         );
     }
 

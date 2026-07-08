@@ -23,6 +23,7 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         .expect("ctx create");
 
     let payload = IngestPayload {
+        goal: None,
         title: "Show Meta Test".to_string(),
         origin_uri: "test://e2e/show-meta".to_string(),
         context_ref: "@me/meta-cli".to_string(),
@@ -93,6 +94,7 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         .expect("ctx create");
 
     let payload = IngestPayload {
+        goal: None,
         title: "Fields Filter Test".to_string(),
         origin_uri: "test://e2e/fields-filter".to_string(),
         context_ref: "@me/meta-cli".to_string(),
@@ -163,6 +165,7 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
     // The dotted-path error fires after the API call (projection is applied
     // to the fetched meta), so the resource must exist.
     let payload = IngestPayload {
+        goal: None,
         title: "Dotted Path Test".to_string(),
         origin_uri: "test://e2e/dotted-path".to_string(),
         context_ref: "@me/meta-cli".to_string(),
@@ -228,6 +231,7 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
         ),
     ] {
         let payload = IngestPayload {
+            goal: None,
             title: format!("List Meta {slug}"),
             origin_uri: format!("test://e2e/{slug}"),
             context_ref: "@me/meta-cli".to_string(),
@@ -309,6 +313,7 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
         .expect("ctx");
 
     let payload = IngestPayload {
+        goal: None,
         title: "List Fields Test".to_string(),
         origin_uri: "test://e2e/list-fields-test".to_string(),
         context_ref: "@me/meta-cli".to_string(),

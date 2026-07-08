@@ -32,6 +32,7 @@ async fn ingest_create_with_at_me_slug_succeeds(pool: sqlx::PgPool) {
     let context_ref = format!("@me/{slug}");
 
     let payload = IngestPayload {
+        goal: None,
         title: "Context Ref Test — @me/slug form".to_string(),
         origin_uri: "test://e2e/context-ref-at-me-slug".to_string(),
         context_ref,
@@ -73,6 +74,7 @@ async fn ingest_create_with_bare_name_returns_400(pool: sqlx::PgPool) {
         .expect("profile pre-flight failed");
 
     let payload = IngestPayload {
+        goal: None,
         title: "Should Be Rejected".to_string(),
         origin_uri: "test://e2e/context-ref-bare-name".to_string(),
         context_ref: "temper".to_string(), // bare name — no @ or + prefix
@@ -129,6 +131,7 @@ async fn ingest_create_with_uuid_context_ref_succeeds(pool: sqlx::PgPool) {
     let context_ref = ctx.id.to_string();
 
     let payload = IngestPayload {
+        goal: None,
         title: "Context Ref Test — UUID form".to_string(),
         origin_uri: "test://e2e/context-ref-uuid".to_string(),
         context_ref,

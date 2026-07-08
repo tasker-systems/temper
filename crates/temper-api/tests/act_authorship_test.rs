@@ -68,6 +68,7 @@ fn create_cmd(context: ContextId, slug: &str, act: ActContext) -> CreateResource
         origin_uri: Some(format!("test://act-{slug}")),
         chunks_packed: None,
         content_hash: None,
+        goal: None,
         act,
         origin: Surface::ApiHttp,
     }

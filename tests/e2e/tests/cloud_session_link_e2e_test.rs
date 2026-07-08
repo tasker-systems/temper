@@ -38,6 +38,7 @@ fn cloud_env<'a>(
 /// Seed a task via the API client (cloud-only; no vault files written).
 async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &str, title: &str) {
     let payload = IngestPayload {
+        goal: None,
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
         context_ref: format!("@me/{context}"),
@@ -132,6 +133,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    goal: None,
                     doc_type: "session",
                     title,
                     context: Some("@me/myapp"),
@@ -255,6 +257,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    goal: None,
                     doc_type: "session",
                     title,
                     context: Some("@me/myapp"),
@@ -324,6 +327,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    goal: None,
                     doc_type: "session",
                     title,
                     context: Some("@me/myapp"),
@@ -397,6 +401,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    goal: None,
                     doc_type: "research",
                     title: "Research With Task Flag",
                     context: Some("@me/myapp"),
@@ -469,6 +474,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    goal: None,
                     doc_type: "session",
                     title,
                     context: Some("@me/myapp"),

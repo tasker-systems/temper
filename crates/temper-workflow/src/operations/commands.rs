@@ -38,6 +38,12 @@ pub struct CreateResource {
     pub managed_meta: ManagedMeta,
     /// Free-form user metadata (open_meta tier).
     pub open_meta: Option<Value>,
+    /// First-class goal link (`Edge`-fated, not a property). When `Some`, the backend
+    /// projects a live `advances`→goal edge (`EdgeKind::LeadsTo`, `Polarity::Forward`,
+    /// `label="advances"`) from the new resource to this goal after create. Surfaces
+    /// resolve the caller's `--goal <ref>` to a `ResourceId` (trailing-UUID-only) before
+    /// building the command. `None` = no goal.
+    pub goal: Option<ResourceId>,
     /// Canonical resource URI for dedup and storage. Callers that derive a
     /// `kb://`-scheme URI from context/doctype/slug should set this; callers
     /// without a pre-computed URI may leave it `None` and the server will
@@ -83,6 +89,20 @@ pub struct MoveSpec {
     pub type_to: Option<String>,
 }
 
+/// Update-time intent for a resource's goal edge (the `advances`→goal link).
+///
+/// Tri-state: `UpdateResource.goal == None` leaves the goal edge untouched;
+/// `Some(Set(id))` replaces it (fold any existing goal edge, then assert the new
+/// one); `Some(Clear)` folds the existing goal edge without asserting a new one.
+/// This mirrors the body-update three-form contract — absent ≠ cleared.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GoalPatch {
+    /// Set (or replace) the resource's goal to this pre-resolved goal resource.
+    Set(ResourceId),
+    /// Retract the resource's current goal edge, leaving it goal-less.
+    Clear,
+}
+
 /// Update a resource — partial; any combination of body, managed_meta,
 /// open_meta may be supplied.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,6 +117,11 @@ pub struct UpdateResource {
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
+    /// Goal-edge patch (`Edge`-fated, not a property). `None` leaves the goal edge
+    /// untouched; `Some(Set)` folds any existing `advances`→goal edge and asserts a new
+    /// one; `Some(Clear)` folds the existing edge. Surfaces resolve `--goal <ref>` to a
+    /// `ResourceId` (trailing-UUID-only) before building the command.
+    pub goal: Option<GoalPatch>,
     /// Move spec: `DbBackend` re-homes the resource when `move_to.context_to`
     /// is `Some`. The `context_to` field carries a **resolved** `ContextId`;
     /// surfaces must parse+resolve a context ref before setting it. For the
@@ -324,6 +349,7 @@ mod tests {
             open_meta: None,
             move_to: None,
             context_ref: None,
+            goal: None,
             act: Default::default(),
             origin: Surface::ApiHttp,
         };
@@ -349,6 +375,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: Surface::CliCloud,
         };

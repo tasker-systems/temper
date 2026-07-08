@@ -600,6 +600,7 @@ mod non_embed_impl {
                 origin_uri: None,
                 chunks_packed: None,
                 content_hash: None,
+                goal: None,
                 act: Default::default(),
                 origin: Surface::CliCloud,
             };
