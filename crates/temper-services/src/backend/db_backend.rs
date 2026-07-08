@@ -354,12 +354,14 @@ impl DbBackend {
     /// `team_ancestors` resolve their unqualified references against the connection search_path (the one
     /// schema post-collapse), so no per-txn `SET LOCAL`.
     async fn check_can_modify_next(&self, new_id: uuid::Uuid) -> Result<(), TemperError> {
-        let can: Option<bool> = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
-            .bind(*self.profile_id)
-            .bind(new_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(api_err)?;
+        let can: Option<bool> = sqlx::query_scalar!(
+            "SELECT can_modify_resource($1, $2)",
+            *self.profile_id,
+            new_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(api_err)?;
         if can.unwrap_or(false) {
             Ok(())
         } else {
@@ -417,11 +419,11 @@ impl DbBackend {
     /// source resource"); the parity-era write path only ever asserts resource→resource edges, so the
     /// source is always a `kb_resources` endpoint.
     async fn edge_source_resource(&self, edge_id: uuid::Uuid) -> Result<uuid::Uuid, TemperError> {
-        sqlx::query_scalar::<_, uuid::Uuid>(
+        sqlx::query_scalar!(
             "SELECT source_id FROM kb_edges \
              WHERE id = $1 AND source_table = 'kb_resources'",
+            edge_id,
         )
-        .bind(edge_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(api_err)?
@@ -442,15 +444,16 @@ impl DbBackend {
         edge: SourceHomedEdge<'_>,
         act_ctx: EventContext,
     ) -> Result<EdgeId, TemperError> {
-        let (home_id, home_table): (uuid::Uuid, String) = sqlx::query_as(
+        let home = sqlx::query!(
             "SELECT anchor_id, anchor_table FROM kb_resource_homes \
              WHERE resource_id=$1 AND anchor_table IN ('kb_contexts', 'kb_cogmaps') \
              LIMIT 1",
+            edge.src,
         )
-        .bind(edge.src)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
+        let (home_id, home_table) = (home.anchor_id, home.anchor_table);
 
         let label = (!edge.label.is_empty()).then_some(edge.label);
         let src = ResourceId::from(edge.src);
@@ -510,7 +513,7 @@ impl DbBackend {
         emitter: EntityId,
         act_ctx: &EventContext,
     ) -> Result<(), TemperError> {
-        let edge_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        let edge_ids: Vec<uuid::Uuid> = sqlx::query_scalar!(
             "SELECT e.id FROM kb_edges e \
              JOIN kb_properties p \
                ON p.owner_table = 'kb_resources' AND p.owner_id = e.target_id \
@@ -520,9 +523,9 @@ impl DbBackend {
                AND e.edge_kind = 'leads_to' AND e.label = $2 \
                AND p.property_value #>> '{}' = 'goal' \
                AND NOT e.is_folded",
+            src_next,
+            GOAL_EDGE_LABEL,
         )
-        .bind(src_next)
-        .bind(GOAL_EDGE_LABEL)
         .fetch_all(&self.pool)
         .await
         .map_err(api_err)?;

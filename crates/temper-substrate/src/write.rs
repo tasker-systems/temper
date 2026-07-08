@@ -296,14 +296,14 @@ async fn refresh_moved_region_readouts(
     if !touched_resources.is_empty() {
         // one query for the reused regions that actually contain a moved member (not every reused
         // region, and not N per-component round-trips).
-        let region_ids: Vec<Uuid> = sqlx::query_scalar(
+        let region_ids: Vec<Uuid> = sqlx::query_scalar!(
             "SELECT DISTINCT r.id FROM kb_cogmap_regions r \
              JOIN kb_cogmap_region_members m ON m.region_id = r.id \
              WHERE r.component_id = ANY($1) AND NOT r.is_folded \
                AND m.member_table = 'kb_resources' AND m.member_id = ANY($2)",
+            unchanged,
+            &touched_resources,
         )
-        .bind(unchanged)
-        .bind(&touched_resources)
         .fetch_all(&mut **tx)
         .await?;
         for rid in &region_ids {
@@ -311,11 +311,13 @@ async fn refresh_moved_region_readouts(
         }
         // one batched last_event_id stamp for every refreshed region (same `ev` for all).
         if !region_ids.is_empty() {
-            sqlx::query("UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id = ANY($2)")
-                .bind(ev)
-                .bind(&region_ids)
-                .execute(&mut **tx)
-                .await?;
+            sqlx::query!(
+                "UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id = ANY($2)",
+                ev.uuid(),
+                &region_ids,
+            )
+            .execute(&mut **tx)
+            .await?;
         }
     }
     Ok(())
@@ -343,16 +345,16 @@ async fn last_materialize_watermark(
     lens_id: LensId,
     current_ev: EventId,
 ) -> Result<Option<Uuid>> {
-    Ok(sqlx::query_scalar(
+    Ok(sqlx::query_scalar!(
         "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
          WHERE et.name='region_materialized' \
            AND (e.payload->>'cogmap_id')::uuid=$1 AND (e.payload->>'lens_id')::uuid=$2 \
            AND e.id < $3 \
          ORDER BY e.id DESC LIMIT 1",
+        cogmap.uuid(),
+        lens_id.uuid(),
+        current_ev.uuid(),
     )
-    .bind(cogmap)
-    .bind(lens_id)
-    .bind(current_ev)
     .fetch_optional(&mut **tx)
     .await?)
 }
@@ -363,13 +365,13 @@ async fn fold_live_regions(
     lens_id: LensId,
     ev: EventId,
 ) -> Result<()> {
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \
          WHERE cogmap_id=$2 AND lens_id=$3 AND NOT is_folded",
+        ev.uuid(),
+        cogmap.uuid(),
+        lens_id.uuid(),
     )
-    .bind(ev)
-    .bind(cogmap)
-    .bind(lens_id)
     .execute(tx)
     .await?;
     Ok(())
@@ -381,13 +383,13 @@ async fn fold_live_components(
     lens_id: LensId,
     ev: EventId,
 ) -> Result<()> {
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_components SET is_folded=true, last_event_id=$1 \
          WHERE cogmap_id=$2 AND lens_id=$3 AND NOT is_folded",
+        ev.uuid(),
+        cogmap.uuid(),
+        lens_id.uuid(),
     )
-    .bind(ev)
-    .bind(cogmap)
-    .bind(lens_id)
     .execute(tx)
     .await?;
     Ok(())
@@ -398,19 +400,19 @@ async fn fold_components(tx: &mut PgConnection, component_ids: &[Uuid], ev: Even
     if component_ids.is_empty() {
         return Ok(());
     }
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \
          WHERE component_id = ANY($2) AND NOT is_folded",
+        ev.uuid(),
+        component_ids,
     )
-    .bind(ev)
-    .bind(component_ids)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
+    sqlx::query!(
         "UPDATE kb_cogmap_components SET is_folded=true, last_event_id=$1 WHERE id = ANY($2)",
+        ev.uuid(),
+        component_ids,
     )
-    .bind(ev)
-    .bind(component_ids)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -424,20 +426,19 @@ async fn create_component(
     comp: &ComponentWork,
     ev: EventId,
 ) -> Result<Uuid> {
-    use sqlx::Row;
-    let row = sqlx::query(
+    let id = sqlx::query_scalar!(
         "INSERT INTO kb_cogmap_components \
            (cogmap_id, lens_id, fingerprint, member_ids, asserted_by_event_id, last_event_id) \
          VALUES ($1,$2,$3,$4,$5,$5) RETURNING id",
+        cogmap.uuid(),
+        lens_id.uuid(),
+        &comp.fingerprint,
+        &comp.members,
+        ev.uuid(),
     )
-    .bind(cogmap)
-    .bind(lens_id)
-    .bind(&comp.fingerprint)
-    .bind(&comp.members)
-    .bind(ev)
     .fetch_one(&mut *tx)
     .await?;
-    Ok(row.get::<Uuid, _>("id"))
+    Ok(id)
 }
 
 /// Parameters for [`assert_region`]. The region id is pre-generated (identity-as-input) and already
