@@ -18,7 +18,14 @@ export type HomeCogmap = { id: string, name: string, owner_ref: string, team_ids
  * sized by its visible resource count. `owner_ref` is the decorated owner-scope
  * (`@me`, `+team-slug`) — the Home build lens tints by it.
  */
-export type HomeContext = { id: string, name: string, owner_ref: string, resource_count: number, 
+export type HomeContext = { id: string, name: string, 
+/**
+ * Per-owner addressable handle (`kb_contexts.slug`). Combined with
+ * `owner_ref` it forms the `context_ref` (`owner/slug`) the vault route
+ * `/vault/[owner]/[context]` resolves — so a Home build circle can route to
+ * the context's resource list rather than a bare owner-scope path (which 404s).
+ */
+slug: string, owner_ref: string, resource_count: number, 
 /**
  * Most recent `updated` timestamp among the context's visible, active
  * resources — visibility-scoped so a resource the caller can't see (or one

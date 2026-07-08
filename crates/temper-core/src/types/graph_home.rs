@@ -19,6 +19,11 @@ use uuid::Uuid;
 pub struct HomeContext {
     pub id: Uuid,
     pub name: String,
+    /// Per-owner addressable handle (`kb_contexts.slug`). Combined with
+    /// `owner_ref` it forms the `context_ref` (`owner/slug`) the vault route
+    /// `/vault/[owner]/[context]` resolves — so a Home build circle can route to
+    /// the context's resource list rather than a bare owner-scope path (which 404s).
+    pub slug: String,
     pub owner_ref: String,
     pub resource_count: i32,
     /// Most recent `updated` timestamp among the context's visible, active

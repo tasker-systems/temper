@@ -4,7 +4,7 @@
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
 	import { labelAnchors } from '$lib/graph/atlas/labels';
-	import { buildDrillNodeUrl, buildEdgeSelectUrl, buildNodeSelectUrl } from '$lib/graph/atlas/nav';
+	import { buildEdgeSelectUrl, buildNodeSelectUrl } from '$lib/graph/atlas/nav';
 	import { isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import NodeChip from './marks/NodeChip.svelte';
 	import Edge from './marks/Edge.svelte';
@@ -23,26 +23,21 @@
 	const anchors = $derived(labelAnchors(graph.nodes, seedId, 5));
 	let hoveredEdge = $state<number | null>(null);
 
-	// Drill is a drill step — PUSH history so browser Back walks the path (see nav.ts).
-	function drill(nodeId: string) {
-		goto(buildDrillNodeUrl($page.url, nodeId));
-	}
-
 	// Edge selection is ephemeral panel state (?sel), not a scope change — REPLACE
 	// so it doesn't clutter the drill history the Back button walks.
 	function selectEdge(edgeId: string) {
 		goto(buildEdgeSelectUrl($page.url, edgeId), { replaceState: true });
 	}
 
-	// A context-resource (builder-axis) node opens its TrailRail via ?sel — a
-	// cogmap-scoped drill would fall out of scope and dead-end (Beat D). Facets
-	// (cogmap-homed) still drill into their neighborhood.
+	// Beat D polish: every node click opens its TrailRail via ?sel (inspect first).
+	// Drilling into a node's neighborhood is now an explicit action in the rail
+	// (facets only — a context node's cogmap-scoped drill would dead-end). This
+	// makes the rail the hub instead of a click silently re-centering the graph.
 	function selectNode(nodeId: string) {
 		goto(buildNodeSelectUrl($page.url, nodeId), { replaceState: true });
 	}
 	function activate(node: (typeof graph.nodes)[number]) {
-		if (node.home === 'context') selectNode(node.id);
-		else drill(node.id);
+		selectNode(node.id);
 	}
 
 	function nodeRadius(degree: number): number {

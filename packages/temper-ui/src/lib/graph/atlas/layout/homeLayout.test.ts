@@ -4,8 +4,8 @@ import type { AtlasHome } from '$lib/types/generated/graph_home';
 
 const home: AtlasHome = {
 	build: [
-		{ id: 'c1', name: 'temper', owner_ref: '@me', resource_count: 331, last_active_at: null },
-		{ id: 'c2', name: 'storyteller', owner_ref: '@me', resource_count: 42, last_active_at: null }
+		{ id: 'c1', name: 'temper', slug: 'temper', owner_ref: '@me', resource_count: 331, last_active_at: null },
+		{ id: 'c2', name: 'storyteller', slug: 'storyteller', owner_ref: '@me', resource_count: 42, last_active_at: null }
 	],
 	research: [
 		{ id: 'm1', name: 'Self-cognition', owner_ref: 'temper', team_ids: [], region_count: 12, facet_count: 3 }

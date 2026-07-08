@@ -53,6 +53,13 @@
 	function refocus(id: string) {
 		goto(buildDrillNodeUrl($page.url, id));
 	}
+	// Beat D: drilling into the selected node's neighborhood is an explicit rail
+	// action (facets only — a context node's drill falls out of cogmap scope and
+	// dead-ends). PUSH history so Back returns to the prior view, same as refocus.
+	const canDrill = $derived(node?.home === 'cogmap');
+	function drillIn() {
+		if (node) goto(buildDrillNodeUrl($page.url, node.id));
+	}
 </script>
 
 {#if selection.kind !== 'none'}
@@ -62,6 +69,12 @@
 			<button class="close" onclick={close}>CLOSE ✕</button>
 		</header>
 		<h2 class="title">{nodeTitle ?? (edge ? `${edge.edge_kind}` : '')}</h2>
+
+		{#if canDrill}
+			<section class="actions">
+				<button class="drill-in" onclick={drillIn}>Drill into neighborhood →</button>
+			</section>
+		{/if}
 
 		{#if isNode && nodeExcerpt}
 			<section class="excerpt-section">
@@ -237,6 +250,28 @@
 	.empty {
 		color: #6a727e;
 		font-size: 12px;
+	}
+
+	/* ─── Primary action — explicit drill into the selected facet's neighborhood ─── */
+	.actions {
+		padding-top: 0;
+		border-top: 0;
+	}
+	.drill-in {
+		width: 100%;
+		text-align: left;
+		background: color-mix(in srgb, var(--hue) 12%, transparent);
+		border: 1px solid color-mix(in srgb, var(--hue) 45%, transparent);
+		border-radius: 6px;
+		padding: 7px 10px;
+		color: color-mix(in srgb, var(--hue) 85%, white);
+		font-size: 12px;
+		letter-spacing: 0.02em;
+		cursor: pointer;
+	}
+	.drill-in:hover {
+		background: color-mix(in srgb, var(--hue) 22%, transparent);
+		border-color: color-mix(in srgb, var(--hue) 70%, transparent);
 	}
 
 	/* ─── Excerpt — read-first body preview, directly under the title ─── */
