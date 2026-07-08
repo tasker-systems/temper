@@ -12,6 +12,9 @@ pub struct ApiConfig {
     pub enable_swagger: bool,
     /// Shared secret gating the internal SAML reconcile endpoint. `None` disables the endpoint.
     pub internal_reconcile_secret: Option<String>,
+    /// Shared secret gating the internal embed-dispatch drain endpoint (issue #299), called by the
+    /// Vercel cron. `None` disables the endpoint (a deployment with no drain configured).
+    pub embed_dispatch_secret: Option<String>,
 }
 
 impl ApiConfig {
@@ -63,6 +66,9 @@ impl ApiConfig {
                 .unwrap_or(3000),
             enable_swagger,
             internal_reconcile_secret: env::var("INTERNAL_RECONCILE_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            embed_dispatch_secret: env::var("EMBED_DISPATCH_SECRET")
                 .ok()
                 .filter(|s| !s.is_empty()),
         })

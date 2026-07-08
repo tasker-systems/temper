@@ -15,6 +15,15 @@ pub const DEFAULT_STEWARD_LEASE_SECONDS: i32 = 600;
 /// most-drifted-first, so the cap is meaningful; richer prioritization is deferred.
 pub const DEFAULT_STEWARD_DISPATCH_CAP: i64 = 10;
 
+/// Lease for a claimed embed job (issue #299). Like the steward lease it MUST exceed the Vercel
+/// function timeout (300s) so a genuinely-running embed is never reaped mid-flight.
+pub const DEFAULT_EMBED_LEASE_SECONDS: i32 = 600;
+
+/// Resources embedded per embed-dispatch tick. Conservative — each job embeds every deferred chunk of
+/// a resource (ONNX inference), so a small cap per (frequent) cron tick keeps any one invocation well
+/// under the function timeout; the queue drains the backlog across ticks.
+pub const DEFAULT_EMBED_DISPATCH_CAP: i32 = 5;
+
 /// Which agent persona a queued job is for. The queue is persona-agnostic; `Embed` is the
 /// non-agent, server-computed embedding worker (issue #299) and shares the queue with `Steward`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +76,24 @@ pub struct ClaimedJob {
     pub cogmap_id: Uuid,
     /// How many times this job has now been claimed (1 on first dispatch).
     pub attempts: i32,
+}
+
+/// Outcome of one embed-dispatch pass (issue #299): how many resource-keyed embed jobs were claimed,
+/// how many completed cleanly, how many failed (left for the reaper's retry→dead path), and the total
+/// chunks embedded. Returned by the `/api/embed/dispatch` drain so a cron/operator has observability.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "steward.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EmbedDispatchSummary {
+    /// Jobs claimed this pass (bounded by the dispatch cap).
+    pub claimed: u32,
+    /// Jobs whose resource embedded cleanly and were marked done.
+    pub completed: u32,
+    /// Jobs whose embed errored — left in_progress for the reaper to retry (then dead at max attempts).
+    pub failed: u32,
+    /// Total chunks embedded across all completed jobs.
+    pub chunks_embedded: u64,
 }
 
 /// A resource-keyed job claimed for dispatch — the resource twin of [`ClaimedJob`]. The `Embed`
