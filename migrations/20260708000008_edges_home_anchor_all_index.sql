@@ -1,0 +1,22 @@
+-- Migration: folded-inclusive home-anchor index on kb_edges for cogmap_staleness.
+--
+-- SQL function audit 2026-07-08 (docs/code-reviews/2026-07-08-sql-function-audit.md,
+-- SQLA-1 finding: partial-index-excludes-folded). cogmap_staleness' edges leg scans
+-- `WHERE home_anchor_table = 'kb_cogmaps' AND home_anchor_id = p_cogmap` with NO
+-- is_folded restriction, so the only home-anchor index (idx_kb_edges_home, partial on
+-- NOT is_folded) cannot serve it — a seq scan of the schema's largest-growing table on
+-- every cogmap_analytics read.
+--
+-- DECISION (recorded per the audit's chunk-5 ask): a fold COUNTS as a staleness touch.
+-- Folding an edge mutates the materialized shape (the edge leaves the rendered map), and
+-- the fold event updates the edge's last_event_id — cogmap_staleness must keep reporting
+-- the map stale after a pure retirement fold (fold-then-recreate would count via the new
+-- edge either way). So the function's folded-inclusive predicate is correct as written,
+-- and the fix is this index rather than adding NOT is_folded to the query.
+--
+-- INCLUDE (last_event_id) lets the touch probe read the join key from the index without
+-- visiting the heap. The existing partial idx_kb_edges_home stays — it remains the
+-- smaller, cheaper index for the many NOT-is_folded readers. CREATE INDEX only — no
+-- function bodies change, no .sqlx impact.
+CREATE INDEX idx_kb_edges_home_all
+    ON kb_edges (home_anchor_table, home_anchor_id) INCLUDE (last_event_id);
