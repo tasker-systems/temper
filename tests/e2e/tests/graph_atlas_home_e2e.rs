@@ -476,6 +476,7 @@ async fn build_lens_last_active_at_is_visibility_scoped(pool: sqlx::PgPool) {
 
     let t1 = chrono::Utc::now() - chrono::Duration::days(2);
     let t2 = chrono::Utc::now() - chrono::Duration::days(1); // newer than t1
+    let t3 = chrono::Utc::now(); // newer than both t1 and t2
 
     // R1: visible + active, stamped t1.
     let visible = home_resource_returning(&pool, ctx, profile, "visible-r1").await;
@@ -487,6 +488,18 @@ async fn build_lens_last_active_at_is_visibility_scoped(pool: sqlx::PgPool) {
     let hidden = home_resource_returning(&pool, ctx, profile, "hidden-r2").await;
     set_resource_updated_at(&pool, hidden, t2).await;
     soft_delete_resource(&pool, hidden).await;
+
+    // R3: homed in the SAME context, active, but owned/originated by a SECOND
+    // profile with no grant back to the caller — invisible via
+    // `resources_visible_to(profile)` even though `ctx` itself (owned by
+    // `profile`) is visible. Stamped t3 (newest of all three) so a leak would
+    // be unambiguous. Proves the `resources_visible_to` conjunct specifically,
+    // distinct from R2's soft-delete/is_active conjunct.
+    let other_token =
+        common::generate_test_jwt("e2e-other-recency", "other-recency@test.example.com");
+    let other_profile = provision_profile(&app, &other_token).await;
+    let invisible = home_resource_returning(&pool, ctx, other_profile, "invisible-r3").await;
+    set_resource_updated_at(&pool, invisible, t3).await;
 
     // A second context with no homed resources at all — last_active_at is None.
     let empty_ctx = create_personal_context(&pool, profile, "empty-ctx").await;
@@ -517,6 +530,12 @@ async fn build_lens_last_active_at_is_visibility_scoped(pool: sqlx::PgPool) {
     assert!(
         (last_active_at - t2).num_milliseconds().abs() > 1000,
         "the soft-deleted resource's newer stamp (t2) must NOT leak into last_active_at, got {last_active_at:?}"
+    );
+    assert!(
+        (last_active_at - t3).num_milliseconds().abs() > 1000,
+        "a resource invisible to the caller (owned by another profile, no grant) must NOT \
+         advance last_active_at even though its stamp (t3) is the newest of all three, \
+         got {last_active_at:?}"
     );
 
     let empty = body

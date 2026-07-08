@@ -32,7 +32,6 @@
 		if (seg.kind === 'home') return goto(buildHomeUrl($page.url));
 		if (seg.kind === 'cogmap' && cogmapId) return goto(buildCogmapUrl($page.url, cogmapId));
 		if (seg.focusPath) return gotoFocus(seg.focusPath);
-		// ancestors are a de-emphasized set with no drill target
 	}
 </script>
 
@@ -47,15 +46,11 @@
 	>
 	{#each segments as seg, i (i)}
 		{#if i > 0}<span class="sep">›</span>{/if}
-		{#if seg.kind === 'ancestor'}
-			<span class="seg ancestor">{seg.label}</span>
-		{:else}
-			<button
-				class="seg {seg.kind} {i === segments.length - 1 ? 'current' : ''}"
-				type="button"
-				onclick={() => onSegment(seg)}>{seg.label}</button
-			>
-		{/if}
+		<button
+			class="seg {seg.kind} {i === segments.length - 1 ? 'current' : ''}"
+			type="button"
+			onclick={() => onSegment(seg)}>{seg.label}</button
+		>
 	{/each}
 </nav>
 
@@ -91,15 +86,12 @@
 		cursor: pointer;
 		border-radius: 5px;
 	}
-	.seg:not(.ancestor):hover {
+	.seg:hover {
 		background: rgba(255, 255, 255, 0.06);
 	}
 	.seg.current {
 		font-weight: 600;
 		cursor: default;
-	}
-	.ancestor {
-		opacity: 0.6;
 	}
 	.sep {
 		opacity: 0.4;

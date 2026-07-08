@@ -47,7 +47,6 @@ const EXPECTED_KEYS = Object.keys(REQUIRED_KEYS).sort();
 // Every scenario the harness offers must be present so a fresh checkout can drive it.
 const EXPECTED_SCENARIOS = [
 	'home',
-	'teamPanorama',
 	'regionSlice',
 	'nodeNeighborhood',
 	'nodeSelected',

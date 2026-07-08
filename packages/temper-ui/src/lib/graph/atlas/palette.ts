@@ -69,9 +69,6 @@ export const TERRITORY_TINTS: Record<TerritoryKind, string> = {
 /** Atlas canvas slate background. */
 export const CANVAS_BG = '#1b1e26';
 
-/** Team-zone rectangle fill, name label, and sub-count text. */
-export const TEAM_ZONE = { fill: '#6fa8c7', label: '#9fc4d6', sub: '#5f7686' } as const;
-
 /**
  * Atlas Home door tokens (spec Task 4). Cogmap door reuses the cogmap territory
  * hue (`TERRITORY_TINTS.cogmap`) so the door and the panorama wash agree.

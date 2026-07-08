@@ -2,7 +2,7 @@ import type { Focus } from './nav';
 
 export interface CrumbSegment {
 	label: string;
-	kind: 'home' | 'ancestor' | 'team' | 'cogmap' | 'territory' | 'node' | 'scope';
+	kind: 'home' | 'cogmap' | 'territory' | 'node' | 'scope';
 	/** The `?focus=` value this segment navigates to; null for home/scope segments. */
 	focusPath: string | null;
 }

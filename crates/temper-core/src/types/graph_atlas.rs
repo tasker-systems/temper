@@ -73,29 +73,6 @@ pub struct AtlasSubgraph {
     pub edges: Vec<AtlasEdge>,
 }
 
-/// A team-scoped search hit on the Atlas canvas. `node_id` is `kb_resources.id`
-/// (identical to `AtlasNode.id`, so the UI can drill straight to it). Scores are
-/// the `unified_search` blend, inherited verbatim. `region_id` is a best-affinity
-/// territory hint (may be `None`); the camera jump uses `node_id` alone.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_atlas.ts"))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct AtlasSearchHit {
-    pub node_id: Uuid,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub doc_type: Option<String>,
-    pub home: NodeHome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub region_id: Option<Uuid>,
-    pub combined_score: f32,
-    pub fts_score: f32,
-    pub vector_score: f32,
-    pub graph_score: f32,
-}
-
 /// R4 request: focus seeds (required, non-empty), BFS depth, and an optional
 /// edge-kind filter that constrains the *traversal* (induced subgraph).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
