@@ -25,6 +25,7 @@ upfront; read only what the current task requires.
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
+- `teams.md` — Working with teams: create, invite (email as correlator), list your invitations, join, roles, offboarding
 
 ### Workflow Files (`workflows/`)
 One file per mode/effort combination. Read only the one that matches the current task.
