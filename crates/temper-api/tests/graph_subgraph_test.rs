@@ -596,6 +596,49 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn edge_count_excludes_edges_to_invisible_endpoints(pool: PgPool) {
+    // m2 has two edges in the fixture: c1→m2 (both endpoints Alice's) and
+    // m2→b2 (b2 is Bob's private research, invisible to Alice). The rendered
+    // edge list already drops m2→b2 through the visibility gate; edge_count
+    // must agree — degree is computed over edges_visible_to, not raw kb_edges,
+    // so a profile cannot learn how many edges touch resources it cannot see.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_id: uuid(CTX_PRIMARY),
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let m2 = result
+        .nodes
+        .iter()
+        .find(|n| Uuid::from(n.id) == uuid(M2_MIDDLEWARE))
+        .expect("m2 should be in the result");
+    assert_eq!(
+        m2.edge_count, 1,
+        "m2's degree counts only c1→m2; the cross-owner edge to Bob's b2 must not leak into edge_count"
+    );
+
+    // The rendered edge list and the degree must tell the same story: no
+    // rendered edge touches b2 either.
+    assert!(
+        !result
+            .edges
+            .iter()
+            .any(|e| e.source == uuid(B2_BOB_RESEARCH) || e.target == uuid(B2_BOB_RESEARCH)),
+        "no rendered edge may touch Bob's b2"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
     // c1 is seeded with a two-paragraph body; excerpt must contain only the
     // first paragraph, and m1 is seeded with a long single paragraph so the

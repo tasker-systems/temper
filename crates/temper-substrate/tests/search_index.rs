@@ -519,3 +519,98 @@ async fn create_resource_homes_in_cogmap(pool: sqlx::PgPool) {
     assert_eq!(table, "kb_cogmaps");
     assert_eq!(anchor, cogmap_id.uuid());
 }
+
+/// SQLA audit chunk 3 (docs/code-reviews/2026-07-08-sql-function-audit.md, SQLA-3 /
+/// folded-block-leaks-into-fts): a charter supersede folds the old blocks, but their
+/// chunks stay `is_current` (the new charter arrives as fresh block ids). The rebuilt
+/// search_vector must aggregate only chunks of LIVE blocks — mirroring
+/// `_recompute_resource_body_hash` — so superseded charter prose stops matching FTS.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn charter_supersede_removes_superseded_prose_from_fts(pool: sqlx::PgPool) {
+    use temper_substrate::content;
+    use temper_substrate::events::{fire, SeedAction};
+
+    fn sha256_hex(s: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(s.as_bytes());
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+    /// One-block charter carrying `prose` as a synthetic, already-embedded chunk (ONNX-free).
+    fn charter_of(prose: &str) -> Vec<content::PreparedBlock> {
+        let chunk = content::IncomingChunk {
+            chunk_index: 0,
+            content_hash: sha256_hex(prose),
+            content: prose.to_string(),
+            embedding: vec![0.1f32; 768],
+            header_path: String::new(),
+            heading_depth: 0,
+        };
+        vec![content::prepare_block_from_chunks(
+            0,
+            Some("statement"),
+            vec![chunk],
+        )]
+    }
+
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+
+    // Genesis a cogmap with an EMPTY telos (no embed call), then charter it twice.
+    let mut conn = pool.acquire().await.unwrap();
+    let (cogmap, telos) = fire(
+        &mut conn,
+        SeedAction::CogmapGenesis {
+            name: "fts-supersede-cogmap",
+            telos_title: "FTS supersede telos",
+            charter: &[],
+            cogmap_id: None,
+            telos_resource_id: None,
+            owner,
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .cogmap_genesis()
+    .unwrap();
+    drop(conn);
+
+    let mut tx = pool.begin().await.unwrap();
+    writes::set_charter_in_tx(
+        &mut tx,
+        cogmap,
+        &charter_of("the zirconium doctrine governs this map"),
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert!(
+        index_matches(&pool, telos.uuid(), "zirconium").await,
+        "first charter's prose is FTS-matchable"
+    );
+
+    // Supersede: new prose folds the zirconium block.
+    let mut tx = pool.begin().await.unwrap();
+    writes::set_charter_in_tx(
+        &mut tx,
+        cogmap,
+        &charter_of("the vanadium doctrine governs this map"),
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(
+        index_matches(&pool, telos.uuid(), "vanadium").await,
+        "superseding charter's prose is FTS-matchable"
+    );
+    assert!(
+        !index_matches(&pool, telos.uuid(), "zirconium").await,
+        "superseded (folded) charter prose must no longer match FTS"
+    );
+}
