@@ -166,7 +166,9 @@ pub struct CreateResourceArgs<'a> {
     pub cogmap: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
-    pub slug: Option<&'a str>,
+    /// Open (caller-defined) frontmatter as a raw `--open-meta` JSON object
+    /// string. Parsed + validated (must be a JSON object) by `parse_open_meta_flag`.
+    pub open_meta: Option<&'a str>,
     /// Goal link target ref (`--goal`). When `Some`, resolved via `parse_ref` and
     /// projected to a live `advances`→goal edge on create.
     pub goal: Option<&'a str>,
@@ -204,7 +206,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         cogmap,
         mode,
         effort,
-        slug,
+        open_meta,
         goal,
         task,
         body_flag,
@@ -267,12 +269,15 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Body resolution — --from wins; fall back to --body flag + stdin pipe.
     let body_opt = resolve_create_body(from.as_deref(), body_flag.as_deref(), stdin_is_tty)?;
 
-    // Slug derivation (mode-independent — Concept and Goal skip date prefix).
-    // An unrecognized (open-tail) doctype has no variant, so it falls back to
-    // the date-prefixed `_` catch-all inside `derive_create_slug`, the same
-    // as any known non-Concept/Goal doctype.
+    // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
+    // caller input — always derived from the title. It seeds the client-side `validate_create`
+    // temper-slug check; the server re-derives its own from the title (issue #307 Bug 2). The
+    // date-prefix for non-Concept/Goal doctypes is retained for the local projection filename.
     let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type).ok();
-    let slug_resolved = derive_create_slug(slug, title, doctype_enum);
+    let slug_resolved = derive_create_slug(title, doctype_enum);
+
+    // Parse the optional --open-meta JSON object (the free-form open tier).
+    let open_meta_value = open_meta.map(parse_open_meta_flag).transpose()?;
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
@@ -316,7 +321,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             effort: effort.map(String::from),
             ..ManagedMeta::default()
         },
-        open_meta: None,
+        open_meta: open_meta_value,
         goal: goal_resolved,
         origin_uri: None,
         chunks_packed: None,
@@ -395,27 +400,25 @@ fn resolve_create_body(
     }
 }
 
-/// Derive a resource slug: an explicit `--slug` is used verbatim; otherwise
-/// derive from the title, date-prefixing every doctype except Concept and
-/// Goal (which are identified by name). `doctype` is `None` for an
-/// unrecognized (open-tail) label, which falls into the date-prefixed
-/// catch-all alongside every other non-Concept/Goal doctype.
+/// Derive a resource slug from the title (slug is §7-dissolved and never a caller
+/// input — issue #307). Date-prefixes every doctype except Concept and Goal (which
+/// are identified by name). `doctype` is `None` for an unrecognized (open-tail)
+/// label, which falls into the date-prefixed catch-all alongside every other
+/// non-Concept/Goal doctype. Used for the client-side `validate_create` temper-slug
+/// check and the local projection filename; the server re-derives its own.
 fn derive_create_slug(
-    slug: Option<&str>,
     title: &str,
     doctype: Option<temper_workflow::frontmatter::DocType>,
 ) -> String {
-    slug.map(String::from).unwrap_or_else(|| {
-        let today = Local::now().format("%Y-%m-%d").to_string();
-        let base_slug = vault::slugify(title);
-        match doctype {
-            // Concept and Goal are identified by name — no date prefix.
-            Some(temper_workflow::frontmatter::DocType::Concept)
-            | Some(temper_workflow::frontmatter::DocType::Goal) => base_slug,
-            // Every other doctype (known or open-tail/unrecognized) gets a date prefix.
-            _ => format!("{today}-{base_slug}"),
-        }
-    })
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let base_slug = vault::slugify(title);
+    match doctype {
+        // Concept and Goal are identified by name — no date prefix.
+        Some(temper_workflow::frontmatter::DocType::Concept)
+        | Some(temper_workflow::frontmatter::DocType::Goal) => base_slug,
+        // Every other doctype (known or open-tail/unrecognized) gets a date prefix.
+        _ => format!("{today}-{base_slug}"),
+    }
 }
 
 /// Assert the session→task `advances` link after a session create.
@@ -1039,6 +1042,9 @@ pub struct UpdateParams<'a> {
     pub extends: &'a [String],
     pub preceded_by: &'a [String],
     pub derived_from: &'a [String],
+    /// Raw `--open-meta` JSON object string: arbitrary open-tier ("bring-your-own")
+    /// keys, merged over the repeatable list flags above by `build_open_meta_for_update`.
+    pub open_meta: Option<&'a str>,
     // Task-specific fields
     pub stage: Option<&'a str>,
     pub mode: Option<&'a str>,
@@ -1134,6 +1140,44 @@ struct PartialOpenMeta<'a> {
     preceded_by: &'a [String],
     #[serde(rename = "derived-from", skip_serializing_if = "<[String]>::is_empty")]
     derived_from: &'a [String],
+}
+
+/// Parse a `--open-meta <json>` flag value into a validated open-tier object.
+///
+/// The open tier is a key/value map, so the value MUST be a JSON object; a
+/// malformed string, or a JSON array/scalar, is a hard error rather than a
+/// silent drop (parse-don't-validate / escalate). Returns the object `Value`.
+fn parse_open_meta_flag(raw: &str) -> Result<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| TemperError::BadRequest(format!("--open-meta must be valid JSON: {e}")))?;
+    if !value.is_object() {
+        return Err(TemperError::BadRequest(
+            "--open-meta must be a JSON object (e.g. '{\"marker\":\"x\"}')".into(),
+        ));
+    }
+    Ok(value)
+}
+
+/// Combine the update surface's open-tier inputs into one `open_meta` object:
+/// the repeatable list flags (`--tags`/`--relates-to`/…) form the base, then the
+/// explicit `--open-meta` JSON object is merged over it (explicit keys win).
+/// Returns `None` when neither source contributes a key (so a frontmatter-only
+/// update with no open-tier change PATCHes nothing on the open tier).
+fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_json::Value>> {
+    let mut obj = serde_json::Map::new();
+    if let Some(serde_json::Value::Object(m)) = build_partial_open_meta_from_args(params) {
+        obj.extend(m);
+    }
+    if let Some(raw) = params.open_meta {
+        if let serde_json::Value::Object(m) = parse_open_meta_flag(raw)? {
+            obj.extend(m);
+        }
+    }
+    if obj.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::Value::Object(obj)))
+    }
 }
 
 /// Build a partial `open_meta` JSON object from update CLI list flags. Returns
@@ -1280,7 +1324,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
             body
         }),
         managed_meta: build_partial_managed_meta_from_args(params),
-        open_meta: build_partial_open_meta_from_args(params),
+        open_meta: build_open_meta_for_update(params)?,
         goal,
         move_to: build_move_spec_from_args(params),
         context_ref: params.context_to.map(String::from),
@@ -1391,6 +1435,7 @@ mod build_helpers_tests {
             extends: &[],
             preceded_by: &[],
             derived_from: &[],
+            open_meta: None,
             stage: None,
             mode: None,
             effort: None,
@@ -1459,6 +1504,50 @@ mod build_helpers_tests {
     // on `UpdateResource.title`, not through `build_partial_managed_meta_from_args`
     // (which now carries only the Property vocabulary). The former "title propagates
     // through the partial managed_meta" guards were removed with that reshape.
+
+    // --- issue #307: --open-meta arbitrary open-tier keys (create + update) ---
+
+    #[test]
+    fn parse_open_meta_flag_accepts_object() {
+        let v = parse_open_meta_flag(r#"{"marker":"x","n":1}"#).expect("valid object");
+        assert_eq!(v.get("marker"), Some(&serde_json::json!("x")));
+        assert_eq!(v.get("n"), Some(&serde_json::json!(1)));
+    }
+
+    #[test]
+    fn parse_open_meta_flag_rejects_non_object_and_malformed() {
+        // A JSON array/scalar is not a key/value map → hard error.
+        assert!(parse_open_meta_flag(r#"["a","b"]"#).is_err());
+        assert!(parse_open_meta_flag("42").is_err());
+        // Malformed JSON → hard error (never a silent drop).
+        assert!(parse_open_meta_flag("{not json").is_err());
+    }
+
+    #[test]
+    fn build_open_meta_for_update_merges_explicit_over_list_flags() {
+        let mut params = empty_update_params("foo");
+        let tags = vec!["a".to_string(), "b".to_string()];
+        params.tags = &tags;
+        params.open_meta = Some(r#"{"marker":"x"}"#);
+        let out = build_open_meta_for_update(&params)
+            .expect("ok")
+            .expect("some open_meta");
+        assert_eq!(out.get("tags"), Some(&serde_json::json!(["a", "b"])));
+        assert_eq!(out.get("marker"), Some(&serde_json::json!("x")));
+    }
+
+    #[test]
+    fn build_open_meta_for_update_is_none_when_no_open_tier_input() {
+        let params = empty_update_params("foo");
+        assert!(build_open_meta_for_update(&params).expect("ok").is_none());
+    }
+
+    #[test]
+    fn build_open_meta_for_update_propagates_malformed_flag_error() {
+        let mut params = empty_update_params("foo");
+        params.open_meta = Some("{bad");
+        assert!(build_open_meta_for_update(&params).is_err());
+    }
 }
 
 #[cfg(test)]

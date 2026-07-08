@@ -70,7 +70,6 @@ async fn seed_task(
         home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: None,
-        slug: slug.to_string(),
         content: String::new(),
         metadata: None,
         managed_meta: Some(serde_json::Value::Object(managed)),

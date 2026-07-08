@@ -58,7 +58,6 @@ fn empty_payload(title: &str, ctx: &str) -> IngestPayload {
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: None,
-        slug: title.to_lowercase().replace(' ', "-"),
         content: String::new(),
         metadata: None,
         managed_meta: None,

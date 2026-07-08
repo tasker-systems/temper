@@ -32,7 +32,6 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         content_hash: Some(
             "showmeta0000000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "show-meta-test".to_string(),
         content: "# Show Meta\n\nBody here.".to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({"temper-stage": "in-progress"})),
@@ -103,7 +102,6 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         content_hash: Some(
             "fieldsfilt0000000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "fields-filter-test".to_string(),
         content: "# Test".to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
@@ -174,7 +172,6 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
         content_hash: Some(
             "dottedpath000000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "dotted-path-test".to_string(),
         content: "# Test".to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
@@ -238,7 +235,6 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             home_cogmap_id: None,
             doc_type_name: "task".to_string(),
             content_hash: Some(hash.to_string()),
-            slug: slug.to_string(),
             // EMPTY body on purpose: client-ingested resources carry their prose in
             // `chunks_packed` (not `content`), so `content` arrives empty on the wire
             // and the resource's `body_hash` is the empty hash. A NON-empty `content`
@@ -322,7 +318,6 @@ async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
         content_hash: Some(
             "listfields00000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "list-fields-test".to_string(),
         content: "# Test".to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({"temper-stage": "in-progress"})),

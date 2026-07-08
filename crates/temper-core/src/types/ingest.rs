@@ -32,7 +32,6 @@ pub struct IngestPayload {
     /// `"sha256:<hex>"` — server computes if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
-    pub slug: String,
     /// Full extracted markdown content.
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,7 +211,6 @@ mod tests {
             doc_type_name: "task".to_owned(),
             goal: None,
             content_hash: Some("sha256:abc".to_owned()),
-            slug: "test".to_owned(),
             content: "# Test".to_owned(),
             metadata: None,
             managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
@@ -248,7 +246,6 @@ mod tests {
             home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
             goal: None,
-            slug: "test".to_owned(),
             content: "# Test".to_owned(),
             content_hash: None,
             metadata: None,
@@ -271,7 +268,7 @@ mod tests {
 
     #[test]
     fn payload_deserializes_with_optional_chunks_absent() {
-        let json = r#"{"title":"Test","origin_uri":"kb://ctx/task/test","context_ref":"ctx","doc_type_name":"task","slug":"test","content":"Heading"}"#;
+        let json = r#"{"title":"Test","origin_uri":"kb://ctx/task/test","context_ref":"ctx","doc_type_name":"task","content":"Heading"}"#;
         let payload: IngestPayload = serde_json::from_str(json).unwrap();
         assert!(payload.chunks_packed.is_none());
         assert!(payload.content_hash.is_none());
@@ -286,7 +283,6 @@ mod tests {
             home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
             goal: None,
-            slug: "test".to_owned(),
             content: "# Test".to_owned(),
             content_hash: Some("sha256:abc".to_owned()),
             metadata: None,

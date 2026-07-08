@@ -45,7 +45,6 @@ async fn seed_task(client: &temper_client::TemperClient, context: &str, slug: &s
         home_cogmap_id: None,
         doc_type_name: "task".to_string(),
         content_hash: None,
-        slug: slug.to_string(),
         content: String::new(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
@@ -133,6 +132,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "session",
                     title,
@@ -140,7 +140,6 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: Some("implement-widget"),
                     body_flag: None,
                     from: None,
@@ -257,6 +256,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "session",
                     title,
@@ -264,7 +264,6 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: None,
                     body_flag: None,
                     from: None,
@@ -327,6 +326,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "session",
                     title,
@@ -334,7 +334,6 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: Some("does-not-exist-anywhere"),
                     body_flag: None,
                     from: None,
@@ -401,6 +400,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "research",
                     title: "Research With Task Flag",
@@ -408,7 +408,6 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: Some("implement-widget"),
                     body_flag: None,
                     from: None,
@@ -474,6 +473,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "session",
                     title,
@@ -481,7 +481,6 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: Some("widget"),
                     body_flag: None,
                     from: None,

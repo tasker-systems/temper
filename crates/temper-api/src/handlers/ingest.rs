@@ -102,7 +102,9 @@ pub async fn create(
     let cmd = CreateResource {
         home,
         doctype: payload.doc_type_name,
-        slug: payload.slug,
+        // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is
+        // NOT a caller input — always derived from the title. (issue #307 Bug 2)
+        slug: temper_workflow::operations::sluggify(&payload.title),
         title: payload.title,
         body,
         managed_meta,

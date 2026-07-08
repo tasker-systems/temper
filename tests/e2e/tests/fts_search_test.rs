@@ -28,7 +28,6 @@ async fn ingest_with_chunks(
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64x}", title.len())),
-        slug: slug.to_string(),
         content: content.to_string(),
         metadata: None,
         managed_meta: None,
