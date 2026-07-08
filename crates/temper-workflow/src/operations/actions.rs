@@ -668,6 +668,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -689,6 +690,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -715,6 +717,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -739,6 +742,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -763,6 +767,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -783,6 +788,7 @@ mod tests {
             open_meta: None,
             move_to: None,
             context_ref: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -989,6 +995,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -1019,6 +1026,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -1049,6 +1057,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };
@@ -1074,6 +1083,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
+            goal: None,
             act: Default::default(),
             origin: super::super::Surface::CliCloud,
         };

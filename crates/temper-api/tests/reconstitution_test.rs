@@ -80,6 +80,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
         content_hash: None,
         metadata: None,
         open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+        goal: None,
         act: Default::default(),
         sources: Vec::new(),
     };

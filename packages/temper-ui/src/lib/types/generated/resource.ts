@@ -38,7 +38,14 @@ export type ResourceListParams = { kb_doc_type_id: string | null,
  * Context filter: UUID string or `@owner/slug` decorated ref.
  * Bare context names are rejected server-side (spec Decision 1).
  */
-context_ref: string | null, doc_type_name: string | null, owner: string | null, q: string | null, stage: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
+context_ref: string | null, doc_type_name: string | null, owner: string | null, q: string | null, stage: string | null, 
+/**
+ * Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns
+ * only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP
+ * resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the
+ * query. `None` = no goal filter.
+ */
+goal: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
 /**
  * When true, the list endpoint returns `ResourceMetaListResponse`
  * (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
@@ -137,7 +144,21 @@ context_to: string | null,
  * `MoveSpec.type_to`. First-class since Phase 2 (type is no longer carried
  * as a `temper-type` key inside `managed_meta`).
  */
-type_to: string | null, };
+type_to: string | null, 
+/**
+ * Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to.
+ * When present the server folds any existing `advances`→goal edge and asserts a
+ * new one. Mutually exclusive with `clear_goal` (the CLI rejects both together).
+ * Forwarded from the CLI `--goal <ref>` flag (resolved client-side).
+ */
+goal: string | null, 
+/**
+ * Goal-clear: when `Some(true)`, the server folds the resource's current
+ * `advances`→goal edge, leaving it goal-less. The tri-state complement to `goal`
+ * (absent = untouched, `goal` = set/replace, `clear_goal` = retract). Forwarded
+ * from the CLI `--clear-goal` flag.
+ */
+clear_goal: boolean | null, };
 
 /**
  * Sort direction.

@@ -68,6 +68,9 @@ pub async fn update_meta(
         body: None,
         managed_meta: Some(payload.managed_meta),
         open_meta: Some(payload.open_meta),
+        // Meta-only path is Property-only (Fork 2); the goal edge (relationship-fated) is not a
+        // property and travels via the full update path, never the /meta endpoint.
+        goal: None,
         move_to: None,
         context_ref: None,
         act,

@@ -49,6 +49,11 @@ pub struct CreateResourceInput {
     pub sources: Option<Vec<String>>,
     /// Optional URL-friendly slug.
     pub slug: Option<String>,
+    /// Optional goal link: a ref (UUID or decorated `slug-<uuid>`) of the goal this resource
+    /// advances. Projects a live `advances`→goal edge on create. Relationship-fated, not
+    /// metadata — first-class here, never a `managed_meta` key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
     /// Optional origin URI. Defaults to `mcp://agent/{uuid}`.
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
@@ -100,6 +105,10 @@ pub struct ListResourcesInput {
     pub context_ref: Option<String>,
     /// Filter by doc type name (e.g. "task", "research").
     pub doc_type_name: Option<String>,
+    /// Filter by goal: a ref (UUID or decorated `slug-<uuid>`) of a goal resource. Returns only
+    /// resources linked to it via a live `advances`→goal edge (task-only in practice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
     /// Max results (default 50, max 200).
     pub limit: Option<i64>,
     /// Pagination offset.
@@ -122,6 +131,16 @@ pub struct UpdateResourceInput {
     pub title: Option<String>,
     /// New slug.
     pub slug: Option<String>,
+    /// Set (or replace) the resource's goal: a ref (UUID or decorated `slug-<uuid>`) of the goal
+    /// this resource advances. Folds any existing `advances`→goal edge and asserts the new one.
+    /// Mutually exclusive with `clear_goal`. Omit to leave the goal edge untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    /// Clear the resource's goal: when `true`, folds the current `advances`→goal edge, leaving it
+    /// goal-less. The tri-state complement to `goal` (absent = untouched, `goal` = set/replace,
+    /// `clear_goal` = retract). Mutually exclusive with `goal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_goal: Option<bool>,
     /// New markdown content. Replaces existing content and triggers
     /// re-processing.
     pub content: Option<String>,
@@ -488,6 +507,15 @@ pub async fn create_resource(
         .into_act_context()
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
+    // Resolve the optional goal ref client-side (trailing-UUID-only, like `edge assert`); the
+    // backend projects the live `advances`→goal edge after create.
+    let goal = input
+        .goal
+        .as_deref()
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
     let cmd = CreateResource {
         slug,
         doctype: input.doc_type_name,
@@ -496,6 +524,7 @@ pub async fn create_resource(
         body,
         managed_meta,
         open_meta: input.open_meta,
+        goal,
         origin_uri: Some(origin_uri),
         chunks_packed: None,
         content_hash: None,
@@ -635,11 +664,20 @@ pub async fn list_resources(
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
+    // Resolve the optional goal filter ref client-side (trailing-UUID-only, like the write path).
+    let goal = input
+        .goal
+        .as_deref()
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
     // Build list params — context_ref is resolved server-side by filtered_visible_page;
     // bare context names are rejected there (spec Decision 1).
     let params = temper_workflow::types::resource::ResourceListParams {
         context_ref: input.context_ref.clone(),
         doc_type_name: input.doc_type_name.clone(),
+        goal: goal.map(uuid::Uuid::from),
         limit: input.limit.or(Some(50)).map(|l| l.min(200)),
         offset: input.offset,
         ..Default::default()
@@ -702,6 +740,16 @@ pub async fn update_resource(
         .into_act_context()
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let body = provenance_body(input.content, input.sources, input.content_block)?;
+    // Goal patch is tri-state: `goal` (set/replace, ref resolved client-side) wins over
+    // `clear_goal` (retract); absent leaves the goal edge untouched.
+    let goal = match (input.goal.as_deref(), input.clear_goal) {
+        (Some(r), _) => Some(temper_workflow::operations::GoalPatch::Set(
+            temper_workflow::operations::parse_ref(r)
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
+        )),
+        (None, Some(true)) => Some(temper_workflow::operations::GoalPatch::Clear),
+        _ => None,
+    };
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         title: input.title.clone(),
@@ -709,6 +757,7 @@ pub async fn update_resource(
         body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
+        goal,
         move_to: None,
         context_ref: None,
         act,
@@ -773,6 +822,8 @@ pub async fn update_resource_meta(
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
+        // Meta-only path is Property-only (Fork 2); goal links travel via update_resource.
+        goal: None,
         move_to: None,
         context_ref: None,
         act,
@@ -1279,6 +1330,7 @@ mod fields_projection_tests {
         let _input = ListResourcesInput {
             context_ref: None,
             doc_type_name: None,
+            goal: None,
             limit: None,
             offset: None,
             fields: Some(vec!["managed_meta".to_string()]),

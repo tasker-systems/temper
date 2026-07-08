@@ -75,6 +75,7 @@ fn create_cmd(context: ContextId, slug: &str) -> CreateResource {
         origin_uri: Some(format!("test://nonauth-{slug}")),
         chunks_packed: None,
         content_hash: None,
+        goal: None,
         act: ActContext::default(),
         origin: Surface::ApiHttp,
     }
@@ -138,6 +139,7 @@ async fn update_under_invocation_stamps_the_property_act(pool: PgPool) {
             open_meta: Some(serde_json::json!({ "reviewed_by": "qa" })),
             move_to: None,
             context_ref: None,
+            goal: None,
             act: stamped(inv),
             origin: Surface::ApiHttp,
         })
@@ -263,6 +265,7 @@ async fn nonauthored_act_claiming_unknown_invocation_is_not_found(pool: PgPool) 
             open_meta: Some(serde_json::json!({ "k": "v" })),
             move_to: None,
             context_ref: None,
+            goal: None,
             act,
             origin: Surface::ApiHttp,
         })
@@ -320,6 +323,7 @@ async fn update_without_act_leaves_invocation_null(pool: PgPool) {
             open_meta: Some(serde_json::json!({ "reviewed_by": "qa" })),
             move_to: None,
             context_ref: None,
+            goal: None,
             act: ActContext::default(),
             origin: Surface::ApiHttp,
         })

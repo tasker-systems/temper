@@ -86,6 +86,7 @@ async fn create_honors_client_chunks_no_server_embed(pool: PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("pack")),
+        goal: None,
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -144,6 +145,7 @@ async fn update_honors_client_chunks_no_server_embed(pool: PgPool) {
         managed_meta: None,
         open_meta: None,
         chunks_packed: Some(pack_chunks(&create_chunks).expect("pack")),
+        goal: None,
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -218,6 +220,7 @@ async fn create_without_chunks_falls_back_to_server_embed(pool: PgPool) {
         open_meta: None,
         // No client chunks → the server embeds.
         chunks_packed: None,
+        goal: None,
         act: Default::default(),
         sources: Vec::new(),
     };

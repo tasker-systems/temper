@@ -53,6 +53,7 @@ async fn seed_resource(
     app.client
         .ingest()
         .create(&IngestPayload {
+            goal: None,
             title: slug.to_string(),
             origin_uri: format!("mcp://test/{slug}"),
             context_ref: format!("@me/{context_name}"),

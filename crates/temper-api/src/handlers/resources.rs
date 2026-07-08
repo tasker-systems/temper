@@ -204,6 +204,9 @@ pub async fn create(
         body: None,
         managed_meta: ManagedMeta::default(),
         open_meta: None,
+        // POST /api/resources is a metadata-only create; ResourceCreateRequest carries no goal.
+        // Goal-bearing creates go through POST /api/ingest.
+        goal: None,
         origin_uri: Some(req.origin_uri),
         // POST /api/resources is a metadata-only create: ResourceCreateRequest carries no
         // body, so there are no client chunks to honor here. The body-bearing (client-chunked)
@@ -241,7 +244,7 @@ pub async fn update(
 ) -> ApiResult<Json<ResourceRow>> {
     use temper_core::context_ref::parse_context_ref;
     use temper_core::types::ids::ResourceId;
-    use temper_workflow::operations::{BodyUpdate, MoveSpec, UpdateResource};
+    use temper_workflow::operations::{BodyUpdate, GoalPatch, MoveSpec, UpdateResource};
 
     // Client-supplied chunks_packed (+ content_hash) are HONORED: the client did the
     // extract→chunk→embed locally, so the server carries them verbatim and only embeds
@@ -287,6 +290,15 @@ pub async fn update(
 
     let act = req.act.into_act_context().map_err(ApiError::from)?;
 
+    // Goal patch is tri-state on the wire: `goal` (set/replace) wins over `clear_goal` (retract);
+    // absent leaves the goal edge untouched. The CLI enforces mutual exclusion, but decode
+    // defensively (goal takes precedence) rather than trust the caller.
+    let goal = match (req.goal, req.clear_goal) {
+        (Some(goal_id), _) => Some(GoalPatch::Set(ResourceId::from(goal_id))),
+        (None, Some(true)) => Some(GoalPatch::Clear),
+        _ => None,
+    };
+
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         title: title_top,
@@ -294,6 +306,7 @@ pub async fn update(
         body,
         managed_meta,
         open_meta: req.open_meta,
+        goal,
         move_to,
         context_ref: None,
         act,

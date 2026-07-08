@@ -113,9 +113,13 @@ User-created guidance files. Read and apply any files found here.
 4. Infer or ask effort:
    - "How big is this? (a) small — single session, (b) medium — multi-step but bounded, (c) large — multi-session, may need decomposition"
 5. Ask: "Any specific acceptance criteria or outcomes?" (optional — user can skip)
-6. Create the task (pipe the problem statement and acceptance criteria via stdin):
+6. Optionally link a goal: pass `--goal <ref>` (a goal resource's UUID or decorated
+   `slug-<uuid>` ref, from `temper resource list --type goal`). This projects a live
+   `advances`→goal edge; later, `temper resource list --type task --goal <ref>` filters
+   tasks by it, and `temper resource update <ref> --clear-goal` retracts the link.
+7. Create the task (pipe the problem statement and acceptance criteria via stdin):
    ```bash
-   cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort>
+   cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort> [--goal <ref>]
    # <title>
 
    <problem statement from step 2>

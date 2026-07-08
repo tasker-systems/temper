@@ -140,10 +140,18 @@ async fn filtered_visible_page(
             AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
             AND ($6::text IS NULL OR p.handle = $6)
             AND ($7::text IS NULL OR r.title ILIKE '%' || $7 || '%')
+            AND ($8::uuid IS NULL OR EXISTS (
+                  SELECT 1 FROM kb_edges ge
+                   WHERE ge.source_table = 'kb_resources' AND ge.source_id = r.id
+                     AND ge.target_table = 'kb_resources' AND ge.target_id = $8
+                     AND ge.edge_kind = 'leads_to' AND ge.label = $9
+                     AND NOT ge.is_folded))
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
 
+    // The goal filter matches the live `advances`→goal edge minted by the create/update
+    // projection — same `edge_kind`='leads_to' and label (`GOAL_EDGE_LABEL`). They must agree.
     let rows = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
@@ -152,6 +160,8 @@ async fn filtered_visible_page(
         .bind(owner_self)
         .bind(owner_handle)
         .bind(params.q.as_deref())
+        .bind(params.goal)
+        .bind(super::db_backend::GOAL_EDGE_LABEL)
         .fetch_all(pool)
         .await
         .map_err(api_err)?;

@@ -70,6 +70,7 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: 
         content_hash: None,
         metadata: None,
         open_meta: None,
+        goal: None,
         act: Default::default(),
         sources: Vec::new(),
     };
