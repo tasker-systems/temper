@@ -249,59 +249,203 @@ async fn unbind_reverts_accessibility_and_is_safe(pool: sqlx::PgPool) {
     );
 }
 
-// ── (c) non-admin bind is denied (403) and writes nothing ────────────────────────────────────────
+// ── democratized bind matrix ─────────────────────────────────────────────────────────────────────
 
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn non_admin_bind_is_denied_and_writes_nothing(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
-
-    let admin_id = provision_profile(&app, &app.token).await;
-    common::enable_invite_only(&pool, admin_id).await;
-
-    let (team_id, _resource_id) = team_with_visible_resource(&pool, admin_id).await;
-
-    let cogmap_id = app
-        .client
-        .cognitive_maps()
-        .create_cognitive_map(&genesis_request())
+/// Make `profile` a member of a fresh NON-gating team at `role`. Returns the team id.
+async fn team_with_role(pool: &sqlx::PgPool, profile: Uuid, role: &str) -> Uuid {
+    let team_id = Uuid::now_v7();
+    let slug = format!("role-team-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    sqlx::query("INSERT INTO kb_teams (id, slug, name) VALUES ($1, $2, $2)")
+        .bind(team_id)
+        .bind(&slug)
+        .execute(pool)
         .await
-        .expect("admin genesis should succeed")
-        .cogmap_id;
+        .expect("insert team");
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
+    )
+    .bind(team_id)
+    .bind(profile)
+    .bind(role)
+    .execute(pool)
+    .await
+    .expect("insert membership");
+    team_id
+}
 
-    // A SECOND user with system access (a `watcher` of temper-system) but NOT admin: passes the
-    // system-access middleware, reaches the handler, and is denied by the service `is_system_admin` gate.
-    let second_token = common::generate_second_user_jwt();
-    let second_id = provision_profile(&app, &second_token).await;
+/// Provision the second (non-admin) user with system access; returns (token, profile_id).
+async fn second_user(app: &common::E2eTestApp, pool: &sqlx::PgPool) -> (String, Uuid) {
+    let token = common::generate_second_user_jwt();
+    let id = provision_profile(app, &token).await;
     sqlx::query(
         "INSERT INTO kb_team_members (team_id, profile_id, role)
          SELECT id, $1, 'watcher' FROM kb_teams WHERE slug = 'temper-system'
          ON CONFLICT (team_id, profile_id) DO NOTHING",
     )
-    .bind(second_id)
-    .execute(&pool)
+    .bind(id)
+    .execute(pool)
     .await
-    .expect("add second user as watcher");
+    .expect("second user system access");
+    (token, id)
+}
 
+/// The second user genesis-creates their OWN map (non-admin genesis) → they hold can_grant on it.
+/// Returns the server-minted cogmap id.
+async fn second_user_creates_map(app: &common::E2eTestApp, token: &str) -> Uuid {
     let resp = app
         .reqwest_client
+        .post(app.url("/api/cognitive-maps"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "name": "My map", "telos_title": "My telos" }))
+        .send()
+        .await
+        .expect("genesis request");
+    assert_eq!(resp.status(), StatusCode::OK, "non-admin genesis succeeds");
+    let body: serde_json::Value = resp.json().await.expect("json");
+    body["cogmap_id"].as_str().unwrap().parse().unwrap()
+}
+
+async fn bind_status(
+    app: &common::E2eTestApp,
+    token: &str,
+    cogmap_id: Uuid,
+    team_id: Uuid,
+) -> StatusCode {
+    app.reqwest_client
         .post(app.url(&format!("/api/cognitive-maps/{cogmap_id}/teams")))
-        .header("Authorization", format!("Bearer {second_token}"))
+        .header("Authorization", format!("Bearer {token}"))
         .json(&serde_json::json!({ "team_id": team_id }))
         .send()
         .await
-        .expect("request failed");
+        .expect("bind request")
+        .status()
+}
+
+// ── (c) a team Maintainer who administers the map may bind it to their team (+ symmetric unbind) ───
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn maintainer_with_map_grant_binds_own_map(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision_profile(&app, &app.token).await;
+    common::enable_invite_only(&pool, admin_id).await;
+
+    let (token, second_id) = second_user(&app, &pool).await;
+    let cogmap_id = second_user_creates_map(&app, &token).await; // holds can_grant via creator-grant
+    let team_id = team_with_role(&pool, second_id, "maintainer").await;
 
     assert_eq!(
-        resp.status(),
-        StatusCode::FORBIDDEN,
-        "a non-admin bind must be denied by the service is_system_admin gate"
+        bind_status(&app, &token, cogmap_id, team_id).await,
+        StatusCode::OK
     );
-    let body: serde_json::Value = resp.json().await.expect("json parse");
-    assert_eq!(body["error"]["code"], "FORBIDDEN");
+    assert!(
+        binding_exists(&pool, cogmap_id, team_id).await,
+        "the binding was written"
+    );
 
-    // No binding row was written.
+    // Symmetric unbind: the same principal may unbind.
+    let unbind = app
+        .reqwest_client
+        .delete(app.url(&format!("/api/cognitive-maps/{cogmap_id}/teams/{team_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("unbind request");
+    assert_eq!(
+        unbind.status(),
+        StatusCode::OK,
+        "maintainer may unbind their own map"
+    );
     assert!(
         !binding_exists(&pool, cogmap_id, team_id).await,
-        "a denied bind must write nothing"
+        "the binding was removed"
+    );
+}
+
+// ── (d) a mere team Member (not can_manage) is denied even holding the map grant ──────────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn member_cannot_bind(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision_profile(&app, &app.token).await;
+    common::enable_invite_only(&pool, admin_id).await;
+
+    let (token, second_id) = second_user(&app, &pool).await;
+    let cogmap_id = second_user_creates_map(&app, &token).await;
+    let team_id = team_with_role(&pool, second_id, "member").await; // not can_manage
+
+    assert_eq!(
+        bind_status(&app, &token, cogmap_id, team_id).await,
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        !binding_exists(&pool, cogmap_id, team_id).await,
+        "a denied bind writes nothing"
+    );
+}
+
+// ── (e) a team Maintainer who does NOT administer the map is denied (map-side gate) ───────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn maintainer_without_map_grant_cannot_bind(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision_profile(&app, &app.token).await;
+    common::enable_invite_only(&pool, admin_id).await;
+
+    // The ADMIN owns this map (second user holds no grant on it).
+    let admins_map = app
+        .client
+        .cognitive_maps()
+        .create_cognitive_map(&genesis_request())
+        .await
+        .expect("admin genesis")
+        .cogmap_id;
+
+    let (token, second_id) = second_user(&app, &pool).await;
+    let team_id = team_with_role(&pool, second_id, "maintainer").await;
+
+    assert_eq!(
+        bind_status(&app, &token, admins_map, team_id).await,
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        !binding_exists(&pool, admins_map, team_id).await,
+        "a denied bind writes nothing"
+    );
+}
+
+// ── (f) binding to the gating/root team stays admin-only (escalation guard) ───────────────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn bind_to_gating_team_denied_for_non_admin(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision_profile(&app, &app.token).await;
+    common::enable_invite_only(&pool, admin_id).await;
+
+    let (token, second_id) = second_user(&app, &pool).await;
+    let cogmap_id = second_user_creates_map(&app, &token).await; // holds can_grant on their map
+
+    // Promote the second user to MAINTAINER of the gating team (temper-system).
+    let gating_team_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .expect("gating team id");
+    sqlx::query(
+        "UPDATE kb_team_members SET role = 'maintainer' WHERE team_id = $1 AND profile_id = $2",
+    )
+    .bind(gating_team_id)
+    .bind(second_id)
+    .execute(&pool)
+    .await
+    .expect("promote to maintainer of gating team");
+
+    assert_eq!(
+        bind_status(&app, &token, cogmap_id, gating_team_id).await,
+        StatusCode::FORBIDDEN,
+        "binding to the gating team must stay admin-only even for a maintainer"
+    );
+    assert!(
+        !binding_exists(&pool, cogmap_id, gating_team_id).await,
+        "no escalation binding written"
     );
 }

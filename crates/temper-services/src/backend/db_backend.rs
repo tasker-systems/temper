@@ -1460,25 +1460,39 @@ impl Backend for DbBackend {
     }
 
     /// Genesis (create) a new cognitive map (cogmap + telos charter resource) from a manifest, under the
-    /// system actor, as a SINGLE `SERIALIZABLE` transaction. Identity is manifest-supplied uuidv7
-    /// (backend-minted when absent — the identity-as-input contract). Idempotent at a given id:
-    /// re-genesis returns the existing identity with `created: false` and fires NOTHING. No HTTP/authz
-    /// here (the surface gates on `is_system_admin` first); this is the backend command.
+    /// system actor, as a SINGLE `SERIALIZABLE` transaction. Idempotent at a given id: re-genesis
+    /// returns the existing identity with `created: false` and fires NOTHING. Create is open to any
+    /// authenticated profile (no surface admin gate). Two guards live HERE: a caller-supplied
+    /// `cogmap_id`/`telos_resource_id` is honored only for a system-admin (else server-minted — a
+    /// non-admin can never place a map at a chosen, e.g. reserved, id), and the creator is granted
+    /// read+write+grant on the new map (below).
     async fn create_cognitive_map(
         &self,
         cmd: CreateCognitiveMap,
     ) -> Result<CommandOutput<CreateCogmapOutcome>, TemperError> {
-        // Resolve genesis identity: manifest-supplied uuidv7, or backend-minted when absent. Resolving
-        // HERE (not deferring to the firing arm's `unwrap_or_else`) lets the existence pre-check key on
-        // the realized id and lets the outcome echo a stable id even on the mint path.
-        let cogmap_id = cmd
-            .request
-            .cogmap_id
+        // Reserved-id hardening: honor a caller-supplied id ONLY for a system-admin. A non-admin's ids
+        // are ignored and the server mints fresh uuidv7s, so a non-admin can never place a map at a
+        // chosen (e.g. reserved L0/system) id. Explicit-id genesis stays operator work. Resolving the
+        // identity HERE (not deferring to the firing arm's `unwrap_or_else`) lets the existence
+        // pre-check key on the realized id and lets the outcome echo a stable id even on the mint path.
+        let caller_is_admin =
+            crate::services::access_service::is_system_admin(&self.pool, self.profile_id)
+                .await
+                .map_err(|e| TemperError::Api(e.to_string()))?;
+        let requested_cogmap_id = if caller_is_admin {
+            cmd.request.cogmap_id
+        } else {
+            None
+        };
+        let requested_telos_id = if caller_is_admin {
+            cmd.request.telos_resource_id
+        } else {
+            None
+        };
+        let cogmap_id = requested_cogmap_id
             .map(CogmapId::from)
             .unwrap_or_else(|| CogmapId::from(uuid::Uuid::now_v7()));
-        let telos_resource_id = cmd
-            .request
-            .telos_resource_id
+        let telos_resource_id = requested_telos_id
             .map(ResourceId::from)
             .unwrap_or_else(|| ResourceId::from(uuid::Uuid::now_v7()));
         let cogmap_uuid = uuid::Uuid::from(cogmap_id);

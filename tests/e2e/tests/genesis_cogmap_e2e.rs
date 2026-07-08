@@ -110,17 +110,16 @@ async fn admin_genesis_creates_then_is_idempotent(pool: sqlx::PgPool) {
     assert_eq!(out2.telos_resource_id, out1.telos_resource_id);
 }
 
-// ── (b) non-admin genesis is denied by the handler's `is_system_admin` gate ──────────────────────
+// ── (b) non-admin genesis now SUCCEEDS, but its caller-supplied id is IGNORED (server-minted) ─────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn non_admin_genesis_is_denied(pool: sqlx::PgPool) {
+async fn non_admin_genesis_succeeds_with_server_minted_id(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
     let admin_id = provision_profile(&app, &app.token).await;
     common::enable_invite_only(&pool, admin_id).await;
 
-    // A SECOND user with system access (a `watcher` of temper-system) but NOT admin: it passes the
-    // system-access middleware and reaches the handler, where the `is_system_admin` gate denies it.
+    // A SECOND user with system access (a `watcher` of temper-system) but NOT admin.
     let second_token = common::generate_second_user_jwt();
     let second_id = provision_profile(&app, &second_token).await;
     sqlx::query(
@@ -133,7 +132,7 @@ async fn non_admin_genesis_is_denied(pool: sqlx::PgPool) {
     .await
     .expect("add second user as watcher");
 
-    let req = genesis_request();
+    let req = genesis_request(); // supplies fixed cogmap_id / telos_resource_id
     let resp = app
         .reqwest_client
         .post(app.url("/api/cognitive-maps"))
@@ -145,17 +144,45 @@ async fn non_admin_genesis_is_denied(pool: sqlx::PgPool) {
 
     assert_eq!(
         resp.status(),
-        StatusCode::FORBIDDEN,
-        "a non-admin genesis must be denied by the handler's is_system_admin gate"
+        StatusCode::OK,
+        "a non-admin may now genesis a non-reserved map"
     );
     let body: serde_json::Value = resp.json().await.expect("json parse");
-    assert_eq!(body["error"]["code"], "FORBIDDEN");
+    assert_eq!(body["created"], true, "the map was created");
 
-    // No cogmap was written at the requested id.
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kb_cogmaps WHERE id = $1)")
-        .bind(req.cogmap_id.unwrap())
+    // Reserved-id hardening: the caller-supplied id was IGNORED; the server minted a fresh one.
+    let returned_id: Uuid = body["cogmap_id"].as_str().unwrap().parse().unwrap();
+    assert_ne!(
+        returned_id,
+        req.cogmap_id.unwrap(),
+        "a non-admin's supplied id must be ignored and server-minted"
+    );
+    let requested_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kb_cogmaps WHERE id = $1)")
+            .bind(req.cogmap_id.unwrap())
+            .fetch_one(&pool)
+            .await
+            .expect("exists query");
+    assert!(
+        !requested_exists,
+        "nothing was written at the caller-supplied id"
+    );
+
+    // Creator-grant: the non-admin creator holds `grant` on and can AUTHOR the new map.
+    let can_grant: bool =
+        sqlx::query_scalar("SELECT can('kb_profiles', $1, 'grant', 'kb_cogmaps', $2)")
+            .bind(second_id)
+            .bind(returned_id)
+            .fetch_one(&pool)
+            .await
+            .expect("can grant query");
+    assert!(can_grant, "the creator holds can_grant on its new map");
+
+    let authorable: bool = sqlx::query_scalar("SELECT cogmap_authorable_by_profile($1, $2)")
+        .bind(second_id)
+        .bind(returned_id)
         .fetch_one(&pool)
         .await
-        .expect("exists query");
-    assert!(!exists, "a denied genesis must write nothing");
+        .expect("authorable query");
+    assert!(authorable, "the creator can author its new map immediately");
 }

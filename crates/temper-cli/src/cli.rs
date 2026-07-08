@@ -920,8 +920,9 @@ pub enum CogmapCmd {
     /// Genesis (create) a new cognitive map from a committed manifest.
     ///
     /// Reads the authored genesis manifest (name, telos title, optional ids + telos charter),
-    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (admin-gated, idempotent).
-    /// Ids absent from the manifest are minted client-side for a stable, reproducible identity.
+    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (open to any authenticated
+    /// profile; idempotent). Manifest/`--id` ids are honored only for a system-admin — a non-admin
+    /// always receives a server-minted id.
     Create {
         /// Path to the genesis manifest (YAML)
         #[arg(long)]
@@ -954,15 +955,16 @@ pub enum CogmapCmd {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
     },
-    /// Bind a cognitive map to a team (admin-only). Widens the map's reach to the
-    /// team's shared resources.
+    /// Bind a cognitive map to a team. Requires system-admin, OR that you manage the team
+    /// (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to
+    /// the team's shared resources.
     Bind {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,
         /// Team to bind to: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
-    /// Unbind a cognitive map from a team (admin-only).
+    /// Unbind a cognitive map from a team (same authority as bind).
     Unbind {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,

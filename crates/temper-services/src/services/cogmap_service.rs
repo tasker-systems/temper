@@ -6,16 +6,17 @@
 //! same precedent as `context_service`). Only cogmap *genesis* got a Backend
 //! command.
 //!
-//! Gating is admin-only: `is_system_admin` at the TOP of each fn, BEFORE any
-//! write. (This differs from `team_service::add_member`, which gates on
-//! `owner`/`maintainer` — binding a map widens its producer-intersection reach
-//! across teams, so it is an operator action.)
+//! Bind/unbind gate is TWO-SIDED (`can_bind`, at the TOP of each fn, BEFORE any write):
+//! `is_system_admin`, OR the caller administers the MAP (`can_grant` on it) AND may manage the TEAM
+//! (`can_manage` = owner/maintainer, direct membership) AND the team is NOT the gating/root team
+//! (binding there flips the map into the `require_cogmap_write_admin` regime — an escalation kept
+//! admin-only).
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service;
+use crate::services::{access_service, team_service};
 use temper_core::types::cognitive_maps::{BindTeamOutcome, BindTeamRequest, UnbindTeamOutcome};
 use temper_core::types::ids::{CogmapId, ProfileId};
 
@@ -29,8 +30,8 @@ pub async fn bind_team(
     cogmap_id: Uuid,
     req: &BindTeamRequest,
 ) -> ApiResult<BindTeamOutcome> {
-    // Auth before writes: binding a map is a system-admin operation.
-    if !access_service::is_system_admin(pool, caller).await? {
+    // Auth before writes: system-admin, OR a team manager who administers the map (non-root team).
+    if !can_bind(pool, caller, cogmap_id, req.team_id).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -52,6 +53,32 @@ pub async fn bind_team(
         team_id: req.team_id,
         bound: inserted.is_some(),
     })
+}
+
+/// Two-sided bind/unbind gate. Allowed IFF `is_system_admin`, OR the caller can administer the MAP
+/// (`can_grant` on it) AND may manage the TEAM (`can_manage` = Owner|Maintainer, direct membership)
+/// AND the team is NOT the gating/root team. Binding to the gating team flips the map into the
+/// `require_cogmap_write_admin` regime, so that stays admin-only (escalation guard).
+async fn can_bind(
+    pool: &PgPool,
+    caller: ProfileId,
+    cogmap_id: Uuid,
+    team_id: Uuid,
+) -> ApiResult<bool> {
+    if access_service::is_system_admin(pool, caller).await? {
+        return Ok(true);
+    }
+    if access_service::is_gating_team(pool, team_id).await? {
+        return Ok(false);
+    }
+    let team_ok = matches!(
+        team_service::role_on_team(pool, team_id, caller).await?,
+        Some(role) if team_service::can_manage(role)
+    );
+    if !team_ok {
+        return Ok(false);
+    }
+    access_service::profile_can_grant(pool, caller, "kb_cogmaps", cogmap_id).await
 }
 
 /// Producer write gate: can `profile` author a resource homed in `cogmap`?
@@ -90,8 +117,8 @@ pub async fn unbind_team(
     cogmap_id: Uuid,
     team_id: Uuid,
 ) -> ApiResult<UnbindTeamOutcome> {
-    // Auth before writes: unbinding a map is a system-admin operation.
-    if !access_service::is_system_admin(pool, caller).await? {
+    // Auth before writes: symmetric with bind — a principal who could bind may unbind.
+    if !can_bind(pool, caller, cogmap_id, team_id).await? {
         return Err(ApiError::Forbidden);
     }
 

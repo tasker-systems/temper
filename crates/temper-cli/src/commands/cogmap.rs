@@ -60,7 +60,8 @@ pub fn analytics(cogmap_ref: &str, fmt: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (admin-only).
+/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (system-admin, or a team
+/// manager who administers the map).
 ///
 /// The team is resolved to its id CLIENT-SIDE (slug → id via the teams list, or a bare UUID); the
 /// wire shape is id-based (mirroring `team add-member`).
@@ -187,7 +188,8 @@ pub fn reconcile(
 }
 
 /// Genesis (create) a new cognitive map from the manifest at `manifest_path`. `--id` / `--name`
-/// override the manifest's `cogmap_id` / `name`; absent ids are minted client-side (stable, reproducible).
+/// override the manifest's `cogmap_id` / `name`. A supplied id is honored only for a system-admin;
+/// a non-admin always receives a server-minted id (reserved-id hardening).
 #[cfg(feature = "embed")]
 pub fn create(
     manifest_path: &str,
