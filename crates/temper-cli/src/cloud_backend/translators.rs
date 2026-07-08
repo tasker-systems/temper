@@ -49,12 +49,12 @@ fn resolve_create_body(
 /// `content_hash` and `chunks_packed`, they are forwarded directly. Otherwise
 /// runs `compute_body_chunks` to fill them.
 ///
-/// **Identity is first-class:** `title` and `slug` travel as top-level payload
-/// fields from the typed `cmd`; `managed_meta` is Property-only and is never
-/// injected with identity keys.
+/// **Identity is first-class:** `title` travels as a top-level payload field from
+/// the typed `cmd`; `managed_meta` is Property-only and is never injected with
+/// identity keys. Slug is §7-dissolved and NOT sent — the server derives it from
+/// the title (issue #307).
 ///
-/// **`origin_uri`:** empty string today — server constructs the canonical
-/// URI from `(owner, context, doctype, slug)`.
+/// **`origin_uri`:** empty string today — the server owns URI construction.
 #[cfg(feature = "embed")]
 pub(crate) fn cmd_to_ingest_payload(
     cmd: &CreateResource,
@@ -110,7 +110,6 @@ pub(crate) fn cmd_to_ingest_payload(
         // handler projects the live `advances`→goal edge after create.
         goal: cmd.goal.map(uuid::Uuid::from),
         content_hash,
-        slug: cmd.slug.clone(),
         content,
         metadata: None,
         managed_meta,
@@ -208,7 +207,6 @@ pub(crate) fn cmd_to_resource_update_request(
 
     Ok(temper_workflow::types::ResourceUpdateRequest {
         title: cmd.title.clone(),
-        slug: cmd.slug.clone(),
         managed_meta: managed_meta_opt,
         open_meta,
         content,
@@ -298,7 +296,6 @@ mod tests {
     fn cmd_to_ingest_payload_round_trips_basic_fields() {
         let cmd = sample_cmd();
         let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
-        assert_eq!(payload.slug, "2026-05-18-test");
         assert_eq!(payload.title, "Test task");
         assert_eq!(payload.context_ref, "@me/temper");
         assert_eq!(payload.doc_type_name, "task");
@@ -335,16 +332,13 @@ mod tests {
     #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_ingest_payload_carries_identity_top_level_not_in_managed_meta() {
-        // Identity is first-class: title/slug travel as top-level payload fields
-        // from the typed cmd, and managed_meta is Property-only — it must NOT carry
-        // `temper-title` / `temper-slug` (they left the vocabulary in Phase 2).
+        // Identity is first-class: `title` travels as a top-level payload field from
+        // the typed cmd, and managed_meta is Property-only — it must NOT carry
+        // `temper-title` / `temper-slug` (they left the vocabulary in Phase 2). Slug is
+        // §7-dissolved and no longer on the wire at all (issue #307).
         let cmd = sample_cmd();
         let payload = cmd_to_ingest_payload(&cmd, "@me/temper").expect("should succeed");
         assert_eq!(payload.title, "Test task", "identity title is top-level");
-        assert_eq!(
-            payload.slug, "2026-05-18-test",
-            "identity slug is top-level"
-        );
         if let Some(mm) = &payload.managed_meta {
             assert!(
                 mm.get("temper-title").is_none() && mm.get("temper-slug").is_none(),

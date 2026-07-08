@@ -36,7 +36,6 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         content_hash: Some(
             "meta0test0000000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "meta-test-doc".to_string(),
         content: "# Meta Test\n\nContent for meta testing.".to_string(),
         metadata: None,
         managed_meta: None,
@@ -170,7 +169,6 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         content_hash: Some(
             "chunkpreserve0000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "chunks-preserved".to_string(),
         content: "# Heading A\n\nContent for chunk A.\n\n# Heading B\n\nContent for chunk B."
             .to_string(),
         metadata: None,
@@ -321,7 +319,6 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64}", "e")),
-        slug: "errors-doc".to_string(),
         content: "# Errors\n\nResource for error mapping.".to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({})),
@@ -464,7 +461,6 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(format!("{:0>64}", "c")),
-        slug: "get-meta-doc".to_string(),
         content: "# Section A\n\nBody for A.\n\n# Section B\n\nBody for B.".to_string(),
         metadata: None,
         managed_meta: Some(seeded_managed.clone()),

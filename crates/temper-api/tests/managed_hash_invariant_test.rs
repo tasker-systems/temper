@@ -53,8 +53,8 @@ async fn provision_profile(app: &common::TestApp) -> String {
     token
 }
 
-/// Ingest a research doc with the given title/slug, returning the created id.
-async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: &str) -> String {
+/// Ingest a research doc with the given title, returning the created id.
+async fn ingest_research(app: &common::TestApp, token: &str, title: &str) -> String {
     let chunks = vec![fake_chunk("body content", 0)];
     let chunks_packed = pack_chunks(&chunks).expect("pack_chunks");
     let payload = IngestPayload {
@@ -63,7 +63,6 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str, slug: 
         context_ref: "@me/default".to_string(),
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
-        slug: slug.to_string(),
         content: "body content".to_string(),
         managed_meta: None,
         chunks_packed: Some(chunks_packed),
@@ -109,8 +108,7 @@ async fn ingest_stores_title_on_resource(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
-    let resource_id =
-        ingest_research(&app, &token, "Hash Invariant Doc", "hash-invariant-doc").await;
+    let resource_id = ingest_research(&app, &token, "Hash Invariant Doc").await;
 
     let row = fetch_resource(&app, &token, &resource_id).await;
     assert_eq!(
@@ -125,7 +123,7 @@ async fn meta_only_update_preserves_title(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
-    let resource_id = ingest_research(&app, &token, "Preserve Original", "preserve-original").await;
+    let resource_id = ingest_research(&app, &token, "Preserve Original").await;
 
     // PUT /api/resources/{id}/meta with only a stage change (no title). The title
     // column must survive untouched.
@@ -163,7 +161,7 @@ async fn title_patch_updates_resource_title(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
-    let resource_id = ingest_research(&app, &token, "Original Title", "original-slug").await;
+    let resource_id = ingest_research(&app, &token, "Original Title").await;
 
     let patch_resp = app
         .client

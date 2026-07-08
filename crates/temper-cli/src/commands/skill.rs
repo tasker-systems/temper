@@ -68,9 +68,11 @@ llm-model, llm-run, provenance). It is optional metadata with smart defaults;
 you never *have* to send it. An unknown key under `managed_meta` is rejected --
 put caller-defined ("bring-your-own") fields in `open_meta`, the free-form tier.
 
-**Slug precedence:** the slug is derived from the title. To override it, pass
-the top-level `slug` (CLI `--slug`, MCP `slug`). A slug placed in managed
-frontmatter is inert.
+**Slug:** the slug is always derived from the title -- it is not a caller
+input on any surface. Addressing is trailing-UUID-only (a bare UUID or the
+decorated `sluggify(title)-<uuid>` ref), so the slug is display decoration
+only; there is no CLI `--slug` flag and the MCP/API request schemas no longer
+carry a `slug` field. A slug placed in managed frontmatter is likewise inert.
 
 ## Discovery Workflow
 

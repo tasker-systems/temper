@@ -116,7 +116,6 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
         title: "Authored via MCP".to_string(),
         content: None,
         sources: None,
-        slug: None,
         origin_uri: None,
         owner: None,
         managed_meta: None,

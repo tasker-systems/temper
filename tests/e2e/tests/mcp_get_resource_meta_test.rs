@@ -60,7 +60,6 @@ async fn seed_resource(
             home_cogmap_id: None,
             doc_type_name: "research".to_string(),
             content_hash: Some(format!("sha256:{}", sha2_hex(slug))),
-            slug: slug.to_string(),
             // EMPTY body: client-ingested prose rides in `chunks_packed`, so a
             // non-empty `content` would engage `create_resource`'s body-dedup, which
             // collapses these empty-bodied batch rows onto one (empty) hash. An empty

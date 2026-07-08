@@ -25,6 +25,9 @@ use super::{
 /// (not via a `ResourceId`) since it doesn't exist yet.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateResource {
+    /// Server-derived slug (from the title) — NOT a caller input. Slug is §7-dissolved
+    /// (never stored; addressing is trailing-UUID-only), so surfaces populate this by
+    /// slugifying the title; it only seeds the temper-slug schema validation (issue #307).
     pub slug: String,
     pub doctype: String,
     /// Resolved home anchor — exactly one of a context or a cognitive map.
@@ -111,8 +114,9 @@ pub struct UpdateResource {
     /// New title (identity). First-class: identity travels here, not inside
     /// `managed_meta`. `None` leaves the current title unchanged.
     pub title: Option<String>,
-    /// New slug (identity). `None` leaves it unchanged; the server derives a
-    /// slug from the effective title when a title change arrives without one.
+    /// Slug is §7-dissolved and NOT a caller input — surfaces always pass `None` and the
+    /// backend derives it from the effective title. Retained as a field only so the command
+    /// shape is stable; there is no way to set a slug on any surface (issue #307).
     pub slug: Option<String>,
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,

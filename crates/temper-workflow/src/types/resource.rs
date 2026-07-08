@@ -169,7 +169,6 @@ pub struct ResourceCreateRequest {
     pub doc_type: String,
     pub origin_uri: String,
     pub title: String,
-    pub slug: Option<String>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the create act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     #[serde(default, flatten)]
@@ -185,8 +184,6 @@ pub struct ResourceCreateRequest {
 pub struct ResourceUpdateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slug: Option<String>,
     /// Partial managed_meta — only fields with `Some` apply.
     /// Untouched fields preserve their stored value. There is no in-band
     /// signal for "clear this field"; field-clearing is reserved for a
@@ -385,7 +382,6 @@ mod tests {
         use serde_json::json;
         let req = ResourceUpdateRequest {
             title: Some("New Title".to_string()),
-            slug: Some("new-slug".to_string()),
             managed_meta: Some(ManagedMeta {
                 stage: Some("done".to_string()),
                 ..Default::default()
@@ -405,7 +401,6 @@ mod tests {
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.title.as_deref(), Some("New Title"));
-        assert_eq!(parsed.slug.as_deref(), Some("new-slug"));
         assert_eq!(parsed.type_to.as_deref(), Some("goal"));
         assert_eq!(parsed.content_block, Some(uuid::Uuid::nil()));
         assert_eq!(
@@ -426,7 +421,6 @@ mod tests {
     fn resource_update_request_omits_none_fields_on_serialize() {
         let req = ResourceUpdateRequest {
             title: None,
-            slug: None,
             managed_meta: Some(ManagedMeta {
                 stage: Some("done".to_string()),
                 ..Default::default()

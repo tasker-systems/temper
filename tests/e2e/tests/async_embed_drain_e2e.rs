@@ -76,7 +76,6 @@ async fn deferred_create_is_fts_immediate_then_ready_after_drain(pool: sqlx::PgP
         goal: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(content)),
-        slug: "deferred-embed-doc".to_string(),
         content: content.to_string(),
         metadata: None,
         managed_meta: None,

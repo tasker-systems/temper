@@ -41,7 +41,6 @@ async fn ingest_create_with_at_me_slug_succeeds(pool: sqlx::PgPool) {
         content_hash: Some(
             "c0010001000100010001000100010001000100010001000100010001000100010001".to_string(),
         ),
-        slug: "context-ref-at-me-slug-test".to_string(),
         content: "# Context Ref Test\n\n@me/slug form.".to_string(),
         metadata: None,
         managed_meta: None,
@@ -81,7 +80,6 @@ async fn ingest_create_with_bare_name_returns_400(pool: sqlx::PgPool) {
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: None,
-        slug: "should-be-rejected".to_string(),
         content: "# Rejected".to_string(),
         metadata: None,
         managed_meta: None,
@@ -140,7 +138,6 @@ async fn ingest_create_with_uuid_context_ref_succeeds(pool: sqlx::PgPool) {
         content_hash: Some(
             "d0010001000100010001000100010001000100010001000100010001000100010001".to_string(),
         ),
-        slug: "context-ref-uuid-test".to_string(),
         content: "# Context Ref Test\n\nUUID form.".to_string(),
         metadata: None,
         managed_meta: None,

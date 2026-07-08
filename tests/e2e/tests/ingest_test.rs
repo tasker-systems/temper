@@ -35,7 +35,6 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         content_hash: Some(
             "e2e0test00000000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "e2e-test-document".to_string(),
         content: "# E2E Test\n\nThis is a test document for e2e testing.".to_string(),
         metadata: None,
         managed_meta: None,

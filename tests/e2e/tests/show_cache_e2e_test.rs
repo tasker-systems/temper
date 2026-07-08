@@ -70,7 +70,6 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
-        slug: "heal-me".to_string(),
         content: body.clone(),
         metadata: None,
         // ManagedMeta uses serde(rename = "temper-*") on its typed fields and
@@ -176,7 +175,6 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
-        slug: "mismatch".to_string(),
         content: body.clone(),
         metadata: None,
         managed_meta: None,
