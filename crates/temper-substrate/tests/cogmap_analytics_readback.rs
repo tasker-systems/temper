@@ -211,6 +211,29 @@ async fn analytics_telos_staleness_regulation_and_deny(pool: PgPool) {
     assert_eq!(got.regulation[0].edge_label, "operationalized_by");
     assert_eq!(got.regulation[0].title, "Deploy safely");
 
+    // Soft-delete READ floor (SQL audit 2026-07-08 chunk 2): flipping is_active — the whole
+    // effect of `_project_resource_deleted` — must drop the concept from regulation, because
+    // `cogmap_regulation` gates through `resources_readable_by` → the is_active-gated
+    // visibility functions. The map row itself (telos + staleness) stays readable.
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(target)
+        .execute(&pool)
+        .await
+        .expect("soft-delete regulation target");
+    let after_delete = temper_substrate::readback::cogmap_analytics(
+        &pool,
+        CogmapId::from(cogmap),
+        ProfileId::from(p1),
+    )
+    .await
+    .expect("analytics read after delete")
+    .expect("map stays readable after member-resource delete");
+    assert!(
+        after_delete.regulation.is_empty(),
+        "cogmap_regulation must stop serving the soft-deleted concept: {:?}",
+        after_delete.regulation
+    );
+
     // Non-member: the in-SQL gate yields zero rows → None.
     let denied = temper_substrate::readback::cogmap_analytics(
         &pool,
