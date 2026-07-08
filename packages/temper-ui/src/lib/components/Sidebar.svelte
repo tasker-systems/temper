@@ -65,11 +65,11 @@
 			</a>
 
 			{#if myContexts.length > 0}
-				<ContextNavGroup label="Contexts" ownerPrefix="@me" contexts={myContexts} />
+				<ContextNavGroup label="Contexts" contexts={myContexts} />
 			{/if}
 
 			{#if teamContexts.length > 0}
-				<ContextNavGroup label="Teams" ownerPrefix="+team" contexts={teamContexts} />
+				<ContextNavGroup label="Teams" contexts={teamContexts} />
 			{/if}
 		</nav>
 
