@@ -4,6 +4,7 @@
 	import AtlasCrumb from '$lib/components/graph/atlas/AtlasCrumb.svelte';
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
 	import HomeA11yList from '$lib/components/graph/atlas/HomeA11yList.svelte';
+	import CompositionA11yList from '$lib/components/graph/atlas/CompositionA11yList.svelte';
 	import { selectedElement } from '$lib/graph/atlas/nav';
 	import type { AtlasViewData } from '$lib/graph/atlas/viewData';
 	import { navigating, page } from '$app/stores';
@@ -57,6 +58,9 @@
 	<div class="canvas-wrap">
 		{#if data.home}
 			<HomeA11yList home={data.home} />
+		{/if}
+		{#if subgraph && subgraph.nodes.length > 0}
+			<CompositionA11yList {subgraph} />
 		{/if}
 		{#if isViewLoad}
 			<div class="loading-veil" role="status" aria-live="polite">Loading…</div>

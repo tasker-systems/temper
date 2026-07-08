@@ -11,3 +11,22 @@ export type NodeMarkShape = 'circle' | 'square';
 export function nodeMarkShape(home: 'context' | 'cogmap'): NodeMarkShape {
 	return home === 'cogmap' ? 'circle' : 'square';
 }
+
+import type { AtlasNode } from '$lib/types/generated/graph_atlas';
+
+/** The a11y mirror of the two-axis field: nodes split into Ideas (cogmap facets)
+ *  and Sources (context-homed work). Same `home`-drives-axis rule as the marks. */
+export interface AxisGroups {
+	ideas: AtlasNode[];
+	sources: AtlasNode[];
+}
+
+export function groupByAxis(nodes: AtlasNode[]): AxisGroups {
+	const ideas: AtlasNode[] = [];
+	const sources: AtlasNode[] = [];
+	for (const n of nodes) {
+		if (n.home === 'cogmap') ideas.push(n);
+		else sources.push(n);
+	}
+	return { ideas, sources };
+}
