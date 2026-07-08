@@ -12,7 +12,11 @@
 		label: string | null;
 		/** Member count fallback: when `label` is null, renders "Region · N" instead of a blank circle. */
 		memberCount?: number;
-		onEnter?: () => void;
+		/** `shift` is true when the activating click/key held Shift — drives multi-region
+		 *  union selection on the panorama (Beat D). */
+		onEnter?: (opts: { shift: boolean }) => void;
+		/** In the pending union selection — draws a solid accent ring (Beat D). */
+		selected?: boolean;
 		/** Empty territory (no members) — render as a de-emphasized ghost (L3). Still drillable. */
 		ghost?: boolean;
 		/** Salience-gated labeling: only the salient regions draw an in-panorama label;
@@ -32,7 +36,7 @@
 		coherence?: number | null;
 	}
 	let {
-		x, y, r, kind, label, memberCount = 0, onEnter,
+		x, y, r, kind, label, memberCount = 0, onEnter, selected = false,
 		ghost = false, showLabel = true, intensity = 0.5,
 		tint: tintOverride,
 		glow: recencyGlow,
@@ -85,8 +89,10 @@
 	role={onEnter ? 'button' : undefined}
 	tabindex={onEnter ? 0 : undefined}
 	aria-label={ariaLabel}
-	onclick={onEnter}
-	onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onEnter?.())}
+	aria-pressed={isRegion ? selected : undefined}
+	onclick={(e) => onEnter?.({ shift: e.shiftKey })}
+	onkeydown={(e) =>
+		(e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onEnter?.({ shift: e.shiftKey }))}
 	onmouseenter={() => (hovered = true)}
 	onmouseleave={() => (hovered = false)}
 	onfocus={() => (hovered = true)}
@@ -119,6 +125,17 @@
 		>
 			{#each lines as line, i (i)}<tspan x={x} dy={i === 0 ? 0 : LINE_H}>{line}</tspan>{/each}
 		</text>
+	{/if}
+	{#if selected}
+		<circle
+			cx={x}
+			cy={y}
+			r={radius + 5}
+			fill="none"
+			stroke="#cfd6e2"
+			stroke-width="2.5"
+			stroke-opacity="0.95"
+		/>
 	{/if}
 	<circle class="focus-ring" cx={x} cy={y} r={radius + 4} stroke-width="2" />
 	{#if hovered && isRegion}

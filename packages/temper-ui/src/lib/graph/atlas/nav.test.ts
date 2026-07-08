@@ -5,6 +5,7 @@ import {
 	buildAscendUrl,
 	buildCogmapUrl,
 	buildDrillNodeUrl,
+	buildDrillTerritoriesUrl,
 	buildDrillTerritoryUrl,
 	buildEdgeSelectUrl,
 	buildNodeSelectUrl,
@@ -265,5 +266,9 @@ describe('territory union (Beat D)', () => {
 		const once = buildDrillTerritoryUrl(u('?focus=territory:A'), 'B', { add: true });
 		const twice = buildDrillTerritoryUrl(new URL(`https://x${once}`), 'B', { add: true });
 		expect(idsAfter(twice)).toEqual(['A', 'B']);
+	});
+
+	it('buildDrillTerritoriesUrl commits a whole selection as a union', () => {
+		expect(idsAfter(buildDrillTerritoriesUrl(u(''), ['A', 'B', 'C']))).toEqual(['A', 'B', 'C']);
 	});
 });

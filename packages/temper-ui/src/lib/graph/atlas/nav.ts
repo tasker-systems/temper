@@ -194,6 +194,11 @@ export function buildDrillTerritoryUrl(
 	});
 }
 
+/** Commit a multi-region union selection to the URL: `focus=territory:A~B~C`. */
+export function buildDrillTerritoriesUrl(base: URL, ids: string[]): string {
+	return withParams(base, (p) => p.set('focus', `territory:${ids.join(UNION_SEP)}`));
+}
+
 export function buildDrillNodeUrl(base: URL, nodeId: string): string {
 	// Replace a trailing node leaf (node→node drill) while KEEPING any preceding
 	// territory prefix; otherwise append to a territory leaf, or set directly

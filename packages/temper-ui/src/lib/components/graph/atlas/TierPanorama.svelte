@@ -6,7 +6,11 @@
 	import { intensityOf, labeledRegionIds } from '$lib/graph/atlas/labels';
 	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
 	import { bridgeGeometry } from '$lib/graph/atlas/layout/bridges';
-	import { buildDrillTerritoryUrl, buildDrillNodeUrl } from '$lib/graph/atlas/nav';
+	import {
+		buildDrillTerritoryUrl,
+		buildDrillTerritoriesUrl,
+		buildDrillNodeUrl
+	} from '$lib/graph/atlas/nav';
 	import { TERRITORY_TINTS, isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import { isEmptyTerritory } from '$lib/graph/atlas/territory';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
@@ -39,10 +43,27 @@
 	const territoryPos = $derived(new Map(packed.map((t) => [t.id, { x: t.x, y: t.y }])));
 	const bridgeLines = $derived(bridgeGeometry(overview.bridges, territoryPos));
 
+	// Beat D multi-region union: shift-click toggles regions into a pending selection
+	// (stays on the panorama); the "Explore N regions" button commits the union. A
+	// plain click still drills into a single region.
+	let unionSel = $state<string[]>([]);
+	function toggleUnion(regionId: string) {
+		unionSel = unionSel.includes(regionId)
+			? unionSel.filter((id) => id !== regionId)
+			: [...unionSel, regionId];
+	}
+
 	// Drill is a drill step — PUSH history so browser Back walks the path
 	// (Atlas ← cogmap ← territory ← node). See nav.ts.
-	function drillTerritory(regionId: string) {
-		goto(buildDrillTerritoryUrl($page.url, regionId));
+	function drillTerritory(regionId: string, kind: string, shift: boolean) {
+		if (shift && kind === 'region') {
+			toggleUnion(regionId);
+		} else {
+			goto(buildDrillTerritoryUrl($page.url, regionId));
+		}
+	}
+	function commitUnion() {
+		if (unionSel.length > 0) goto(buildDrillTerritoriesUrl($page.url, unionSel));
 	}
 	function drillNode(nodeId: string) {
 		goto(buildDrillNodeUrl($page.url, nodeId));
@@ -64,7 +85,8 @@
 			kind={t.kind}
 			label={t.label}
 			memberCount={t.member_count}
-			onEnter={() => drillTerritory(t.id)}
+			onEnter={(o) => drillTerritory(t.id, t.kind, o.shift)}
+			selected={unionSel.includes(t.id)}
 			ghost={isEmptyTerritory(t)}
 			showLabel={labeledIds.has(t.id)}
 			intensity={intensityOf(t.salience, maxSalience)}
@@ -93,4 +115,39 @@
 			</g>
 		{/each}
 	</g>
+
+	<!-- Union commit affordance: appears while regions are shift-selected. -->
+	{#if unionSel.length > 0}
+		<g
+			class="union-commit atlas-focusable"
+			role="button"
+			tabindex="0"
+			aria-label={`Explore ${unionSel.length} selected ${unionSel.length === 1 ? 'region' : 'regions'} together`}
+			onclick={commitUnion}
+			onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), commitUnion())}
+			style="cursor:pointer"
+		>
+			<rect
+				x={width / 2 - 96}
+				y={14}
+				width={192}
+				height={30}
+				rx={15}
+				fill="#1b2733"
+				stroke="#cfd6e2"
+				stroke-opacity="0.55"
+				stroke-width="1.5"
+			/>
+			<text
+				x={width / 2}
+				y={33}
+				text-anchor="middle"
+				fill="#e6ebf2"
+				font-size="13"
+				font-weight="600"
+			>
+				Explore {unionSel.length} {unionSel.length === 1 ? 'region' : 'regions'} →
+			</text>
+		</g>
+	{/if}
 </g>
