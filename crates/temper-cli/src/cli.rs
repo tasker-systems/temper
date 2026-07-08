@@ -185,6 +185,8 @@ pub enum Commands {
         #[arg(long)]
         context: Option<String>,
     },
+    /// List the pending team invitations addressed to you
+    Invitations,
     /// Manage Claude Code skill
     Skill {
         #[command(subcommand)]

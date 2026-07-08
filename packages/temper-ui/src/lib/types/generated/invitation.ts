@@ -23,6 +23,14 @@ export type CreateInvitationRequest = { invited_email: string, role: TeamRole, }
 export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
 
 /**
+ * A pending invitation resolved to the *invitee's* view — the `TeamInvitation`
+ * fields plus the team's slug/name for display. Returned by
+ * `GET /api/invitations/mine`; the caller is authorized to redeem these, so the
+ * `token` is legitimately theirs to see.
+ */
+export type InviteeInvitation = { id: string, team_id: string, team_slug: string, team_name: string, invited_email: string, invited_by_profile_id: string, role: TeamRole, token: string, status: InvitationStatus, expires_at: string, created: string, };
+
+/**
  * A pending or resolved invitation to join a team.
  *
  * Primary flow is link-based: invite generates a token-bearing URL,

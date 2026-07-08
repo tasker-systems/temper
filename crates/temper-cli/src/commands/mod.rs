@@ -8,6 +8,7 @@ pub mod context_cmd;
 pub mod edge;
 pub mod facet;
 pub mod init;
+pub mod invitations;
 pub mod invocation;
 pub mod pull;
 pub mod resource;
