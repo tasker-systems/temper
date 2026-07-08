@@ -9,34 +9,41 @@ import {
 	parseFocus,
 	parseFocusPath,
 	parseScopeFilter,
-	selectedElement
+	selectedElement,
+	territoryIds
 } from '$lib/graph/atlas/nav';
 import type { EdgeKind } from '$lib/types/generated/graph';
+import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import { ApiError } from '$lib/server/api';
 import {
 	readAtlasHome,
 	readCogmapNeighborhood,
 	readCogmapPanorama,
-	readRegionSlice,
+	readRegionComposition,
 	readResourceRow,
 	readTrail
 } from '$lib/server/graph-reads';
-import type { TerritorySlice } from '$lib/types/generated/graph_territory';
 
 const NEIGHBORHOOD_DEPTH = 2;
 
 const isNotFound = (e: unknown): boolean => e instanceof ApiError && e.status === 404;
 
 /**
- * Read a focused territory's slice, degrading gracefully when it has been
- * re-materialized out from under the URL. Region ids are ephemeral (the steward
- * re-sweeps cogmap clusters), so a bookmarked / back-navigated / long-open
- * territory URL can 404. On 404 we redirect to the current scope's panorama
- * rather than 500 the whole page; a genuine 5xx still surfaces.
+ * Beat D — read a focused territory's COMPOSITION drill (facets + the
+ * context-resources they were derived_from), degrading gracefully when the region
+ * has been re-materialized out from under the URL. Region ids are ephemeral (the
+ * steward re-sweeps cogmap clusters), so a bookmarked / back-navigated / long-open
+ * territory URL can 404. On 404 we redirect to the current scope's panorama rather
+ * than 500 the whole page; a genuine 5xx still surfaces. Drives one region or a
+ * shift-selected union (the `~`-split id list).
  */
-async function sliceOrPanorama(token: string, regionId: string, url: URL): Promise<TerritorySlice> {
+async function compositionOrPanorama(
+	token: string,
+	ids: string[],
+	url: URL
+): Promise<AtlasSubgraph> {
 	try {
-		return await readRegionSlice(token, regionId);
+		return await readRegionComposition(token, ids, 1);
 	} catch (e) {
 		if (isNotFound(e)) throw redirect(303, buildPanoramaUrl(url));
 		throw e;
@@ -44,25 +51,12 @@ async function sliceOrPanorama(token: string, regionId: string, url: URL): Promi
 }
 
 /**
- * Resolve the breadcrumb label for a path territory. At Tier 1 the primary slice
- * is already loaded and reused; at Tier 2 (a node leaf under a territory) we fetch
- * the ancestor's slice just for its label. That ancestor can be a stale region id —
- * but the node view itself is still valid (node ids are stable), so on 404 we keep
- * the view and let the crumb fall back to its generic label rather than 500 or bounce
- * the user off a working page.
+ * Read-free crumb for a territory hop. The composition read carries no region
+ * label (region ids are ephemeral anyway), so a single region shows the generic
+ * label (null → crumbModel renders "Region") and a union shows its count.
  */
-async function crumbTerritoryLabel(
-	token: string,
-	segId: string,
-	slice: TerritorySlice | null
-): Promise<{ id: string; label: string | null }> {
-	if (slice && slice.region_id === segId) return { id: segId, label: slice.label };
-	try {
-		return { id: segId, label: (await readRegionSlice(token, segId)).label };
-	} catch (e) {
-		if (isNotFound(e)) return { id: segId, label: null };
-		throw e;
-	}
+function crumbTerritoryFor(segId: string, unionSize: number): { id: string; label: string | null } {
+	return { id: segId, label: unionSize > 1 ? `${unionSize} regions` : null };
 }
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -90,24 +84,26 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		// door was entered from). Falls back to a generic label if not visible there
 		// (e.g. a public/system cogmap outside your membership — refined in Beat 2).
 		// The home read is independent of the tier read, so run them concurrently.
-		const [territories, slice, home, neighborhood] = await Promise.all([
+		// Beat D: a territory focus (one region or a `~`-union) loads the composition
+		// force-graph into `neighborhood`; a node focus loads the cogmap neighborhood.
+		// The R3 members-hull `slice` is retired — territory drill is now the two-axis
+		// composition (facets + the context-resources they were derived_from).
+		const [territories, home, neighborhood] = await Promise.all([
 			tier === 0 ? readCogmapPanorama(token, cogmapId) : Promise.resolve(null),
-			tier === 1 && focus.kind === 'territory' ? sliceOrPanorama(token, focus.id, url) : Promise.resolve(null),
 			readAtlasHome(token),
-			tier === 2 && focus.kind === 'node'
-				? readCogmapNeighborhood(token, cogmapId, {
-						seeds: [focus.id],
-						depth: NEIGHBORHOOD_DEPTH,
-						edge_kinds: [] as EdgeKind[]
-					})
-				: Promise.resolve(null)
+			tier === 1 && focus.kind === 'territory'
+				? compositionOrPanorama(token, territoryIds(focus), url)
+				: tier === 2 && focus.kind === 'node'
+					? readCogmapNeighborhood(token, cogmapId, {
+							seeds: [focus.id],
+							depth: NEIGHBORHOOD_DEPTH,
+							edge_kinds: [] as EdgeKind[]
+						})
+					: Promise.resolve(null)
 		]);
 		const cogmapName = home.research.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
-		// Name the territory hop in the crumb (reuses the already-loaded slice at Tier 1;
-		// fetches the path territory's slice for its label at Tier 2, tolerating a stale
-		// region id).
 		const crumbTerritory = territorySeg
-			? await crumbTerritoryLabel(token, territorySeg.id, slice)
+			? crumbTerritoryFor(territorySeg.id, territoryIds(focus).length)
 			: null;
 
 		// R5 trail + resource row are profile-scoped, not scope-gated.
@@ -128,7 +124,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			focus,
 			home: null,
 			territories,
-			slice,
+			slice: null,
 			neighborhood,
 			selection,
 			trail,

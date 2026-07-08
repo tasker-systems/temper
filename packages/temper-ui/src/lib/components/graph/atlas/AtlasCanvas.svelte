@@ -8,7 +8,6 @@
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
 	import TierHome from './TierHome.svelte';
 	import TierPanorama from './TierPanorama.svelte';
-	import TierTerritory from './TierTerritory.svelte';
 	import TierNeighborhood from './TierNeighborhood.svelte';
 
 	interface Props {
@@ -30,16 +29,20 @@
 
 	const seedId = $derived(focus.kind === 'node' ? focus.id : '');
 
-	// A Tier-2 neighborhood with no nodes must not fall through to a blank canvas
-	// (B4). Cogmap scope has no neighborhood read at all, so a node drilled inside a
-	// cogmap gets a scope-aware message instead of the generic "No data" (B3).
-	const hasNeighbors = $derived(tier === 2 && !!neighborhood && neighborhood.nodes.length > 0);
+	// Both the Tier-1 territory COMPOSITION drill (Beat D) and the Tier-2 node
+	// neighborhood render as the force-graph; neither must fall through to a blank
+	// canvas when the subgraph is empty (B4).
+	const hasNeighbors = $derived(
+		(tier === 1 || tier === 2) && !!neighborhood && neighborhood.nodes.length > 0
+	);
 	const emptyMessage = $derived(
 		cogmapId && tier === 2
 			? 'Node neighborhoods are not available in cogmap view yet — return to the map to explore its regions.'
 			: tier === 2
 				? 'This node has no mapped neighbors yet.'
-				: 'No data for this view.'
+				: tier === 1
+					? 'This region has no linked resources yet.'
+					: 'No data for this view.'
 	);
 
 	let svgEl: SVGSVGElement | undefined = $state();
@@ -64,8 +67,6 @@
 				<TierHome {home} width={W} height={H} />
 			{:else if tier === 0 && territories}
 				<TierPanorama overview={territories} width={W} height={H} docTypes={filters.docTypes} />
-			{:else if tier === 1 && slice}
-				<TierTerritory {slice} width={W} height={H} />
 			{:else if hasNeighbors && neighborhood}
 				<TierNeighborhood subgraph={neighborhood} {seedId} width={W} height={H} docTypes={filters.docTypes} />
 			{:else}
