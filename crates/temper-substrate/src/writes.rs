@@ -125,9 +125,37 @@ pub async fn create_resource_with(
     p: CreateParams<'_>,
     ctx: EventContext,
 ) -> Result<ResourceId> {
-    let mut block = match p.chunks {
-        Some(chunks) => prepare_block_from_chunks(0, None, chunks),
-        None => prepare_block(0, None, p.body)?,
+    create_resource_impl(pool, p, ctx, false).await
+}
+
+/// [`create_resource_with`] with embedding **deferred** (issue #299): when the caller supplies no
+/// precomputed `chunks`, the body block is chunked but NOT embedded — its chunks land with a NULL
+/// vector, so the resource is fully FTS-searchable immediately and its embeddings are backfilled
+/// off-request (see [`crate::embed::embed_resource_chunks`]). Caller-supplied `chunks` (bring-your-own
+/// vectors) are still honored verbatim — there is nothing to defer. Persist-side twin of the queued
+/// embed job; the caller enqueues the backfill after this returns the new id.
+pub async fn create_resource_deferred_with(
+    pool: &PgPool,
+    p: CreateParams<'_>,
+    ctx: EventContext,
+) -> Result<ResourceId> {
+    create_resource_impl(pool, p, ctx, true).await
+}
+
+/// Shared create body for [`create_resource_with`] (inline embed) and
+/// [`create_resource_deferred_with`] (deferred embed). `defer` only affects the no-precomputed-chunks
+/// case: `false` embeds inline (`prepare_block`), `true` chunks without embedding
+/// (`prepare_block_deferred`). Everything else — sources, event fan-out, properties — is identical.
+async fn create_resource_impl(
+    pool: &PgPool,
+    p: CreateParams<'_>,
+    ctx: EventContext,
+    defer: bool,
+) -> Result<ResourceId> {
+    let mut block = match (p.chunks, defer) {
+        (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
+        (None, false) => prepare_block(0, None, p.body)?,
+        (None, true) => crate::content::prepare_block_deferred(0, None, p.body),
     };
     // Resource-level sources apply to the (single) body block; carried onto the manifest → provenance.
     block.incorporated = p.sources;
@@ -210,7 +238,24 @@ pub async fn update_resource_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    update_resource_in_tx(&mut tx, p, ctx).await?;
+    update_resource_in_tx(&mut tx, p, ctx, false).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`update_resource_with`] with embedding **deferred** (issue #299) — the update twin of
+/// [`create_resource_deferred_with`]. When the caller supplies no precomputed `chunks`, the revised
+/// body block is re-chunked but NOT embedded (its chunks land with a NULL vector); the caller enqueues
+/// the backfill. A body revise makes the new chunks `is_current` and the old generation non-current,
+/// so a backfill (keyed on `is_current AND embedding IS NULL`) only ever embeds the current revision —
+/// create-then-quick-update supersede is automatic.
+pub async fn update_resource_deferred_with(
+    pool: &PgPool,
+    p: UpdateParams<'_>,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    update_resource_in_tx(&mut tx, p, ctx, true).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -223,6 +268,7 @@ pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     p: UpdateParams<'_>,
     ctx: EventContext,
+    defer: bool,
 ) -> Result<()> {
     if let Some(body) = p.body {
         let block_id = match p.content_block {
@@ -268,9 +314,10 @@ pub async fn update_resource_in_tx(
                 }
             }
         };
-        let mut prepared = match p.chunks {
-            Some(chunks) => prepare_block_from_chunks(0, None, chunks),
-            None => prepare_block(0, None, body)?,
+        let mut prepared = match (p.chunks, defer) {
+            (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
+            (None, false) => prepare_block(0, None, body)?,
+            (None, true) => crate::content::prepare_block_deferred(0, None, body),
         };
         if prepared.chunks.is_empty() {
             anyhow::bail!(

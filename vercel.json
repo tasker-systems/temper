@@ -7,6 +7,9 @@
       "SQLX_OFFLINE": "true"
     }
   },
+  "crons": [
+    { "path": "/api/embed/dispatch", "schedule": "* * * * *" }
+  ],
   "routes": [
     { "handle": "filesystem" },
     { "src": "/mcp", "dest": "/api/mcp" },

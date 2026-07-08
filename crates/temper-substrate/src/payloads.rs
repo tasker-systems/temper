@@ -199,7 +199,10 @@ pub fn content_sidecar_chunks(
             c.chunk_id.to_string(),
             ChunkContent {
                 content: c.content.clone(),
-                embedding: Some(EmbeddingRepr::Vector(c.embedding.clone())),
+                // A deferred chunk (`embedding: None`) drops the sidecar `embedding` key entirely
+                // (skip_serializing_if), which `_insert_chunk` reads as a NULL vector — the write-side
+                // half of the async-embed path (issue #299). An embedded chunk carries its vector.
+                embedding: c.embedding.clone().map(EmbeddingRepr::Vector),
                 header_path: c.header_path.clone(),
                 heading_depth: c.heading_depth,
             },
@@ -621,7 +624,7 @@ mod tests {
                 chunk_index: 0,
                 content_hash: "ab".repeat(32),
                 content: "secret prose".into(),
-                embedding: vec![0.5; 4],
+                embedding: Some(vec![0.5; 4]),
                 header_path: None,
                 heading_depth: None,
             }],
@@ -697,7 +700,7 @@ mod tests {
                 chunk_index: 0,
                 content_hash: "cd".repeat(32),
                 content: "the prose".into(),
-                embedding: vec![1.0, 2.0],
+                embedding: Some(vec![1.0, 2.0]),
                 header_path: None,
                 heading_depth: None,
             }],
@@ -707,5 +710,29 @@ mod tests {
         let entry = side.get(&b.chunks[0].chunk_id.to_string()).unwrap();
         assert_eq!(entry.content, "the prose");
         assert!(matches!(entry.embedding, Some(EmbeddingRepr::Vector(_))));
+    }
+
+    // A deferred chunk (`embedding: None`) yields a sidecar entry whose `embedding` is None, and that
+    // entry serializes with the `embedding` key ABSENT — which `_insert_chunk` reads as a NULL vector
+    // (issue #299). Content still rides through, so text + FTS persist while the vector is deferred.
+    #[test]
+    fn deferred_chunk_sidecar_entry_has_null_embedding() {
+        use crate::content::prepare_block_deferred;
+        let block = prepare_block_deferred(0, None, "deferred prose for the sidecar");
+        let side = content_sidecar(std::slice::from_ref(&block));
+        let entry = side.get(&block.chunks[0].chunk_id.to_string()).unwrap();
+        assert_eq!(entry.content, "deferred prose for the sidecar");
+        assert!(
+            entry.embedding.is_none(),
+            "deferred sidecar entry carries no vector"
+        );
+        // The serialized JSON drops the `embedding` key (skip_serializing_if = Option::is_none), which
+        // is exactly the absent-key case the projector maps to NULL.
+        let json = serde_json::to_value(entry).unwrap();
+        assert!(json.get("content").is_some());
+        assert!(
+            json.get("embedding").is_none(),
+            "absent embedding key is the projector's NULL signal: {json}"
+        );
     }
 }

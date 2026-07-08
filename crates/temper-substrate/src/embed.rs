@@ -46,3 +46,47 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     }
     Ok(())
 }
+
+/// Backfill the deferred embeddings for ONE resource — the resource-scoped twin of [`embed_chunks`],
+/// the per-job body of the async-embed worker (issue #299). Embeds every current, non-folded chunk of
+/// `resource_id` whose `embedding IS NULL` and writes the 768-dim vector back. Scoping by
+/// `is_current AND embedding IS NULL` is what makes create-then-update supersede naturally: a body
+/// revise makes the new generation current (embedding NULL) and the old generation non-current, so a
+/// job — whenever it runs — only ever embeds the resource's *current* chunks. Returns the number of
+/// chunks embedded (0 when the resource is already fully embedded — an idempotent no-op).
+pub async fn embed_resource_chunks(pool: &PgPool, resource_id: Uuid) -> Result<u64> {
+    let chunks = sqlx::query(
+        "SELECT ch.id AS chunk_id, cc.content \
+         FROM kb_chunks ch \
+         JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
+         JOIN kb_content_blocks b ON b.id = ch.block_id \
+         WHERE ch.resource_id = $1 AND ch.is_current AND NOT b.is_folded AND ch.embedding IS NULL",
+    )
+    .bind(resource_id)
+    .fetch_all(pool)
+    .await?;
+    let mut embedded = 0u64;
+    for row in chunks {
+        let chunk_id: Uuid = row.get("chunk_id");
+        let content: String = row.get("content");
+        if content.trim().is_empty() {
+            continue;
+        }
+        let embeddings = temper_ingest::embed::embed_texts(&[content.as_str()])?;
+        let emb = &embeddings[0];
+        let vec_lit = format!(
+            "[{}]",
+            emb.iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        sqlx::query("UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2")
+            .bind(vec_lit)
+            .bind(chunk_id)
+            .execute(pool)
+            .await?;
+        embedded += 1;
+    }
+    Ok(embedded)
+}

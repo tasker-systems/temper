@@ -2,6 +2,7 @@ pub mod access;
 pub mod cognitive_maps;
 pub mod contexts;
 pub mod edges;
+pub mod embed;
 pub mod events;
 pub mod facets;
 pub mod graph;

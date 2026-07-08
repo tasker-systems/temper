@@ -915,6 +915,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         port: 0,
         enable_swagger: false,
         internal_reconcile_secret: None,
+        embed_dispatch_secret: None,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let svc = temper_mcp::service::TemperMcpService::new(state);
@@ -1068,6 +1069,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         port: 0,
         enable_swagger: false,
         internal_reconcile_secret: None,
+        embed_dispatch_secret: None,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let svc = temper_mcp::service::TemperMcpService::new(state);
