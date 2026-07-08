@@ -459,16 +459,20 @@ pub async fn region_composition_slice(
     // Bound the union so the central idea-cluster stays legible (spec §6).
     const MAX_UNION_REGIONS: usize = 6;
     const NODE_CAP: usize = 120;
-    let regions: Vec<Uuid> = if region_ids.len() > MAX_UNION_REGIONS {
+    // Dedup first: a caller repeating a region id must not trip the entry-gate
+    // count check (distinct matched rows vs len), and the union bound counts
+    // distinct regions.
+    let mut regions: Vec<Uuid> = region_ids.to_vec();
+    regions.sort_unstable();
+    regions.dedup();
+    if regions.len() > MAX_UNION_REGIONS {
         tracing::warn!(
-            requested = region_ids.len(),
+            requested = regions.len(),
             cap = MAX_UNION_REGIONS,
             "region composition union clamped"
         );
-        region_ids[..MAX_UNION_REGIONS].to_vec()
-    } else {
-        region_ids.to_vec()
-    };
+        regions.truncate(MAX_UNION_REGIONS);
+    }
 
     // Entry gate (deny-as-absence): every requested region must exist, be
     // unfolded, and be cogmap-readable by the caller. Selecting the count adds
@@ -500,40 +504,30 @@ pub async fn region_composition_slice(
     .fetch_all(pool)
     .await?;
 
-    let edges: Vec<AtlasEdge> = walked
-        .iter()
-        .map(
-            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
-                id: *id,
-                source: *source,
-                target: *target,
-                edge_kind: *edge_kind,
-                polarity: *polarity,
-                label: label.clone(),
-                weight: *weight,
-            },
-        )
-        .collect();
-
-    // Seeds (region members) ensure an isolated facet with no edges still
-    // renders; union with all walked endpoints, then cap.
-    let mut node_ids: Vec<Uuid> = sqlx::query_scalar(
+    // Node id set: region members (seeds) FIRST so NODE_CAP never drops a facet in
+    // favour of a neighbor, then the walked endpoints. Seeds also ensure an
+    // isolated facet with no edges still renders.
+    let seeds: Vec<Uuid> = sqlx::query_scalar(
         "SELECT DISTINCT member_id FROM kb_cogmap_region_members WHERE region_id = ANY($1)",
     )
     .bind(&regions)
     .fetch_all(pool)
     .await?;
-    for (_, s, t, ..) in &walked {
-        node_ids.push(*s);
-        node_ids.push(*t);
+    let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut node_ids: Vec<Uuid> = Vec::new();
+    for id in seeds
+        .into_iter()
+        .chain(walked.iter().flat_map(|(_, s, t, ..)| [*s, *t]))
+    {
+        if seen.insert(id) {
+            node_ids.push(id);
+        }
     }
-    node_ids.sort_unstable();
-    node_ids.dedup();
     if node_ids.len() > NODE_CAP {
         tracing::warn!(
             nodes = node_ids.len(),
             cap = NODE_CAP,
-            "region composition node set clamped"
+            "region composition node set clamped (seeds kept, neighbors dropped)"
         );
         node_ids.truncate(NODE_CAP);
     }
@@ -563,6 +557,26 @@ pub async fn region_composition_slice(
         excerpt: first_chunk.as_deref().and_then(compute_excerpt),
     })
     .collect();
+
+    // Keep only edges whose BOTH endpoints made the final (capped + visibility- and
+    // is_active-gated) node set, so the wire payload never references a node the
+    // client can't place — no dangling edge into a dropped node.
+    let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
+    let edges: Vec<AtlasEdge> = walked
+        .into_iter()
+        .filter(|(_, s, t, ..)| present.contains(s) && present.contains(t))
+        .map(
+            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
+                id,
+                source,
+                target,
+                edge_kind,
+                polarity,
+                label,
+                weight,
+            },
+        )
+        .collect();
 
     Ok(AtlasSubgraph { nodes, edges })
 }

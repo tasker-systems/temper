@@ -84,30 +84,7 @@ pub struct TerritoryOverview {
     pub bridges: Vec<Bridge>,
 }
 
-/// A member of a region's interior (resolved per-member through resources_visible_to).
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct RegionMember {
-    pub id: Uuid,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub doc_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub affinity: Option<f64>,
-}
-
-/// R3 territory drill-in: region label + top-N members (visibility-scoped).
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_territory.ts"))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct TerritorySlice {
-    pub region_id: Uuid,
-    /// The region's human label (`kb_cogmap_regions.label`); may be null.
-    pub label: Option<String>,
-    pub members: Vec<RegionMember>,
-}
+// R3 `TerritorySlice` / `RegionMember` retired in Beat D — the territory drill is
+// now the two-axis composition (`AtlasSubgraph`), so the members-hull payload has
+// no consumer. (The `graph_region_members` SQL fn is left in place; it is a shipped
+// object dropped in a later additive migration.)

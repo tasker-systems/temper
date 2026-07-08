@@ -70,9 +70,7 @@ pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
 pub use graph_atlas::{AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest};
 pub use graph_home::{AtlasHome, HomeCogmap, HomeContext};
-pub use graph_territory::{
-    Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
-};
+pub use graph_territory::{Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{

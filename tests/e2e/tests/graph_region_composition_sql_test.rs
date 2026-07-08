@@ -376,6 +376,28 @@ async fn service_returns_two_axis_subgraph(pool: sqlx::PgPool) {
         .any(|e| e.source == facet && e.target == ctx_doc));
 }
 
+/// A repeated region id must NOT trip the entry-gate count check (dedup), and the
+/// returned subgraph must never contain an edge whose endpoint is absent from the
+/// node set (no dangling edges — the payload is always internally consistent).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn service_dedups_regions_and_never_dangles_edges(pool: sqlx::PgPool) {
+    let (a, _b, region, facet, ctx_doc) = build_cross_home(&pool).await;
+
+    let sub = region_composition_slice(&pool, ProfileId::from(a), &[region, region], 1)
+        .await
+        .expect("duplicate region id must not be denied");
+    assert!(sub.nodes.iter().any(|n| n.id == facet));
+    assert!(sub.nodes.iter().any(|n| n.id == ctx_doc));
+
+    let present: std::collections::HashSet<Uuid> = sub.nodes.iter().map(|n| n.id).collect();
+    for e in &sub.edges {
+        assert!(
+            present.contains(&e.source) && present.contains(&e.target),
+            "edge {e:?} references a node absent from the subgraph"
+        );
+    }
+}
+
 /// Service entry gate (deny-as-absence): a caller who cannot read the region's
 /// cogmap gets NotFound, never a partial subgraph.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
