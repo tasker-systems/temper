@@ -256,17 +256,17 @@
 					width={chip.w}
 					height={CHIP_H}
 					rx={CHIP_H / 2}
-					fill={active ? tint : 'rgba(255,255,255,0.02)'}
-					fill-opacity={active ? 0.2 : 1}
+					fill={tint}
+					fill-opacity={active ? 0.28 : 0.12}
 					stroke={tint}
-					stroke-opacity={active ? 0.9 : 0.35}
+					stroke-opacity={active ? 0.95 : 0.5}
 					stroke-width={active ? 1.5 : 1}
 				/>
 				<text
 					x={chip.x + chip.w / 2}
 					y={CHIP_Y + CHIP_H / 2 + 4}
 					text-anchor="middle"
-					fill={active ? tint : '#8b93a5'}
+					fill={tint}
 					font-size="11"
 					font-weight={active ? '700' : '500'}>{chip.label}</text
 				>
