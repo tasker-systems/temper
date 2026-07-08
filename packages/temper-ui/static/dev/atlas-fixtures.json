@@ -9,7 +9,6 @@
    "kind": "none"
   },
   "territories": null,
-  "slice": null,
   "neighborhood": null,
   "selection": {
    "kind": "none"
@@ -126,163 +125,6 @@
    ]
   }
  },
- "regionSlice": {
-  "owner": "@me",
-  "cogmapId": null,
-  "cogmapName": null,
-  "scopeFilter": null,
-  "tier": 1,
-  "focus": {
-   "kind": "territory",
-   "id": "0191d0c0-001d-7000-8000-00000000001d"
-  },
-  "territories": null,
-  "slice": {
-   "region_id": "0191d0c0-001d-7000-8000-00000000001d",
-   "label": null,
-   "components": [
-    {
-     "id": "0191d0c0-003f-7000-8000-00000000003f",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0040-7000-8000-000000000040",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0041-7000-8000-000000000041",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0042-7000-8000-000000000042",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0043-7000-8000-000000000043",
-     "member_count": 20
-    },
-    {
-     "id": "0191d0c0-0044-7000-8000-000000000044",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0045-7000-8000-000000000045",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0046-7000-8000-000000000046",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0047-7000-8000-000000000047",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0048-7000-8000-000000000048",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0049-7000-8000-000000000049",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-004a-7000-8000-00000000004a",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-004b-7000-8000-00000000004b",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-004c-7000-8000-00000000004c",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-004d-7000-8000-00000000004d",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-004e-7000-8000-00000000004e",
-     "member_count": 21
-    },
-    {
-     "id": "0191d0c0-004f-7000-8000-00000000004f",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0050-7000-8000-000000000050",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0051-7000-8000-000000000051",
-     "member_count": 4
-    },
-    {
-     "id": "0191d0c0-0052-7000-8000-000000000052",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0053-7000-8000-000000000053",
-     "member_count": 2
-    },
-    {
-     "id": "0191d0c0-0054-7000-8000-000000000054",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0055-7000-8000-000000000055",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0056-7000-8000-000000000056",
-     "member_count": 1
-    },
-    {
-     "id": "0191d0c0-0057-7000-8000-000000000057",
-     "member_count": 1
-    }
-   ],
-   "members": [
-    {
-     "id": "0191d0c0-0058-7000-8000-000000000058",
-     "title": "Lucid atlas",
-     "doc_type": "commitment"
-    },
-    {
-     "id": "0191d0c0-0059-7000-8000-000000000059",
-     "title": "Signal ember ripple",
-     "doc_type": "theme"
-    },
-    {
-     "id": "0191d0c0-005a-7000-8000-00000000005a",
-     "title": "Quartz summit willow anchor",
-     "doc_type": "fact"
-    }
-   ]
-  },
-  "neighborhood": null,
-  "selection": {
-   "kind": "none"
-  },
-  "trail": null,
-  "resourceRow": null,
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [
-   {
-    "kind": "territory",
-    "id": "0191d0c0-001d-7000-8000-00000000001d"
-   }
-  ],
-  "crumbTerritory": {
-   "id": "0191d0c0-001d-7000-8000-00000000001d",
-   "label": null
-  },
-  "home": null
- },
  "nodeNeighborhood": {
   "owner": "@me",
   "cogmapId": null,
@@ -294,7 +136,6 @@
    "id": "0191d0c0-0058-7000-8000-000000000058"
   },
   "territories": null,
-  "slice": null,
   "neighborhood": {
    "nodes": [
     {
@@ -555,7 +396,6 @@
    "id": "0191d0c0-0058-7000-8000-000000000058"
   },
   "territories": null,
-  "slice": null,
   "neighborhood": {
    "nodes": [
     {
@@ -1366,7 +1206,6 @@
    ],
    "bridges": []
   },
-  "slice": null,
   "neighborhood": null,
   "selection": {
    "kind": "none"
@@ -1393,7 +1232,6 @@
    "id": "0191d0c0-0058-7000-8000-000000000058"
   },
   "territories": null,
-  "slice": null,
   "neighborhood": {
    "nodes": [],
    "edges": []

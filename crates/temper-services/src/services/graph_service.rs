@@ -17,7 +17,7 @@ use temper_core::types::graph_atlas::{
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
-    OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
+    OrphanNode, Territory, TerritoryKind, TerritoryOverview,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_workflow::frontmatter::document::DocType;
@@ -436,55 +436,6 @@ pub async fn cogmap_panorama(
         territories,
         orphan_nodes,
         bridges: Vec::new(),
-    })
-}
-
-/// R3 Tier-1 territory drill-in: a region's visibility-scoped interior
-/// members. Deny-as-absence — the region must exist, be unfolded, and be
-/// readable by the caller, else `NotFound`.
-pub async fn territory_slice(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    region_id: Uuid,
-) -> ApiResult<TerritorySlice> {
-    // The readability gate and the label come from one query: deny-as-absence
-    // (region must exist, be unfolded, and be cogmap-readable). Selecting the
-    // label here adds no new visibility surface — it is strictly less sensitive
-    // than the member titles returned below.
-    let label: Option<String> = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT reg.label FROM kb_cogmap_regions reg \
-         WHERE reg.id = $1 AND NOT reg.is_folded \
-           AND cogmap_readable_by_profile($2, reg.cogmap_id)",
-    )
-    .bind(region_id)
-    .bind(profile_id.as_uuid())
-    .fetch_optional(pool)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-
-    const MEMBER_LIMIT: usize = 100;
-    let members: Vec<RegionMember> =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, Option<f64>)>(
-            "SELECT id, title, doc_type, affinity FROM graph_region_members($1, $2)",
-        )
-        .bind(profile_id.as_uuid())
-        .bind(region_id)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .take(MEMBER_LIMIT)
-        .map(|(id, title, doc_type, affinity)| RegionMember {
-            id,
-            title,
-            doc_type,
-            affinity,
-        })
-        .collect();
-
-    Ok(TerritorySlice {
-        region_id,
-        label,
-        members,
     })
 }
 

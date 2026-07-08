@@ -93,15 +93,9 @@ pub fn create_app(state: AppState) -> Router {
             "/api/cogmaps/{id}/graph/slice",
             post(handlers::graph::cogmap_neighborhood_slice),
         )
-        // Static path must precede the `{region_id}` param route so "composition"
-        // is not captured as a region id.
         .route(
             "/api/graph/regions/composition",
             get(handlers::graph::region_composition),
-        )
-        .route(
-            "/api/graph/regions/{region_id}/slice",
-            get(handlers::graph::territory_slice),
         )
         .route("/api/graph/home", get(handlers::graph::atlas_home))
         .route(

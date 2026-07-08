@@ -31,7 +31,6 @@ const REQUIRED_KEYS = {
 	focus: true,
 	home: true,
 	territories: true,
-	slice: true,
 	neighborhood: true,
 	selection: true,
 	trail: true,
@@ -47,7 +46,6 @@ const EXPECTED_KEYS = Object.keys(REQUIRED_KEYS).sort();
 // Every scenario the harness offers must be present so a fresh checkout can drive it.
 const EXPECTED_SCENARIOS = [
 	'home',
-	'regionSlice',
 	'nodeNeighborhood',
 	'nodeSelected',
 	'cogmapPanorama',

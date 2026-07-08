@@ -10,15 +10,13 @@ import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atl
 import type { EventTrail, ElementKind } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { TeamRow } from '$lib/types/generated/team';
-import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
+import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 import type { ResourceRow } from '$lib/types/generated/resource';
 
 export const atlasHomePath = (): string => '/api/graph/home';
 
 export const cogmapPanoramaPath = (id: string, lensId?: string): string =>
 	`/api/graph/cogmaps/${id}/panorama${lensId ? `?lens_id=${lensId}` : ''}`;
-
-export const regionSlicePath = (regionId: string): string => `/api/graph/regions/${regionId}/slice`;
 
 /** Beat D — composition drill over one or more regions (comma-joined ids). */
 export const regionCompositionPath = (ids: string[], depth = 1): string =>
@@ -42,9 +40,6 @@ export const readCogmapPanorama = (
 	id: string,
 	lensId?: string
 ): Promise<TerritoryOverview> => apiGet<TerritoryOverview>(cogmapPanoramaPath(id, lensId), token);
-
-export const readRegionSlice = (token: string, regionId: string): Promise<TerritorySlice> =>
-	apiGet<TerritorySlice>(regionSlicePath(regionId), token);
 
 export const readRegionComposition = (
 	token: string,

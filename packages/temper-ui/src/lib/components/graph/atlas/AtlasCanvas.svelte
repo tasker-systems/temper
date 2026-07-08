@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
+	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import type { AtlasHome } from '$lib/types/generated/graph_home';
 	import type { Focus, GraphFilters } from '$lib/graph/atlas/nav';
@@ -15,12 +15,11 @@
 		tier: number;
 		focus: Focus;
 		territories: TerritoryOverview | null;
-		slice: TerritorySlice | null;
 		neighborhood: AtlasSubgraph | null;
 		home: AtlasHome | null;
 		filters: GraphFilters;
 	}
-	let { cogmapId, tier, focus, territories, slice, neighborhood, home, filters }: Props = $props();
+	let { cogmapId, tier, focus, territories, neighborhood, home, filters }: Props = $props();
 
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;

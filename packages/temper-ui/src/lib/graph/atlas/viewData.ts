@@ -10,7 +10,7 @@ import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { ResourceRow } from '$lib/types/generated/resource';
-import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
+import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 import type { Focus, GraphFilters, SelectedElement } from './nav';
 
 /** Breadcrumb label for the focused territory hop (see `crumbTerritory` in load).
@@ -31,7 +31,6 @@ export interface AtlasViewData {
 	// carried here — TierHome derives it from the URL (`?home`).
 	home: AtlasHome | null;
 	territories: TerritoryOverview | null;
-	slice: TerritorySlice | null;
 	neighborhood: AtlasSubgraph | null;
 	selection: SelectedElement;
 	trail: EventTrail | null;

@@ -71,7 +71,6 @@
 				tier={data.tier}
 				focus={data.focus}
 				territories={data.territories}
-				slice={data.slice}
 				neighborhood={data.neighborhood}
 				home={data.home}
 				filters={data.filters}

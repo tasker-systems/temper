@@ -4,15 +4,11 @@ import {
 	atlasHomePath,
 	cogmapPanoramaPath,
 	regionCompositionPath,
-	regionSlicePath,
 	teamsListPath,
 	trailPath
 } from './graph-reads';
 
 describe('graph API path builders', () => {
-	it('R3 region slice', () => {
-		expect(regionSlicePath('r5')).toBe('/api/graph/regions/r5/slice');
-	});
 	it('Beat D region composition (single + union)', () => {
 		expect(regionCompositionPath(['r1'])).toBe('/api/graph/regions/composition?ids=r1&depth=1');
 		expect(regionCompositionPath(['r1', 'r2'], 1)).toBe(
