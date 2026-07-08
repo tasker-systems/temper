@@ -150,9 +150,39 @@ export function buildCogmapUrl(base: URL, cogmapId: string): string {
 	});
 }
 
-export function buildDrillTerritoryUrl(base: URL, territoryId: string): string {
-	// A territory is always the first drill hop from the panorama.
-	return withParams(base, (p) => p.set('focus', `territory:${territoryId}`));
+/** Union separator inside a territory token. `~` is URL-unreserved (RFC 3986) and
+ *  never appears in a UUID, and — unlike `+` — it does not decode to a space in a
+ *  query string, so a union round-trips through the URL intact. */
+const UNION_SEP = '~';
+
+/** Region ids carried by a territory focus. A shift-selected union is expressed as
+ *  `~`-joined ids within the territory token (`territory:A~B` → ['A','B']); the drill
+ *  path (comma) stays untouched. Non-territory focus → []. */
+export function territoryIds(focus: Focus): string[] {
+	return focus.kind === 'territory' ? focus.id.split(UNION_SEP).filter(Boolean) : [];
+}
+
+export function buildDrillTerritoryUrl(
+	base: URL,
+	territoryId: string,
+	opts?: { add?: boolean }
+): string {
+	// A territory is the first drill hop from the panorama. `add` (shift-click)
+	// unions the region into the current territory leaf: `territory:A` → `territory:A~B`.
+	return withParams(base, (p) => {
+		if (opts?.add) {
+			const path = (p.get('focus') ?? '').split(',').filter(Boolean);
+			const leaf = path[path.length - 1];
+			if (leaf?.startsWith('territory:')) {
+				const ids = leaf.slice('territory:'.length).split(UNION_SEP).filter(Boolean);
+				if (!ids.includes(territoryId)) ids.push(territoryId);
+				path[path.length - 1] = `territory:${ids.join(UNION_SEP)}`;
+				p.set('focus', path.join(','));
+				return;
+			}
+		}
+		p.set('focus', `territory:${territoryId}`);
+	});
 }
 
 export function buildDrillNodeUrl(base: URL, nodeId: string): string {

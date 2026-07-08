@@ -19,6 +19,7 @@ import {
 	parseCogmap,
 	parseFilters,
 	parseFocus,
+	territoryIds,
 	parseFocusPath,
 	parseHomeLens,
 	parseScopeFilter,
@@ -222,5 +223,41 @@ describe('scope filter (?scope)', () => {
 
 	it('clears the scope filter, keeping the lens', () => {
 		expect(clearScopeFilterUrl(u('?home=build&scope=%2Btasker'))).toBe('/graph/@me?home=build');
+	});
+});
+
+describe('territory union (Beat D)', () => {
+	const u = (qs: string) => new URL(`https://x/graph/@me${qs}`);
+	// Round-trip a built path back through the URL parser — the real property is
+	// "the ids survive", independent of how the wire percent-encodes the token.
+	const idsAfter = (path: string) =>
+		territoryIds(parseFocus(new URL(`https://x${path}`).searchParams));
+
+	it('territoryIds splits a ~-joined union token', () => {
+		expect(territoryIds({ kind: 'territory', id: 'A~B' })).toEqual(['A', 'B']);
+		expect(territoryIds({ kind: 'territory', id: 'A' })).toEqual(['A']);
+		expect(territoryIds({ kind: 'node', id: 'N' })).toEqual([]);
+		expect(territoryIds({ kind: 'none' })).toEqual([]);
+	});
+
+	it('a single region round-trips', () => {
+		expect(idsAfter(buildDrillTerritoryUrl(u(''), 'A'))).toEqual(['A']);
+	});
+
+	it('replaces focus by default', () => {
+		expect(idsAfter(buildDrillTerritoryUrl(u('?focus=territory:A'), 'B'))).toEqual(['B']);
+	});
+
+	it('add unions into the territory leaf and round-trips', () => {
+		expect(idsAfter(buildDrillTerritoryUrl(u('?focus=territory:A'), 'B', { add: true }))).toEqual([
+			'A',
+			'B'
+		]);
+	});
+
+	it('add is idempotent (no duplicate region)', () => {
+		const once = buildDrillTerritoryUrl(u('?focus=territory:A'), 'B', { add: true });
+		const twice = buildDrillTerritoryUrl(new URL(`https://x${once}`), 'B', { add: true });
+		expect(idsAfter(twice)).toEqual(['A', 'B']);
 	});
 });
