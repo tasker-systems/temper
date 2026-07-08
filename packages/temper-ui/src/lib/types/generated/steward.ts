@@ -14,6 +14,25 @@ cogmap_id: string,
 watermark: string, };
 
 /**
+ * A resource-keyed job claimed for dispatch — the resource twin of [`ClaimedJob`]. The `Embed`
+ * worker claims one of these per resource whose deferred chunk embeddings need backfilling (issue
+ * #299); the `resource_id` is the scope it embeds.
+ */
+export type ClaimedEmbedJob = { 
+/**
+ * The queue row id.
+ */
+id: string, 
+/**
+ * The resource whose deferred embeddings this claimed run backfills.
+ */
+resource_id: string, 
+/**
+ * How many times this job has now been claimed (1 on first dispatch).
+ */
+attempts: number, };
+
+/**
  * A job claimed for dispatch — the caller starts exactly one agent session per `ClaimedJob`,
  * carrying its single `cogmap_id` (the fan-out is over the workflow, never the agent's target).
  */
@@ -58,6 +77,29 @@ new_resources: bigint,
  * All events anchored to the team's contexts since the watermark (total activity).
  */
 new_events: bigint, };
+
+/**
+ * Outcome of one embed-dispatch pass (issue #299): how many resource-keyed embed jobs were claimed,
+ * how many completed cleanly, how many failed (left for the reaper's retry→dead path), and the total
+ * chunks embedded. Returned by the `/api/embed/dispatch` drain so a cron/operator has observability.
+ */
+export type EmbedDispatchSummary = { 
+/**
+ * Jobs claimed this pass (bounded by the dispatch cap).
+ */
+claimed: number, 
+/**
+ * Jobs whose resource embedded cleanly and were marked done.
+ */
+completed: number, 
+/**
+ * Jobs whose embed errored — left in_progress for the reaper to retry (then dead at max attempts).
+ */
+failed: number, 
+/**
+ * Total chunks embedded across all completed jobs.
+ */
+chunks_embedded: bigint, };
 
 /**
  * The ingest delta for a team-self-cognition cogmap since its watermark — the trigger signal the
