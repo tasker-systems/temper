@@ -7,6 +7,7 @@ import {
 	buildDrillNodeUrl,
 	buildDrillTerritoryUrl,
 	buildEdgeSelectUrl,
+	buildNodeSelectUrl,
 	buildFiltersUrl,
 	buildHomeLensUrl,
 	buildHomeUrl,
@@ -99,16 +100,21 @@ describe('cogmap addressing', () => {
 });
 
 describe('edge selection (?sel)', () => {
-	it('parses ?sel=edge:e1', () => {
+	it('parses ?sel=edge:e1 and ?sel=node:n1', () => {
 		expect(parseSelection(url('?sel=edge:e1'))).toEqual({ kind: 'edge', id: 'e1' });
+		// Beat D: node selection opens a builder-axis node's detail without a drill.
+		expect(parseSelection(url('?sel=node:n1'))).toEqual({ kind: 'node', id: 'n1' });
 	});
 	it('none when absent/malformed', () => {
 		expect(parseSelection(url(''))).toEqual({ kind: 'none' });
-		expect(parseSelection(url('?sel=node:n1'))).toEqual({ kind: 'none' }); // only edges use ?sel
+		expect(parseSelection(url('?sel=bogus:x'))).toEqual({ kind: 'none' });
 	});
-	it('buildEdgeSelectUrl sets ?sel, leaves ?focus intact', () => {
+	it('buildEdgeSelectUrl / buildNodeSelectUrl set ?sel, leave ?focus intact', () => {
 		expect(buildEdgeSelectUrl(url('?focus=node:n1'), 'e9')).toBe(
 			'/graph/@me?focus=node%3An1&sel=edge%3Ae9'
+		);
+		expect(buildNodeSelectUrl(url('?focus=territory:R'), 'c9')).toBe(
+			'/graph/@me?focus=territory%3AR&sel=node%3Ac9'
 		);
 	});
 	it('clearSelectionUrl drops ?sel', () => {

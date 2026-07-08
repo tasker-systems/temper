@@ -12,7 +12,7 @@
 //      committed by mistake instead of the sanitized bundle.
 //
 // Scope: this gate covers the top-level `AtlasViewData` composition (where the
-// harness/page contract lives). Nested payload types (TerritorySlice, AtlasSubgraph, …)
+// harness/page contract lives). Nested payload types (AtlasSubgraph, TerritoryOverview, …)
 // are checked where components consume them via svelte-check.
 import { describe, expect, it } from 'vitest';
 import type { AtlasViewData } from './viewData';

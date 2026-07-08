@@ -102,8 +102,11 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 					: Promise.resolve(null)
 		]);
 		const cogmapName = home.research.find((c) => c.id === cogmapId)?.name ?? 'Cognitive map';
+		// Union size comes from the territory SEGMENT, not the leaf focus — at tier 2
+		// (a node under a territory) the leaf is the node, so counting `focus` would
+		// lose the "N regions" label.
 		const crumbTerritory = territorySeg
-			? crumbTerritoryFor(territorySeg.id, territoryIds(focus).length)
+			? crumbTerritoryFor(territorySeg.id, territoryIds(territorySeg).length)
 			: null;
 
 		// R5 trail + resource row are profile-scoped, not scope-gated.

@@ -58,20 +58,28 @@ export function parseFocus(params: URLSearchParams): Focus {
 
 export type Selection =
 	| { kind: 'none' }
-	| { kind: 'edge'; id: string };
+	| { kind: 'edge'; id: string }
+	| { kind: 'node'; id: string };
 
-/** Orthogonal panel selection for edges. `?focus` still owns scope/camera/seed;
- *  `?sel=edge:<id>` selects an edge for the TrailRail panel without re-seeding. */
+/** Orthogonal panel selection. `?focus` still owns scope/camera/seed; `?sel=edge:<id>`
+ *  or `?sel=node:<id>` opens the TrailRail for that element WITHOUT re-seeding. Node
+ *  selection is how a context-resource (builder-axis) node opens its detail without a
+ *  cogmap-scoped drill it would fall out of scope of (Beat D). */
 export function parseSelection(url: URL): Selection {
 	const raw = url.searchParams.get('sel');
 	if (!raw) return { kind: 'none' };
 	const [kind, id] = raw.split(':', 2);
 	if (id && kind === 'edge') return { kind: 'edge', id };
+	if (id && kind === 'node') return { kind: 'node', id };
 	return { kind: 'none' };
 }
 
 export function buildEdgeSelectUrl(base: URL, edgeId: string): string {
 	return withParams(base, (p) => p.set('sel', `edge:${edgeId}`));
+}
+
+export function buildNodeSelectUrl(base: URL, nodeId: string): string {
+	return withParams(base, (p) => p.set('sel', `node:${nodeId}`));
 }
 
 export function clearSelectionUrl(base: URL): string {
@@ -87,7 +95,8 @@ export type SelectedElement =
 
 export function selectedElement(focus: Focus, url: URL): SelectedElement {
 	const sel = parseSelection(url);
-	if (sel.kind === 'edge') return sel;
+	// An explicit `?sel` (edge or node) wins over the focused node.
+	if (sel.kind !== 'none') return sel;
 	if (focus.kind === 'node') return { kind: 'node', id: focus.id };
 	return { kind: 'none' };
 }

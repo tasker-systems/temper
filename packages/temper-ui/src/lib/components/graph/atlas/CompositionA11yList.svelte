@@ -20,7 +20,9 @@
 	const meta = (n: AtlasNode) => `${n.doc_type ?? 'untyped'} · ${n.degree} links`;
 </script>
 
-<nav class="composition-a11y" aria-label="Region composition — ideas and the work they came from">
+<!-- Label is tier-neutral: this mirror serves both the tier-1 region composition
+     and the tier-2 node neighborhood (both group into ideas + sources). -->
+<nav class="composition-a11y" aria-label="Graph nodes — ideas and the work they came from">
 	<h2>Ideas</h2>
 	{#if groups.ideas.length}
 		<ul>
