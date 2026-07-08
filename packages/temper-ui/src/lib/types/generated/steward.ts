@@ -85,6 +85,11 @@ new_events: bigint, };
  */
 export type EmbedDispatchSummary = { 
 /**
+ * Dead embed jobs re-enqueued this pass (Phase 4 re-drive). Zero unless the caller asked for a
+ * re-drive (`?redrive=true`); these resources are then eligible for the same pass's claim.
+ */
+redriven: number, 
+/**
  * Jobs claimed this pass (bounded by the dispatch cap).
  */
 claimed: number, 
