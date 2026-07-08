@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::invitation::{
-    AcceptInvitationResponse, CreateInvitationRequest, TeamInvitation,
+    AcceptInvitationResponse, CreateInvitationRequest, InviteeInvitation, TeamInvitation,
 };
 use temper_core::types::reassign::{BulkReassignAck, BulkReassignRequest};
 use temper_core::types::team::{
@@ -161,6 +161,16 @@ impl<'a> TeamsClient<'a> {
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/invitations/mine — the caller's own pending invitations.
+    pub async fn list_my_invitations(&self) -> Result<Vec<InviteeInvitation>> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/invitations/mine";
+        let req = self.http.get(path);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
             .await
     }
 

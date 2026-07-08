@@ -586,6 +586,35 @@ impl TemperMcpService {
         self.ensure_profile_from_parts(&parts).await?;
         tools::profiles::get_profile(self).await
     }
+
+    #[tool(description = "List the pending team invitations addressed to you (across all teams).")]
+    async fn list_my_invitations(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invitations::list_my_invitations(self).await
+    }
+
+    #[tool(description = "Accept a team invitation by its token.")]
+    async fn accept_invitation(
+        &self,
+        Parameters(input): Parameters<tools::invitations::AcceptInvitationInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invitations::accept_invitation(self, input).await
+    }
+
+    #[tool(description = "Decline a team invitation by its token.")]
+    async fn decline_invitation(
+        &self,
+        Parameters(input): Parameters<tools::invitations::DeclineInvitationInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invitations::decline_invitation(self, input).await
+    }
 }
 
 /// Map the shared seam's refusal vocabulary onto rmcp transport errors.
