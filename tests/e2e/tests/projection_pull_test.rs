@@ -39,7 +39,6 @@ async fn seed_resource(
         home_cogmap_id: None,
         doc_type_name: doc_type.to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(&body)),
-        slug,
         content: body.clone(),
         metadata: None,
         managed_meta: None,

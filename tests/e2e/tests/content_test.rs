@@ -43,7 +43,6 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         content_hash: Some(
             "cont0test0000000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        slug: "content-retrieval-doc".to_string(),
         content: chunk_content.to_string(),
         metadata: None,
         managed_meta: None,

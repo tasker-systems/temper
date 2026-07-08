@@ -29,7 +29,6 @@ async fn resource_reassign_moves_ownership(pool: sqlx::PgPool) {
             doc_type: "research".to_string(),
             origin_uri: "test://e2e/reassign".to_string(),
             title: "Reassign E2E".to_string(),
-            slug: None,
             act: Default::default(),
         })
         .await

@@ -166,7 +166,6 @@ pub struct CreateResourceArgs<'a> {
     pub cogmap: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
-    pub slug: Option<&'a str>,
     /// Open (caller-defined) frontmatter as a raw `--open-meta` JSON object
     /// string. Parsed + validated (must be a JSON object) by `parse_open_meta_flag`.
     pub open_meta: Option<&'a str>,
@@ -207,7 +206,6 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         cogmap,
         mode,
         effort,
-        slug,
         open_meta,
         goal,
         task,
@@ -271,26 +269,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Body resolution — --from wins; fall back to --body flag + stdin pipe.
     let body_opt = resolve_create_body(from.as_deref(), body_flag.as_deref(), stdin_is_tty)?;
 
-    // Slug derivation (mode-independent — Concept and Goal skip date prefix).
-    // An unrecognized (open-tail) doctype has no variant, so it falls back to
-    // the date-prefixed `_` catch-all inside `derive_create_slug`, the same
-    // as any known non-Concept/Goal doctype.
-    //
-    // The slug is ALWAYS the title-derived value: slug is §7-dissolved (never
-    // stored; addressing is trailing-UUID-only), so an explicit `--slug` cannot
-    // be honored. Rather than silently discard a differing override (issue #307
-    // Bug 2), reject it — a matching value is a harmless no-op.
+    // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
+    // caller input — always derived from the title. It seeds the client-side `validate_create`
+    // temper-slug check; the server re-derives its own from the title (issue #307 Bug 2). The
+    // date-prefix for non-Concept/Goal doctypes is retained for the local projection filename.
     let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type).ok();
-    let slug_resolved = derive_create_slug(None, title, doctype_enum);
-    if let Some(explicit) = slug {
-        if explicit != slug_resolved {
-            return Err(TemperError::BadRequest(format!(
-                "--slug '{explicit}' cannot be honored: the slug is derived from the title \
-                 ('{slug_resolved}') and addressing is trailing-UUID-only, so an override is \
-                 not stored. Omit --slug."
-            )));
-        }
-    }
+    let slug_resolved = derive_create_slug(title, doctype_enum);
 
     // Parse the optional --open-meta JSON object (the free-form open tier).
     let open_meta_value = open_meta.map(parse_open_meta_flag).transpose()?;
@@ -416,27 +400,25 @@ fn resolve_create_body(
     }
 }
 
-/// Derive a resource slug: an explicit `--slug` is used verbatim; otherwise
-/// derive from the title, date-prefixing every doctype except Concept and
-/// Goal (which are identified by name). `doctype` is `None` for an
-/// unrecognized (open-tail) label, which falls into the date-prefixed
-/// catch-all alongside every other non-Concept/Goal doctype.
+/// Derive a resource slug from the title (slug is §7-dissolved and never a caller
+/// input — issue #307). Date-prefixes every doctype except Concept and Goal (which
+/// are identified by name). `doctype` is `None` for an unrecognized (open-tail)
+/// label, which falls into the date-prefixed catch-all alongside every other
+/// non-Concept/Goal doctype. Used for the client-side `validate_create` temper-slug
+/// check and the local projection filename; the server re-derives its own.
 fn derive_create_slug(
-    slug: Option<&str>,
     title: &str,
     doctype: Option<temper_workflow::frontmatter::DocType>,
 ) -> String {
-    slug.map(String::from).unwrap_or_else(|| {
-        let today = Local::now().format("%Y-%m-%d").to_string();
-        let base_slug = vault::slugify(title);
-        match doctype {
-            // Concept and Goal are identified by name — no date prefix.
-            Some(temper_workflow::frontmatter::DocType::Concept)
-            | Some(temper_workflow::frontmatter::DocType::Goal) => base_slug,
-            // Every other doctype (known or open-tail/unrecognized) gets a date prefix.
-            _ => format!("{today}-{base_slug}"),
-        }
-    })
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let base_slug = vault::slugify(title);
+    match doctype {
+        // Concept and Goal are identified by name — no date prefix.
+        Some(temper_workflow::frontmatter::DocType::Concept)
+        | Some(temper_workflow::frontmatter::DocType::Goal) => base_slug,
+        // Every other doctype (known or open-tail/unrecognized) gets a date prefix.
+        _ => format!("{today}-{base_slug}"),
+    }
 }
 
 /// Assert the session→task `advances` link after a session create.

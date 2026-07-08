@@ -48,8 +48,6 @@ pub struct CreateResourceInput {
     /// nothing to attribute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
-    /// Optional URL-friendly slug.
-    pub slug: Option<String>,
     /// Optional goal link: a ref (UUID or decorated `slug-<uuid>`) of the goal this resource
     /// advances. Projects a live `advances`→goal edge on create. Relationship-fated, not
     /// metadata — first-class here, never a `managed_meta` key.
@@ -61,7 +59,7 @@ pub struct CreateResourceInput {
     pub owner: Option<String>,
     /// Managed workflow/provenance frontmatter — a **closed, temper-owned
     /// vocabulary** of optional `temper-*` keys: stage/mode/effort/status/seq/
-    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`/`slug`), type
+    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`), type
     /// (`doc_type_name`), and home (`context_ref`/`cogmap`) are first-class
     /// fields on this input, not metadata. An unknown key is rejected;
     /// caller-defined ("bring-your-own") fields belong in `open_meta`.
@@ -130,8 +128,6 @@ pub struct UpdateResourceInput {
     pub id: Uuid,
     /// New title.
     pub title: Option<String>,
-    /// New slug.
-    pub slug: Option<String>,
     /// Set (or replace) the resource's goal: a ref (UUID or decorated `slug-<uuid>`) of the goal
     /// this resource advances. Folds any existing `advances`→goal edge and asserts the new one.
     /// Mutually exclusive with `clear_goal`. Omit to leave the goal edge untouched.
@@ -158,7 +154,7 @@ pub struct UpdateResourceInput {
     pub content_block: Option<Uuid>,
     /// Managed workflow/provenance frontmatter — a **closed, temper-owned
     /// vocabulary** of optional `temper-*` keys: stage/mode/effort/status/seq/
-    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`/`slug`), type
+    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`), type
     /// (`doc_type_name`), and home (`context_ref`/`cogmap`) are first-class
     /// fields on this input, not metadata. An unknown key is rejected;
     /// caller-defined ("bring-your-own") fields belong in `open_meta`.
@@ -500,28 +496,10 @@ pub async fn create_resource(
         }
     };
 
-    // Derive the slug from the title via the one canonical slugifier, whose
-    // output is validate_slug-conformant (ASCII, runs collapsed) — an inline
-    // copy previously kept non-ASCII letters and made create fail validation
-    // on a non-ASCII title (bug B2, 2026-07-06).
-    //
-    // The slug is ALWAYS the title-derived value: slug is §7-dissolved (never
-    // stored; addressing is trailing-UUID-only), so an explicit `slug` cannot be
-    // honored. Rather than silently discard a differing override (issue #307
-    // Bug 2), reject it — a matching value is a harmless no-op.
+    // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
+    // caller input — always derived from the title via the one canonical slugifier, whose
+    // output is validate_slug-conformant (ASCII, runs collapsed). (issue #307 Bug 2)
     let slug = temper_workflow::operations::sluggify(&input.title);
-    if let Some(explicit) = &input.slug {
-        if *explicit != slug {
-            return Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "slug '{explicit}' cannot be honored: the slug is derived from the title \
-                     ('{slug}') and addressing is trailing-UUID-only, so an override is not \
-                     stored. Omit slug."
-                ),
-                None,
-            ));
-        }
-    }
 
     let origin_uri = input
         .origin_uri
@@ -780,10 +758,10 @@ pub async fn update_resource(
     let profile_id = ProfileId::from(profile.id);
     let resource_id = ResourceId::from(input.id);
 
-    // Identity travels first-class on the cmd (title/slug below); managed_meta is
-    // Property-only. The caller-supplied managed_meta passes through untouched —
-    // the DbBackend validation pipeline injects identity into the validation
-    // document from the effective title/slug (cmd.title / current row).
+    // Identity (title) travels first-class on the cmd; managed_meta is Property-only. The
+    // caller-supplied managed_meta passes through untouched — the DbBackend validation pipeline
+    // injects identity into the validation document from the effective title (cmd.title / current
+    // row). Slug is §7-dissolved and not a caller input; the backend derives it. (issue #307)
     let managed_meta = input.managed_meta.unwrap_or_default();
 
     let act = input
@@ -804,7 +782,7 @@ pub async fn update_resource(
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
         title: input.title.clone(),
-        slug: input.slug.clone(),
+        slug: None,
         body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,

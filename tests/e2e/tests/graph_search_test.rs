@@ -41,7 +41,6 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
         content_hash: Some(
             format!("{slug}-body-hash-{pad}", pad = "0".repeat(64))[..64].to_string(),
         ),
-        slug: slug.to_string(),
         content: format!("# {title}\n\n{title} content for testing."),
         metadata: None,
         managed_meta: None,

@@ -36,7 +36,6 @@ async fn seed(
         doc_type_name: doc_type.to_string(),
         goal,
         content_hash: None,
-        slug: slug.to_string(),
         content: String::new(),
         metadata: None,
         managed_meta: Some(serde_json::Value::Object(managed)),

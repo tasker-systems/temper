@@ -104,7 +104,7 @@ export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq
 /**
  * Request body for updating a resource.
  */
-export type ResourceUpdateRequest = { title: string | null, slug: string | null, 
+export type ResourceUpdateRequest = { title: string | null, 
 /**
  * Partial managed_meta — only fields with `Some` apply.
  * Untouched fields preserve their stored value. There is no in-band

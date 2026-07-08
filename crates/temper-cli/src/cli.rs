@@ -316,12 +316,6 @@ pub enum ResourceAction {
         /// Work effort: small, medium, large (task only)
         #[arg(long)]
         effort: Option<String>,
-        /// (Discouraged.) The slug is always derived from the title, and
-        /// addressing is trailing-UUID-only, so an override cannot be stored.
-        /// Supplying a value that differs from the derived slug is rejected
-        /// (rather than silently discarded); omit this flag.
-        #[arg(long)]
-        slug: Option<String>,
         /// Open (caller-defined) frontmatter as a JSON object string, e.g.
         /// --open-meta '{"marker":"x","reviewed":true}'. These are the free-form
         /// "bring-your-own" fields; the closed temper-* vocabulary uses the typed

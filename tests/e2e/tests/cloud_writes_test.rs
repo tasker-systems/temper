@@ -122,6 +122,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "session",
                     title: "Cloud Round-Trip Session",
@@ -129,7 +130,6 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: None,
                     body_flag: None, // default body generated
                     from: None,
@@ -258,7 +258,6 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         home_cogmap_id: None,
         doc_type_name: "session".to_string(),
         content_hash: Some(body_hash.clone()),
-        slug: "meta-only-update-test".to_string(),
         content: body_text.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
@@ -303,6 +302,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    open_meta: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -471,6 +471,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    open_meta: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -637,6 +638,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    open_meta: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -792,6 +794,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    open_meta: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -905,6 +908,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "session",
                     title: "Chunk Dedup Test",
@@ -952,6 +956,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config2,
                 &temper_cli::commands::resource::UpdateParams {
+                    open_meta: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -1052,7 +1057,6 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
             home_cogmap_id: None,
             doc_type_name: "session".to_string(),
             content_hash: Some(hash),
-            slug: format!("cloud-only-resource-{i}"),
             // EMPTY body: client-ingested prose rides in `chunks_packed`, so a
             // non-empty `content` engages `create_resource`'s body-dedup, collapsing
             // these two empty-bodied rows onto one (empty) hash. An empty body skips
@@ -1163,6 +1167,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "task",
                     title: "Projection Write Test",
@@ -1170,7 +1175,6 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: None,
                     body_flag: None,
                     from: None,
@@ -1262,6 +1266,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config2,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "task",
                     title: "Update Projection Test",
@@ -1269,7 +1274,6 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: None,
                     body_flag: None, // default body generated
                     from: None,
@@ -1322,6 +1326,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    open_meta: None,
                     goal: None,
                     clear_goal: false,
                     r#ref: &ref_for_update,
@@ -1417,6 +1422,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config2,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
                     goal: None,
                     doc_type: "task",
                     title: "Delete Projection Test",
@@ -1424,7 +1430,6 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: None,
                     body_flag: None,
                     from: None,
@@ -1537,7 +1542,6 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
             home_cogmap_id: None,
             doc_type_name: "research".to_string(),
             content_hash: None,
-            slug: "edges-resolve-test".to_string(),
             content: String::new(),
             metadata: None,
             managed_meta: Some(serde_json::json!({})),
@@ -1627,7 +1631,6 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
             home_cogmap_id: None,
             doc_type_name: "research".to_string(),
             content_hash: None,
-            slug: "decorated-ref-target".to_string(),
             content: String::new(),
             metadata: None,
             managed_meta: Some(serde_json::json!({})),

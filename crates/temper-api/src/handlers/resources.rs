@@ -188,11 +188,10 @@ pub async fn create(
     )
     .await?;
 
-    // When slug is absent, derive one from the title so the create path's
-    // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.
-    let slug = req
-        .slug
-        .unwrap_or_else(|| temper_substrate::text::slugify(&req.title));
+    // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
+    // caller input — always derived from the title (satisfies the temper-slug schema pattern
+    // ^[a-z0-9][a-z0-9-]*$). (issue #307 Bug 2)
+    let slug = temper_substrate::text::slugify(&req.title);
 
     let act = req.act.into_act_context().map_err(ApiError::from)?;
 
@@ -257,10 +256,10 @@ pub async fn update(
         content_block: req.content_block,
     });
 
-    // Identity travels first-class on the cmd (title/slug); managed_meta is
-    // Property-only and passes through untouched.
+    // Identity (title) travels first-class on the cmd; managed_meta is Property-only and
+    // passes through untouched. Slug is §7-dissolved and not a caller input — the backend
+    // derives it from the effective title, so the command carries `slug: None`. (issue #307)
     let title_top = req.title;
-    let slug_top = req.slug;
     let managed_meta = req.managed_meta;
 
     // A move is a context re-home (`context_to`) and/or a type conversion (`type_to`),
@@ -302,7 +301,7 @@ pub async fn update(
     let cmd = UpdateResource {
         resource: ResourceId::from(resource_id),
         title: title_top,
-        slug: slug_top,
+        slug: None,
         body,
         managed_meta,
         open_meta: req.open_meta,
