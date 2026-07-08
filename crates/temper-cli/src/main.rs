@@ -380,6 +380,11 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             let context = context.as_deref();
             temper_cli::commands::warmup::run(&config, context, output_format)
         }
+        Commands::Invitations => temper_cli::actions::runtime::with_client(|client| {
+            Box::pin(async move {
+                temper_cli::commands::invitations::list_mine(client, output_format).await
+            })
+        }),
         Commands::Team { action } => match action {
             TeamAction::Join { token } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
