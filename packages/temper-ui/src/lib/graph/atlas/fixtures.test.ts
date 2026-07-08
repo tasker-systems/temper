@@ -15,6 +15,7 @@
 // harness/page contract lives). Nested payload types (AtlasSubgraph, TerritoryOverview, …)
 // are checked where components consume them via svelte-check.
 import { describe, expect, it } from 'vitest';
+import { resourceHref } from '$lib/vault-url';
 import type { AtlasViewData } from './viewData';
 import type { AtlasFixtureBundle } from '../../../routes/dev/atlas/+page';
 import type { HomeContext } from '$lib/types/generated/graph_home';
@@ -48,6 +49,7 @@ const EXPECTED_SCENARIOS = [
 	'home',
 	'nodeNeighborhood',
 	'nodeSelected',
+	'nodeSelectedContext',
 	'cogmapPanorama',
 	'leafBare',
 	'regionDrill',
@@ -106,6 +108,29 @@ describe('committed atlas fixtures', () => {
 			expect(e).toHaveProperty('payload');
 			expect(typeof e.actor_name).toBe('string');
 		}
+	});
+
+	// The TrailRail "View full resource →" button is gated on `resourceHref(resourceRow)`
+	// being non-null. These two scenarios exercise both sides of that gate off real-shaped
+	// fixture data, so the harness has a live example of each and the gate stays honest.
+	it('nodeSelected is cogmap-homed → resourceHref is null → the bridge button is hidden', () => {
+		const rr = scenario('nodeSelected').resourceRow;
+		expect(rr).not.toBeNull();
+		expect(rr!.context_owner_ref).toBeNull();
+		expect(rr!.cogmap_id).not.toBeNull();
+		expect(resourceHref(rr!)).toBeNull();
+	});
+
+	it('nodeSelectedContext is context-homed → resourceHref resolves → the bridge button shows', () => {
+		const view = scenario('nodeSelectedContext');
+		expect(view.selection?.kind).toBe('node');
+		const rr = view.resourceRow;
+		expect(rr).not.toBeNull();
+		expect(rr!.context_owner_ref).not.toBeNull();
+		expect(rr!.cogmap_id).toBeNull();
+		expect(resourceHref(rr!)).toBe(
+			`/vault/${rr!.context_owner_ref}/${rr!.context_slug}/${rr!.doc_type_name}/${rr!.id}`
+		);
 	});
 
 	it('home build entries carry a recency field and no leaked PII (Beat C)', () => {
