@@ -28,7 +28,7 @@
 ## File Structure
 
 **Beat 1 — persistence + events (temper-substrate, migrations)**
-- Create: `migrations/20260708000007_streaming_ingest.sql` — seed `resource_finalized` event type; `block_append()` + `resource_finalize()` SQL functions.
+- Create: `migrations/20260708000009_streaming_ingest.sql` — seed `resource_finalized` event type; `block_append()` + `resource_finalize()` SQL functions.
 - Modify: `crates/temper-substrate/src/payloads.rs` — extend `BlockCreated`, add `ResourceFinalized`.
 - Modify: `crates/temper-substrate/src/events.rs` — `SeedAction::BlockAppend`, `EventKind::BlockCreated` wiring, fire arm.
 - Modify: `crates/temper-substrate/src/writes.rs` — `append_block`, `finalize_ingest`, `upsert_ingestion_record`, params structs.
@@ -58,7 +58,7 @@
 ### Task 1.1: SQL migration — `resource_finalized` type, `block_append()`, `resource_finalize()`
 
 **Files:**
-- Create: `migrations/20260708000007_streaming_ingest.sql`
+- Create: `migrations/20260708000009_streaming_ingest.sql`
 - Reference (read, do not edit): `migrations/20260624000002_canonical_functions.sql:619` (`_project_blocks`), `:765` (`_event_append`), `:957` (`block_mutate`), `migrations/20260624000003_canonical_seed.sql:31-57` (event-type seed rows), `migrations/20260629000001_cogmap_charter_set.sql:18` (the `(resource_id, seq) WHERE NOT is_folded` partial unique index).
 
 **Interfaces:**
@@ -96,7 +96,7 @@ Expected: FAIL — no such row (migration not written yet).
 - [ ] **Step 3: Write the migration**
 
 ```sql
--- migrations/20260708000007_streaming_ingest.sql
+-- migrations/20260708000009_streaming_ingest.sql
 -- Streaming/segmented ingestion: activate the dormant `block_created` event per
 -- appended segment, add a `resource_finalized` completion event, and provide the
 -- idempotent block_append + validating resource_finalize functions. Additive:
@@ -210,7 +210,7 @@ Expected: PASS.
 ```bash
 DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo sqlx migrate run
 cargo fmt
-git add migrations/20260708000007_streaming_ingest.sql crates/temper-substrate/tests/streaming_ingest_test.rs
+git add migrations/20260708000009_streaming_ingest.sql crates/temper-substrate/tests/streaming_ingest_test.rs
 git commit -m "feat(ingest): block_append + resource_finalize SQL + resource_finalized event type"
 ```
 
