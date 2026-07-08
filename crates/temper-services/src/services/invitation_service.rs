@@ -13,7 +13,9 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service::{can_manage, role_on_team};
 use temper_core::types::ids::ProfileId;
-use temper_core::types::invitation::{AcceptInvitationResponse, InvitationStatus, TeamInvitation};
+use temper_core::types::invitation::{
+    AcceptInvitationResponse, InvitationStatus, InviteeInvitation, TeamInvitation,
+};
 use temper_core::types::team::TeamRole;
 
 /// Parameters for creating an invitation.
@@ -223,6 +225,45 @@ pub async fn list_invitations(
     Ok(rows)
 }
 
+/// List a caller's own pending, non-expired invitations. Resolution matches
+/// `invited_email` (case-insensitively) against the caller's `kb_profile_auth_links`
+/// emails, guarded so an email that maps to more than one profile is discounted
+/// (Option B — never leaks another profile's invite; falls back to token hand-off).
+/// Auth: any authenticated caller (their own invitations only).
+pub async fn list_for_profile(
+    pool: &PgPool,
+    caller: ProfileId,
+) -> ApiResult<Vec<InviteeInvitation>> {
+    let rows = sqlx::query_as!(
+        InviteeInvitation,
+        r#"
+        SELECT i.id, i.team_id, t.slug AS team_slug, t.name AS team_name,
+               i.invited_email, i.invited_by_profile_id,
+               i.role AS "role: TeamRole", i.token,
+               i.status AS "status: InvitationStatus", i.expires_at, i.created
+          FROM kb_team_invitations i
+          JOIN kb_teams t ON t.id = i.team_id
+         WHERE i.status = 'pending'
+           AND i.expires_at > now()
+           AND t.is_active
+           AND lower(i.invited_email) IN (
+                 SELECT lower(al.email)
+                   FROM kb_profile_auth_links al
+                  WHERE al.profile_id = $1
+                    AND al.email IS NOT NULL
+                    AND (SELECT COUNT(DISTINCT al2.profile_id)
+                           FROM kb_profile_auth_links al2
+                          WHERE lower(al2.email) = lower(al.email)) = 1
+               )
+         ORDER BY i.created DESC
+        "#,
+        *caller,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
@@ -271,6 +312,132 @@ mod tests {
         let team = mk_team(pool, "acme").await;
         add_member(pool, team, owner, "owner").await;
         (team, owner)
+    }
+
+    /// Attach an auth-link email to a profile — the resolver matches on these.
+    async fn add_auth_email(
+        pool: &PgPool,
+        profile: ProfileId,
+        provider_uid: &str,
+        email: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO kb_profile_auth_links \
+               (id, profile_id, auth_provider, auth_provider_user_id, email, is_default) \
+             VALUES (gen_random_uuid(), $1, 'test', $2, $3, true)",
+        )
+        .bind(*profile)
+        .bind(provider_uid)
+        .bind(email)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Insert an invitation with an explicit status and expiry offset (days; negative = expired).
+    async fn seed_invite(
+        pool: &PgPool,
+        team: Uuid,
+        email: &str,
+        by: ProfileId,
+        status: &str,
+        expires_days: i32,
+    ) {
+        sqlx::query(
+            "INSERT INTO kb_team_invitations \
+               (id, team_id, invited_email, invited_by_profile_id, role, token, status, expires_at) \
+             VALUES (gen_random_uuid(), $1, $2, $3, 'member'::team_role, $4, \
+                     $5::invitation_status, now() + make_interval(days => $6))",
+        )
+        .bind(team)
+        .bind(email)
+        .bind(*by)
+        .bind(format!("tok-{}", Uuid::now_v7()))
+        .bind(status)
+        .bind(expires_days)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_resolves_unambiguous_email_only(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("invitee@x.com")).await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+        seed_invite(&pool, team, "invitee@x.com", inviter, "pending", 7).await;
+
+        let got = list_for_profile(&pool, invitee).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].team_slug, "platform");
+        assert_eq!(got[0].invited_email, "invitee@x.com");
+        assert!(!got[0].token.is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_case_insensitive_match(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("invitee@x.com")).await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+        seed_invite(&pool, team, "Invitee@X.com", inviter, "pending", 7).await; // mixed case
+
+        let got = list_for_profile(&pool, invitee).await.unwrap();
+        assert_eq!(got.len(), 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_discounts_ambiguous_email(pool: PgPool) {
+        // Two profiles both hold dup@x.com — ambiguous, must be discounted for the caller.
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("dup@x.com")).await;
+        let other = mk_profile(&pool, "other").await;
+        add_auth_email(&pool, other, "other-uid", Some("dup@x.com")).await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+        seed_invite(&pool, team, "dup@x.com", inviter, "pending", 7).await;
+
+        let got = list_for_profile(&pool, invitee).await.unwrap();
+        assert!(got.is_empty(), "ambiguous email must not resolve");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_excludes_declined_expired_softdeleted(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("invitee@x.com")).await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+
+        seed_invite(&pool, team, "invitee@x.com", inviter, "declined", 7).await;
+        seed_invite(&pool, team, "invitee@x.com", inviter, "pending", -1).await; // expired
+        let dead = mk_team(&pool, "dead").await;
+        add_member(&pool, dead, inviter, "owner").await;
+        sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+            .bind(dead)
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_invite(&pool, dead, "invitee@x.com", inviter, "pending", 7).await;
+
+        let got = list_for_profile(&pool, invitee).await.unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_null_email_caller_empty(pool: PgPool) {
+        let agent = mk_profile(&pool, "agent").await;
+        add_auth_email(&pool, agent, "agent-uid", None).await;
+        let got = list_for_profile(&pool, agent).await.unwrap();
+        assert!(got.is_empty());
     }
 
     #[sqlx::test(migrations = "../../migrations")]
