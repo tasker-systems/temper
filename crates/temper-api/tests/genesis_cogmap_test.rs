@@ -1,8 +1,11 @@
 #![cfg(feature = "test-db")]
 //! `DbBackend::create_cognitive_map` — cognitive-map genesis (org-provisioning Chunk 4). Drives the
-//! backend command DIRECTLY (no HTTP/authz — the `is_system_admin` gate lives on the surface and is
-//! covered by the e2e tier). Telos charter blocks are pre-embedded with synthetic (recognizable)
-//! chunks, so every case runs in the plain `test-db` tier — NO ONNX (the genesis path is a pure
+//! backend command DIRECTLY. Create itself is open to any authenticated profile (the surface admin
+//! gate is gone), but the backend enforces reserved-id hardening: a caller-supplied
+//! `cogmap_id`/`telos_resource_id` is honored ONLY for a system-admin; a non-admin is server-minted.
+//! So the explicit-id cases here make the caller an admin (`make_admin`), and `non_admin_...` covers
+//! the server-mint path. Telos charter blocks are pre-embedded with synthetic (recognizable) chunks,
+//! so every case runs in the plain `test-db` tier — NO ONNX (the genesis path is a pure
 //! event+projection write).
 //!
 //! Headline invariants:
@@ -112,10 +115,40 @@ async fn mint_profile(pool: &PgPool, handle: &str) -> Uuid {
     .expect("mint profile")
 }
 
-/// A backend for the genesis/reconcile commands. Both resolve the system actor themselves and ignore
-/// `self.profile_id`, but we seed it with the system profile for principled construction.
+/// Make `profile` a system-admin: ensure the `temper-system` gating team exists, make `profile` its
+/// owner, and point `gating_team_slug` at it. Mirrors the e2e `enable_invite_only`. Required for the
+/// explicit-id genesis path — a caller-supplied cogmap/telos id is honored only for a system-admin
+/// (a non-admin is server-minted: the reserved-id guard).
+async fn make_admin(pool: &PgPool, profile: Uuid) {
+    let team_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System')
+         ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("ensure gating team");
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')
+         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(team_id)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("make owner of gating team");
+    sqlx::query(
+        "UPDATE kb_system_settings SET gating_team_slug = 'temper-system', updated = now()",
+    )
+    .execute(pool)
+    .await
+    .expect("point gating_team_slug at temper-system");
+}
+
+/// An ADMIN backend for the explicit-id genesis/reconcile cases: the system profile promoted to
+/// system-admin so its caller-supplied ids are honored (see `make_admin`).
 async fn backend(pool: &PgPool) -> DbBackend {
     let sys = system_profile(pool).await;
+    make_admin(pool, sys).await;
     DbBackend::new(pool.clone(), ProfileId::from(sys))
 }
 
@@ -295,8 +328,10 @@ async fn genesis_without_telos_creates_empty_charter_map(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn genesis_seeds_creator_grant(pool: PgPool) {
     // A distinct creator profile — NOT the system actor genesis fires under. The backend's
-    // `self.profile_id` is the invoking caller; creator seeding (§3.B) keys on it.
+    // `self.profile_id` is the invoking caller; creator seeding (§3.B) keys on it. Admin so the
+    // supplied id is honored (the grant is then asserted at that id).
     let creator = mint_profile(&pool, "creator-admin").await;
+    make_admin(&pool, creator).await;
     let be = DbBackend::new(pool.clone(), ProfileId::from(creator));
 
     let cogmap_id = Uuid::now_v7();
@@ -347,4 +382,53 @@ async fn genesis_mints_ids_when_absent(pool: PgPool) {
     assert_ne!(out.cogmap_id, Uuid::nil(), "minted a real cogmap id");
     assert!(cogmap_exists(&pool, out.cogmap_id).await);
     assert!(resource_exists(&pool, out.telos_resource_id).await);
+}
+
+// ── (f) reserved-id hardening: a NON-admin's supplied ids are ignored and server-minted ──────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn non_admin_genesis_server_mints_ids(pool: PgPool) {
+    // A plain (non-admin) caller — no `make_admin`.
+    let creator = mint_profile(&pool, "non-admin-creator").await;
+    let be = DbBackend::new(pool.clone(), ProfileId::from(creator));
+
+    let supplied_cogmap = Uuid::now_v7();
+    let supplied_telos = Uuid::now_v7();
+    let out = be
+        .create_cognitive_map(genesis_cmd(genesis_request(
+            supplied_cogmap,
+            supplied_telos,
+            None,
+        )))
+        .await
+        .expect("non-admin genesis")
+        .value;
+
+    assert!(out.created, "the map is created");
+    assert_ne!(
+        out.cogmap_id, supplied_cogmap,
+        "a non-admin's supplied cogmap id is ignored (server-minted)"
+    );
+    assert_ne!(
+        out.telos_resource_id, supplied_telos,
+        "a non-admin's supplied telos id is ignored (server-minted)"
+    );
+    assert!(
+        !cogmap_exists(&pool, supplied_cogmap).await,
+        "nothing written at the supplied cogmap id"
+    );
+    assert!(
+        cogmap_exists(&pool, out.cogmap_id).await,
+        "the map exists at the server-minted id"
+    );
+
+    // The creator grant lands on the server-minted id (so the creator can author its new map).
+    let has_grant: bool =
+        sqlx::query_scalar::<_, bool>("SELECT can('kb_profiles', $1, 'grant', 'kb_cogmaps', $2)")
+            .bind(creator)
+            .bind(out.cogmap_id)
+            .fetch_one(&pool)
+            .await
+            .expect("can grant query");
+    assert!(has_grant, "creator holds grant on the server-minted map");
 }
