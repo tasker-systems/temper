@@ -37,7 +37,6 @@ async fn ingest_semantic(
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: Some(temper_core::hash::compute_body_hash(content)),
-        slug: slug.to_string(),
         content: content.to_string(),
         metadata: None,
         managed_meta: None,

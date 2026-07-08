@@ -211,7 +211,6 @@ async fn create_without_chunks_falls_back_to_server_embed(pool: PgPool) {
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
         content_hash: None,
-        slug: "server-embedded".to_string(),
         content: "Fallback prose the server must chunk and embed itself.".to_string(),
         metadata: None,
         managed_meta: None,

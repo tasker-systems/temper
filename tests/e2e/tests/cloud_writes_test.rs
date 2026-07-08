@@ -420,7 +420,6 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         home_cogmap_id: None,
         doc_type_name: "session".to_string(),
         content_hash: Some(initial_hash.clone()),
-        slug: "body-and-meta-update-test".to_string(),
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
@@ -593,7 +592,6 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         home_cogmap_id: None,
         doc_type_name: "session".to_string(),
         content_hash: Some(initial_hash.clone()),
-        slug: "body-only-update-test".to_string(),
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
@@ -749,7 +747,6 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         home_cogmap_id: None,
         doc_type_name: "session".to_string(),
         content_hash: Some(initial_hash.clone()),
-        slug: "body-empty-guard-test".to_string(),
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
@@ -916,7 +913,6 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     cogmap: None,
                     mode: None,
                     effort: None,
-                    slug: None,
                     task: None,
                     body_flag: Some(body_flag),
                     from: None,
