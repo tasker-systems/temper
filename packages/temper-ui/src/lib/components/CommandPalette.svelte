@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import type { ResourceRow } from '$lib/types';
+	import { resourceHref, searchHref } from '$lib/vault-url';
 
 	let open = $state(false);
 	let query = $state('');
@@ -56,13 +57,11 @@
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
 			if (focused < results.length) {
-				const row = results[focused];
-				goto(
-					`/vault/${row.context_owner_ref}/${row.context_slug}/${row.doc_type_name}/${row.id}`
-				);
+				const href = resourceHref(results[focused]);
+				if (href) goto(href);
 				open = false;
 			} else if (query.trim()) {
-				goto(`/vault/search?q=${encodeURIComponent(query)}`);
+				goto(searchHref(query));
 				open = false;
 			}
 		}
@@ -99,9 +98,8 @@
 						class="w-full text-left px-4 py-2.5 flex flex-col gap-0.5 transition-colors
 						       {i === focused ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}"
 						onclick={() => {
-							goto(
-								`/vault/${row.context_owner_ref}/${row.context_slug}/${row.doc_type_name}/${row.id}`
-							);
+							const href = resourceHref(row);
+							if (href) goto(href);
 							open = false;
 						}}
 					>
@@ -117,7 +115,7 @@
 				<button
 					class="w-full text-left px-4 py-2 text-xs text-quiet-accent hover:bg-zinc-800/50 border-t border-zinc-800"
 					onclick={() => {
-						goto(`/vault/search?q=${encodeURIComponent(query)}`);
+						goto(searchHref(query));
 						open = false;
 					}}
 				>
