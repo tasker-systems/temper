@@ -500,14 +500,28 @@ pub async fn create_resource(
         }
     };
 
-    // Build slug from title if not provided
     // Derive the slug from the title via the one canonical slugifier, whose
     // output is validate_slug-conformant (ASCII, runs collapsed) — an inline
     // copy previously kept non-ASCII letters and made create fail validation
     // on a non-ASCII title (bug B2, 2026-07-06).
-    let slug = input
-        .slug
-        .unwrap_or_else(|| temper_workflow::operations::sluggify(&input.title));
+    //
+    // The slug is ALWAYS the title-derived value: slug is §7-dissolved (never
+    // stored; addressing is trailing-UUID-only), so an explicit `slug` cannot be
+    // honored. Rather than silently discard a differing override (issue #307
+    // Bug 2), reject it — a matching value is a harmless no-op.
+    let slug = temper_workflow::operations::sluggify(&input.title);
+    if let Some(explicit) = &input.slug {
+        if *explicit != slug {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "slug '{explicit}' cannot be honored: the slug is derived from the title \
+                     ('{slug}') and addressing is trailing-UUID-only, so an override is not \
+                     stored. Omit slug."
+                ),
+                None,
+            ));
+        }
+    }
 
     let origin_uri = input
         .origin_uri
