@@ -49,7 +49,9 @@ const EXPECTED_SCENARIOS = [
 	'nodeNeighborhood',
 	'nodeSelected',
 	'cogmapPanorama',
-	'leafBare'
+	'leafBare',
+	'regionDrill',
+	'regionDrillUnion'
 ];
 
 const bundle = bundleJson as AtlasFixtureBundle;

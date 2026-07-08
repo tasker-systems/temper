@@ -1320,5 +1320,355 @@
  "_meta": {
   "synthetic": true,
   "note": "Synthetic, personal-data-free Atlas fixtures. Regenerate via scripts/sanitize-atlas-fixtures.mjs from a local capture (see README)."
+ },
+ "regionDrill": {
+  "owner": "@me",
+  "cogmapId": "0191d0c0-0700-7000-8000-000000000700",
+  "cogmapName": "Lucid atlas field",
+  "scopeFilter": null,
+  "tier": 1,
+  "focus": {
+   "kind": "territory",
+   "id": "0191d0c0-0701-7000-8000-000000000a01"
+  },
+  "territories": null,
+  "home": null,
+  "neighborhood": {
+   "nodes": [
+    {
+     "id": "0191d0c0-0701-7000-8000-000000000701",
+     "title": "Verdant meridian lattice",
+     "doc_type": "theme",
+     "home": "cogmap",
+     "degree": 5,
+     "excerpt": "Cobalt harbor signal — ember quartz cascade willow."
+    },
+    {
+     "id": "0191d0c0-0702-7000-8000-000000000702",
+     "title": "Cobalt harbor signal",
+     "doc_type": "concept",
+     "home": "cogmap",
+     "degree": 3,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0703-7000-8000-000000000703",
+     "title": "Ember quartz cascade",
+     "doc_type": "fact",
+     "home": "cogmap",
+     "degree": 4,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0704-7000-8000-000000000704",
+     "title": "Thicket beacon prairie",
+     "doc_type": "domain",
+     "home": "cogmap",
+     "degree": 2,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0705-7000-8000-000000000705",
+     "title": "Willow prairie ledger",
+     "doc_type": "session",
+     "home": "context",
+     "degree": 2,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0706-7000-8000-000000000706",
+     "title": "Marble thicket beacon",
+     "doc_type": "task",
+     "home": "context",
+     "degree": 2,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0707-7000-8000-000000000707",
+     "title": "Cedar delta orbit",
+     "doc_type": "session",
+     "home": "context",
+     "degree": 1,
+     "excerpt": null
+    }
+   ],
+   "edges": [
+    {
+     "id": "0191d0c0-0801-7000-8000-000000000801",
+     "source": "0191d0c0-0702-7000-8000-000000000702",
+     "target": "0191d0c0-0701-7000-8000-000000000701",
+     "edge_kind": "near",
+     "polarity": "forward",
+     "label": "relates_to",
+     "weight": 0.7
+    },
+    {
+     "id": "0191d0c0-0802-7000-8000-000000000802",
+     "source": "0191d0c0-0703-7000-8000-000000000703",
+     "target": "0191d0c0-0701-7000-8000-000000000701",
+     "edge_kind": "contains",
+     "polarity": "inverse",
+     "label": "part_of",
+     "weight": 0.9
+    },
+    {
+     "id": "0191d0c0-0803-7000-8000-000000000803",
+     "source": "0191d0c0-0701-7000-8000-000000000701",
+     "target": "0191d0c0-0704-7000-8000-000000000704",
+     "edge_kind": "near",
+     "polarity": "forward",
+     "label": "spans",
+     "weight": 0.6
+    },
+    {
+     "id": "0191d0c0-0804-7000-8000-000000000804",
+     "source": "0191d0c0-0701-7000-8000-000000000701",
+     "target": "0191d0c0-0705-7000-8000-000000000705",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0805-7000-8000-000000000805",
+     "source": "0191d0c0-0701-7000-8000-000000000701",
+     "target": "0191d0c0-0706-7000-8000-000000000706",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0806-7000-8000-000000000806",
+     "source": "0191d0c0-0702-7000-8000-000000000702",
+     "target": "0191d0c0-0707-7000-8000-000000000707",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0807-7000-8000-000000000807",
+     "source": "0191d0c0-0703-7000-8000-000000000703",
+     "target": "0191d0c0-0705-7000-8000-000000000705",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    }
+   ]
+  },
+  "selection": {
+   "kind": "none"
+  },
+  "trail": null,
+  "resourceRow": null,
+  "filters": {
+   "lensId": null,
+   "edgeKinds": [],
+   "docTypes": []
+  },
+  "focusPath": [
+   {
+    "kind": "territory",
+    "id": "0191d0c0-0701-7000-8000-000000000a01"
+   }
+  ],
+  "crumbTerritory": {
+   "id": "0191d0c0-0701-7000-8000-000000000a01",
+   "label": null
+  }
+ },
+ "regionDrillUnion": {
+  "owner": "@me",
+  "cogmapId": "0191d0c0-0700-7000-8000-000000000700",
+  "cogmapName": "Lucid atlas field",
+  "scopeFilter": null,
+  "tier": 1,
+  "focus": {
+   "kind": "territory",
+   "id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02"
+  },
+  "territories": null,
+  "home": null,
+  "neighborhood": {
+   "nodes": [
+    {
+     "id": "0191d0c0-0701-7000-8000-000000000701",
+     "title": "Verdant meridian lattice",
+     "doc_type": "theme",
+     "home": "cogmap",
+     "degree": 5,
+     "excerpt": "Cobalt harbor signal — ember quartz cascade willow."
+    },
+    {
+     "id": "0191d0c0-0702-7000-8000-000000000702",
+     "title": "Cobalt harbor signal",
+     "doc_type": "concept",
+     "home": "cogmap",
+     "degree": 3,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0703-7000-8000-000000000703",
+     "title": "Ember quartz cascade",
+     "doc_type": "fact",
+     "home": "cogmap",
+     "degree": 4,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0704-7000-8000-000000000704",
+     "title": "Thicket beacon prairie",
+     "doc_type": "domain",
+     "home": "cogmap",
+     "degree": 2,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0705-7000-8000-000000000705",
+     "title": "Willow prairie ledger",
+     "doc_type": "session",
+     "home": "context",
+     "degree": 2,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0706-7000-8000-000000000706",
+     "title": "Marble thicket beacon",
+     "doc_type": "task",
+     "home": "context",
+     "degree": 2,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0707-7000-8000-000000000707",
+     "title": "Cedar delta orbit",
+     "doc_type": "session",
+     "home": "context",
+     "degree": 1,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0708-7000-8000-000000000708",
+     "title": "Meadow orbit harbor",
+     "doc_type": "theme",
+     "home": "cogmap",
+     "degree": 3,
+     "excerpt": null
+    },
+    {
+     "id": "0191d0c0-0709-7000-8000-000000000709",
+     "title": "Basalt fern summit",
+     "doc_type": "task",
+     "home": "context",
+     "degree": 1,
+     "excerpt": null
+    }
+   ],
+   "edges": [
+    {
+     "id": "0191d0c0-0801-7000-8000-000000000801",
+     "source": "0191d0c0-0702-7000-8000-000000000702",
+     "target": "0191d0c0-0701-7000-8000-000000000701",
+     "edge_kind": "near",
+     "polarity": "forward",
+     "label": "relates_to",
+     "weight": 0.7
+    },
+    {
+     "id": "0191d0c0-0802-7000-8000-000000000802",
+     "source": "0191d0c0-0703-7000-8000-000000000703",
+     "target": "0191d0c0-0701-7000-8000-000000000701",
+     "edge_kind": "contains",
+     "polarity": "inverse",
+     "label": "part_of",
+     "weight": 0.9
+    },
+    {
+     "id": "0191d0c0-0803-7000-8000-000000000803",
+     "source": "0191d0c0-0701-7000-8000-000000000701",
+     "target": "0191d0c0-0704-7000-8000-000000000704",
+     "edge_kind": "near",
+     "polarity": "forward",
+     "label": "spans",
+     "weight": 0.6
+    },
+    {
+     "id": "0191d0c0-0804-7000-8000-000000000804",
+     "source": "0191d0c0-0701-7000-8000-000000000701",
+     "target": "0191d0c0-0705-7000-8000-000000000705",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0805-7000-8000-000000000805",
+     "source": "0191d0c0-0701-7000-8000-000000000701",
+     "target": "0191d0c0-0706-7000-8000-000000000706",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0806-7000-8000-000000000806",
+     "source": "0191d0c0-0702-7000-8000-000000000702",
+     "target": "0191d0c0-0707-7000-8000-000000000707",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0807-7000-8000-000000000807",
+     "source": "0191d0c0-0703-7000-8000-000000000703",
+     "target": "0191d0c0-0705-7000-8000-000000000705",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    },
+    {
+     "id": "0191d0c0-0808-7000-8000-000000000808",
+     "source": "0191d0c0-0708-7000-8000-000000000708",
+     "target": "0191d0c0-0701-7000-8000-000000000701",
+     "edge_kind": "near",
+     "polarity": "forward",
+     "label": "relates_to",
+     "weight": 0.5
+    },
+    {
+     "id": "0191d0c0-0809-7000-8000-000000000809",
+     "source": "0191d0c0-0708-7000-8000-000000000708",
+     "target": "0191d0c0-0709-7000-8000-000000000709",
+     "edge_kind": "express",
+     "polarity": "forward",
+     "label": "derived_from",
+     "weight": 1.0
+    }
+   ]
+  },
+  "selection": {
+   "kind": "none"
+  },
+  "trail": null,
+  "resourceRow": null,
+  "filters": {
+   "lensId": null,
+   "edgeKinds": [],
+   "docTypes": []
+  },
+  "focusPath": [
+   {
+    "kind": "territory",
+    "id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02"
+   }
+  ],
+  "crumbTerritory": {
+   "id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02",
+   "label": "2 regions"
+  }
  }
 }
