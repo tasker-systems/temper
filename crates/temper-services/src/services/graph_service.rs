@@ -589,18 +589,19 @@ pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Atlas
     // sized + owner-scoped. Visibility-gated inside graph_home_contexts.
     let build: Vec<HomeContext> = sqlx::query_as::<
         _,
-        (Uuid, String, String, i32, Option<DateTime<Utc>>),
+        (Uuid, String, String, String, i32, Option<DateTime<Utc>>),
     >(
-        "SELECT context_id, name, owner_ref, resource_count, last_active_at FROM graph_home_contexts($1)",
+        "SELECT context_id, name, slug, owner_ref, resource_count, last_active_at FROM graph_home_contexts($1)",
     )
     .bind(profile_id.as_uuid())
     .fetch_all(pool)
     .await?
     .into_iter()
     .map(
-        |(id, name, owner_ref, resource_count, last_active_at)| HomeContext {
+        |(id, name, slug, owner_ref, resource_count, last_active_at)| HomeContext {
             id,
             name,
+            slug,
             owner_ref,
             resource_count,
             last_active_at,

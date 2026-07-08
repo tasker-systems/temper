@@ -59,6 +59,9 @@
 	// §10.2 subtle per-scope tint (see homeTint.ts): build tints key off owner_ref
 	// (cool blue→indigo), research off owner_ref (warm red-orange→amber).
 	const ownerRefById = $derived(new Map(home.build.map((c) => [c.id, c.owner_ref])));
+	// slug is the second half of the context_ref the vault route resolves
+	// (`/vault/[owner]/[context]` → `owner/slug`) — needed to route a build circle.
+	const slugById = $derived(new Map(home.build.map((c) => [c.id, c.slug])));
 	const researchScopeById = $derived(new Map(home.research.map((m) => [m.id, m.owner_ref])));
 	// Recency glow (build only, §Beat C): last-active timestamp per build context, fed
 	// through the pure `recencyGlow` curve at render time (`now` = Date.now()).
@@ -140,10 +143,19 @@
 		goto(clearHomeLensUrl($page.url), { keepFocus: true, noScroll: true });
 	}
 
-	// Body navigation. Research → the cogmap panorama (Beat A). Build → the owner's
-	// vault (temporary destination §10.4; Atlas-native contexts panorama is Beat C).
-	function enterContext(ownerRef: string) {
-		goto(`/vault/${ownerRef}`);
+	// Body navigation. Research → the cogmap panorama (Beat A). Build → the context's
+	// resource list (`/vault/[owner]/[context]`, resolving `context_ref = owner/slug`).
+	function enterContext(ownerRef: string, slug: string) {
+		goto(`/vault/${ownerRef}/${slug}`);
+	}
+	// The `shared` owner-scope (a context visible only via a cross-owner read-grant,
+	// no team) has no routable owner segment — suppress navigation rather than 404.
+	// No product surface mints such a grant today, so this is a defensive dead-branch.
+	function buildEnter(id: string): (() => void) | undefined {
+		const ownerRef = ownerRefById.get(id) ?? '@me';
+		const slug = slugById.get(id);
+		if (ownerRef === 'shared' || !slug) return undefined;
+		return () => enterContext(ownerRef, slug);
 	}
 	function enterCogmap(id: string) {
 		goto(buildCogmapUrl($page.url, id));
@@ -293,9 +305,7 @@
 				intensity={intensityFor(t.member_count, buildMax)}
 				tint={buildTint(ownerRefById.get(t.id) ?? '@me')}
 				glow={recencyGlow(lastActiveById.get(t.id) ?? null, Date.now())}
-				onEnter={committed === 'build'
-					? () => enterContext(ownerRefById.get(t.id) ?? '@me')
-					: undefined}
+				onEnter={committed === 'build' ? buildEnter(t.id) : undefined}
 			/>
 		{/each}
 	</g>

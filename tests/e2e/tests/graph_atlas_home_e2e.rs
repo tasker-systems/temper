@@ -321,11 +321,15 @@ async fn build_lens_scopes_contexts_to_membership(pool: sqlx::PgPool) {
         "a context owned by a non-member team must NOT appear on the build lens"
     );
 
-    // Owner-scope decoration.
+    // Owner-scope decoration + addressable slug: together they form the
+    // `context_ref` (`owner_ref/slug`) the Home build circle routes to
+    // (`/vault/[owner]/[context]`) — a bare owner-scope path 404s (Beat D fix).
     let p = body.build.iter().find(|c| c.id == personal).unwrap();
     assert_eq!(p.owner_ref, "@me");
+    assert_eq!(p.slug, "personal-ctx");
     let t = body.build.iter().find(|c| c.id == team_ctx).unwrap();
     assert_eq!(t.owner_ref, "+ctx-in");
+    assert_eq!(t.slug, "member-team-ctx");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

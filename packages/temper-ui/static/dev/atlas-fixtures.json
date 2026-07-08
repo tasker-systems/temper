@@ -29,56 +29,64 @@
      "name": "platform",
      "owner_ref": "@me",
      "resource_count": 331,
-     "last_active_at": "2026-07-04T22:15:00Z"
+     "last_active_at": "2026-07-04T22:15:00Z",
+     "slug": "platform"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000002",
      "name": "lattice",
      "owner_ref": "@me",
      "resource_count": 120,
-     "last_active_at": "2026-07-01T09:30:00Z"
+     "last_active_at": "2026-07-01T09:30:00Z",
+     "slug": "lattice"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000003",
      "name": "beacon",
      "owner_ref": "@me",
      "resource_count": 42,
-     "last_active_at": "2026-06-20T14:00:00Z"
+     "last_active_at": "2026-06-20T14:00:00Z",
+     "slug": "beacon"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000004",
      "name": "cedar",
      "owner_ref": "@me",
      "resource_count": 63,
-     "last_active_at": "2026-06-01T00:00:00Z"
+     "last_active_at": "2026-06-01T00:00:00Z",
+     "slug": "cedar"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000005",
      "name": "harbor",
      "owner_ref": "@me",
      "resource_count": 18,
-     "last_active_at": "2026-05-01T00:00:00Z"
+     "last_active_at": "2026-05-01T00:00:00Z",
+     "slug": "harbor"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000006",
      "name": "meadow",
      "owner_ref": "@me",
      "resource_count": 9,
-     "last_active_at": null
+     "last_active_at": null,
+     "slug": "meadow"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000007",
      "name": "roadmap",
      "owner_ref": "+ripple",
      "resource_count": 47,
-     "last_active_at": "2026-07-04T18:30:00Z"
+     "last_active_at": "2026-07-04T18:30:00Z",
+     "slug": "roadmap"
     },
     {
      "id": "0191d0c0-0b00-7000-8000-000000000008",
      "name": "orbit",
      "owner_ref": "+ripple",
      "resource_count": 210,
-     "last_active_at": "2026-06-25T00:00:00Z"
+     "last_active_at": "2026-06-25T00:00:00Z",
+     "slug": "orbit"
     }
    ],
    "research": [
