@@ -1,24 +1,22 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { TeamScopeView } from '$lib/types/generated/graph_scope';
 	import type { Focus } from '$lib/graph/atlas/nav';
-	import { buildHomeUrl, buildScopeUrl, buildCogmapUrl, buildAscendUrl } from '$lib/graph/atlas/nav';
+	import { buildHomeUrl, buildCogmapUrl, buildAscendUrl } from '$lib/graph/atlas/nav';
 	import { crumbModel, type CrumbSegment } from '$lib/graph/atlas/crumbModel';
 
 	interface Props {
-		scope: TeamScopeView | null;
 		cogmapName: string | null;
 		focusPath: Focus[];
 		crumbTerritory: { id: string; label: string | null } | null;
 		seedTitle: string | null;
-		teamId: string | null;
 		cogmapId: string | null;
+		scopeFilter: string | null;
 	}
-	let { scope, cogmapName, focusPath, crumbTerritory, seedTitle, teamId, cogmapId }: Props = $props();
+	let { cogmapName, focusPath, crumbTerritory, seedTitle, cogmapId, scopeFilter }: Props = $props();
 
 	const segments = $derived(
-		crumbModel({ scope, cogmapName, focusPath, crumbTerritory, seedTitle })
+		crumbModel({ cogmapName, focusPath, crumbTerritory, seedTitle, scopeFilter })
 	);
 	const canAscend = $derived(focusPath.length > 0);
 
@@ -32,10 +30,8 @@
 
 	function onSegment(seg: CrumbSegment) {
 		if (seg.kind === 'home') return goto(buildHomeUrl($page.url));
-		if (seg.kind === 'team' && teamId) return goto(buildScopeUrl($page.url, teamId));
 		if (seg.kind === 'cogmap' && cogmapId) return goto(buildCogmapUrl($page.url, cogmapId));
 		if (seg.focusPath) return gotoFocus(seg.focusPath);
-		// ancestors are a de-emphasized set with no drill target
 	}
 </script>
 
@@ -50,15 +46,11 @@
 	>
 	{#each segments as seg, i (i)}
 		{#if i > 0}<span class="sep">›</span>{/if}
-		{#if seg.kind === 'ancestor'}
-			<span class="seg ancestor">{seg.label}</span>
-		{:else}
-			<button
-				class="seg {seg.kind} {i === segments.length - 1 ? 'current' : ''}"
-				type="button"
-				onclick={() => onSegment(seg)}>{seg.label}</button
-			>
-		{/if}
+		<button
+			class="seg {seg.kind} {i === segments.length - 1 ? 'current' : ''}"
+			type="button"
+			onclick={() => onSegment(seg)}>{seg.label}</button
+		>
 	{/each}
 </nav>
 
@@ -94,15 +86,12 @@
 		cursor: pointer;
 		border-radius: 5px;
 	}
-	.seg:not(.ancestor):hover {
+	.seg:hover {
 		background: rgba(255, 255, 255, 0.06);
 	}
 	.seg.current {
 		font-weight: 600;
 		cursor: default;
-	}
-	.ancestor {
-		opacity: 0.6;
 	}
 	.sep {
 		opacity: 0.4;

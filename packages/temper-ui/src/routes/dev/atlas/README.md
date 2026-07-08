@@ -17,8 +17,8 @@ bun run dev
 # open http://localhost:5173/dev/atlas
 ```
 
-Pick a **scenario** (home / teamPanorama / regionSlice / nodeNeighborhood /
-nodeSelected / cogmapPanorama / leafBare) and a **viewport** preset (or type w/h).
+Pick a **scenario** (home / nodeNeighborhood / nodeSelected / cogmapPanorama /
+leafBare / regionDrill / regionDrillUnion) and a **viewport** preset (or type w/h).
 The frame clips like a real bounded viewport and is drag-resizable from its corner.
 On a fresh checkout the harness runs against the committed synthetic fixtures — no
 local capture required.
@@ -73,22 +73,24 @@ const grab = async (qs) => {
   return nodes.find((d) => d && ('focus' in d || 'territories' in d || 'teams' in d)) ?? nodes[nodes.length - 1];
 };
 
-const TEAM = '<your team id>';        // from grab('') → .teams[].id
-const COGMAP = '<your cogmap id>';    // from grab('') → .cogmaps[].id
-const REGION = '<a region territory id>'; // from grab('team='+TEAM) → .territories.territories[] where kind==='region'
-const NODE = '<a member/node id>';    // from a region slice → .slice.members[].id
+const COGMAP = '<your cogmap id>';    // from grab('') → .home.research[].id
+const REGION = '<a region territory id>'; // from grab('cogmap='+COGMAP) → .territories.territories[] where kind==='region'
+const REGION2 = '<a second region id>';   // another region in the same cogmap (for the union)
+const NODE = '<a node id>';           // from a composition drill → .neighborhood.nodes[].id
 
 const LEAF = '<a neighbor-less leaf node id>'; // a node whose neighborhood is empty
 
+// Beat D: a territory focus is the region → resources COMPOSITION drill (facets +
+// the context-resources they were derived_from); a `~`-join unions regions.
 const bundle = {
   _meta: { captured_from: 'temperkb.io/graph/@me', note: 'full PageData per scenario' },
   home: await grab(''),
-  teamPanorama: await grab('team=' + TEAM),
-  regionSlice: await grab('team=' + TEAM + '&focus=territory:' + REGION),
-  nodeNeighborhood: await grab('team=' + TEAM + '&focus=node:' + NODE),
-  nodeSelected: await grab('team=' + TEAM + '&focus=node:' + NODE + '&sel=node:' + NODE),
   cogmapPanorama: await grab('cogmap=' + COGMAP),
-  leafBare: await grab('team=' + TEAM + '&focus=node:' + LEAF + '&sel=node:' + LEAF)
+  regionDrill: await grab('cogmap=' + COGMAP + '&focus=territory:' + REGION),
+  regionDrillUnion: await grab('cogmap=' + COGMAP + '&focus=territory:' + REGION + '~' + REGION2),
+  nodeNeighborhood: await grab('cogmap=' + COGMAP + '&focus=node:' + NODE),
+  nodeSelected: await grab('cogmap=' + COGMAP + '&focus=node:' + NODE + '&sel=node:' + NODE),
+  leafBare: await grab('cogmap=' + COGMAP + '&focus=node:' + LEAF + '&sel=node:' + LEAF)
 };
 const a = document.createElement('a');
 a.href = URL.createObjectURL(new Blob([JSON.stringify(bundle)], { type: 'application/json' }));

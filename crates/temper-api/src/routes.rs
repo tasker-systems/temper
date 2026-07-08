@@ -90,24 +90,12 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/facets", post(handlers::facets::set_facet))
         .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
-            "/api/teams/{id}/graph/slice",
-            post(handlers::graph::neighborhood_slice),
-        )
-        .route(
             "/api/cogmaps/{id}/graph/slice",
             post(handlers::graph::cogmap_neighborhood_slice),
         )
         .route(
-            "/api/teams/{id}/graph/territories",
-            get(handlers::graph::territory_overview),
-        )
-        .route(
-            "/api/teams/{id}/graph/search",
-            get(handlers::graph::atlas_search),
-        )
-        .route(
-            "/api/graph/regions/{region_id}/slice",
-            get(handlers::graph::territory_slice),
+            "/api/graph/regions/composition",
+            get(handlers::graph::region_composition),
         )
         .route("/api/graph/home", get(handlers::graph::atlas_home))
         .route(
@@ -161,10 +149,6 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/teams/{id}/members/{profile_id}",
             delete(handlers::teams::remove_member).patch(handlers::teams::change_role),
-        )
-        .route(
-            "/api/teams/{id}/graph-scope",
-            get(handlers::teams::graph_scope),
         )
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))

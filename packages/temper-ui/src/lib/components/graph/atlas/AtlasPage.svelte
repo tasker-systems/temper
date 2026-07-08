@@ -2,9 +2,9 @@
 	import AtlasCanvas from '$lib/components/graph/atlas/AtlasCanvas.svelte';
 	import AtlasLegend from '$lib/components/graph/atlas/AtlasLegend.svelte';
 	import AtlasCrumb from '$lib/components/graph/atlas/AtlasCrumb.svelte';
-	import FilterPopover from '$lib/components/graph/atlas/FilterPopover.svelte';
-	import SearchAccelerator from '$lib/components/graph/atlas/SearchAccelerator.svelte';
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
+	import HomeA11yList from '$lib/components/graph/atlas/HomeA11yList.svelte';
+	import CompositionA11yList from '$lib/components/graph/atlas/CompositionA11yList.svelte';
 	import { selectedElement } from '$lib/graph/atlas/nav';
 	import type { AtlasViewData } from '$lib/graph/atlas/viewData';
 	import { navigating, page } from '$app/stores';
@@ -14,7 +14,7 @@
 	// M6: keying AtlasCanvas on the scoped view remounts it on re-scope, resetting the camera.
 	// Selection (`?sel`) is deliberately excluded — selecting an edge must not remount the canvas.
 	const viewKey = $derived(
-		`${data.teamId ?? data.cogmapId ?? 'home'}|${data.focus.kind}:${data.focus.kind === 'none' ? '' : data.focus.id}`
+		`${data.cogmapId ?? 'home'}|${data.focus.kind}:${data.focus.kind === 'none' ? '' : data.focus.id}`
 	);
 	const selection = $derived(selectedElement(data.focus, $page.url));
 	const subgraph = $derived(data.neighborhood ?? null);
@@ -36,51 +36,43 @@
 	);
 	// Show the loading veil only for real view-loads — a scope or focus change that
 	// remounts the canvas — not for ephemeral replaceState navigations (filter
-	// toggle, edge select, panel close) which keep the same team/cogmap/focus. Those
+	// toggle, edge select, panel close) which keep the same cogmap/focus. Those
 	// still run `load`, so an unconditional $navigating veil would flash on every
 	// minor interaction.
-	const scopeKey = (u: URL) =>
-		`${u.searchParams.get('team') ?? u.searchParams.get('cogmap') ?? 'home'}|${u.searchParams.get('focus') ?? ''}`;
+	const scopeKey = (u: URL) => `${u.searchParams.get('cogmap') ?? 'home'}|${u.searchParams.get('focus') ?? ''}`;
 	const isViewLoad = $derived(!!$navigating?.to && scopeKey($navigating.to.url) !== scopeKey($page.url));
 </script>
 
 <div class="atlas-page">
 	<div class="top-bar">
 		<AtlasCrumb
-			scope={data.scope}
 			cogmapName={data.cogmapName}
 			focusPath={data.focusPath}
 			crumbTerritory={data.crumbTerritory}
 			{seedTitle}
-			teamId={data.teamId}
 			cogmapId={data.cogmapId}
+			scopeFilter={data.scopeFilter}
 		/>
-		<div class="top-right">
-			{#if data.scope}
-				<FilterPopover filters={data.filters} />
-			{/if}
-			{#if data.teamId}
-				<SearchAccelerator teamId={data.teamId} />
-			{/if}
-		</div>
 	</div>
 
 	<div class="canvas-wrap">
+		{#if data.home}
+			<HomeA11yList home={data.home} />
+		{/if}
+		{#if subgraph && subgraph.nodes.length > 0}
+			<CompositionA11yList {subgraph} />
+		{/if}
 		{#if isViewLoad}
 			<div class="loading-veil" role="status" aria-live="polite">Loading…</div>
 		{/if}
 		{#key viewKey}
 			<AtlasCanvas
-				teamId={data.teamId}
 				cogmapId={data.cogmapId}
 				tier={data.tier}
 				focus={data.focus}
 				territories={data.territories}
-				slice={data.slice}
 				neighborhood={data.neighborhood}
-				teams={data.teams}
-				cogmaps={data.cogmaps}
-				zones={data.scope?.zones ?? []}
+				home={data.home}
 				filters={data.filters}
 			/>
 		{/key}
@@ -106,12 +98,6 @@
 		padding: 8px 14px;
 		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 		min-width: 0;
-	}
-	.top-right {
-		margin-left: auto;
-		display: flex;
-		align-items: center;
-		gap: 10px;
 	}
 	.canvas-wrap {
 		position: relative;
