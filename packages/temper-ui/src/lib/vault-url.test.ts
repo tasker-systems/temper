@@ -59,6 +59,12 @@ describe('resourceHref', () => {
 		);
 	});
 
+	it('percent-encodes the doc_type segment', () => {
+		expect(resourceHref(makeRow({ doc_type_name: 'a b' }))).toBe(
+			`/vault/@j-cole-taylor/temper/a%20b/${ID}`
+		);
+	});
+
 	it('returns null for a cogmap-homed resource (null context fields)', () => {
 		expect(
 			resourceHref(
