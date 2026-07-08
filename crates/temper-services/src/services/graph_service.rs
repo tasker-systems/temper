@@ -488,6 +488,134 @@ pub async fn territory_slice(
     })
 }
 
+/// Beat D — region → resources COMPOSITION drill. Given one or more regions
+/// (a shift-selected union), returns the two-axis force-graph: the regions'
+/// facets (knowledge axis) plus the context-homed resources they link to (the
+/// builder axis), with all edges among that set. Unlike `cogmap_neighborhood_slice`
+/// this is NOT fenced to cogmap scope — `graph_region_composition_edges` follows
+/// visible edges out to context-homed resources. Deny-as-absence entry gate:
+/// every region must exist, be unfolded, and sit in a cogmap the caller can read.
+pub async fn region_composition_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    region_ids: &[Uuid],
+    depth: i32,
+) -> ApiResult<AtlasSubgraph> {
+    if region_ids.is_empty() {
+        return Err(ApiError::BadRequest("region_ids must be non-empty".into()));
+    }
+
+    // Bound the union so the central idea-cluster stays legible (spec §6).
+    const MAX_UNION_REGIONS: usize = 6;
+    const NODE_CAP: usize = 120;
+    let regions: Vec<Uuid> = if region_ids.len() > MAX_UNION_REGIONS {
+        tracing::warn!(
+            requested = region_ids.len(),
+            cap = MAX_UNION_REGIONS,
+            "region composition union clamped"
+        );
+        region_ids[..MAX_UNION_REGIONS].to_vec()
+    } else {
+        region_ids.to_vec()
+    };
+
+    // Entry gate (deny-as-absence): every requested region must exist, be
+    // unfolded, and be cogmap-readable by the caller. Selecting the count adds
+    // no visibility surface — it is strictly less sensitive than the members
+    // the composition returns below.
+    let readable: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_cogmap_regions reg \
+         WHERE reg.id = ANY($1) AND NOT reg.is_folded \
+           AND cogmap_readable_by_profile($2, reg.cogmap_id)",
+    )
+    .bind(&regions)
+    .bind(profile_id.as_uuid())
+    .fetch_one(pool)
+    .await?;
+    if (readable as usize) < regions.len() {
+        return Err(ApiError::NotFound);
+    }
+
+    let depth = depth.clamp(1, 3);
+
+    // Edges of the induced cross-home subgraph.
+    let walked = sqlx::query_as::<_, (Uuid, Uuid, Uuid, EdgeKind, Polarity, Option<String>, f64)>(
+        "SELECT id, source_id, target_id, edge_kind, polarity, label, weight \
+         FROM graph_region_composition_edges($1, $2, $3)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(&regions)
+    .bind(depth)
+    .fetch_all(pool)
+    .await?;
+
+    let edges: Vec<AtlasEdge> = walked
+        .iter()
+        .map(
+            |(id, source, target, edge_kind, polarity, label, weight)| AtlasEdge {
+                id: *id,
+                source: *source,
+                target: *target,
+                edge_kind: *edge_kind,
+                polarity: *polarity,
+                label: label.clone(),
+                weight: *weight,
+            },
+        )
+        .collect();
+
+    // Seeds (region members) ensure an isolated facet with no edges still
+    // renders; union with all walked endpoints, then cap.
+    let mut node_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT member_id FROM kb_cogmap_region_members WHERE region_id = ANY($1)",
+    )
+    .bind(&regions)
+    .fetch_all(pool)
+    .await?;
+    for (_, s, t, ..) in &walked {
+        node_ids.push(*s);
+        node_ids.push(*t);
+    }
+    node_ids.sort_unstable();
+    node_ids.dedup();
+    if node_ids.len() > NODE_CAP {
+        tracing::warn!(
+            nodes = node_ids.len(),
+            cap = NODE_CAP,
+            "region composition node set clamped"
+        );
+        node_ids.truncate(NODE_CAP);
+    }
+
+    let nodes: Vec<AtlasNode> = sqlx::query_as::<
+        _,
+        (Uuid, String, Option<String>, String, i32, Option<String>),
+    >(
+        "SELECT id, title, doc_type, home, degree, first_chunk FROM graph_atlas_nodes_visible($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(&node_ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, title, doc_type, home, degree, first_chunk)| AtlasNode {
+        id,
+        title,
+        doc_type,
+        home: if home == "cogmap" {
+            NodeHome::Cogmap
+        } else {
+            NodeHome::Context
+        },
+        degree,
+        salience: None,
+        excerpt: first_chunk.as_deref().and_then(compute_excerpt),
+    })
+    .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
+}
+
 /// Atlas Home — the you→teams→cogmaps membership graph with count hints.
 /// No entry gate: the read is inherently self-scoped (member teams +
 /// cogmap_visible_maps), so it returns exactly what the caller may see.
