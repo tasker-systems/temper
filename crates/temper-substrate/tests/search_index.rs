@@ -5,6 +5,7 @@
 
 mod common;
 
+use temper_substrate::events::EventContext;
 use temper_substrate::ids::CogmapId;
 use temper_substrate::payloads::AnchorRef;
 use temper_substrate::readback;
@@ -95,6 +96,87 @@ async fn create_populates_index_with_title_and_body(pool: sqlx::PgPool) {
     assert!(
         !index_matches(&pool, r.uuid(), "unrelated").await,
         "non-present term does not match"
+    );
+}
+
+// The async-embed round-trip (issue #299): a DEFERRED create persists chunk text + FTS immediately
+// but leaves every chunk's vector NULL; the drain's per-resource backfill then fills them. This is the
+// end-to-end proof that "FTS immediate, vector eventual" holds at the write/read boundary.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn deferred_create_is_fts_immediate_then_backfills_vectors(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "def").await;
+    let r = writes::create_resource_deferred_with(
+        &pool,
+        writes::CreateParams {
+            sources: vec![],
+            title: "Deferred doc",
+            origin_uri: "temper://def/r",
+            body: "the async embedding pipeline defers vectors off the request path",
+            doc_type: "concept",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    // FTS is immediate — the body term is indexed even with no vector yet.
+    assert!(
+        index_matches(&pool, r.uuid(), "embedding").await,
+        "deferred create is FTS-searchable immediately"
+    );
+
+    // Every current chunk exists with a NULL embedding (text persisted, vector deferred).
+    let total: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_chunks WHERE resource_id=$1 AND is_current")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let null_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id=$1 AND is_current AND embedding IS NULL",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(total >= 1, "deferred create writes chunks");
+    assert_eq!(
+        null_before, total,
+        "no chunk is embedded yet (all deferred)"
+    );
+
+    // The drain's per-resource backfill embeds every deferred chunk.
+    let embedded = temper_substrate::embed::embed_resource_chunks(&pool, r.uuid())
+        .await
+        .unwrap();
+    assert_eq!(
+        embedded, total as u64,
+        "backfill embeds every deferred chunk"
+    );
+    let null_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id=$1 AND is_current AND embedding IS NULL",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(null_after, 0, "all deferred chunks now carry a vector");
+
+    // Idempotent: a second backfill has nothing to do.
+    assert_eq!(
+        temper_substrate::embed::embed_resource_chunks(&pool, r.uuid())
+            .await
+            .unwrap(),
+        0,
+        "re-running the backfill embeds nothing"
     );
 }
 

@@ -39,7 +39,6 @@ pub static KNOWN_TEMPER_FIELDS: &[&str] = &[
     "temper-stage",
     "temper-mode",
     "temper-effort",
-    "temper-goal",
     "temper-seq",
     "temper-branch",
     "temper-pr",
@@ -92,12 +91,7 @@ mod tests {
 
     #[test]
     fn known_temper_fields_includes_lifecycle_keys() {
-        for key in [
-            "temper-stage",
-            "temper-mode",
-            "temper-effort",
-            "temper-goal",
-        ] {
+        for key in ["temper-stage", "temper-mode", "temper-effort"] {
             assert!(KNOWN_TEMPER_FIELDS.contains(&key), "missing key {key}");
         }
     }

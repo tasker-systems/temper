@@ -78,10 +78,53 @@ To stand up a new target (or document an existing one):
 1. **Create the Vercel project** and connect it to the repo (or fork / `v*` tag).
 2. **Set environment** on the project: `DATABASE_URL` (its Neon), Auth0 vars, and any
    other secrets the functions read. (The repo's `vercel.json` is target-agnostic.)
+   To move embedding off the request path, also set the async-embed vars — see
+   [Async embedding](#async-embedding-off-request-embed-drain-issue-299) below.
 3. **Choose the production trigger** — git auto-deploy from a production branch
    (temperkb.io uses `main`), or manual promotion if the operator wants deploys gated.
 4. **Provision the schema** on its Neon DB from `migrations/` before first traffic.
 5. **Verify** a live read/write through the deployed `/api/axum` against its DB.
+
+## Async embedding (off-request embed drain, issue #299)
+
+By default, a resource created over **MCP** (`create_resource`) or **HTTP-raw ingest**
+(a `content` body with no precomputed chunks) is embedded **synchronously inside the
+request**. For large bodies that is slow and can brush the function timeout. The async
+path moves embedding **off the request**: the create returns as soon as chunk text is
+persisted (immediately full-text searchable), and the vector is backfilled by a queued
+job drained on a schedule. The create return shape is identical either way — no polling.
+
+This path is **opt-in per target** and inert until you enable it, so a target with no
+drain configured keeps embedding inline and never strands chunks unembedded.
+
+To enable it on a target:
+
+1. **Set two env vars** on the Vercel project:
+   - `TEMPER_ASYNC_EMBED=1` — flips server-computed embeds to defer. Leave unset (or
+     `0`) to keep inline embedding. (Caller-supplied vectors from the CLI/API are always
+     persisted inline regardless — there is nothing to defer.)
+   - `EMBED_DISPATCH_SECRET=<secret>` — the bearer secret gating the internal drain
+     endpoint `GET /api/embed/dispatch`. **Set this to the same value as the project's
+     Vercel `CRON_SECRET`**, which Vercel sends as `Authorization: Bearer <CRON_SECRET>`
+     on cron invocations. If unset, the endpoint is disabled (fail-closed) and deferred
+     resources stay FTS-only until it is configured.
+2. **The cron is already declared** in the repo's `vercel.json` (`/api/embed/dispatch`,
+   every minute) — target-agnostic, so no per-target cron setup is needed. On Vercel it
+   activates on the next production deploy of a project that has cron enabled (Pro plan;
+   Hobby only allows daily crons — raise the schedule there or run the drain externally).
+3. **Schema**: the drain reuses the existing `kb_workflow_jobs` queue (migration
+   `20260707000001_workflow_jobs_resource_scope.sql`). Apply `migrations/` as usual
+   before enabling — no separate step.
+
+**Ordering matters**: set `EMBED_DISPATCH_SECRET` (+ confirm the cron runs) *before*
+setting `TEMPER_ASYNC_EMBED=1`. If deferral is on but nothing drains, new large-content
+resources are full-text-searchable but not vector-searchable until the drain catches up.
+
+**Observability**: each drain pass returns `{ claimed, completed, failed, chunks_embedded }`.
+A failed embed is retried by the queue's reaper and marked `dead` after max attempts;
+`dead` jobs are the re-drive signal (a `reindex`/sweep follow-up). Operator guidance on
+bulk vs interactive ingest lives in [docs/upload-lifecycle.md](docs/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
+the full design is [docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md](docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md).
 
 ## Rollback
 

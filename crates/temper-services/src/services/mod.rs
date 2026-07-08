@@ -2,6 +2,7 @@ pub mod access_service;
 pub mod cogmap_service;
 pub mod context_service;
 pub mod edge_service;
+pub mod embed_service;
 pub mod event_service;
 pub mod graph_service;
 pub mod invitation_service;

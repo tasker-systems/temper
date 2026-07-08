@@ -15,6 +15,7 @@ use crate::templates::{CommandWrapperTemplate, SkillTemplate};
 
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
+static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static KNOWLEDGE_BASE_MD: &str = include_str!("../../../../agent-skills/knowledge-base.md");
 static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
 static WF_BUILD_MEDIUM: &str = include_str!("../../skill-content/workflows/build-medium.md");
@@ -58,6 +59,18 @@ static REFERENCE_FOOTER: &str = r#"
 | small | Single session, focused deliverable |
 | medium | Multi-step, bounded to a clear outcome |
 | large | Multi-session, may require decomposition |
+
+## Managed vs Open Frontmatter
+
+`managed_meta` is a **closed, temper-owned vocabulary** -- the `temper-*`
+workflow/provenance keys (stage, mode, effort, status, seq, branch, pr,
+llm-model, llm-run, provenance). It is optional metadata with smart defaults;
+you never *have* to send it. An unknown key under `managed_meta` is rejected --
+put caller-defined ("bring-your-own") fields in `open_meta`, the free-form tier.
+
+**Slug precedence:** the slug is derived from the title. To override it, pass
+the top-level `slug` (CLI `--slug`, MCP `slug`). A slug placed in managed
+frontmatter is inert.
 
 ## Discovery Workflow
 
@@ -379,6 +392,7 @@ fn check_expected_files(skill_dir: &Path) {
         "reference.md",
         "subagent-guidance.md",
         "session-lifecycle.md",
+        "cognitive-maps.md",
         "knowledge-base.md",
         "workflows/build-small.md",
         "workflows/build-medium.md",
@@ -493,6 +507,10 @@ pub fn generate_skill_files_with_hash(
         "session-lifecycle.md".to_string(),
         SESSION_LIFECYCLE_MD.to_string(),
     );
+    files.insert(
+        "cognitive-maps.md".to_string(),
+        COGNITIVE_MAPS_MD.to_string(),
+    );
 
     files.insert(
         "knowledge-base.md".to_string(),
@@ -589,6 +607,7 @@ mod tests {
         assert!(files.contains_key("reference.md"));
         assert!(files.contains_key("subagent-guidance.md"));
         assert!(files.contains_key("session-lifecycle.md"));
+        assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("knowledge-base.md"));
         assert!(files.contains_key("workflows/build-small.md"));
         assert!(files.contains_key("workflows/build-medium.md"));
@@ -728,6 +747,14 @@ mod tests {
         assert!(
             reference.contains("## Context Requirement"),
             "should have Context Requirement section"
+        );
+        assert!(
+            reference.contains("## Managed vs Open Frontmatter"),
+            "should have Managed vs Open Frontmatter section"
+        );
+        assert!(
+            reference.contains("closed, temper-owned vocabulary"),
+            "managed-meta section must state the closed-vocabulary contract"
         );
     }
 

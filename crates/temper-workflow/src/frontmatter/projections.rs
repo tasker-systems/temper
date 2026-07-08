@@ -21,7 +21,25 @@ impl TryFrom<&Frontmatter> for ManagedMeta {
     type Error = TemperError;
 
     fn try_from(fm: &Frontmatter) -> Result<Self> {
-        let managed = fm.managed_json();
+        let mut managed = fm.managed_json();
+        // `managed_json` carries the frontmatter's whole managed tier, which may
+        // include identity/type/home/relationship keys (`temper-title`/`-slug`/
+        // `-type`/`-context`/`-goal`/…). Those are NOT Property metadata and left the
+        // closed `ManagedMeta` vocabulary in Phase 2, so strip them before the
+        // `deny_unknown_fields` deserialize — the typed shape keeps only Property keys.
+        if let Some(obj) = managed.as_object_mut() {
+            for k in [
+                "temper-title",
+                "temper-slug",
+                "temper-type",
+                "temper-context",
+                "temper-goal",
+                "temper-updated",
+                "temper-source",
+            ] {
+                obj.remove(k);
+            }
+        }
         serde_json::from_value(managed)
             .map_err(|e| TemperError::Config(format!("failed to project to ManagedMeta: {e}")))
     }
@@ -131,9 +149,9 @@ body
     #[test]
     fn projects_to_managed_meta() {
         let fm = Frontmatter::try_from(TASK_FIXTURE).unwrap();
+        // ManagedMeta is Property-only — identity (title/slug) projects via
+        // ResourceFrontmatter, not here.
         let mm = ManagedMeta::try_from(&fm).unwrap();
-        assert_eq!(mm.title.as_deref(), Some("My Task"));
-        assert_eq!(mm.slug.as_deref(), Some("my-task"));
         assert_eq!(mm.stage.as_deref(), Some("in-progress"));
         assert_eq!(mm.mode.as_deref(), Some("build"));
         assert_eq!(mm.seq, Some(42));

@@ -270,7 +270,7 @@ temper-type: task
     #[test]
     fn doc_type_schema_properties_land_in_managed_in_schema_order() {
         // task.schema.json declares: temper-type, temper-stage, temper-mode,
-        // temper-effort, temper-goal, temper-seq, temper-branch, temper-pr, slug
+        // temper-effort, temper-seq, temper-branch, temper-pr, slug
         // in that declaration order. We assert the subset present here
         // emerges in that relative order.
         let v = yaml(

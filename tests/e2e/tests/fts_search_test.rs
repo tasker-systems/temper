@@ -30,8 +30,8 @@ async fn ingest_with_chunks(
         slug: slug.to_string(),
         content: content.to_string(),
         metadata: None,
-        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
-        open_meta: None,
+        managed_meta: None,
+        open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
@@ -88,9 +88,15 @@ async fn fts_text_query_finds_resource(pool: sqlx::PgPool) {
     assert_eq!(results[0].title, "Kubernetes Deployment Strategy");
     // Beat 2: unified_search pipeline — origin is always "unified".
     assert_eq!(results[0].origin, "unified");
-    // vector_score is 0.0 because no embedding was supplied (the SQL function zeroes the vector term
-    // when p_emb is NULL); fts_score and combined_score are non-zero for a real FTS match.
-    assert_eq!(results[0].vector_score, 0.0);
+    // The resource is a genuine lexical hit, so its FTS term is non-zero. #297: the server now
+    // embeds a text-only query server-side (`search_select` fills `p_emb`), so the vector term may
+    // also contribute — this is no longer the dead-vector-arm path, and `vector_score` is no longer
+    // asserted to be 0 (its value depends on whether the embedder is available at runtime).
+    assert!(
+        results[0].fts_score > 0.0,
+        "a real FTS match must carry a non-zero fts_score; got {}",
+        results[0].fts_score
+    );
 }
 
 /// Full-text search finds resources by body content, not just title.

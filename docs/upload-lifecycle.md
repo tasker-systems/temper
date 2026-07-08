@@ -206,6 +206,17 @@ This means re-uploading the same resource creates a new version. Old chunks rema
 
 **Status transition:** → `processed`
 
+## Choosing an ingest surface: CLI vs MCP (bulk vs interactive)
+
+The two write surfaces split on **where embeddings are computed**, which determines how large content behaves:
+
+- **CLI (`temper resource create` / import → `/api/ingest`)** computes embeddings **client-side** and ships precomputed vectors (`chunks_packed`); the server only persists. Embedding cost runs on the client's (fast) CPU, so large content stays quick.
+- **MCP (`create_resource`) and raw HTTP ingest with `content` only** have no client-side model, so the server embeds. Today that embed runs **synchronously inside the serverless request** (issue [#299](https://github.com/tasker-systems/temper/issues/299)), so for large bodies it is slow and, on a large enough input, can brush the function timeout.
+
+**Interim operator guidance (permanent):** route **bulk / large imports through the CLI**, and use MCP for **interactive, incremental** writes where per-call embed cost is negligible. This holds regardless of the async work below and is good practice permanently — the CLI is the "bring your own vectors" fast path.
+
+The async-embedding work (issue #299, design spec `docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md`) moves the server-side embed **off the request path**: the create returns as soon as chunk text is persisted (immediately FTS-searchable), and the vector is backfilled by a queued job (vector-searchable shortly after). The create return contract stays uniform — no polling, no alternate return shape. Once that lands, large MCP/HTTP creates return promptly too; the CLI guidance above still stands as the lowest-latency path for bulk work.
+
 ## Database Schema
 
 ### blob_files

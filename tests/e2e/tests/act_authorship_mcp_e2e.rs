@@ -45,6 +45,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpServi
         port: 0,
         enable_swagger: false,
         internal_reconcile_secret: None,
+        embed_dispatch_secret: None,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let svc = temper_mcp::service::TemperMcpService::new(state);

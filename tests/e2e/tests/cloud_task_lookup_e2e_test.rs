@@ -8,6 +8,12 @@
 //! vault with `fs::read_dir`) and that `find_task` resolves slugs through
 //! that same cloud-backed path — even when no projection files exist on disk.
 //!
+//! Post-Phase-2, `managed_meta` is Property-only: identity (`title`) is a
+//! first-class row column, and `load_tasks` sources it from the full list row
+//! (not `managed_meta`). Slugs are title-derived (`sluggify`) for `find_task`
+//! matching; restoring stored-slug / `branch`/`pr` / goal-edge fidelity is task
+//! 019f3d55.
+//!
 //! Tasks are seeded via the API client (`app.client.ingest()`), so nothing is
 //! ever written to the vault directory. Each test then drives the synchronous
 //! `temper_cli::actions::task::{load_tasks, find_task}` lib calls inside
@@ -37,25 +43,21 @@ fn cloud_env<'a>(
 
 /// Seed a task via the API client (cloud-only; no vault files written).
 ///
-/// `managed_meta` carries the `temper-*` keys exactly as the server stores
-/// them — this is the shape `load_tasks` reads back through `list_meta`.
+/// Identity (`title`/`slug`) travels as first-class top-level `IngestPayload`
+/// fields; `managed_meta` carries only the Property vocabulary (stage/mode/
+/// effort/seq) — an identity key here would be rejected by the closed vocabulary.
 async fn seed_task(
     client: &temper_client::TemperClient,
     context: &str,
     slug: &str,
     title: &str,
     stage: &str,
-    goal: Option<&str>,
     seq: Option<i64>,
 ) {
     let mut managed = serde_json::Map::new();
-    managed.insert("temper-title".to_string(), serde_json::json!(title));
     managed.insert("temper-stage".to_string(), serde_json::json!(stage));
     managed.insert("temper-mode".to_string(), serde_json::json!("build"));
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
-    if let Some(g) = goal {
-        managed.insert("temper-goal".to_string(), serde_json::json!(g));
-    }
     if let Some(s) = seq {
         managed.insert("temper-seq".to_string(), serde_json::json!(s));
     }
@@ -87,13 +89,12 @@ async fn seed_task(
 // Test 1: load_tasks returns API tasks sorted by seq with correct mapping
 // ---------------------------------------------------------------------------
 
-/// Seed three tasks in a context via the API (varied stage/goal/seq), then
-/// drive `load_tasks` in cloud mode and assert it returns the server's tasks
-/// — sorted by seq ascending — with correct title/slug/stage/mode/effort/
-/// goal/context mapping. The local vault dir is empty (nothing is ever
-/// projected), proving the result comes from the API, not a disk scan.
+/// Seed three tasks in a context via the API (varied stage/seq), then drive
+/// `load_tasks` in cloud mode and assert it returns the server's tasks — sorted
+/// by seq ascending — with correct title/slug/stage/mode/effort/seq/context
+/// mapping. The local vault dir is empty (nothing is ever projected), proving
+/// the result comes from the API, not a disk scan.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: readback does not inject temper-title into managed_meta (substrate §7 Die key), so the production `load_tasks` fails with Api(\"task managed_meta missing temper-title\")"]
 async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
@@ -108,24 +109,14 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
         .await
         .expect("create myapp context");
 
-    // Seed out of seq order to prove sorting happens.
-    seed_task(
-        &app.client,
-        "myapp",
-        "task-c",
-        "Task C",
-        "done",
-        Some("goal-alpha"),
-        Some(30),
-    )
-    .await;
+    // Seed out of seq order to prove sorting happens. Slug == sluggify(title).
+    seed_task(&app.client, "myapp", "task-c", "Task C", "done", Some(30)).await;
     seed_task(
         &app.client,
         "myapp",
         "task-a",
         "Task A",
         "backlog",
-        Some("goal-alpha"),
         Some(10),
     )
     .await;
@@ -135,7 +126,6 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
         "task-b",
         "Task B",
         "in-progress",
-        Some("goal-beta"),
         Some(20),
     )
     .await;
@@ -148,7 +138,7 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
 
     let tasks = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::actions::task::load_tasks(&cli_config, Some("myapp"), None)
+            temper_cli::actions::task::load_tasks(&cli_config, Some("myapp"))
                 .expect("load_tasks must succeed in cloud mode")
         })
     })
@@ -157,7 +147,7 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
 
     assert_eq!(tasks.len(), 3, "expected all three seeded tasks");
 
-    // Sorted by seq ascending: a(10), b(20), c(30).
+    // Sorted by seq ascending: a(10), b(20), c(30). Slug is title-derived.
     let slugs: Vec<&str> = tasks.iter().map(|t| t.slug.as_str()).collect();
     assert_eq!(
         slugs,
@@ -165,16 +155,15 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
         "tasks must be sorted by seq ascending"
     );
 
-    // Full field mapping on the first task.
+    // Field mapping on the first task — identity + workflow projections come from
+    // the row's top-level columns.
     let a = &tasks[0];
     assert_eq!(a.slug, "task-a");
     assert_eq!(a.title, "Task A");
     assert_eq!(a.stage, "backlog");
     assert_eq!(a.mode.as_deref(), Some("build"));
     assert_eq!(a.effort.as_deref(), Some("small"));
-    assert_eq!(a.goal.as_deref(), Some("goal-alpha"));
     assert_eq!(a.seq, Some(10));
-    // Context comes from the row's context, not managed_meta.
     assert_eq!(
         a.context, "myapp",
         "context must come from the resource's context, not managed_meta"
@@ -182,95 +171,13 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: goal_slug filter returns only matching-goal tasks
+// Test 2: find_task resolves by exact slug, by unique suffix, and returns None
 // ---------------------------------------------------------------------------
 
-/// `load_tasks(.., goal_slug = Some("goal-alpha"))` returns only the tasks
-/// whose `temper-goal` equals `goal-alpha`, filtered client-side.
+/// `find_task` resolves a task by exact (title-derived) slug and by an
+/// unambiguous suffix, and returns `None` for an unknown identifier — all
+/// through the cloud path with an empty local vault.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: readback does not inject temper-title into managed_meta (substrate §7 Die key), so the production `load_tasks` fails with Api(\"task managed_meta missing temper-title\")"]
-async fn load_tasks_filters_by_goal_slug(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
-
-    app.client
-        .profile()
-        .get()
-        .await
-        .expect("profile pre-flight");
-    app.client
-        .contexts()
-        .create("myapp", None)
-        .await
-        .expect("create myapp context");
-
-    seed_task(
-        &app.client,
-        "myapp",
-        "alpha-1",
-        "Alpha One",
-        "backlog",
-        Some("goal-alpha"),
-        Some(10),
-    )
-    .await;
-    seed_task(
-        &app.client,
-        "myapp",
-        "alpha-2",
-        "Alpha Two",
-        "backlog",
-        Some("goal-alpha"),
-        Some(20),
-    )
-    .await;
-    seed_task(
-        &app.client,
-        "myapp",
-        "beta-1",
-        "Beta One",
-        "backlog",
-        Some("goal-beta"),
-        Some(15),
-    )
-    .await;
-
-    let global_config = app.vault_dir.path().join("no-such-config.toml");
-    let api_url = format!("http://{}", app.addr);
-    let token = app.token.clone();
-    let global_config_str = global_config.to_str().unwrap().to_string();
-    let cli_config = app.cli_config.clone();
-
-    let tasks = tokio::task::spawn_blocking(move || {
-        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::actions::task::load_tasks(&cli_config, Some("myapp"), Some("goal-alpha"))
-                .expect("load_tasks with goal filter must succeed")
-        })
-    })
-    .await
-    .expect("spawn_blocking joined");
-
-    assert_eq!(tasks.len(), 2, "only the two goal-alpha tasks must match");
-    for t in &tasks {
-        assert_eq!(
-            t.goal.as_deref(),
-            Some("goal-alpha"),
-            "goal filter must exclude non-matching goals; got {t:?}"
-        );
-    }
-    let mut slugs: Vec<&str> = tasks.iter().map(|t| t.slug.as_str()).collect();
-    slugs.sort_unstable();
-    assert_eq!(slugs, vec!["alpha-1", "alpha-2"]);
-}
-
-// ---------------------------------------------------------------------------
-// Test 3: find_task resolves by exact slug, by unique suffix, and returns None
-// ---------------------------------------------------------------------------
-
-/// `find_task` resolves a task by exact slug and by an unambiguous suffix,
-/// and returns `None` for an unknown identifier — all through the cloud path
-/// with an empty local vault.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: readback drops temper-title/temper-slug from managed_meta (substrate §7 Die keys), so `find_task` (via `load_tasks`) fails with Api(\"task managed_meta missing temper-title\") and cannot resolve by slug/suffix"]
 async fn find_task_resolves_by_slug_and_suffix(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
@@ -285,23 +192,22 @@ async fn find_task_resolves_by_slug_and_suffix(pool: sqlx::PgPool) {
         .await
         .expect("create myapp context");
 
+    // Slug is title-derived: "Implement Widget" -> "implement-widget".
     seed_task(
         &app.client,
         "myapp",
-        "2026-05-30-implement-widget",
+        "implement-widget",
         "Implement Widget",
         "backlog",
-        None,
         Some(10),
     )
     .await;
     seed_task(
         &app.client,
         "myapp",
-        "2026-05-30-refactor-gadget",
+        "refactor-gadget",
         "Refactor Gadget",
         "backlog",
-        None,
         Some(20),
     )
     .await;
@@ -316,7 +222,7 @@ async fn find_task_resolves_by_slug_and_suffix(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             let exact = temper_cli::actions::task::find_task(
                 &cli_config,
-                "2026-05-30-implement-widget",
+                "implement-widget",
                 Some("myapp"),
             )
             .expect("find_task exact must succeed");
@@ -336,12 +242,12 @@ async fn find_task_resolves_by_slug_and_suffix(pool: sqlx::PgPool) {
     .expect("spawn_blocking joined");
 
     let exact = exact.expect("exact slug must resolve");
-    assert_eq!(exact.slug, "2026-05-30-implement-widget");
+    assert_eq!(exact.slug, "implement-widget");
     assert_eq!(exact.title, "Implement Widget");
 
     let suffix = suffix.expect("unique suffix must resolve");
     assert_eq!(
-        suffix.slug, "2026-05-30-implement-widget",
+        suffix.slug, "implement-widget",
         "suffix 'widget' must resolve to the implement-widget task"
     );
 

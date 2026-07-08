@@ -9,7 +9,9 @@ describe("buildAsMetadata", () => {
       issuer: "https://saml.example.com",
       authorization_endpoint: "https://saml.example.com/oauth/authorize",
       token_endpoint: "https://saml.example.com/oauth/token",
+      registration_endpoint: "https://saml.example.com/oauth/register",
       jwks_uri: "https://saml.example.com/oauth/jwks",
+      scopes_supported: ["openid", "profile", "email", "offline_access"],
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
@@ -22,6 +24,18 @@ describe("buildAsMetadata", () => {
 
     expect(meta.issuer).toBe("https://saml.example.com");
     expect(meta.authorization_endpoint).toBe("https://saml.example.com/oauth/authorize");
+  });
+
+  it("advertises the DCR registration endpoint so MCP clients can complete the handshake", () => {
+    // MCP clients (Claude Code/Desktop) require dynamic client registration and abort the OAuth
+    // walk if the AS metadata omits registration_endpoint — the bug this field fixes (issue #293).
+    const meta = buildAsMetadata("https://saml.example.com/");
+    expect(meta.registration_endpoint).toBe("https://saml.example.com/oauth/register");
+  });
+
+  it("advertises offline_access so conformant clients get a refresh token", () => {
+    const meta = buildAsMetadata("https://saml.example.com");
+    expect(meta.scopes_supported).toContain("offline_access");
   });
 });
 

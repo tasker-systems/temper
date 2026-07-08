@@ -258,13 +258,22 @@ pub fn create_app(state: AppState) -> Router {
             crate::middleware::internal_auth::require_internal_signature,
         ));
 
+    // Internal embed-dispatch drain (issue #299) — self-gated by EMBED_DISPATCH_SECRET (bearer),
+    // NOT `require_auth`. Called by the Vercel cron on a schedule; the handler checks the secret
+    // itself (fail-closed when unset), so no auth-middleware layer is applied.
+    let embed_internal = Router::new().route(
+        "/api/embed/dispatch",
+        get(handlers::embed::dispatch).post(handlers::embed::dispatch),
+    );
+
     let cors = cors_layer(&state);
 
     let mut app = Router::new()
         .merge(public)
         .merge(auth_only)
         .merge(gated)
-        .merge(internal);
+        .merge(internal)
+        .merge(embed_internal);
 
     if state.config.enable_swagger {
         app = app

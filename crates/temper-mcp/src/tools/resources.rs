@@ -53,10 +53,12 @@ pub struct CreateResourceInput {
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,
-    /// Managed (temper-*) frontmatter. Typed: the schema covers every key
-    /// temper governs and extras round-trip through `ManagedMeta::extra`.
-    /// A concrete object schema (rather than free-form JSON) keeps MCP
-    /// clients from string-encoding nested objects.
+    /// Managed workflow/provenance frontmatter — a **closed, temper-owned
+    /// vocabulary** of optional `temper-*` keys: stage/mode/effort/status/seq/
+    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`/`slug`), type
+    /// (`doc_type_name`), and home (`context_ref`/`cogmap`) are first-class
+    /// fields on this input, not metadata. An unknown key is rejected;
+    /// caller-defined ("bring-your-own") fields belong in `open_meta`.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
@@ -134,10 +136,12 @@ pub struct UpdateResourceInput {
     /// block. The block must belong to the resource and be non-folded. Requires `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_block: Option<Uuid>,
-    /// Managed (temper-*) frontmatter. Typed: the schema covers every key
-    /// temper governs and extras round-trip through `ManagedMeta::extra`.
-    /// A concrete object schema (rather than free-form JSON) keeps MCP
-    /// clients from string-encoding nested objects.
+    /// Managed workflow/provenance frontmatter — a **closed, temper-owned
+    /// vocabulary** of optional `temper-*` keys: stage/mode/effort/status/seq/
+    /// branch/pr/llm-model/llm-run/provenance. Identity (`title`/`slug`), type
+    /// (`doc_type_name`), and home (`context_ref`/`cogmap`) are first-class
+    /// fields on this input, not metadata. An unknown key is rejected;
+    /// caller-defined ("bring-your-own") fields belong in `open_meta`.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
@@ -155,18 +159,19 @@ pub struct UpdateResourceInput {
 /// (managed_meta / open_meta) without re-chunking or re-embedding the
 /// body. This is the MCP peer of `PUT /api/resources/{id}/meta`.
 ///
-/// `managed_meta` is typed: agents get a schema-validated shape for
-/// the fields temper knows about, and the `extra` flatten bucket on
-/// `ManagedMeta` accepts any additional keys (doc-type-schema fields
-/// like `date`, plus forward-compat unknowns) without dropping them.
-/// `open_meta` stays a free-form JSON value by design — the open tier
-/// is intentionally untyped.
+/// `managed_meta` is a **closed, temper-owned vocabulary** — exactly the
+/// optional `temper-*` Property keys (stage/mode/effort/status/seq/branch/pr/
+/// llm-model/llm-run/provenance). Unknown keys are rejected; this path is
+/// Property-only — identity (`title`/`slug`), type, and home are NOT accepted
+/// here (change them via `update_resource`). `open_meta` stays a free-form JSON
+/// value by design — the open tier is intentionally untyped.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateResourceMetaInput {
     /// UUID of the resource to update.
     pub id: Uuid,
-    /// New managed (temper-*) frontmatter. Typed fields cover every
-    /// key temper governs; extras round-trip through `ManagedMeta::extra`.
+    /// New managed (temper-*) frontmatter — a **closed, temper-owned
+    /// vocabulary**. Only the typed temper-* keys are accepted; an unknown key
+    /// is rejected. Caller-defined fields belong in `open_meta`.
     pub managed_meta: ManagedMeta,
     /// New open (user-defined) frontmatter as JSON.
     pub open_meta: serde_json::Value,
@@ -452,14 +457,13 @@ pub async fn create_resource(
     };
 
     // Build slug from title if not provided
-    let slug = input.slug.unwrap_or_else(|| {
-        input
-            .title
-            .to_lowercase()
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-            .trim_matches('-')
-            .to_owned()
-    });
+    // Derive the slug from the title via the one canonical slugifier, whose
+    // output is validate_slug-conformant (ASCII, runs collapsed) — an inline
+    // copy previously kept non-ASCII letters and made create fail validation
+    // on a non-ASCII title (bug B2, 2026-07-06).
+    let slug = input
+        .slug
+        .unwrap_or_else(|| temper_workflow::operations::sluggify(&input.title));
 
     let origin_uri = input
         .origin_uri
@@ -467,26 +471,11 @@ pub async fn create_resource(
 
     let content = input.content.unwrap_or_default();
 
-    // Inject canonical temper-title / temper-slug into managed_meta JSONB so
-    // the local canonical form matches what the server will hash. Symmetric
-    // with the CLI send-side wiring in build_ingest_payload (Phase 5 Task 3).
-    let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
-        })?;
-    temper_workflow::operations::ensure_managed_identity_keys(
-        &mut managed_meta_value,
-        &input.title,
-        Some(&slug),
-    );
-
-    // Dispatch through DbBackend so MCP shares the unified write path with
-    // HTTP. The send-side ensure_managed_identity_keys above ran on the
-    // JSONB form; deserialize back to the typed ManagedMeta the cmd carries
-    // (extras bucket preserves unknown keys; serde renames re-emit canonical
-    // temper-* keys on round-trip).
-    let managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
+    // Identity travels first-class on the cmd (title/slug below); managed_meta is
+    // Property-only. The caller-supplied managed_meta passes through untouched —
+    // the DbBackend validation pipeline injects identity into the validation
+    // document from the typed title/slug.
+    let managed_meta = input.managed_meta.unwrap_or_default();
 
     // Create always writes a single new body block; per-block addressing is an update-only concern.
     let body = provenance_body(Some(content), input.sources, None)?;
@@ -702,51 +691,11 @@ pub async fn update_resource(
     let profile_id = ProfileId::from(profile.id);
     let resource_id = ResourceId::from(input.id);
 
-    // Send-side canonical-key injection (Phase 5 symmetric defense). When the
-    // caller is also touching title or slug, fetch existing.title for the
-    // canonical-key fill so the wire payload's temper-title / temper-slug
-    // match what the receive-side will write. Pure meta-only updates skip
-    // the fetch — the backend update's receive-side ensure call fills
-    // canonical keys from the stored title/slug for us.
-    let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
-        })?;
-    if input.title.is_some() || input.slug.is_some() || input.content.is_some() {
-        let existing = substrate_read::show_select(
-            pool,
-            ProfileId::from(profile.id),
-            ResourceId::from(input.id),
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-        })?;
-        let title = input.title.clone().unwrap_or(existing.title);
-        // slug is §7-dissolved from ResourceRow; derive from effective title when the
-        // caller hasn't supplied one explicitly.
-        let slug = input
-            .slug
-            .clone()
-            .unwrap_or_else(|| temper_workflow::operations::sluggify(&title));
-        temper_workflow::operations::ensure_managed_identity_keys(
-            &mut managed_meta_value,
-            &title,
-            Some(slug.as_str()),
-        );
-    }
-
-    // Build the typed cmd. Mirror title/slug onto ManagedMeta so the
-    // translator's manifest-merge path picks them up from cmd.managed_meta
-    // alongside any caller-supplied managed_meta keys.
-    let mut managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
-    if input.title.is_some() {
-        managed_meta.title = input.title.clone();
-    }
-    if input.slug.is_some() {
-        managed_meta.slug = input.slug.clone();
-    }
+    // Identity travels first-class on the cmd (title/slug below); managed_meta is
+    // Property-only. The caller-supplied managed_meta passes through untouched —
+    // the DbBackend validation pipeline injects identity into the validation
+    // document from the effective title/slug (cmd.title / current row).
+    let managed_meta = input.managed_meta.unwrap_or_default();
 
     let act = input
         .act
@@ -755,6 +704,8 @@ pub async fn update_resource(
     let body = provenance_body(input.content, input.sources, input.content_block)?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
+        title: input.title.clone(),
+        slug: input.slug.clone(),
         body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -815,6 +766,10 @@ pub async fn update_resource_meta(
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let cmd = temper_workflow::operations::UpdateResource {
         resource: resource_id,
+        // Meta-only path is Property-only (Fork 2): identity changes go through
+        // the full update_resource path, never here.
+        title: None,
+        slug: None,
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
@@ -1059,6 +1014,24 @@ mod tests {
         let managed = input.managed_meta.expect("managed_meta present");
         assert_eq!(managed.stage.as_deref(), Some("backlog"));
         assert_eq!(managed.mode.as_deref(), Some("build"));
+    }
+
+    /// `managed_meta` is a closed vocabulary: an unknown key under it must be
+    /// rejected at input parse, not silently absorbed. Proves the closed
+    /// `ManagedMeta` type reaches the MCP tool boundary.
+    #[test]
+    fn create_input_rejects_unknown_managed_key() {
+        let raw = serde_json::json!({
+            "context_ref": "@me/temper",
+            "doc_type_name": "task",
+            "title": "T",
+            "managed_meta": { "my-tag": "x" },
+        });
+        let err = serde_json::from_value::<CreateResourceInput>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("my-tag"),
+            "unknown managed key must be rejected at input parse, got: {err}"
+        );
     }
 
     #[test]

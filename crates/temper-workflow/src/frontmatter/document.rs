@@ -243,25 +243,15 @@ impl Frontmatter {
     /// frontmatter in a single typed call.
     ///
     /// Only fields that are `Some` in `meta` are written; `None` fields are
-    /// left untouched (existing values survive). Fields in `meta.extra` are
-    /// applied last, keyed by their original string names.
+    /// left untouched (existing values survive).
     ///
     /// This is the bridge between a typed `ManagedMeta` value and the
     /// `Frontmatter` mutation API — callers do not need to know which
     /// `temper-*` key corresponds to each struct field.
+    /// Render the Property-only managed metadata into the document's frontmatter.
+    /// Identity/type/home keys (`temper-title`/`-slug`/`-type`/`-context`) are NOT
+    /// in `ManagedMeta`; the projection injects them separately from the resource row.
     pub fn set_managed_meta(&mut self, meta: &crate::types::ManagedMeta) {
-        if let Some(ref v) = meta.doc_type {
-            self.set_raw_field("temper-type", serde_json::Value::String(v.clone()));
-        }
-        if let Some(ref v) = meta.context {
-            self.set_raw_field("temper-context", serde_json::Value::String(v.clone()));
-        }
-        if let Some(ref v) = meta.updated {
-            self.set_raw_field("temper-updated", serde_json::Value::String(v.clone()));
-        }
-        if let Some(ref v) = meta.source {
-            self.set_raw_field("temper-source", serde_json::Value::String(v.clone()));
-        }
         if let Some(ref v) = meta.stage {
             self.set_raw_field("temper-stage", serde_json::Value::String(v.clone()));
         }
@@ -271,8 +261,8 @@ impl Frontmatter {
         if let Some(ref v) = meta.effort {
             self.set_raw_field("temper-effort", serde_json::Value::String(v.clone()));
         }
-        if let Some(ref v) = meta.goal {
-            self.set_raw_field("temper-goal", serde_json::Value::String(v.clone()));
+        if let Some(ref v) = meta.status {
+            self.set_raw_field("temper-status", serde_json::Value::String(v.clone()));
         }
         if let Some(v) = meta.seq {
             self.set_raw_field("temper-seq", serde_json::Value::from(v));
@@ -283,27 +273,14 @@ impl Frontmatter {
         if let Some(ref v) = meta.pr {
             self.set_raw_field("temper-pr", serde_json::Value::String(v.clone()));
         }
-        if let Some(ref v) = meta.status {
-            self.set_raw_field("temper-status", serde_json::Value::String(v.clone()));
-        }
-        if let Some(ref v) = meta.provenance {
-            self.set_raw_field("temper-provenance", serde_json::Value::String(v.clone()));
-        }
         if let Some(ref v) = meta.llm_model {
             self.set_raw_field("temper-llm-model", serde_json::Value::String(v.clone()));
         }
         if let Some(ref v) = meta.llm_run {
             self.set_raw_field("temper-llm-run", serde_json::Value::String(v.clone()));
         }
-        if let Some(ref v) = meta.title {
-            self.set_raw_field("temper-title", serde_json::Value::String(v.clone()));
-        }
-        if let Some(ref v) = meta.slug {
-            self.set_raw_field("temper-slug", serde_json::Value::String(v.clone()));
-        }
-        // Apply extra bucket last — these are passthrough fields.
-        for (key, value) in &meta.extra {
-            self.set_raw_field(key, value.clone());
+        if let Some(ref v) = meta.provenance {
+            self.set_raw_field("temper-provenance", serde_json::Value::String(v.clone()));
         }
     }
 
@@ -829,29 +806,20 @@ temper-stage: in-progress
             stage: Some("in-progress".to_string()),
             mode: Some("build".to_string()),
             effort: Some("small".to_string()),
-            goal: Some("my-goal".to_string()),
             seq: Some(20),
             status: Some("active".to_string()),
-            context: Some("newctx".to_string()),
+            branch: Some("jct/x".to_string()),
             ..Default::default()
         };
         fm.set_managed_meta(&meta);
-        // Hash-tier fields (stage, mode, effort, goal, seq, status) appear in managed_json.
+        // Every Property field appears in managed_json.
         let m = fm.managed_json();
         assert_eq!(m["temper-stage"], serde_json::json!("in-progress"));
         assert_eq!(m["temper-mode"], serde_json::json!("build"));
         assert_eq!(m["temper-effort"], serde_json::json!("small"));
-        assert_eq!(m["temper-goal"], serde_json::json!("my-goal"));
         assert_eq!(m["temper-seq"], serde_json::json!(20));
         assert_eq!(m["temper-status"], serde_json::json!("active"));
-        // `temper-context` is a tier-1 system field (stripped from managed_json for
-        // hashing). Verify it was written via the raw value mapping instead.
-        let val = fm.value().as_mapping().unwrap();
-        assert_eq!(
-            val.get(serde_yaml::Value::String("temper-context".into()))
-                .and_then(|v| v.as_str()),
-            Some("newctx")
-        );
+        assert_eq!(m["temper-branch"], serde_json::json!("jct/x"));
     }
 
     #[test]
@@ -862,21 +830,16 @@ temper-stage: in-progress
         // Capture original stage from TASK_FIXTURE before mutation
         let original_stage = fm.managed_json()["temper-stage"].clone();
 
-        // meta with only context set — stage/mode/etc remain None
+        // meta with only mode set — stage/effort/etc remain None
         let meta = ManagedMeta {
-            context: Some("updated-ctx".to_string()),
+            mode: Some("plan".to_string()),
             ..Default::default()
         };
         fm.set_managed_meta(&meta);
-        // context was written to the raw mapping (tier-1 system field)
-        let val = fm.value().as_mapping().unwrap();
-        assert_eq!(
-            val.get(serde_yaml::Value::String("temper-context".into()))
-                .and_then(|v| v.as_str()),
-            Some("updated-ctx")
-        );
-        // stage was NOT overwritten — still has original TASK_FIXTURE value
+        // mode was written
         let m = fm.managed_json();
+        assert_eq!(m["temper-mode"], serde_json::json!("plan"));
+        // stage was NOT overwritten — still has original TASK_FIXTURE value
         assert_eq!(m["temper-stage"], original_stage);
     }
 
@@ -884,17 +847,12 @@ temper-stage: in-progress
     fn set_managed_meta_produces_same_fields_as_individual_setters() {
         use crate::types::ManagedMeta;
 
-        // Build via set_managed_meta. Note: `doc_type` and `context` are tier-1
-        // system fields — they land in the raw value mapping but are stripped
-        // from `managed_json()` for hashing. We verify the YAML serialization
-        // round-trips identically instead.
+        // Build via set_managed_meta (Property-only vocabulary).
         let mut fm_bulk = Frontmatter::new(DocType::Task, String::new());
         let meta = ManagedMeta {
-            context: Some("proj".to_string()),
             stage: Some("backlog".to_string()),
             mode: Some("build".to_string()),
             effort: Some("medium".to_string()),
-            goal: Some("my-goal".to_string()),
             seq: Some(10),
             ..Default::default()
         };
@@ -902,25 +860,16 @@ temper-stage: in-progress
 
         // Build via individual setters
         let mut fm_individual = Frontmatter::new(DocType::Task, String::new());
-        fm_individual.set_managed_field("temper-context", serde_json::json!("proj"));
         fm_individual.set_managed_field("temper-stage", serde_json::json!("backlog"));
         fm_individual.set_managed_field("temper-mode", serde_json::json!("build"));
         fm_individual.set_managed_field("temper-effort", serde_json::json!("medium"));
-        fm_individual.set_managed_field("temper-goal", serde_json::json!("my-goal"));
         fm_individual.set_managed_field("temper-seq", serde_json::json!(10));
 
-        // Hash-tier fields (stage/mode/effort/goal/seq) must match via managed_json.
+        // Every Property field must match via managed_json.
         assert_eq!(
             fm_bulk.managed_json(),
             fm_individual.managed_json(),
-            "set_managed_meta hash-tier fields must match individual setters"
-        );
-        // Tier-1 system field `temper-context` must match in raw value mapping.
-        let key = serde_yaml::Value::String("temper-context".into());
-        assert_eq!(
-            fm_bulk.value().as_mapping().unwrap().get(&key),
-            fm_individual.value().as_mapping().unwrap().get(&key),
-            "set_managed_meta temper-context must match individual setter"
+            "set_managed_meta fields must match individual setters"
         );
     }
 

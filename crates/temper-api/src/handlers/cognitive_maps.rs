@@ -91,7 +91,7 @@ pub async fn reconcile(
     request_body = CreateCogmapRequest,
     responses(
         (status = 200, description = "Genesis applied (or idempotent no-op)", body = CreateCogmapOutcome),
-        (status = 403, description = "Caller is not a system admin"),
+        (status = 403, description = "Caller lacks system access (invite-only middleware)"),
         (status = 409, description = "A concurrent genesis conflicted; retry"),
     )
 )]
@@ -100,13 +100,10 @@ pub async fn genesis(
     auth: AuthUser,
     Json(request): Json<CreateCogmapRequest>,
 ) -> ApiResult<Json<CreateCogmapOutcome>> {
-    // Auth before writes (Global Constraints): genesis is system-admin-only. A brand-new cogmap id is
-    // neither the reserved L0 kernel nor yet root-team-bound, so `require_cogmap_write_admin` would
-    // FAIL-OPEN here — the genesis gate is plain `is_system_admin`, checked at the TOP before any write.
+    // Genesis is open to any authenticated profile. The reserved-id guard and the creator-grant live
+    // in the backend command (`create_cognitive_map`): a caller-supplied id is honored only for a
+    // system-admin, and the creator is granted read+write+grant on the new map.
     let profile_id = ProfileId::from(auth.0.profile.id);
-    if !access_service::is_system_admin(&state.pool, profile_id).await? {
-        return Err(ApiError::Forbidden);
-    }
 
     let cmd = CreateCognitiveMap {
         request,

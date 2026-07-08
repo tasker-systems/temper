@@ -98,8 +98,11 @@ For version pinning, uninstall instructions, and building from source (including
 # Initialize — temper configures auth and ensures your default context server-side
 temper init
 
-# Add a context for your project
-temper context add myapp
+# Create a context for your project on the server
+temper context create myapp
+
+# Subscribe locally so `temper pull` materializes it
+temper context subscribe myapp
 
 # Materialize a local projection of the context
 temper pull myapp
@@ -177,8 +180,10 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 
 | Command | Description |
 |---------|-------------|
-| `temper context add <n>` | Add a context |
-| `temper context list` | List contexts |
+| `temper context create <n>` | Create a context on the server |
+| `temper context subscribe <n>` | Subscribe locally so `temper pull` materializes it |
+| `temper context unsubscribe <n>` | Unsubscribe locally |
+| `temper context list` | List contexts visible to you on the server |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
 

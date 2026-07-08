@@ -10,10 +10,10 @@ import type { ResourceId } from "./ResourceId";
  */
 export type ContentResponse = { resource_id: ResourceId, markdown: string, 
 /**
- * Typed server-side managed_meta from kb_resource_manifests. The
- * typed fields name everything temper knows about; any extras the
- * server stored round-trip through `ManagedMeta::extra`.
- * Used by CLI sync pull to reconstruct complete frontmatter.
+ * Typed server-side managed_meta from kb_resource_manifests — the closed
+ * Property vocabulary. Only the named `temper-*` keys are represented;
+ * there is no catch-all. Used by CLI sync pull to reconstruct complete
+ * frontmatter (identity/type/home come from the resource row, not here).
  */
 managed_meta: ManagedMeta | null, 
 /**
@@ -130,7 +130,14 @@ chunks_packed: string | null,
  * `ContextId` (visibility-gated to the principal) and re-homes the
  * resource. Forwarded verbatim from the CLI `--context-to` flag.
  */
-context_to: string | null, };
+context_to: string | null, 
+/**
+ * Type-move: convert the resource to a new doc-type. Forwarded from the CLI
+ * `--type-to` flag; the server rewrites the authoritative `doc_type` via
+ * `MoveSpec.type_to`. First-class since Phase 2 (type is no longer carried
+ * as a `temper-type` key inside `managed_meta`).
+ */
+type_to: string | null, };
 
 /**
  * Sort direction.

@@ -38,8 +38,8 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         slug: "meta-test-doc".to_string(),
         content: "# Meta Test\n\nContent for meta testing.".to_string(),
         metadata: None,
-        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
-        open_meta: None,
+        managed_meta: None,
+        open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         act: Default::default(),
         sources: Vec::new(),
@@ -54,10 +54,10 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
 
     assert_eq!(resource.title, "Meta Test Doc");
 
-    // Build meta update payload with a new title in managed_meta.
+    // The meta path is Property-only (Fork 2): identity/type never travel here.
+    // Update a Property field + open_meta and prove identity is untouched.
     let managed_meta = ManagedMeta {
-        doc_type: Some("research".to_string()),
-        title: Some("Updated Meta Title".to_string()),
+        stage: Some("done".to_string()),
         ..Default::default()
     };
     let open_meta = serde_json::json!({
@@ -95,7 +95,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
     // the PUT /api/resources/{id}/meta migration through DbBackend).
     assert_eq!(body["id"], resource.id.to_string());
 
-    // Verify title was cascaded to kb_resources.
+    // Identity is untouched by the meta path — title unchanged.
     let fetched = app
         .client
         .resources()
@@ -104,8 +104,8 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         .expect("resource get after meta update failed");
 
     assert_eq!(
-        fetched.title, "Updated Meta Title",
-        "title should have been cascaded from managed_meta"
+        fetched.title, "Meta Test Doc",
+        "the meta path is Property-only and must not change identity"
     );
 }
 
@@ -172,8 +172,8 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         content: "# Heading A\n\nContent for chunk A.\n\n# Heading B\n\nContent for chunk B."
             .to_string(),
         metadata: None,
-        managed_meta: Some(serde_json::json!({"date": "2026-04-12"})),
-        open_meta: None,
+        managed_meta: None,
+        open_meta: Some(serde_json::json!({"date": "2026-04-12"})),
         chunks_packed: Some(pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
@@ -206,12 +206,11 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
     .expect("fetch chunks before");
     assert_eq!(chunks_before.len(), 2, "expected two chunks pre-update");
 
-    // PUT new meta with a fresh title (cascade) and some open_meta.
+    // PUT new meta (Property-only) with some open_meta.
     let meta_payload = MetaUpdatePayload {
         resource_id: resource.id,
         managed_meta: ManagedMeta {
-            doc_type: Some("research".to_string()),
-            title: Some("Chunks Still Preserved".to_string()),
+            stage: Some("done".to_string()),
             ..Default::default()
         },
         open_meta: serde_json::json!({
@@ -268,13 +267,13 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         "chunk rows (index, content, content_hash) must be byte-identical"
     );
 
-    // Title cascaded to kb_resources.
+    // Identity untouched by the Property-only meta path — title unchanged.
     let title_after: String = sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1")
         .bind(resource.id)
         .fetch_one(&pool)
         .await
         .expect("fetch title after");
-    assert_eq!(title_after, "Chunks Still Preserved");
+    assert_eq!(title_after, "Chunks Preserved");
 }
 
 // DELETED (F7): `meta_patch_reconciles_edges_add_and_remove`.
@@ -339,10 +338,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     let second_token = common::generate_second_user_jwt();
     let valid_payload = MetaUpdatePayload {
         resource_id: resource.id,
-        managed_meta: ManagedMeta {
-            doc_type: Some("research".to_string()),
-            ..Default::default()
-        },
+        managed_meta: ManagedMeta::default(),
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:second_user".to_string(),
         open_hash: "sha256:second_user".to_string(),
@@ -366,10 +362,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     let ghost_id = uuid::Uuid::now_v7();
     let ghost_payload = MetaUpdatePayload {
         resource_id: temper_core::types::ResourceId::from(ghost_id),
-        managed_meta: ManagedMeta {
-            doc_type: Some("research".to_string()),
-            ..Default::default()
-        },
+        managed_meta: ManagedMeta::default(),
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:ghost".to_string(),
         open_hash: "sha256:ghost".to_string(),
@@ -397,37 +390,10 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
          missing-resource distinct from unauthorized"
     );
 
-    // --- (3) Unknown (non-empty) doc_type → accepted (open tail, spec D3) ---
-    // Pre-T1 this was a 400: unrecognized doc_types were rejected at the closed
-    // set. T1 Sequence A2 made `doc_type` a closed-set-WITH-open-tail — a
-    // recognized label still carries its frontmatter schema, but an unrecognized
-    // non-empty label passes through and is stored verbatim (schema validation
-    // is skipped for it). So this update now succeeds; the steward can home
-    // cogmap nodes under expressive labels beyond the recognized set.
-    let unknown_doctype_payload = MetaUpdatePayload {
-        resource_id: resource.id,
-        managed_meta: ManagedMeta {
-            doc_type: Some("definitely-not-a-real-type".to_string()),
-            ..Default::default()
-        },
-        open_meta: serde_json::json!({}),
-        managed_hash: "sha256:unknown_doctype".to_string(),
-        open_hash: "sha256:unknown_doctype".to_string(),
-        act: Default::default(),
-    };
-    let resp = app
-        .reqwest_client
-        .put(app.url(&format!("/api/resources/{}/meta", resource.id)))
-        .header("Authorization", format!("Bearer {}", app.token))
-        .json(&unknown_doctype_payload)
-        .send()
-        .await
-        .expect("unknown doctype meta update request failed");
-    assert_eq!(
-        resp.status(),
-        reqwest::StatusCode::OK,
-        "an unrecognized non-empty doc_type must be accepted (open tail, D3), not rejected"
-    );
+    // (Former sub-test #3 — "unknown doc_type accepted via meta" — is removed:
+    // Phase 2 makes the meta path Property-only, so `doc_type` no longer travels
+    // through `managed_meta`. Type conversion (incl. the open-tail doc_type
+    // behavior, spec D3) is now the PATCH path's `type_to`, covered there.)
 }
 
 /// `GET /api/resources/{id}/meta` must return the current meta tier without
@@ -479,9 +445,9 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         embedding: vec![0.2_f32; 768],
     };
 
+    // Property-only managed tier (identity/type travel first-class, not here).
     let seeded_managed = serde_json::json!({
-        "temper-type": "research",
-        "temper-title": "Get Meta Doc",
+        "temper-stage": "backlog",
     });
     let seeded_open = serde_json::json!({
         "tags": ["get", "meta"],

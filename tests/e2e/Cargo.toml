@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [package.metadata.cargo-machete]
-ignored = ["base64", "rmp-serde", "serde_json"]
+ignored = ["base64", "rmp-serde", "serde_json", "temper-ingest"]
 
 [features]
 test-db = []
@@ -40,6 +40,10 @@ temper-services = { path = "../../crates/temper-services" }
 temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }
+# Referenced only by the `test-embed`-gated server-query-embedding regression (#297) to build
+# real-embedding chunks and assert server/CLI query-vector parity. Already in the graph via
+# temper-substrate → temper-ingest(embed), so naming it adds no new linked footprint.
+temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
 temper-workflow = { path = "../../crates/temper-workflow" }
 temper-mcp = { path = "../../crates/temper-mcp" }
 temp-env = "0.3"

@@ -136,7 +136,7 @@ fn block_with_embedding(content: &str, emb: Vec<f32>) -> PreparedBlock {
             chunk_index: 0,
             content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
             content: content.to_string(),
-            embedding: emb,
+            embedding: Some(emb),
             header_path: None,
             heading_depth: None,
         }],

@@ -65,14 +65,41 @@ async fn can_administer_grant(
     subject_table: &str,
     subject_id: Uuid,
 ) -> ApiResult<bool> {
-    if is_system_admin(pool, caller).await? {
-        return Ok(true);
-    }
+    Ok(is_system_admin(pool, caller).await?
+        || profile_can_grant(pool, caller, subject_table, subject_id).await?)
+}
+
+/// Raw `can_grant` capability probe (NO `is_system_admin` OR) — the reusable primitive. Callers that
+/// also admit admins compose it with `is_system_admin` themselves (see `can_administer_grant`,
+/// `cogmap_service::can_bind`).
+pub(crate) async fn profile_can_grant(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<bool> {
     let ok = sqlx::query_scalar!(
         "SELECT can('kb_profiles', $1, 'grant', $2, $3)",
         *caller,
         subject_table,
         subject_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
+/// Is `team_id` the configured gating/root team? An unconfigured system (`gating_team_slug` NULL)
+/// has no gating team ⇒ `false`. Used by the bind gate's escalation guard: binding a map to the
+/// gating team flips it into the `require_cogmap_write_admin` regime, so it stays admin-only.
+pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT EXISTS( \
+           SELECT 1 FROM kb_teams t \
+             JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
+            WHERE t.id = $1 )",
+        team_id,
     )
     .fetch_one(pool)
     .await?

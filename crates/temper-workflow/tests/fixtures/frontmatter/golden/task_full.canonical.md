@@ -10,7 +10,6 @@ temper-slug: full-task
 temper-stage: in-progress
 temper-mode: build
 temper-effort: small
-temper-goal: some-goal
 temper-seq: 7
 temper-branch: jct/full-task
 temper-pr: https://github.com/example/repo/pull/1

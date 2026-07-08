@@ -12,14 +12,25 @@ use temper_core::types::ids::ResourceId;
 use temper_core::types::provenance::ProvenanceSource;
 use uuid::Uuid;
 
-/// Slugify a title for the decoration half of a ref / a filename.
-/// Lowercase, non-alphanumeric (ascii) runs → `-`, trimmed.
+/// Slugify a title for a resource's stored slug and the decoration half of a
+/// ref / filename. Lowercase; every run of non-ASCII-alphanumeric chars (incl.
+/// non-ASCII letters like `é`, `ē`) collapses to a single `-`; leading/trailing
+/// `-` trimmed. The output is always [`validate_slug`](super::actions::validate_slug)-conformant
+/// (ASCII lowercase alphanumerics separated by single hyphens) — this is what
+/// lets a title-derived slug pass create-time validation. Non-ASCII letters are
+/// *stripped*, not transliterated: a title with no ASCII alphanumerics (e.g.
+/// wholly non-Latin) slugs to the empty string, which `validate_slug` then
+/// rejects with a clear error rather than a silent bad slug.
 pub fn sluggify(title: &str) -> String {
     title
         .to_lowercase()
-        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-        .trim_matches('-')
-        .to_owned()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|seg| !seg.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// The decorated, self-resolving form printed for every resource:
@@ -81,11 +92,35 @@ mod tests {
 
     #[test]
     fn sluggify_lowercases_and_dashes() {
-        // Each non-`-` non-alphanumeric char maps to one `-` (separator runs
-        // are NOT collapsed); unicode letters are kept (is_alphanumeric).
-        assert_eq!(sluggify("Hello, World!"), "hello--world");
-        assert_eq!(sluggify("  Trim --Me-- "), "trim---me");
-        assert_eq!(sluggify("Café déjà"), "café-déjà"); // unicode letters kept
+        // Runs of non-ASCII-alphanumeric chars collapse to a single `-`;
+        // leading/trailing `-` are trimmed.
+        assert_eq!(sluggify("Hello, World!"), "hello-world");
+        assert_eq!(sluggify("  Trim --Me-- "), "trim-me");
+    }
+
+    #[test]
+    fn sluggify_output_is_validate_slug_conformant() {
+        // Regression (bug B2, 2026-07-06): a non-ASCII title char used to slug
+        // to a non-ASCII slug that validate_slug rejected on create. Non-ASCII
+        // letters are now stripped, and the result is a valid slug.
+        use crate::operations::actions::validate_slug;
+        for title in [
+            "Three distinct map telē", // trailing non-ASCII → stripped
+            "Café déjà",               // interior non-ASCII → stripped, runs collapsed
+            "Hello, World!",           // punctuation run → single hyphen
+            "  Trim --Me-- ",          // leading/trailing separators trimmed
+        ] {
+            let slug = sluggify(title);
+            assert!(
+                validate_slug(&slug).is_ok(),
+                "sluggify({title:?}) = {slug:?} must be validate_slug-conformant"
+            );
+        }
+        assert_eq!(
+            sluggify("Three distinct map telē"),
+            "three-distinct-map-tel"
+        );
+        assert_eq!(sluggify("Café déjà"), "caf-d-j");
     }
 
     #[test]

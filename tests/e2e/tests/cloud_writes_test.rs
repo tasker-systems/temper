@@ -126,7 +126,6 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                     title: "Cloud Round-Trip Session",
                     context: Some("@me/myapp"),
                     cogmap: None,
-                    goal: None,
                     mode: None,
                     effort: None,
                     slug: None,
@@ -261,7 +260,6 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         content: body_text.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-title": "Meta-Only Update Test",
             "temper-stage": "backlog"
         })),
         open_meta: None,
@@ -318,7 +316,6 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     stage: None,
                     mode: None,
                     effort: None,
-                    goal: None,
                     seq: None,
                     branch: None,
                     pr: None,
@@ -422,7 +419,6 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-title": "Body+Meta Update Test",
             "temper-stage": "backlog"
         })),
         open_meta: None,
@@ -485,7 +481,6 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     stage: None,
                     mode: None,
                     effort: None,
-                    goal: None,
                     seq: None,
                     branch: None,
                     pr: None,
@@ -593,7 +588,6 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-title": "Body-Only Update Test",
             "temper-stage": "in-progress"
         })),
         open_meta: None,
@@ -650,7 +644,6 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
                     stage: None, // no managed-meta flags
                     mode: None,
                     effort: None,
-                    goal: None,
                     seq: None,
                     branch: None,
                     pr: None,
@@ -747,7 +740,6 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "temper-title": "Body Empty Guard Test",
             "temper-stage": "backlog"
         })),
         open_meta: None,
@@ -804,7 +796,6 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
                     stage: None,
                     mode: None,
                     effort: None,
-                    goal: None,
                     seq: None,
                     branch: None,
                     pr: None,
@@ -905,7 +896,6 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     title: "Chunk Dedup Test",
                     context: Some("@me/myapp"),
                     cogmap: None,
-                    goal: None,
                     mode: None,
                     effort: None,
                     slug: None,
@@ -963,7 +953,6 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     stage: None,
                     mode: None,
                     effort: None,
-                    goal: None,
                     seq: None,
                     branch: None,
                     pr: None,
@@ -1053,7 +1042,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
             // dedup → both distinct rows persist.
             content: String::new(),
             metadata: None,
-            managed_meta: Some(serde_json::json!({"temper-title": format!("Cloud Only {i}")})),
+            managed_meta: Some(serde_json::json!({})),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
             act: Default::default(),
@@ -1161,7 +1150,6 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                     title: "Projection Write Test",
                     context: Some("@me/myapp"),
                     cogmap: None,
-                    goal: None,
                     mode: None,
                     effort: None,
                     slug: None,
@@ -1260,7 +1248,6 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     title: "Update Projection Test",
                     context: Some("@me/myapp"),
                     cogmap: None,
-                    goal: None,
                     mode: None,
                     effort: None,
                     slug: None,
@@ -1331,7 +1318,6 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     stage: None,
                     mode: None,
                     effort: None,
-                    goal: None,
                     seq: None,
                     branch: None,
                     pr: None,
@@ -1414,7 +1400,6 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                     title: "Delete Projection Test",
                     context: Some("@me/myapp"),
                     cogmap: None,
-                    goal: None,
                     mode: None,
                     effort: None,
                     slug: None,
@@ -1532,9 +1517,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
             slug: "edges-resolve-test".to_string(),
             content: String::new(),
             metadata: None,
-            managed_meta: Some(serde_json::json!({
-                "temper-title": "Edges Resolve Test"
-            })),
+            managed_meta: Some(serde_json::json!({})),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
             act: Default::default(),
@@ -1623,9 +1606,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
             slug: "decorated-ref-target".to_string(),
             content: String::new(),
             metadata: None,
-            managed_meta: Some(serde_json::json!({
-                "temper-title": "Decorated Ref Target"
-            })),
+            managed_meta: Some(serde_json::json!({})),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
             act: Default::default(),

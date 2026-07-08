@@ -148,7 +148,7 @@ fn truncate_lines(content: String, max_lines: usize) -> String {
 
 /// Collect in-progress tasks for a project from the cloud-backed task list.
 fn collect_in_progress_tasks(config: &Config, project: &str) -> Vec<WarmupTask> {
-    let tasks = match crate::commands::task::load_tasks(config, Some(project), None) {
+    let tasks = match crate::commands::task::load_tasks(config, Some(project)) {
         Ok(t) => t,
         Err(_) => return vec![],
     };

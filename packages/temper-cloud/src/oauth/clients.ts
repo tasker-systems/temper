@@ -46,11 +46,31 @@ export function loadClientRegistry(): ClientRegistry {
 }
 
 /**
- * Returns true iff `clientId` is registered and its allowlist contains `redirectUri` by exact
- * string match. Exact match only -- proportionate and safest for Phase 1: RFC 8252 loopback-any-port
- * matching (matching `redirect_uri`s that vary only in an ephemeral loopback port) can be added
- * later if/when a native loopback client is registered. Phase-1 clients (temper-cli, temper-ui) use
- * fixed redirect URIs, so exact match is sufficient.
+ * RFC 8252 §7.3 loopback hosts. `localhost` is included pragmatically — some native clients
+ * (Claude Code historically) use it even though the RFC recommends the IP literal.
+ */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+/** True for `http://` redirect URIs whose host is a loopback host (RFC 8252 §7.3). */
+function isLoopback(u: URL): boolean {
+  return u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname);
+}
+
+/**
+ * Returns true iff `clientId` is registered and its allowlist permits `redirectUri`.
+ *
+ * Exact string match wins first — this is the only match non-loopback clients (temper-ui, and the
+ * `claude.ai`/`claude.com` desktop/web connector with its fixed HTTPS callbacks) ever get, so they
+ * are unaffected by the loopback path below.
+ *
+ * Loopback URIs additionally get RFC 8252 §7.3 port-flexible matching: a native CLI MCP client
+ * (Claude Code) runs a local callback server on an ephemeral port (`http://127.0.0.1:<random>/callback`),
+ * which can never exact-match an allowlist entry. An incoming loopback URI matches any allowlisted
+ * loopback entry that shares its **path** — port AND loopback host are ignored (an allowlisted
+ * `127.0.0.1` entry matches an incoming `localhost` URI and vice-versa). This stays confined to the
+ * local machine (both sides must be loopback) and removes the operator foot-gun of having to
+ * allowlist the exact loopback host the client happens to send. Non-loopback URIs never reach this
+ * branch, so the open-redirect protection for remote redirect targets is unchanged.
  */
 export function isRedirectUriAllowed(
   registry: ClientRegistry,
@@ -58,5 +78,31 @@ export function isRedirectUriAllowed(
   redirectUri: string,
 ): boolean {
   const allowed = registry[clientId];
-  return Array.isArray(allowed) && allowed.includes(redirectUri);
+  if (!Array.isArray(allowed)) {
+    return false;
+  }
+  if (allowed.includes(redirectUri)) {
+    return true; // exact match — all non-loopback clients
+  }
+
+  let incoming: URL;
+  try {
+    incoming = new URL(redirectUri);
+  } catch {
+    return false;
+  }
+  if (!isLoopback(incoming)) {
+    return false; // only loopback URIs get port-/host-flexible matching
+  }
+
+  return allowed.some((entry) => {
+    let a: URL;
+    try {
+      a = new URL(entry);
+    } catch {
+      return false;
+    }
+    // Any loopback host matches any loopback host; the path must still match. Port is ignored.
+    return isLoopback(a) && a.pathname === incoming.pathname;
+  });
 }

@@ -164,7 +164,6 @@ pub struct CreateResourceArgs<'a> {
     /// Cognitive-map ref to home the resource in. Mutually exclusive with
     /// `context`; the surface enforces exactly-one.
     pub cogmap: Option<&'a str>,
-    pub goal: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub slug: Option<&'a str>,
@@ -200,7 +199,6 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         title,
         context,
         cogmap,
-        goal,
         mode,
         effort,
         slug,
@@ -306,7 +304,6 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         managed_meta: ManagedMeta {
             mode: mode.map(String::from),
             effort: effort.map(String::from),
-            goal: goal.map(String::from),
             ..ManagedMeta::default()
         },
         open_meta: None,
@@ -1021,7 +1018,6 @@ pub struct UpdateParams<'a> {
     pub stage: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
-    pub goal: Option<&'a str>,
     pub seq: Option<i64>,
     pub branch: Option<&'a str>,
     pub pr: Option<&'a str>,
@@ -1056,11 +1052,11 @@ pub struct UpdateParams<'a> {
 fn build_partial_managed_meta_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_workflow::types::ManagedMeta> {
-    let any_set = params.title.is_some()
-        || params.stage.is_some()
+    // Identity (`--title`) travels first-class on the cmd, not through managed_meta —
+    // this builder carries only the Property vocabulary.
+    let any_set = params.stage.is_some()
         || params.mode.is_some()
         || params.effort.is_some()
-        || params.goal.is_some()
         || params.seq.is_some()
         || params.branch.is_some()
         || params.pr.is_some()
@@ -1069,11 +1065,9 @@ fn build_partial_managed_meta_from_args(
         return None;
     }
     Some(temper_workflow::types::ManagedMeta {
-        title: params.title.map(String::from),
         stage: params.stage.map(String::from),
         mode: params.mode.map(String::from),
         effort: params.effort.map(String::from),
-        goal: params.goal.map(String::from),
         seq: params.seq,
         branch: params.branch.map(String::from),
         pr: params.pr.map(String::from),
@@ -1232,10 +1226,14 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     // 4. Build the UpdateResource cmd.
     // context_to travels as a raw ref via context_ref (the API handler resolves
-    // it server-side); type_to goes through MoveSpec so the translator can set
-    // managed_meta.doc_type on the wire.
+    // it server-side); type_to goes through MoveSpec and travels first-class on
+    // the wire (type is no longer a managed_meta key).
     let cmd = UpdateResource {
         resource: id,
+        title: params.title.map(String::from),
+        // CLI update has no --slug flag; the server derives the slug from an
+        // effective title change.
+        slug: None,
         body: resolved_body.map(|content| {
             let mut body = BodyUpdate::new(content);
             body.sources = resolved_sources;
@@ -1293,7 +1291,6 @@ fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result
         ("temper-stage", params.stage.map(String::from)),
         ("temper-mode", params.mode.map(String::from)),
         ("temper-effort", params.effort.map(String::from)),
-        ("temper-goal", params.goal.map(String::from)),
         ("temper-branch", params.branch.map(String::from)),
         ("temper-pr", params.pr.map(String::from)),
         ("temper-status", params.status.map(String::from)),
@@ -1357,7 +1354,6 @@ mod build_helpers_tests {
             stage: None,
             mode: None,
             effort: None,
-            goal: None,
             seq: None,
             branch: None,
             pr: None,
@@ -1417,32 +1413,10 @@ mod build_helpers_tests {
         assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 
-    /// `title` is a managed-meta field (`temper-title`) and must propagate
-    /// through `build_partial_managed_meta_from_args` so the B4 surface-side
-    /// dispatch can hand a partial `ManagedMeta` (carrying `title`) to the
-    /// backend's `apply_updates` translator. Pre-B4 the helper omitted
-    /// `title`; this test guards against re-introducing that gap.
-    #[test]
-    fn build_partial_managed_meta_from_args_includes_title_when_set() {
-        let mut params = empty_update_params("foo");
-        params.title = Some("Renamed Resource");
-        let mm = build_partial_managed_meta_from_args(&params).expect("expected Some");
-        assert_eq!(mm.title.as_deref(), Some("Renamed Resource"));
-    }
-
-    /// Regression guard: a bare `--title` (no other managed flags) must still
-    /// trip the `any_set` short-circuit so the helper returns `Some(..)`. If
-    /// `any_set` were to omit `title`, callers passing only `--title` would
-    /// see `None` and the title update would silently no-op.
-    #[test]
-    fn build_partial_managed_meta_from_args_returns_some_when_only_title_set() {
-        let mut params = empty_update_params("foo");
-        params.title = Some("Solo title");
-        assert!(
-            build_partial_managed_meta_from_args(&params).is_some(),
-            "title-only must trip any_set"
-        );
-    }
+    // Identity (`--title`) is a first-class wire field since Phase 2 — it travels
+    // on `UpdateResource.title`, not through `build_partial_managed_meta_from_args`
+    // (which now carries only the Property vocabulary). The former "title propagates
+    // through the partial managed_meta" guards were removed with that reshape.
 }
 
 #[cfg(test)]
@@ -1955,7 +1929,7 @@ mod show_meta_only_tests {
         ResourceMetaResponse {
             resource_id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
             managed_meta: Some(ManagedMeta {
-                title: Some("test".to_string()),
+                stage: Some("in-progress".to_string()),
                 ..Default::default()
             }),
             open_meta: Some(serde_json::json!({"tags": ["x"]})),

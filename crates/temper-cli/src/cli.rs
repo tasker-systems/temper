@@ -310,16 +310,15 @@ pub enum ResourceAction {
         /// resource in. Mutually exclusive with --context; specify exactly one.
         #[arg(long)]
         cogmap: Option<String>,
-        /// Parent goal slug (task only)
-        #[arg(long)]
-        goal: Option<String>,
         /// Work mode: plan or build (task only)
         #[arg(long)]
         mode: Option<String>,
         /// Work effort: small, medium, large (task only)
         #[arg(long)]
         effort: Option<String>,
-        /// Override auto-generated slug (goal only)
+        /// Override the auto-generated slug. The slug is derived from the title
+        /// by default; this flag is the only way to override it (a slug in
+        /// managed frontmatter is inert).
         #[arg(long)]
         slug: Option<String>,
         /// Link this session to a task by slug (session only). Asserts a
@@ -441,7 +440,8 @@ pub enum ResourceAction {
         /// Set derived-from reference (repeatable)
         #[arg(long)]
         derived_from: Vec<String>,
-        // --- Task-specific fields ---
+        // --- Managed (temper-*) fields: a closed vocabulary; caller-defined
+        //     tags/relationships are open-tier (see --tags/--relates-to above) ---
         /// Task stage (backlog, in-progress, done, cancelled)
         #[arg(long)]
         stage: Option<String>,
@@ -451,9 +451,6 @@ pub enum ResourceAction {
         /// Task effort (small, medium, large)
         #[arg(long)]
         effort: Option<String>,
-        /// Task goal slug
-        #[arg(long)]
-        goal: Option<String>,
         /// Task sequence number
         #[arg(long)]
         seq: Option<i64>,
@@ -568,13 +565,16 @@ pub enum ResourceAction {
 
 #[derive(Subcommand)]
 pub enum ContextAction {
-    /// Add a context to subscriptions
-    Add {
-        /// Context name to add
+    /// Subscribe to a context locally so `temper pull` materializes it. Local
+    /// config only — this does NOT create the context on the server (use
+    /// `context create`) and has no server/RBAC effect.
+    Subscribe {
+        /// Context name to subscribe to
         name: String,
     },
-    /// Remove a context from subscriptions
-    Remove { name: String },
+    /// Unsubscribe from a context locally (drops it from the local pull set).
+    /// Local config only — no server effect.
+    Unsubscribe { name: String },
     /// Create a new context on the server
     Create {
         /// Context name to create
@@ -584,7 +584,7 @@ pub enum ContextAction {
         #[arg(long)]
         owner: Option<String>,
     },
-    /// List configured contexts
+    /// List the contexts you can see on the server (with owner ref + resource counts)
     List,
     /// Share a context into a team's read-reach (admin-only). The context ref is a UUID or the
     /// `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted.
@@ -920,8 +920,9 @@ pub enum CogmapCmd {
     /// Genesis (create) a new cognitive map from a committed manifest.
     ///
     /// Reads the authored genesis manifest (name, telos title, optional ids + telos charter),
-    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (admin-gated, idempotent).
-    /// Ids absent from the manifest are minted client-side for a stable, reproducible identity.
+    /// embeds the charter client-side, and POSTs to `/api/cognitive-maps` (open to any authenticated
+    /// profile; idempotent). Manifest/`--id` ids are honored only for a system-admin — a non-admin
+    /// always receives a server-minted id.
     Create {
         /// Path to the genesis manifest (YAML)
         #[arg(long)]
@@ -954,15 +955,16 @@ pub enum CogmapCmd {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
     },
-    /// Bind a cognitive map to a team (admin-only). Widens the map's reach to the
-    /// team's shared resources.
+    /// Bind a cognitive map to a team. Requires system-admin, OR that you manage the team
+    /// (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to
+    /// the team's shared resources.
     Bind {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,
         /// Team to bind to: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
-    /// Unbind a cognitive map from a team (admin-only).
+    /// Unbind a cognitive map from a team (same authority as bind).
     Unbind {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,
@@ -1232,6 +1234,57 @@ mod meta_only_flag_tests {
         assert!(
             Cli::try_parse_from(["temper", "resource", "show", "some-ref", "--type", "task",])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn create_and_update_reject_removed_goal_flag() {
+        use clap::Parser;
+        // temper-goal is KeyFate::Edge, not a managed property; the --goal write
+        // flag is removed (goal-as-edge deferred to task 019f3d55). clap must
+        // reject it on both create and update. The List --goal filter is unaffected.
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "create",
+                "--type",
+                "task",
+                "--title",
+                "T",
+                "--context",
+                "@me/temper",
+                "--goal",
+                "some-goal",
+            ])
+            .is_err(),
+            "--goal must be rejected on create"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "update",
+                "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+                "--goal",
+                "some-goal",
+            ])
+            .is_err(),
+            "--goal must be rejected on update"
+        );
+        // The List --goal filter stays valid (query param, out of scope).
+        assert!(
+            Cli::try_parse_from([
+                "temper",
+                "resource",
+                "list",
+                "--type",
+                "task",
+                "--goal",
+                "some-goal",
+            ])
+            .is_ok(),
+            "list --goal filter must remain valid"
         );
     }
 

@@ -25,18 +25,29 @@
  * /auth/login or /request-access as appropriate.
  */
 
-import type { Handle } from '@sveltejs/kit';
+import { type Handle, text } from '@sveltejs/kit';
 import { readSession, writeSession, clearSession } from '$lib/server/session';
 import { refreshAccessToken, REFRESH_THRESHOLD_SECONDS } from '$lib/server/oidc';
 import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
+import { CSRF_FORBIDDEN_MESSAGE, isForbiddenCrossOriginFormPost } from '$lib/server/csrf';
 import { apiGet, ApiError } from '$lib/server/api';
 import type { ProfileWithEntitlements } from '$lib/types';
 
 export const handle: Handle = async ({ event, resolve }) => {
 	// Reverse-proxy the API/MCP/OAuth/discovery surface to the upstream host
-	// before any SvelteKit handling. These paths are not UI routes.
+	// before any SvelteKit handling. These paths are not UI routes. This
+	// includes the SAML ACS (`/oauth/saml/acs`), which by design takes a
+	// cross-origin form POST from the IdP — authenticated by the SAML layer,
+	// not by origin — so it must forward upstream before the CSRF guard below.
 	if (isProxiedPath(event.url.pathname)) {
 		return proxyRequest(event);
+	}
+
+	// SvelteKit's built-in `checkOrigin` is disabled (svelte.config.js) so the
+	// proxied ACS POST above isn't blocked pre-hook. Re-apply the equivalent
+	// origin guard here, scoped to the UI's own routes.
+	if (isForbiddenCrossOriginFormPost(event.request, event.url.origin)) {
+		return text(CSRF_FORBIDDEN_MESSAGE, { status: 403 });
 	}
 
 	event.locals.user = null;

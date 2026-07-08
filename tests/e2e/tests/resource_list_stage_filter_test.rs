@@ -28,7 +28,6 @@ async fn seed_task(
     stage: &str,
 ) {
     let mut managed = serde_json::Map::new();
-    managed.insert("temper-title".to_string(), serde_json::json!(title));
     managed.insert("temper-stage".to_string(), serde_json::json!(stage));
     managed.insert("temper-mode".to_string(), serde_json::json!("build"));
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
