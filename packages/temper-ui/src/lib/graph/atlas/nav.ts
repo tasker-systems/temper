@@ -7,9 +7,9 @@
  * hand to `goto()`.
  *
  * History mode is chosen at the call site, not here:
- *   - Scope/drill transitions (buildScopeUrl, buildCogmapUrl, buildDrillTerritoryUrl,
+ *   - Scope/drill transitions (buildCogmapUrl, buildDrillTerritoryUrl,
  *     buildDrillNodeUrl, buildAscendUrl, buildHomeUrl) PUSH history so the browser
- *     Back button walks the drill path (Atlas ← team ← territory ← node).
+ *     Back button walks the drill path (Atlas ← cogmap ← territory ← node).
  *   - Ephemeral view state (buildFiltersUrl, buildEdgeSelectUrl, clearSelectionUrl)
  *     REPLACES history so filter toggles and panel selection don't clutter the path.
  */
@@ -27,10 +27,6 @@ export interface GraphFilters {
 	edgeKinds: string[];
 	/** `?doc_types` CSV — restrict rendered nodes to these doc types (ScopeBar, Task 8). */
 	docTypes: string[];
-}
-
-export function parseTeam(params: URLSearchParams): string | null {
-	return params.get('team');
 }
 
 /** `?cogmap` addressing — entering a cogmap door is a distinct scope from a team (spec Task 5). */
@@ -62,20 +58,28 @@ export function parseFocus(params: URLSearchParams): Focus {
 
 export type Selection =
 	| { kind: 'none' }
-	| { kind: 'edge'; id: string };
+	| { kind: 'edge'; id: string }
+	| { kind: 'node'; id: string };
 
-/** Orthogonal panel selection for edges. `?focus` still owns scope/camera/seed;
- *  `?sel=edge:<id>` selects an edge for the TrailRail panel without re-seeding. */
+/** Orthogonal panel selection. `?focus` still owns scope/camera/seed; `?sel=edge:<id>`
+ *  or `?sel=node:<id>` opens the TrailRail for that element WITHOUT re-seeding. Node
+ *  selection is how a context-resource (builder-axis) node opens its detail without a
+ *  cogmap-scoped drill it would fall out of scope of (Beat D). */
 export function parseSelection(url: URL): Selection {
 	const raw = url.searchParams.get('sel');
 	if (!raw) return { kind: 'none' };
 	const [kind, id] = raw.split(':', 2);
 	if (id && kind === 'edge') return { kind: 'edge', id };
+	if (id && kind === 'node') return { kind: 'node', id };
 	return { kind: 'none' };
 }
 
 export function buildEdgeSelectUrl(base: URL, edgeId: string): string {
 	return withParams(base, (p) => p.set('sel', `edge:${edgeId}`));
+}
+
+export function buildNodeSelectUrl(base: URL, nodeId: string): string {
+	return withParams(base, (p) => p.set('sel', `node:${nodeId}`));
 }
 
 export function clearSelectionUrl(base: URL): string {
@@ -91,7 +95,8 @@ export type SelectedElement =
 
 export function selectedElement(focus: Focus, url: URL): SelectedElement {
 	const sel = parseSelection(url);
-	if (sel.kind === 'edge') return sel;
+	// An explicit `?sel` (edge or node) wins over the focused node.
+	if (sel.kind !== 'none') return sel;
 	if (focus.kind === 'node') return { kind: 'node', id: focus.id };
 	return { kind: 'none' };
 }
@@ -146,26 +151,52 @@ function withParams(base: URL, mutate: (p: URLSearchParams) => void): string {
 	return `${u.pathname}${u.search}`;
 }
 
-/** Enter a team zone / switch team: set team, clear focus (re-scope resets to Tier 0). */
-export function buildScopeUrl(base: URL, teamId: string): string {
-	return withParams(base, (p) => {
-		p.set('team', teamId);
-		p.delete('focus');
-	});
-}
-
-/** Enter a cogmap door: set cogmap, clear team + focus (re-scope resets to Tier 0). */
+/** Enter a cogmap door: set cogmap, clear focus (re-scope resets to Tier 0). */
 export function buildCogmapUrl(base: URL, cogmapId: string): string {
 	return withParams(base, (p) => {
 		p.set('cogmap', cogmapId);
-		p.delete('team');
 		p.delete('focus');
 	});
 }
 
-export function buildDrillTerritoryUrl(base: URL, territoryId: string): string {
-	// A territory is always the first drill hop from the panorama.
-	return withParams(base, (p) => p.set('focus', `territory:${territoryId}`));
+/** Union separator inside a territory token. `~` is URL-unreserved (RFC 3986) and
+ *  never appears in a UUID, and — unlike `+` — it does not decode to a space in a
+ *  query string, so a union round-trips through the URL intact. */
+const UNION_SEP = '~';
+
+/** Region ids carried by a territory focus. A shift-selected union is expressed as
+ *  `~`-joined ids within the territory token (`territory:A~B` → ['A','B']); the drill
+ *  path (comma) stays untouched. Non-territory focus → []. */
+export function territoryIds(focus: Focus): string[] {
+	return focus.kind === 'territory' ? focus.id.split(UNION_SEP).filter(Boolean) : [];
+}
+
+export function buildDrillTerritoryUrl(
+	base: URL,
+	territoryId: string,
+	opts?: { add?: boolean }
+): string {
+	// A territory is the first drill hop from the panorama. `add` (shift-click)
+	// unions the region into the current territory leaf: `territory:A` → `territory:A~B`.
+	return withParams(base, (p) => {
+		if (opts?.add) {
+			const path = (p.get('focus') ?? '').split(',').filter(Boolean);
+			const leaf = path[path.length - 1];
+			if (leaf?.startsWith('territory:')) {
+				const ids = leaf.slice('territory:'.length).split(UNION_SEP).filter(Boolean);
+				if (!ids.includes(territoryId)) ids.push(territoryId);
+				path[path.length - 1] = `territory:${ids.join(UNION_SEP)}`;
+				p.set('focus', path.join(','));
+				return;
+			}
+		}
+		p.set('focus', `territory:${territoryId}`);
+	});
+}
+
+/** Commit a multi-region union selection to the URL: `focus=territory:A~B~C`. */
+export function buildDrillTerritoriesUrl(base: URL, ids: string[]): string {
+	return withParams(base, (p) => p.set('focus', `territory:${ids.join(UNION_SEP)}`));
 }
 
 export function buildDrillNodeUrl(base: URL, nodeId: string): string {
@@ -190,6 +221,25 @@ export function buildAscendUrl(base: URL): string {
 	});
 }
 
+/** The Atlas Home lens (Beat B). Neutral (rest) is the absence of `?home`. */
+export type HomeLens = 'build' | 'research';
+
+/** The committed Home lens, or null for the neutral (rest) state. */
+export function parseHomeLens(url: URL): HomeLens | null {
+	const v = url.searchParams.get('home');
+	return v === 'build' || v === 'research' ? v : null;
+}
+
+/** Commit a Home lens (call site PUSHes history so Back returns to neutral). */
+export function buildHomeLensUrl(base: URL, lens: HomeLens): string {
+	return withParams(base, (p) => p.set('home', lens));
+}
+
+/** Return to the neutral Home selection (drop the committed lens). */
+export function clearHomeLensUrl(base: URL): string {
+	return withParams(base, (p) => p.delete('home'));
+}
+
 /** Return to the membership home: clear team, cogmap, and focus. */
 export function buildHomeUrl(base: URL): string {
 	return withParams(base, (p) => {
@@ -208,4 +258,19 @@ export function buildPanoramaUrl(base: URL): string {
 		p.delete('focus');
 		p.delete('sel');
 	});
+}
+
+/** The active Home scope filter (`?scope=@me|+slug|temper`), or null for the un-narrowed lens. */
+export function parseScopeFilter(url: URL): string | null {
+	return url.searchParams.get('scope');
+}
+
+/** Narrow the committed Home lens to one owner-scope (call site PUSHes history). */
+export function buildScopeFilterUrl(base: URL, scope: string): string {
+	return withParams(base, (p) => p.set('scope', scope));
+}
+
+/** Clear the scope narrow, returning to the full committed lens. */
+export function clearScopeFilterUrl(base: URL): string {
+	return withParams(base, (p) => p.delete('scope'));
 }

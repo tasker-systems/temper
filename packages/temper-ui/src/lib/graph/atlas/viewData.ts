@@ -8,10 +8,9 @@
  */
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { EventTrail } from '$lib/types/generated/element_trail';
-import type { HomeCogmap, HomeTeam } from '$lib/types/generated/graph_home';
+import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { ResourceRow } from '$lib/types/generated/resource';
-import type { TeamScopeView } from '$lib/types/generated/graph_scope';
-import type { TerritoryOverview, TerritorySlice } from '$lib/types/generated/graph_territory';
+import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 import type { Focus, GraphFilters, SelectedElement } from './nav';
 
 /** Breadcrumb label for the focused territory hop (see `crumbTerritory` in load).
@@ -23,16 +22,15 @@ export interface CrumbTerritory {
 
 export interface AtlasViewData {
 	owner: string;
-	teamId: string | null;
 	cogmapId: string | null;
 	cogmapName: string | null;
-	scope: TeamScopeView | null;
 	tier: number;
 	focus: Focus;
-	teams: HomeTeam[] | null;
-	cogmaps: HomeCogmap[] | null;
+	// Atlas Home (Beat B): the build/research footprint. Null on the scoped
+	// (team/cogmap) branches, which don't render Home. The committed lens is not
+	// carried here — TierHome derives it from the URL (`?home`).
+	home: AtlasHome | null;
 	territories: TerritoryOverview | null;
-	slice: TerritorySlice | null;
 	neighborhood: AtlasSubgraph | null;
 	selection: SelectedElement;
 	trail: EventTrail | null;
@@ -40,4 +38,8 @@ export interface AtlasViewData {
 	filters: GraphFilters;
 	focusPath: Focus[];
 	crumbTerritory: CrumbTerritory | null;
+	// Beat C: the committed Home `?scope` narrow (from `parseScopeFilter`), or null.
+	// Meaningful only on the Home branch — the cogmap-door branch carries it too for
+	// AtlasViewData shape uniformity, but crumbModel suppresses it once a cogmap is set.
+	scopeFilter: string | null;
 }

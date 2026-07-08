@@ -12,11 +12,12 @@
 //      committed by mistake instead of the sanitized bundle.
 //
 // Scope: this gate covers the top-level `AtlasViewData` composition (where the
-// harness/page contract lives). Nested payload types (TerritorySlice, AtlasSubgraph, …)
+// harness/page contract lives). Nested payload types (AtlasSubgraph, TerritoryOverview, …)
 // are checked where components consume them via svelte-check.
 import { describe, expect, it } from 'vitest';
 import type { AtlasViewData } from './viewData';
 import type { AtlasFixtureBundle } from '../../../routes/dev/atlas/+page';
+import type { HomeContext } from '$lib/types/generated/graph_home';
 import bundleJson from '../../../../static/dev/atlas-fixtures.json';
 
 // Pinned to AtlasViewData: if the type gains/loses a field, this object stops
@@ -24,23 +25,20 @@ import bundleJson from '../../../../static/dev/atlas-fixtures.json';
 // the fixtures (and this list) back into lockstep with the type.
 const REQUIRED_KEYS = {
 	owner: true,
-	teamId: true,
 	cogmapId: true,
 	cogmapName: true,
-	scope: true,
 	tier: true,
 	focus: true,
-	teams: true,
-	cogmaps: true,
+	home: true,
 	territories: true,
-	slice: true,
 	neighborhood: true,
 	selection: true,
 	trail: true,
 	resourceRow: true,
 	filters: true,
 	focusPath: true,
-	crumbTerritory: true
+	crumbTerritory: true,
+	scopeFilter: true
 } satisfies Record<keyof AtlasViewData, true>;
 
 const EXPECTED_KEYS = Object.keys(REQUIRED_KEYS).sort();
@@ -48,12 +46,12 @@ const EXPECTED_KEYS = Object.keys(REQUIRED_KEYS).sort();
 // Every scenario the harness offers must be present so a fresh checkout can drive it.
 const EXPECTED_SCENARIOS = [
 	'home',
-	'teamPanorama',
-	'regionSlice',
 	'nodeNeighborhood',
 	'nodeSelected',
 	'cogmapPanorama',
-	'leafBare'
+	'leafBare',
+	'regionDrill',
+	'regionDrillUnion'
 ];
 
 const bundle = bundleJson as AtlasFixtureBundle;
@@ -107,6 +105,16 @@ describe('committed atlas fixtures', () => {
 		for (const e of events) {
 			expect(e).toHaveProperty('payload');
 			expect(typeof e.actor_name).toBe('string');
+		}
+	});
+
+	it('home build entries carry a recency field and no leaked PII (Beat C)', () => {
+		const home = scenario('home').home;
+		for (const c of home?.build ?? []) {
+			expect(c).toHaveProperty('last_active_at'); // string | null
+			// key-set pinned to the wire type:
+			const _pin = c satisfies HomeContext;
+			void _pin;
 		}
 	});
 

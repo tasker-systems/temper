@@ -4,7 +4,7 @@
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
 	import { labelAnchors } from '$lib/graph/atlas/labels';
-	import { buildDrillNodeUrl, buildEdgeSelectUrl } from '$lib/graph/atlas/nav';
+	import { buildDrillNodeUrl, buildEdgeSelectUrl, buildNodeSelectUrl } from '$lib/graph/atlas/nav';
 	import { isDocTypeDimmed } from '$lib/graph/atlas/palette';
 	import NodeChip from './marks/NodeChip.svelte';
 	import Edge from './marks/Edge.svelte';
@@ -32,6 +32,17 @@
 	// so it doesn't clutter the drill history the Back button walks.
 	function selectEdge(edgeId: string) {
 		goto(buildEdgeSelectUrl($page.url, edgeId), { replaceState: true });
+	}
+
+	// A context-resource (builder-axis) node opens its TrailRail via ?sel — a
+	// cogmap-scoped drill would fall out of scope and dead-end (Beat D). Facets
+	// (cogmap-homed) still drill into their neighborhood.
+	function selectNode(nodeId: string) {
+		goto(buildNodeSelectUrl($page.url, nodeId), { replaceState: true });
+	}
+	function activate(node: (typeof graph.nodes)[number]) {
+		if (node.home === 'context') selectNode(node.id);
+		else drill(node.id);
 	}
 
 	function nodeRadius(degree: number): number {
@@ -75,6 +86,6 @@
 		dim={isDocTypeDimmed(n.docType, docTypes)}
 		edges={n.degree}
 		excerpt={n.excerpt ?? null}
-		onEnter={() => drill(n.id)}
+		onEnter={() => activate(n)}
 	/>
 {/each}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { docTypeHue, CANVAS_BG } from '$lib/graph/atlas/palette';
 	import { truncateLabel } from '$lib/graph/atlas/labels';
+	import { nodeMarkShape } from '$lib/graph/atlas/marks';
 	import NodeHoverCard from './NodeHoverCard.svelte';
 
 	interface Props {
@@ -36,7 +37,7 @@
 	}: Props = $props();
 
 	const color = $derived(docTypeHue(docType));
-	const filled = $derived(home === 'cogmap');
+	const shape = $derived(nodeMarkShape(home));
 	const style = $derived(`${onEnter ? 'cursor:pointer;' : ''}opacity:${dim ? 0.15 : 1};`);
 	let hovered = $state(false);
 	// The small anchored label is a lightweight always-on cue; the hover card
@@ -60,10 +61,22 @@
 	{#if seed}
 		<circle cx={x} cy={y} r={r + 6} fill="none" stroke="#cfd6e2" stroke-width="1.5" />
 	{/if}
-	{#if filled}
+	{#if shape === 'circle'}
+		<!-- cogmap facet = an idea in the map -->
 		<circle cx={x} cy={y} {r} fill={color} />
 	{:else}
-		<circle cx={x} cy={y} {r} fill={CANVAS_BG} stroke={color} stroke-width="2.5" />
+		<!-- context resource = the work it was derived_from — a document-square.
+		     Shape carries the axis; color still carries doc-type. -->
+		<rect
+			x={x - r}
+			y={y - r}
+			width={2 * r}
+			height={2 * r}
+			rx={Math.max(2, r * 0.32)}
+			fill={color}
+			stroke={CANVAS_BG}
+			stroke-width="1.5"
+		/>
 	{/if}
 	{#if showLabel}
 		<text x={x} y={y + r + 13} text-anchor="middle" fill="#c7d0da" font-size="10">{truncateLabel(title, 22)}</text>

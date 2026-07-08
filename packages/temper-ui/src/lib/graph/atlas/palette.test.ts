@@ -6,7 +6,6 @@ import {
 	DOC_TYPE_HUES,
 	EDGE_COLORS,
 	FALLBACK_HUE,
-	TEAM_ZONE,
 	TERRITORY_TINTS,
 	docTypeHue,
 	edgeStyle,
@@ -143,11 +142,5 @@ describe('TERRITORY_TINTS / chrome', () => {
 
 	it('locks the canvas background', () => {
 		expect(CANVAS_BG).toBe('#1b1e26');
-	});
-
-	it('defines team-zone fill, label, and sub colors', () => {
-		expect(TEAM_ZONE.fill).toMatch(/^#[0-9a-f]{6}$/i);
-		expect(TEAM_ZONE.label).toMatch(/^#[0-9a-f]{6}$/i);
-		expect(TEAM_ZONE.sub).toMatch(/^#[0-9a-f]{6}$/i);
 	});
 });

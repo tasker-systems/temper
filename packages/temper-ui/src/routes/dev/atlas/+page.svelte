@@ -7,7 +7,7 @@
 
 	// Scenario keys are every fixture entry except the `_meta` provenance stamp.
 	const scenarios = $derived(Object.keys(data.fixtures).filter((k) => k !== '_meta'));
-	let scenario = $state('teamPanorama');
+	let scenario = $state('home');
 	const view = $derived(data.fixtures[scenario] as AtlasViewData);
 
 	// Viewport axis — the two Beat-2a regressions (legend grows into canvas /

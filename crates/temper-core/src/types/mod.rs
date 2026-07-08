@@ -24,7 +24,6 @@ pub mod facet_requests;
 pub mod graph;
 pub mod graph_atlas;
 pub mod graph_home;
-pub mod graph_scope;
 pub mod graph_territory;
 pub mod home;
 pub mod ids;
@@ -69,14 +68,9 @@ pub use device::DeviceSyncState;
 pub use element_trail::{ElementEvent, ElementKind, EventTrail};
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
-pub use graph_atlas::{
-    AtlasEdge, AtlasNode, AtlasSearchHit, AtlasSubgraph, NodeHome, SliceRequest,
-};
-pub use graph_home::{AtlasHome, HomeCogmap, HomeTeam};
-pub use graph_scope::{TeamRef, TeamScopeView, TeamZone};
-pub use graph_territory::{
-    Bridge, OrphanNode, RegionMember, Territory, TerritoryKind, TerritoryOverview, TerritorySlice,
-};
+pub use graph_atlas::{AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest};
+pub use graph_home::{AtlasHome, HomeCogmap, HomeContext};
+pub use graph_territory::{Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{

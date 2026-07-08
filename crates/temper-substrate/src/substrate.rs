@@ -1,7 +1,7 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
 use crate::ids::{CogmapId, LensId, ResourceId};
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 #[derive(Debug)]
 pub struct Substrate {
@@ -22,98 +22,91 @@ pub async fn connect() -> Result<PgPool> {
 }
 
 pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<CogmapId> {
-    let row = sqlx::query("SELECT id FROM kb_cogmaps WHERE name = $1")
-        .bind(name)
+    let id = sqlx::query_scalar!("SELECT id FROM kb_cogmaps WHERE name = $1", name)
         .fetch_one(pool)
         .await?;
-    Ok(row.get::<CogmapId, _>("id"))
+    Ok(CogmapId::from(id))
 }
 
 pub async fn load(pool: &PgPool, cogmap: CogmapId, lens_name: &str) -> Result<Substrate> {
     // concept-resources homed in the cogmap
-    let node_rows = sqlx::query(
+    let nodes: Vec<ResourceId> = sqlx::query_scalar!(
         "SELECT resource_id FROM kb_resource_homes WHERE anchor_table='kb_cogmaps' AND anchor_id=$1",
+        cogmap.uuid(),
     )
-    .bind(cogmap)
     .fetch_all(pool)
-    .await?;
-    let nodes: Vec<ResourceId> = node_rows
-        .iter()
-        .map(|r| r.get::<ResourceId, _>("resource_id"))
-        .collect();
+    .await?
+    .into_iter()
+    .map(ResourceId::from)
+    .collect();
 
     // declared edges homed in the cogmap, both endpoints resources
-    let edge_rows = sqlx::query(
-        "SELECT source_id, target_id, edge_kind::text AS kind, label, weight \
+    let edge_rows = sqlx::query!(
+        "SELECT source_id, target_id, edge_kind::text AS \"kind!\", label, weight \
          FROM kb_edges WHERE home_anchor_table='kb_cogmaps' AND home_anchor_id=$1 \
            AND source_table='kb_resources' AND target_table='kb_resources' AND NOT is_folded",
+        cogmap.uuid(),
     )
-    .bind(cogmap)
     .fetch_all(pool)
     .await?;
     let edges = edge_rows
-        .iter()
+        .into_iter()
         .map(|r| -> Result<Edge> {
-            let kind_str: String = r.get("kind");
-            let kind = EdgeKind::from_sql(&kind_str)
-                .with_context(|| format!("unknown edge_kind from DB: {kind_str:?}"))?;
+            let kind = EdgeKind::from_sql(&r.kind)
+                .with_context(|| format!("unknown edge_kind from DB: {:?}", r.kind))?;
             Ok(Edge {
-                src: r.get("source_id"),
-                tgt: r.get("target_id"),
+                src: ResourceId::from(r.source_id),
+                tgt: ResourceId::from(r.target_id),
                 kind,
-                weight: r.get("weight"),
-                label: r.get("label"),
+                weight: r.weight,
+                label: r.label,
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
     // facets on those resources (property_key='facet', value jsonb {path:value})
-    let facet_rows = sqlx::query(
+    let facet_rows = sqlx::query!(
         "SELECT owner_id, property_value, weight FROM kb_properties \
          WHERE owner_table='kb_resources' AND property_key='facet' AND NOT is_folded \
            AND owner_id = ANY($1)",
+        &nodes as &[ResourceId],
     )
-    .bind(&nodes)
     .fetch_all(pool)
     .await?;
     let facets = facet_rows
         .iter()
-        .flat_map(|r| {
-            let v: serde_json::Value = r.get("property_value");
-            let weight: f64 = r.get("weight");
-            expand_facets(r.get("owner_id"), &v, weight)
-        })
+        .flat_map(|r| expand_facets(ResourceId::from(r.owner_id), &r.property_value, r.weight))
         .collect();
 
     // the named lens for this cogmap (or the global default). The name is bound (Plan 3 Step 0) so
     // the same producer materializes different lenses (e.g. telos-default vs telos-default-propheavy)
     // over one substrate — S6f plurality.
-    let lr = sqlx::query(
+    let lr = sqlx::query!(
         "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution \
          FROM kb_cogmap_lenses WHERE name=$2 AND (cogmap_id=$1 OR cogmap_id IS NULL) \
          ORDER BY cogmap_id NULLS LAST LIMIT 1",
+        cogmap.uuid(),
+        lens_name,
     )
-    .bind(cogmap)
-    .bind(lens_name)
     .fetch_one(pool)
     .await?;
     let lens = Lens {
-        w_express: lr.get("w_express"),
-        w_contains: lr.get("w_contains"),
-        w_leads_to: lr.get("w_leads_to"),
-        w_near: lr.get("w_near"),
-        w_prop: lr.get("w_prop"),
-        s_telos: lr.get("s_telos"),
-        s_ref: lr.get("s_ref"),
-        s_central: lr.get("s_central"),
-        resolution: lr.get("resolution"),
+        w_express: lr.w_express,
+        w_contains: lr.w_contains,
+        w_leads_to: lr.w_leads_to,
+        w_near: lr.w_near,
+        w_prop: lr.w_prop,
+        s_telos: lr.s_telos,
+        s_ref: lr.s_ref,
+        s_central: lr.s_central,
+        resolution: lr.resolution,
     };
     Ok(Substrate {
         nodes,
         edges,
         facets,
         lens,
-        lens_id: lr.get("id"),
+        lens_id: LensId::from(lr.id),
     })
 }
 

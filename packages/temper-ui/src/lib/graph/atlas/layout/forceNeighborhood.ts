@@ -9,6 +9,7 @@ import {
 	forceCollide,
 	forceLink,
 	forceManyBody,
+	forceRadial,
 	forceSimulation,
 	type SimulationNodeDatum
 } from 'd3-force';
@@ -68,13 +69,28 @@ export function forceNeighborhood(
 		})
 		.filter((l): l is ForceEdge => l !== null);
 
+	// Beat D: spatial reinforcement of the two axes — cogmap facets (ideas) settle
+	// toward the center, context-resources (the builder axis / documents) drift to
+	// an outer ring, so shape (NodeChip) and position agree.
+	const minDim = Math.min(size.width, size.height);
+	const rInner = minDim * 0.06;
+	const rOuter = minDim * 0.44;
+
 	const sim = forceSimulation(nodes)
 		.force(
 			'link',
-			forceLink(links.map((l) => ({ source: l.source, target: l.target }))).distance(90).strength(0.6)
+			// Cross-home links (facet→document) run looser + weaker so the radial can
+			// pull documents outward; same-home links keep their structure.
+			forceLink(links.map((l) => ({ source: l.source, target: l.target })))
+				.distance((_l, i) => (links[i].source.home !== links[i].target.home ? 150 : 80))
+				.strength((_l, i) => (links[i].source.home !== links[i].target.home ? 0.15 : 0.6))
 		)
 		.force('charge', forceManyBody().strength(-260))
 		.force('center', forceCenter(size.width / 2, size.height / 2))
+		.force(
+			'radial',
+			forceRadial<ForceNode>((n) => (n.home === 'context' ? rOuter : rInner), size.width / 2, size.height / 2).strength(0.6)
+		)
 		.force('collide', forceCollide<ForceNode>().radius((n) => 12 + Math.min(10, n.degree)))
 		.stop();
 

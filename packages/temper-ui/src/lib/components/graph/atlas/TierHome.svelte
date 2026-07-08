@@ -1,135 +1,339 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	// TierHome — Beat B "build / research" verb-lens Home.
+	// Two verb-CTAs over one Beat-A field panel: hazy union rest → hover resolves a lens
+	// (build = your contexts, research = the cogmaps you can reach) → click commits to
+	// that lens only (`?home` in the URL) → a back affordance returns to neutral. The
+	// committed lens is URL-derived; hover is an ephemeral local preview that keeps the
+	// field crisp across the (background) load round-trip. Reuses forceTerritories +
+	// TerritoryCircle so Home speaks the same field language as the panorama.
+	import type { AtlasHome } from '$lib/types/generated/graph_home';
 	import { page } from '$app/stores';
-	import type { HomeCogmap, HomeTeam } from '$lib/types/generated/graph_home';
-	import { layoutHome } from '$lib/graph/atlas/layout/homeLayout';
-	import { buildCogmapUrl, buildScopeUrl } from '$lib/graph/atlas/nav';
-	import { COGMAP_DOOR, TEAM_DOOR } from '$lib/graph/atlas/palette';
+	import { goto } from '$app/navigation';
+	import {
+		parseHomeLens,
+		buildHomeLensUrl,
+		clearHomeLensUrl,
+		buildCogmapUrl,
+		parseScopeFilter,
+		buildScopeFilterUrl,
+		clearScopeFilterUrl,
+		type HomeLens
+	} from '$lib/graph/atlas/nav';
+	import {
+		buildLensTerritories,
+		researchLensTerritories,
+		layoutHomeLens
+	} from '$lib/graph/atlas/layout/homeLayout';
+	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
+	import { intensityFor, buildTint, researchTint, recencyGlow } from '$lib/graph/atlas/homeTint';
+	import { deriveScopeChips } from '$lib/graph/atlas/scopeChips';
+	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 
 	interface Props {
-		teams: HomeTeam[];
-		cogmaps: HomeCogmap[];
+		home: AtlasHome;
 		width: number;
 		height: number;
 	}
-	let { teams, cogmaps, width, height }: Props = $props();
+	let { home, width, height }: Props = $props();
 
-	const g = $derived(layoutHome(teams, cogmaps, { width, height }));
-	const teamById = $derived(new Map(teams.map((t) => [t.id, t])));
-	const cogmapById = $derived(new Map(cogmaps.map((c) => [c.id, c])));
+	type Lens = HomeLens;
 
-	// Entering a scope is a drill step — PUSH history so browser Back walks the
-	// path (Atlas ← team/cogmap). Only ephemeral state (filters, panel selection)
-	// stays replaceState. See nav.ts.
-	function enterTeam(teamId: string) {
-		goto(buildScopeUrl($page.url, teamId));
+	// The committed lens lives in the URL (`?home`); Back returns to neutral. Hover is
+	// an ephemeral local preview. `goto` (not shallow pushState — which leaves `page.url`
+	// stale) updates `$page.url` reactively so the field resolves, and gives real Back
+	// history. Home data is lens-independent, so the load re-run is a cheap re-read.
+	const committed = $derived<Lens | null>(parseHomeLens($page.url));
+	let hover = $state<Lens | null>(null);
+	const resolved = $derived<Lens | null>(committed ?? hover);
+
+	const CTA_H = 104; // header band reserved for the two verb-CTAs
+	const ctaY = 22;
+	const fieldSize = $derived({ width, height: Math.max(120, height - CTA_H) });
+
+	const buildPos = $derived(layoutHomeLens(buildLensTerritories(home), fieldSize));
+	const researchPos = $derived(layoutHomeLens(researchLensTerritories(home), fieldSize));
+
+	const buildMax = $derived(Math.max(1, ...home.build.map((c) => c.resource_count)));
+	const researchMax = $derived(Math.max(1, ...home.research.map((m) => m.region_count)));
+
+	// §10.2 subtle per-scope tint (see homeTint.ts): build tints key off owner_ref
+	// (cool blue→indigo), research off owner_ref (warm red-orange→amber).
+	const ownerRefById = $derived(new Map(home.build.map((c) => [c.id, c.owner_ref])));
+	const researchScopeById = $derived(new Map(home.research.map((m) => [m.id, m.owner_ref])));
+	// Recency glow (build only, §Beat C): last-active timestamp per build context, fed
+	// through the pure `recencyGlow` curve at render time (`now` = Date.now()).
+	const lastActiveById = $derived(new Map(home.build.map((c) => [c.id, c.last_active_at])));
+
+	// Scope-filter chips (Beat C): once a lens is committed, narrow its field to one
+	// owner-scope via `?scope`. The chip set is derived from the COMMITTED lens's own
+	// bodies (build chips off home.build, research chips off home.research) so the
+	// chip-row never shows scopes that aren't in the lens currently on screen.
+	const scope = $derived(parseScopeFilter($page.url));
+	const chipRefs = $derived(
+		committed === 'research'
+			? deriveScopeChips(home.research)
+			: committed === 'build'
+				? deriveScopeChips(home.build)
+				: []
+	);
+	const chipTint = (ref: string): string => (committed === 'research' ? researchTint(ref) : buildTint(ref));
+
+	// Client-side narrow: an active `?scope` restricts the rendered field to bodies
+	// owned by that scope; `null` (the un-narrowed "All" state) renders everything.
+	const buildPosFiltered = $derived(buildPos.filter((t) => scope == null || ownerRefById.get(t.id) === scope));
+	const researchPosFiltered = $derived(
+		researchPos.filter((t) => scope == null || researchScopeById.get(t.id) === scope)
+	);
+
+	// Chip-row geometry — tunable knobs, refine on the `/dev/atlas` harness. Pills sit
+	// in the header band between the back-link (ctaY+40) and the field cutoff (CTA_H).
+	const CHIP_Y = ctaY + 66;
+	const CHIP_H = 20;
+	const CHIP_GAP = 6;
+	function chipWidth(label: string): number {
+		return Math.max(40, label.length * 6.5 + 20);
 	}
-	function enterCogmap(cogmapId: string) {
-		goto(buildCogmapUrl($page.url, cogmapId));
+	interface ChipLayout {
+		label: string;
+		ref: string | null; // null = the "All" chip (clears the narrow)
+		x: number;
+		w: number;
+	}
+	const chipLayout = $derived.by<ChipLayout[]>(() => {
+		let x = 20;
+		const out: ChipLayout[] = [];
+		for (const label of ['All', ...chipRefs]) {
+			const w = chipWidth(label);
+			out.push({ label, ref: label === 'All' ? null : label, x, w });
+			x += w + CHIP_GAP;
+		}
+		return out;
+	});
+
+	// Narrow to one scope, or clear back to the full lens (clicking "All", or
+	// re-clicking the already-active chip, both clear — a toggle-off affordance).
+	function selectScope(ref: string | null) {
+		if (ref === null || ref === scope) {
+			goto(clearScopeFilterUrl($page.url), { keepFocus: true, noScroll: true });
+		} else {
+			goto(buildScopeFilterUrl($page.url, ref), { keepFocus: true, noScroll: true });
+		}
 	}
 
-	// D4-threshold fix: `onpointerup` alone (see comment below) also fires at the
-	// END of a pan gesture — d3-zoom's camera sees the down/up pair as a drag, but
-	// the pointerup still lands on whichever door is under the cursor on release,
-	// so panning across a door and letting go on top of it used to navigate.
-	// Fix: remember where the pointer went down and only treat pointerup as an
-	// activation if it released within POINTER_MOVE_THRESHOLD px (euclidean) of
-	// that point — a stationary click is ~0px and always passes; a real pan
-	// exceeds it and is ignored here (d3-zoom handles the pan itself).
-	const POINTER_MOVE_THRESHOLD = 6;
-	let downPt = $state<{ x: number; y: number } | null>(null);
-
-	function onDoorPointerDown(e: PointerEvent) {
-		downPt = { x: e.clientX, y: e.clientY };
+	// Group opacity per lens: rest = hazy union of both; previewing = the other fades
+	// behind; committed = the other is gone.
+	function lensOpacity(lens: Lens): number {
+		if (resolved === null) return 0.26; // rest: ambient hazy union
+		if (resolved === lens) return 1;
+		return committed ? 0 : 0.07; // other: gone if committed, faint if previewing
 	}
-	function onDoorPointerUp(e: PointerEvent, activate: () => void) {
-		if (!downPt) return;
-		const dx = e.clientX - downPt.x;
-		const dy = e.clientY - downPt.y;
-		downPt = null;
-		if (Math.hypot(dx, dy) < POINTER_MOVE_THRESHOLD) activate();
+
+	function commit(lens: Lens) {
+		// Keep `hover` set: `goto` re-runs the load asynchronously, so until `committed`
+		// (URL-derived) catches up, the hover preview keeps the chosen lens crisp — no
+		// flash back to the hazy rest during the round-trip.
+		goto(buildHomeLensUrl($page.url, lens), { keepFocus: true, noScroll: true });
+	}
+	function toNeutral() {
+		// Clear hover so the field returns to neutral immediately, not after the load.
+		hover = null;
+		goto(clearHomeLensUrl($page.url), { keepFocus: true, noScroll: true });
+	}
+
+	// Body navigation. Research → the cogmap panorama (Beat A). Build → the owner's
+	// vault (temporary destination §10.4; Atlas-native contexts panorama is Beat C).
+	function enterContext(ownerRef: string) {
+		goto(`/vault/${ownerRef}`);
+	}
+	function enterCogmap(id: string) {
+		goto(buildCogmapUrl($page.url, id));
+	}
+
+	const TAGLINE: Record<Lens, string> = {
+		build: 'your work, across your teams and personal space',
+		research: 'the knowledge you can explore'
+	};
+	const LENS_TINT: Record<Lens, string> = {
+		build: TERRITORY_TINTS.context,
+		research: TERRITORY_TINTS.cogmap
+	};
+
+	const ctaW = $derived(Math.min(340, width * 0.34));
+	const buildX = $derived(width / 2 - ctaW - 14);
+	const researchX = $derived(width / 2 + 14);
+
+	function isActive(lens: Lens): boolean {
+		return resolved === lens;
 	}
 </script>
 
-<text x={width * 0.34} y="28" text-anchor="middle" fill="#5f7686" font-size="11" letter-spacing="1">YOUR TEAMS</text>
-<text x={width * 0.86} y="28" text-anchor="middle" fill="#5f7686" font-size="11" letter-spacing="1">COGMAPS</text>
-
-{#each g.edges as e, i (i)}
-	<line x1={e.fromX} y1={e.fromY} x2={e.toX} y2={e.toY} stroke="#8b93a5" stroke-opacity="0.5" />
-{/each}
-{#each g.cogmapEdges as e, i (i)}
-	<line x1={e.fromX} y1={e.fromY} x2={e.toX} y2={e.toY} stroke="#8b93a5" stroke-opacity="0.35" />
-{/each}
-
-<circle cx={g.you.x} cy={g.you.y} r="22" fill="#cfd6e2" fill-opacity="0.14" stroke="#cfd6e2" stroke-width="1.5" />
-<text x={g.you.x} y={g.you.y + 4} text-anchor="middle" fill="#cfd6e2" font-size="11">you</text>
-
-<!--
-	D4 fix: the C2 door only entered a team on a SECOND click. Root cause is
-	d3-zoom's camera, attached to the whole canvas <svg> (see camera.ts) — every
-	mousedown/mouseup on ANY child (including these doors) is first captured by
-	d3-zoom's internal pan/drag machinery, which — if it sees any pointer jitter
-	between down and up (routine on trackpads/real mice) — installs a one-shot,
-	capturing `click` listener on `window` that swallows the very next native
-	`click` event to suppress click-through after a real pan gesture. That eats
-	this door's first click; by the second click the one-shot listener is gone.
-	Fix: activate on `pointerup` (fires before d3-zoom's click-swallow listener
-	can intercept it) rather than `onclick`, so a single click always enters.
-	`onclick` stays wired too (harmless/idempotent — same URL) so activation via
-	assistive tech that synthesizes a `click` without a preceding pointer event
-	still works. `onkeydown` (Enter) remains the keyboard path.
-
-	Follow-up: `pointerup` alone also fires at the end of a PAN — releasing the
-	pointer on top of a door after dragging across the canvas used to navigate.
-	`onDoorPointerDown`/`onDoorPointerUp` (above) gate activation on the pointer
-	having moved less than `POINTER_MOVE_THRESHOLD` px between down and up, so a
-	pan is ignored here (d3-zoom drives the pan) while a stationary click
-	(~0px movement) still enters.
--->
-{#each g.teams as t (t.id)}
-	{@const team = teamById.get(t.id)}
+<!-- Verb-CTAs -->
+{#snippet cta(lens: Lens, x: number)}
+	{@const active = isActive(lens)}
 	<g
-		class="atlas-focusable"
 		role="button"
 		tabindex="0"
-		aria-label={t.name}
-		onclick={() => enterTeam(t.id)}
-		onpointerdown={onDoorPointerDown}
-		onpointerup={(e) => onDoorPointerUp(e, () => enterTeam(t.id))}
-		onkeydown={(e) => e.key === 'Enter' && enterTeam(t.id)}
+		class="atlas-focusable cta"
+		aria-label={`${lens} — ${TAGLINE[lens]}`}
+		aria-pressed={committed === lens}
+		onpointerenter={() => (hover = lens)}
+		onpointerleave={() => (hover = null)}
+		onfocus={() => (hover = lens)}
+		onblur={() => (hover = null)}
+		onclick={() => commit(lens)}
+		onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), commit(lens))}
 		style="cursor:pointer"
 	>
-		<rect x={t.x - 90} y={t.y - 22} width="180" height="46" rx="8" fill={TEAM_DOOR.fill} stroke={TEAM_DOOR.stroke} stroke-opacity="0.6" />
-		<text x={t.x} y={t.y - 2} text-anchor="middle" fill={TEAM_DOOR.ink} font-size="11" font-weight="600">{t.name} ↵</text>
-		{#if team}
-			<text x={t.x} y={t.y + 14} text-anchor="middle" fill={TEAM_DOOR.ink} font-size="9" opacity="0.75">
-				{team.resource_count} res · {team.cogmap_count} maps
-			</text>
-		{/if}
-		<rect class="focus-ring" x={t.x - 93} y={t.y - 25} width="186" height="52" rx="10" stroke-width="2" />
+		<rect
+			{x}
+			y={ctaY}
+			width={ctaW}
+			height={64}
+			rx="12"
+			fill={active ? LENS_TINT[lens] : 'rgba(255,255,255,0.02)'}
+			fill-opacity={active ? 0.16 : 1}
+			stroke={LENS_TINT[lens]}
+			stroke-opacity={active ? 0.9 : 0.4}
+			stroke-width={active ? 2 : 1}
+		/>
+		<text
+			x={x + ctaW / 2}
+			y={ctaY + 28}
+			text-anchor="middle"
+			fill={active ? LENS_TINT[lens] : '#c9ced9'}
+			font-size="20"
+			font-weight="700"
+			letter-spacing="0.5">{lens}</text
+		>
+		<text
+			x={x + ctaW / 2}
+			y={ctaY + 48}
+			text-anchor="middle"
+			fill="#8b93a5"
+			font-size="11">{TAGLINE[lens]}</text
+		>
 	</g>
-{/each}
+{/snippet}
 
-{#each g.cogmaps as c (c.id)}
-	{@const cogmap = cogmapById.get(c.id)}
+{@render cta('build', buildX)}
+{@render cta('research', researchX)}
+
+<!-- Back-to-neutral affordance once a lens is committed -->
+{#if committed}
 	<g
-		class="atlas-focusable"
 		role="button"
 		tabindex="0"
-		aria-label={c.name}
-		onclick={() => enterCogmap(c.id)}
-		onpointerdown={onDoorPointerDown}
-		onpointerup={(e) => onDoorPointerUp(e, () => enterCogmap(c.id))}
-		onkeydown={(e) => e.key === 'Enter' && enterCogmap(c.id)}
+		class="atlas-focusable"
+		aria-label="Back to build / research choice"
+		onclick={toNeutral}
+		onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toNeutral())}
 		style="cursor:pointer"
 	>
-		<rect x={c.x - 90} y={c.y - 22} width="180" height="46" rx="8" fill={COGMAP_DOOR.fill} stroke={COGMAP_DOOR.stroke} stroke-opacity="0.6" />
-		<text x={c.x} y={c.y - 2} text-anchor="middle" fill={COGMAP_DOOR.ink} font-size="11" font-weight="600">{c.name} ↵</text>
-		{#if cogmap}
-			<text x={c.x} y={c.y + 14} text-anchor="middle" fill={COGMAP_DOOR.ink} font-size="9" opacity="0.75">
-				{cogmap.region_count} regions · {cogmap.facet_count} facets
+		<text x="20" y={ctaY + 40} fill="#8b93a5" font-size="13">← back</text>
+	</g>
+{/if}
+
+<!-- Scope-filter chip-row: narrows the committed lens's field to one owner-scope. -->
+{#if committed}
+	<g class="chip-row">
+		{#each chipLayout as chip (chip.label)}
+			{@const active = chip.ref === scope || (chip.ref === null && scope === null)}
+			{@const tint = chip.ref ? chipTint(chip.ref) : '#8b93a5'}
+			<g
+				role="button"
+				tabindex="0"
+				class="atlas-focusable chip"
+				aria-label={`Filter to ${chip.label}`}
+				aria-pressed={active}
+				onclick={() => selectScope(chip.ref)}
+				onkeydown={(e) =>
+					(e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), selectScope(chip.ref))}
+				style="cursor:pointer"
+			>
+				<rect
+					x={chip.x}
+					y={CHIP_Y}
+					width={chip.w}
+					height={CHIP_H}
+					rx={CHIP_H / 2}
+					fill={tint}
+					fill-opacity={active ? 0.28 : 0.12}
+					stroke={tint}
+					stroke-opacity={active ? 0.95 : 0.5}
+					stroke-width={active ? 1.5 : 1}
+				/>
+				<text
+					x={chip.x + chip.w / 2}
+					y={CHIP_Y + CHIP_H / 2 + 4}
+					text-anchor="middle"
+					fill={tint}
+					font-size="11"
+					font-weight={active ? '700' : '500'}>{chip.label}</text
+				>
+			</g>
+		{/each}
+	</g>
+{/if}
+
+<!-- The field: both lens layouts, cross-faded by lensOpacity -->
+<g transform={`translate(0, ${CTA_H})`}>
+	<g
+		opacity={lensOpacity('build')}
+		style={`transition: opacity 260ms ease; pointer-events: ${committed === 'build' ? 'auto' : 'none'}`}
+	>
+		{#each buildPosFiltered as t (t.id)}
+			<TerritoryCircle
+				x={t.x}
+				y={t.y}
+				r={t.r}
+				kind="context"
+				label={t.label}
+				memberCount={t.member_count}
+				showLabel={resolved === 'build'}
+				intensity={intensityFor(t.member_count, buildMax)}
+				tint={buildTint(ownerRefById.get(t.id) ?? '@me')}
+				glow={recencyGlow(lastActiveById.get(t.id) ?? null, Date.now())}
+				onEnter={committed === 'build'
+					? () => enterContext(ownerRefById.get(t.id) ?? '@me')
+					: undefined}
+			/>
+		{/each}
+	</g>
+	<g
+		opacity={lensOpacity('research')}
+		style={`transition: opacity 260ms ease; pointer-events: ${committed === 'research' ? 'auto' : 'none'}`}
+	>
+		{#each researchPosFiltered as t (t.id)}
+			<TerritoryCircle
+				x={t.x}
+				y={t.y}
+				r={t.r}
+				kind="cogmap"
+				label={t.label}
+				memberCount={t.member_count}
+				showLabel={resolved === 'research'}
+				intensity={intensityFor(t.member_count, researchMax)}
+				tint={researchTint(researchScopeById.get(t.id) ?? 'temper')}
+				onEnter={committed === 'research' ? () => enterCogmap(t.id) : undefined}
+			/>
+		{/each}
+	</g>
+		<!-- Empty-state for a committed lens with nothing in it (before any scope narrow). -->
+		{#if committed === 'build' && buildPos.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				You don't have any contexts to build in yet.
+			</text>
+		{:else if committed === 'research' && researchPos.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				There are no cognitive maps you can reach yet.
+			</text>
+		{:else if committed === 'build' && buildPosFiltered.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				No contexts in "{scope}" — try "All".
+			</text>
+		{:else if committed === 'research' && researchPosFiltered.length === 0}
+			<text x={width / 2} y={fieldSize.height / 2} text-anchor="middle" fill="#8b93a5" font-size="14">
+				No cognitive maps in "{scope}" — try "All".
 			</text>
 		{/if}
-		<rect class="focus-ring" x={c.x - 93} y={c.y - 25} width="186" height="52" rx="10" stroke-width="2" />
-	</g>
-{/each}
+</g>

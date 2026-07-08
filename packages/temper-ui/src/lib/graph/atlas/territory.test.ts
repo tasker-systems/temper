@@ -9,6 +9,7 @@ const t = (over: Partial<Territory>): Territory => ({
 	label: 'X',
 	member_count: 3,
 	salience: null,
+	coherence: null,
 	anchor_id: 'a',
 	...over
 });

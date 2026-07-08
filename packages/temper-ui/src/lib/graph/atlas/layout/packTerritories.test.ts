@@ -9,6 +9,7 @@ const terr = (id: string, member_count: number): Territory => ({
 	label: id,
 	member_count,
 	salience: 0.5,
+	coherence: null,
 	anchor_id: `anchor-${id}`
 });
 
@@ -35,6 +36,7 @@ describe('packTerritories', () => {
 			label: id,
 			member_count: 1,
 			salience,
+			coherence: null,
 			anchor_id: `anchor-${id}`
 		});
 		const context = (id: string, member_count: number): Territory => ({
@@ -43,6 +45,7 @@ describe('packTerritories', () => {
 			label: id,
 			member_count,
 			salience: null,
+			coherence: null,
 			anchor_id: `anchor-${id}`
 		});
 		const out = packTerritories(
