@@ -37,6 +37,10 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/api/access/settings", get(handlers::access::get_settings))
         .route(
+            "/api/invitations/mine",
+            get(handlers::invitations::list_mine),
+        )
+        .route(
             "/api/invitations/{token}/accept",
             post(handlers::invitations::accept),
         )

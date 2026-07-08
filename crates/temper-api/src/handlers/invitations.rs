@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
-    AcceptInvitationResponse, CreateInvitationRequest, TeamInvitation,
+    AcceptInvitationResponse, CreateInvitationRequest, InviteeInvitation, TeamInvitation,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::invitation_service;
@@ -71,6 +71,24 @@ pub async fn list(
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<TeamInvitation>>> {
     invitation_service::list_invitations(&state.pool, ProfileId::from(auth.0.profile.id), team_id)
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/invitations/mine",
+    tag = "Invitations",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The caller's own pending invitations", body = Vec<InviteeInvitation>),
+    )
+)]
+pub async fn list_mine(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<Vec<InviteeInvitation>>> {
+    invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile.id))
         .await
         .map(Json)
 }
