@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	atlasHomePath,
 	cogmapPanoramaPath,
+	regionCompositionPath,
 	regionSlicePath,
 	teamsListPath,
 	trailPath
@@ -11,6 +12,12 @@ import {
 describe('graph API path builders', () => {
 	it('R3 region slice', () => {
 		expect(regionSlicePath('r5')).toBe('/api/graph/regions/r5/slice');
+	});
+	it('Beat D region composition (single + union)', () => {
+		expect(regionCompositionPath(['r1'])).toBe('/api/graph/regions/composition?ids=r1&depth=1');
+		expect(regionCompositionPath(['r1', 'r2'], 1)).toBe(
+			'/api/graph/regions/composition?ids=r1,r2&depth=1'
+		);
 	});
 	it('R5 element trail', () => {
 		expect(trailPath('node', 'n1')).toBe('/api/graph/elements/node/n1/trail');

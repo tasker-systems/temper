@@ -20,6 +20,10 @@ export const cogmapPanoramaPath = (id: string, lensId?: string): string =>
 
 export const regionSlicePath = (regionId: string): string => `/api/graph/regions/${regionId}/slice`;
 
+/** Beat D — composition drill over one or more regions (comma-joined ids). */
+export const regionCompositionPath = (ids: string[], depth = 1): string =>
+	`/api/graph/regions/composition?ids=${ids.join(',')}&depth=${depth}`;
+
 export const cogmapNeighborhoodSlicePath = (cogmapId: string): string =>
 	`/api/cogmaps/${cogmapId}/graph/slice`;
 
@@ -41,6 +45,12 @@ export const readCogmapPanorama = (
 
 export const readRegionSlice = (token: string, regionId: string): Promise<TerritorySlice> =>
 	apiGet<TerritorySlice>(regionSlicePath(regionId), token);
+
+export const readRegionComposition = (
+	token: string,
+	ids: string[],
+	depth = 1
+): Promise<AtlasSubgraph> => apiGet<AtlasSubgraph>(regionCompositionPath(ids, depth), token);
 
 export const readCogmapNeighborhood = (
 	token: string,
