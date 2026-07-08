@@ -86,6 +86,9 @@ pub struct ClaimedJob {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EmbedDispatchSummary {
+    /// Dead embed jobs re-enqueued this pass (Phase 4 re-drive). Zero unless the caller asked for a
+    /// re-drive (`?redrive=true`); these resources are then eligible for the same pass's claim.
+    pub redriven: u32,
     /// Jobs claimed this pass (bounded by the dispatch cap).
     pub claimed: u32,
     /// Jobs whose resource embedded cleanly and were marked done.
@@ -94,6 +97,24 @@ pub struct EmbedDispatchSummary {
     pub failed: u32,
     /// Total chunks embedded across all completed jobs.
     pub chunks_embedded: u64,
+}
+
+/// Derived embedding-readiness of a resource (issue #299, Phase 4). Computed — never a stored column —
+/// from the resource's current chunks plus its embed-job state (design §8), surfaced on the MCP
+/// `EnrichedResource` so a caller can tell whether semantic (vector) search will find a just-created
+/// resource yet. FTS is always immediate; only the vector is eventually-consistent under async embed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingStatus {
+    /// Every current chunk is embedded (or the resource has no chunks at all — an empty body is
+    /// trivially ready). Vector search will find it.
+    Ready,
+    /// ≥1 current chunk still has a NULL embedding and a live embed job exists
+    /// (`pending`/`in_progress`/`waiting_for_retry`) — the vector is in flight.
+    Pending,
+    /// ≥1 current chunk still has a NULL embedding and no live job remains — the embed job is `dead`
+    /// (reaper-exhausted) or absent after a supersede race. Recoverable via re-drive.
+    Failed,
 }
 
 /// A resource-keyed job claimed for dispatch — the resource twin of [`ClaimedJob`]. The `Embed`
