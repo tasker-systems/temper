@@ -87,7 +87,10 @@ async fn invitee_sees_own_pending_invitation(pool: sqlx::PgPool) {
     assert_eq!(mine.len(), 1, "invitee sees their pending invitation");
     assert_eq!(mine[0].team_slug, "invitee-list-team");
     assert_eq!(mine[0].invited_email, "second@test.example.com");
-    assert!(!mine[0].token.is_empty(), "token is self-served for redemption");
+    assert!(
+        !mine[0].token.is_empty(),
+        "token is self-served for redemption"
+    );
 
     // The inviter (owner) has no invitations addressed to them. Exercises the
     // typed client method end-to-end (plumbing + deserialization).
