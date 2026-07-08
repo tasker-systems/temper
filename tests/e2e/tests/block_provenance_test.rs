@@ -68,6 +68,7 @@ async fn cli_create(
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    goal: None,
                     doc_type: "research",
                     title,
                     context: Some("@me/prov"),
@@ -171,6 +172,8 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
+                goal: None,
+                clear_goal: false,
                 r#ref: &distilled_ref,
                 type_to: None,
                 context_to: None,
@@ -367,6 +370,8 @@ async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgP
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
+                goal: None,
+                clear_goal: false,
                 r#ref: &distilled_ref,
                 type_to: None,
                 context_to: None,
@@ -430,6 +435,8 @@ async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgP
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
+                goal: None,
+                clear_goal: false,
                 r#ref: &distilled_ref,
                 type_to: None,
                 context_to: None,

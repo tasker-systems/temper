@@ -110,6 +110,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
     let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Round-Trip Search Concept".to_string(),
         origin_uri: "mcp://test/round-trip-search".to_string(),
         context_ref: "@me/round-trip-search".to_string(),
@@ -169,6 +170,7 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
     // now auto-fills it to "backlog". Testing an invalid enum value still
     // exercises the validation pipeline and error surfacing.)
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Validation Test Task".to_string(),
         origin_uri: "mcp://test/validation".to_string(),
         context_ref: "@me/validation-test".to_string(),
@@ -242,6 +244,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Content Round-Trip Test".to_string(),
         origin_uri: "mcp://test/content-round-trip".to_string(),
         context_ref: "@me/content-round-trip".to_string(),
@@ -404,6 +407,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         temper_core::types::ingest::pack_chunks(&original_chunks).expect("pack original");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Reindex Test Resource".to_string(),
         origin_uri: "mcp://test/reindex".to_string(),
         context_ref: "@me/update-reindex-test".to_string(),
@@ -442,6 +446,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
 
     let cmd = UpdateResource {
+        goal: None,
         resource: resource.id,
         title: None,
         slug: None,
@@ -546,6 +551,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let packed = temper_core::types::ingest::pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "MCP Meta Parity".to_string(),
         origin_uri: "mcp://test/meta-parity".to_string(),
         context_ref: "@me/mcp-meta-parity".to_string(),
@@ -582,6 +588,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     };
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
     let cmd = UpdateResource {
+        goal: None,
         resource: ResourceId::from(*resource.id),
         title: Some("MCP Meta Parity (updated)".to_string()),
         slug: None,
@@ -673,6 +680,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Gap6 Merge Task", body)])
         .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Gap6 Merge Task".to_string(),
         origin_uri: "mcp://test/gap6".to_string(),
         context_ref: "@me/gap6-merge".to_string(),
@@ -701,6 +709,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
 
     // Partial update: change ONLY the stage.
     let cmd = UpdateResource {
+        goal: None,
         resource: ResourceId::from(*resource.id),
         title: None,
         slug: None,
@@ -776,6 +785,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
         temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Gap5 Validate Task", body)])
             .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Gap5 Validate Task".to_string(),
         origin_uri: "mcp://test/gap5".to_string(),
         context_ref: "@me/gap5-validate".to_string(),
@@ -803,6 +813,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 
     // Update with a temper-stage value outside the task schema's enum.
     let cmd = UpdateResource {
+        goal: None,
         resource: ResourceId::from(*resource.id),
         title: None,
         slug: None,
@@ -877,6 +888,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Selector Route", body)])
         .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
+        goal: None,
         title: "Selector Route Doc".to_string(),
         origin_uri: "mcp://test/selector-route".to_string(),
         context_ref: "@me/selector-route".to_string(),
@@ -1032,6 +1044,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
             .expect("pack chunks");
         let managed = serde_json::json!({"temper-stage": "in-progress"});
         let payload = temper_core::types::ingest::IngestPayload {
+            goal: None,
             title: title.to_string(),
             origin_uri: origin_uri.to_string(),
             context_ref: "@me/list-selector".to_string(),
@@ -1095,6 +1108,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let result = temper_mcp::tools::resources::list_resources(
         &svc,
         temper_mcp::tools::resources::ListResourcesInput {
+            goal: None,
             context_ref: Some("@me/list-selector".to_string()),
             doc_type_name: Some("research".to_string()),
             limit: None,
@@ -1143,6 +1157,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let empty = temper_mcp::tools::resources::list_resources(
         &svc,
         temper_mcp::tools::resources::ListResourcesInput {
+            goal: None,
             context_ref: Some("@me/list-selector".to_string()),
             doc_type_name: Some("no-such-doctype".to_string()),
             limit: None,

@@ -113,6 +113,12 @@ pub struct ResourceListParams {
     pub owner: Option<String>,
     pub q: Option<String>,
     pub stage: Option<String>,
+    /// Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns
+    /// only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP
+    /// resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the
+    /// query. `None` = no goal filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<Uuid>,
     pub sort: Option<ResourceSortField>,
     pub order: Option<SortOrder>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
@@ -214,6 +220,18 @@ pub struct ResourceUpdateRequest {
     /// as a `temper-type` key inside `managed_meta`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_to: Option<String>,
+    /// Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to.
+    /// When present the server folds any existing `advances`→goal edge and asserts a
+    /// new one. Mutually exclusive with `clear_goal` (the CLI rejects both together).
+    /// Forwarded from the CLI `--goal <ref>` flag (resolved client-side).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<Uuid>,
+    /// Goal-clear: when `Some(true)`, the server folds the resource's current
+    /// `advances`→goal edge, leaving it goal-less. The tri-state complement to `goal`
+    /// (absent = untouched, `goal` = set/replace, `clear_goal` = retract). Forwarded
+    /// from the CLI `--clear-goal` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_goal: Option<bool>,
     /// Block-provenance sources this body was distilled from — recorded against the
     /// resource's body block, position → accretion `seq`. Resource refs only in T7b;
     /// URL/`remote` sources are T7c.
@@ -378,6 +396,8 @@ mod tests {
             chunks_packed: Some("base64-blob".to_string()),
             context_to: Some("@me/knowledge".to_string()),
             type_to: Some("goal".to_string()),
+            goal: None,
+            clear_goal: None,
             act: Default::default(),
             sources: Vec::new(),
             content_block: Some(uuid::Uuid::nil()),
@@ -417,6 +437,8 @@ mod tests {
             chunks_packed: None,
             context_to: None,
             type_to: None,
+            goal: None,
+            clear_goal: None,
             act: Default::default(),
             sources: Vec::new(),
             content_block: None,

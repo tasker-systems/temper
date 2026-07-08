@@ -23,6 +23,12 @@ pub struct IngestPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home_cogmap_id: Option<uuid::Uuid>,
     pub doc_type_name: String,
+    /// First-class goal link: the resolved `ResourceId` (as UUID) of the goal this
+    /// resource advances. The CLI/MCP resolve the caller's `--goal <ref>` client-side
+    /// (trailing-UUID-only); the ingest handler projects it to a live `advances`→goal
+    /// edge (`EdgeKind::LeadsTo`, `label="advances"`) after create. `None` = no goal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<uuid::Uuid>,
     /// `"sha256:<hex>"` — server computes if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
@@ -204,6 +210,7 @@ mod tests {
             context_ref: "ctx".to_owned(),
             home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
+            goal: None,
             content_hash: Some("sha256:abc".to_owned()),
             slug: "test".to_owned(),
             content: "# Test".to_owned(),
@@ -240,6 +247,7 @@ mod tests {
             context_ref: "ctx".to_owned(),
             home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
+            goal: None,
             slug: "test".to_owned(),
             content: "# Test".to_owned(),
             content_hash: None,
@@ -277,6 +285,7 @@ mod tests {
             context_ref: "ctx".to_owned(),
             home_cogmap_id: None,
             doc_type_name: "task".to_owned(),
+            goal: None,
             slug: "test".to_owned(),
             content: "# Test".to_owned(),
             content_hash: Some("sha256:abc".to_owned()),

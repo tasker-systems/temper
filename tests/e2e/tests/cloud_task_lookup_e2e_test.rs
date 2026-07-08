@@ -63,6 +63,7 @@ async fn seed_task(
     }
 
     let payload = IngestPayload {
+        goal: None,
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
         context_ref: format!("@me/{context}"),

@@ -73,6 +73,7 @@ async fn seed_session(
     };
 
     let payload = IngestPayload {
+        goal: None,
         title: title.to_string(),
         origin_uri: format!("kb://{context}/session/{slug}"),
         context_ref: format!("@me/{context}"),
@@ -111,6 +112,7 @@ async fn seed_task(
         "temper-seq": seq,
     });
     let payload = IngestPayload {
+        goal: None,
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),
         context_ref: format!("@me/{context}"),

@@ -167,6 +167,9 @@ pub struct CreateResourceArgs<'a> {
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub slug: Option<&'a str>,
+    /// Goal link target ref (`--goal`). When `Some`, resolved via `parse_ref` and
+    /// projected to a live `advances`→goal edge on create.
+    pub goal: Option<&'a str>,
     /// Session→task link target slug (session only). When `Some`, after the
     /// session is created a session→task `advances` relationship is asserted.
     pub task: Option<&'a str>,
@@ -202,6 +205,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         mode,
         effort,
         slug,
+        goal,
         task,
         body_flag,
         from,
@@ -288,6 +292,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         ));
     }
 
+    // Resolve --goal ref → goal resource id (trailing-UUID-only, like `edge assert`); the server
+    // projects the live `advances`→goal edge after create. An unparseable ref is a hard error.
+    let goal_resolved = goal
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()?;
+
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
@@ -307,6 +317,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             ..ManagedMeta::default()
         },
         open_meta: None,
+        goal: goal_resolved,
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
@@ -543,10 +554,18 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     let limit = params.limit.unwrap_or(20);
     let state_dir = config.state_dir.clone();
     let fields_owned: Vec<String> = params.fields.to_vec();
+    // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
+    // `advances`→goal edge. An unparseable ref is a hard error (never a silent drop).
+    let goal_id = params
+        .goal
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()?
+        .map(uuid::Uuid::from);
     let api_params = ResourceListParams {
         doc_type_name: Some(doc_type.clone()),
         context_ref: context.clone(),
         stage: params.stage.map(str::to_string),
+        goal: goal_id,
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),
         limit: Some(limit as i64),
@@ -605,10 +624,16 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
     let limit = params.limit.unwrap_or(50);
+    let goal_id = params
+        .goal
+        .map(temper_workflow::operations::parse_ref)
+        .transpose()?
+        .map(uuid::Uuid::from);
     let api_params = ResourceListParams {
         doc_type_name: Some(params.doc_type.to_string()),
         context_ref: params.context.map(ToString::to_string),
         stage: params.stage.map(str::to_string),
+        goal: goal_id,
         sort: Some(ResourceSortField::Updated),
         order: Some(SortOrder::Desc),
         limit: Some(limit as i64),
@@ -1021,6 +1046,11 @@ pub struct UpdateParams<'a> {
     pub seq: Option<i64>,
     pub branch: Option<&'a str>,
     pub pr: Option<&'a str>,
+    /// Goal-set ref (`--goal`): resolved via `parse_ref`, folds any existing
+    /// `advances`→goal edge and asserts the new one. Mutually exclusive with `clear_goal`.
+    pub goal: Option<&'a str>,
+    /// Goal-clear (`--clear-goal`): retract the resource's `advances`→goal edge.
+    pub clear_goal: bool,
     // Goal-specific fields
     pub status: Option<&'a str>,
     /// Body source flag: `None` (rely on stdin auto-detection — non-empty piped
@@ -1189,7 +1219,7 @@ fn resolve_update_target(
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_workflow::operations::{BodyUpdate, UpdateResource};
+    use temper_workflow::operations::{BodyUpdate, GoalPatch, UpdateResource};
 
     // 1. Resolve the ref to an id + the current server row (for its doctype
     //    and home context), validating the doctype and any `--type-to`.
@@ -1224,6 +1254,15 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         ));
     }
 
+    // 3c. Goal patch: --goal (set/replace, ref resolved via parse_ref) wins; --clear-goal
+    // retracts; neither leaves the goal edge untouched. clap's `conflicts_with` guarantees at
+    // most one is set, so the ordering here is defensive, not load-bearing.
+    let goal = match (params.goal, params.clear_goal) {
+        (Some(r), _) => Some(GoalPatch::Set(temper_workflow::operations::parse_ref(r)?)),
+        (None, true) => Some(GoalPatch::Clear),
+        (None, false) => None,
+    };
+
     // 4. Build the UpdateResource cmd.
     // context_to travels as a raw ref via context_ref (the API handler resolves
     // it server-side); type_to goes through MoveSpec and travels first-class on
@@ -1242,6 +1281,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         }),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
+        goal,
         move_to: build_move_spec_from_args(params),
         context_ref: params.context_to.map(String::from),
         act: params.act.clone().into_act_context()?,
@@ -1357,6 +1397,8 @@ mod build_helpers_tests {
             seq: None,
             branch: None,
             pr: None,
+            goal: None,
+            clear_goal: false,
             status: None,
             body: None,
             sources: &[],

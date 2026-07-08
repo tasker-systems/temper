@@ -40,6 +40,7 @@ fn create_cmd(context: ContextId, slug: &str) -> CreateResource {
         origin_uri: Some(format!("test://facet-{slug}")),
         chunks_packed: None,
         content_hash: None,
+        goal: None,
         act: ActContext::default(),
         origin: Surface::ApiHttp,
     }
