@@ -137,9 +137,12 @@ See `[[feedback_read_gate_must_match_full_canonical_visibility]]`,
 - **Endpoint:** `GET /api/graph/regions/composition?ids=<r1>,<r2>&depth=1` (or a POST with a body if
   the id list grows) → `AtlasSubgraph`. Deny-as-absence per §4.3.
 - **Nav:** on the cogmap panorama (Beat A field), clicking a region navigates to
-  `?cogmap=<id>&focus=territory:<r1>`; shift-click appends → `focus=territory:<r1>,<r2>`.
-  `parseFocus` learns to parse a **comma list** of territory ids (today it is single). The union
-  read is driven by that id list.
+  `?cogmap=<id>&focus=territory:<r1>`; shift-click **unions** into the same territory token →
+  `focus=territory:<r1>~<r2>`. The union separator is **`~`** (URL-unreserved, absent from UUIDs)
+  — **not `+`**, which decodes to a space in a query string and breaks the round-trip (caught by a
+  nav test during implementation). Comma stays reserved for the drill *path*
+  (`territory:X,node:Y`). `territoryIds(focus)` splits the `~`-joined token into the region-id list
+  that drives the union read. (Implemented: `nav.ts` `territoryIds` + `buildDrillTerritoryUrl(add)`.)
 - **Rendering:** territory-focus now renders the **composition force-graph** (reusing
   `forceNeighborhood` + `NodeChip` + the neighborhood marks), NOT the old R3 members hull. Tier for
   territory focus is rendered force-graph-style; `TierTerritory`'s affinity-hull view is **retired**

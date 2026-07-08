@@ -22,6 +22,23 @@
 
 ---
 
+## Implementation status (2026-07-08)
+
+- **DONE + committed + gate-green:** T1 SQL migration (validated on prod — surfaces the 23
+  `derived_from`→context builder edges), T2 service `region_composition_slice`, T3 endpoint, T5
+  marks (document-squares), T6 radial layout, T7 nav union (`~` separator), T8 read wrapper. Backend
+  is end-to-end and its logic is prod-validated; frontend rendering primitives are harness-validated
+  + unit-tested.
+- **REMAINING (need browser/prod-auth verification — do with the user):** T4 e2e (deny-direction is
+  safety-critical), T9 page-load repoint (territory focus → `readRegionComposition`; preserve the
+  `sliceOrPanorama` 404→panorama fallback; crumb label needs a non-slice source for union — the
+  composition read has no `label`, so derive "N regions" for unions and fetch the single region's
+  label from the panorama/territories or a thin label read), T10 canvas render dispatch (territory
+  focus → force-graph), T11 a11y list, T12 retire R3 `TierTerritory`, T13 synthetic harness
+  scenarios. T9+T10 are coupled — land them together so the territory path is never half-wired.
+
+---
+
 ## File Structure
 
 **Backend (Rust / SQL)**
@@ -229,11 +246,8 @@ $$;
 - Modify: `src/lib/graph/atlas/nav.ts`, `src/lib/graph/atlas/nav.test.ts`
 
 **Interfaces:**
-- Produces: `territoryIds(focus: Focus): string[]` (splits a territory focus id on `+`; `[]` for non-territory); `buildDrillTerritoryUrl(base, regionId, { add?: boolean })` (add=true appends `+regionId` to the current leaf territory token; else replaces focus with `territory:regionId`).
-
-- [ ] **Step 1: Failing tests.** `territoryIds({kind:'territory', id:'A+B'}) === ['A','B']`; `parseFocus` of `?focus=territory:A+B` → `{kind:'territory', id:'A+B'}` (token parser must allow `+` in id — it already keeps the whole post-`:` string, verify); `buildDrillTerritoryUrl(url, 'B', {add:true})` on `?focus=territory:A` → `?focus=territory:A+B`; without add → `?focus=territory:B`. `deriveTier({kind:'territory'})` stays `1`.
-- [ ] **Step 2: Run/fail → implement → pass.** `bun run test -- nav`.
-- [ ] **Step 3: Commit.** `git commit -m "feat(atlas): Beat D — union territory ids in the URI frame (+-joined)"`.
+- Produces: `territoryIds(focus: Focus): string[]` (splits a territory focus id on `~`; `[]` for non-territory); `buildDrillTerritoryUrl(base, regionId, { add?: boolean })` (add=true unions `~regionId` into the current leaf territory token; else replaces focus with `territory:regionId`).
+- **DONE** (commit `c090429d`). Separator is `~`, **not `+`** — `+` decodes to a space in a query string and fails to round-trip (a test caught this). Tests assert the round-trip property (build → parse recovers the ids), not the exact wire encoding.
 
 ### Task 8: Read wrapper — `readRegionComposition`
 
