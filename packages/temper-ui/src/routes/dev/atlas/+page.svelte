@@ -66,7 +66,10 @@
 	<div class="stage">
 		<div class="frame" style={`width:${w}px;height:${h}px`}>
 			{#key scenario}
-				<AtlasPage data={view} />
+				<!-- Replay the fixture's captured selection: the harness renders at a static
+				     URL with no `?sel=`, so `?sel=`-driven selections (context-node + edge
+				     rails) only surface when passed explicitly. -->
+				<AtlasPage data={view} selectionOverride={view.selection} />
 			{/key}
 		</div>
 	</div>

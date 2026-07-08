@@ -5,18 +5,27 @@
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
 	import HomeA11yList from '$lib/components/graph/atlas/HomeA11yList.svelte';
 	import CompositionA11yList from '$lib/components/graph/atlas/CompositionA11yList.svelte';
-	import { selectedElement } from '$lib/graph/atlas/nav';
+	import { selectedElement, type SelectedElement } from '$lib/graph/atlas/nav';
 	import type { AtlasViewData } from '$lib/graph/atlas/viewData';
 	import { navigating, page } from '$app/stores';
 
-	let { data }: { data: AtlasViewData } = $props();
+	// `selectionOverride` is a dev-harness affordance: prod derives the selection from
+	// the live `?sel=` URL param (it must, so ephemeral replaceState edge-selects that
+	// don't re-run `load` still register), but the /dev/atlas harness renders at a static
+	// URL with no `?sel=`. Passing the fixture's captured `selection` here lets the harness
+	// replay `?sel=`-driven selections (context-node + edge rails) that the URL can't carry.
+	// Prod never passes it, so production behavior is unchanged.
+	let {
+		data,
+		selectionOverride = null
+	}: { data: AtlasViewData; selectionOverride?: SelectedElement | null } = $props();
 
 	// M6: keying AtlasCanvas on the scoped view remounts it on re-scope, resetting the camera.
 	// Selection (`?sel`) is deliberately excluded — selecting an edge must not remount the canvas.
 	const viewKey = $derived(
 		`${data.cogmapId ?? 'home'}|${data.focus.kind}:${data.focus.kind === 'none' ? '' : data.focus.id}`
 	);
-	const selection = $derived(selectedElement(data.focus, $page.url));
+	const selection = $derived(selectionOverride ?? selectedElement(data.focus, $page.url));
 	const subgraph = $derived(data.neighborhood ?? null);
 	// The TrailRail derives node/edge detail from the loaded subgraph, so an edge
 	// selection and neighbor rendering need a populated subgraph. A resource LEAF is
