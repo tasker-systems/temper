@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         # No `lfs: true` here: `embed` is a default feature of temper-cli, which selects
         # `temper-ingest/embed-download` — the model is fetched at runtime from HF (not the
         # `include_bytes!` git-LFS-bundled path). Feature-unification keeps `embed-download` active across
@@ -99,7 +99,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # The bge-base-en-v1.5 model + the bundled libonnxruntime are git-LFS
           # (crates/temper-ingest/{models,lib}); `include_bytes!` bakes them in at
@@ -170,7 +170,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           lfs: true
 
@@ -251,6 +251,17 @@ jobs:
     # (which runs the same test-db tier uninstrumented). `continue-on-error`
     # keeps a missing token or a Codecov outage from blocking PRs. Mirrors the
     # test-db tier only — embed/ONNX coverage is out of scope for the baseline.
+    #
+    # Two-part optionality (issue: a coverage OOM should never fail a PR):
+    #   1. job-level `continue-on-error` below → the coverage job never fails the
+    #      `test-rust` aggregate, so the branch-protection `ci-success` gate stays
+    #      green regardless of this job.
+    #   2. step-level `continue-on-error` on "Generate coverage" → an infra failure
+    #      (notably "No space left on device" from the instrumented build) marks
+    #      the JOB green instead of a scary red ✗, since coverage is advisory.
+    # The "Free disk space" step below removes preinstalled runner bloat so the
+    # instrumented build usually fits and produces real data; the tolerances are
+    # the safety net for when it still doesn't.
     continue-on-error: true
 
     services:
@@ -273,8 +284,20 @@ jobs:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
 
     steps:
+      - name: Free disk space
+        # The coverage-instrumented build of the whole workspace (plus the LFS bge
+        # model + ONNX) is disk-heavy and has hit "No space left on device" on the
+        # default ~14 GB-free runner. Drop preinstalled toolchains we never use to
+        # reclaim ~20-30 GB before the build. `|| true` — never fail the job on a
+        # missing path or a slow prune.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           lfs: true # LFS bge model + libonnxruntime baked via include_bytes! (see integration job)
 
@@ -311,10 +334,14 @@ jobs:
       - name: Generate coverage (test-db tier)
         # Mirrors the integration-tests job's tier so the baseline reflects
         # unit + DB integration + e2e (now incl. the server-side embed path).
+        # step-level continue-on-error: a coverage build failure (e.g. an OOM
+        # despite the disk-free step above) leaves the JOB green rather than a red
+        # ✗ — coverage is advisory and correctness is gated by integration-tests.
+        continue-on-error: true
         run: cargo llvm-cov nextest --workspace --exclude temper-cloud --features test-db --locked --no-fail-fast --test-threads 1 --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
