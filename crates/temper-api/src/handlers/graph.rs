@@ -154,6 +154,50 @@ pub async fn territory_slice(
         .map(Json)
 }
 
+/// Query parameters for `GET /api/graph/regions/composition`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct RegionCompositionQuery {
+    /// Comma-separated region ids — one region, or a shift-selected union.
+    pub ids: String,
+    /// Composition depth; defaults to 1, clamped to 3 by the service.
+    pub depth: Option<i32>,
+}
+
+/// GET /api/graph/regions/composition — Beat D region→resources composition drill.
+#[utoipa::path(
+    get,
+    path = "/api/graph/regions/composition",
+    tag = "Graph",
+    params(RegionCompositionQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Region composition subgraph (facets + linked context-resources)", body = AtlasSubgraph),
+        (status = 400, description = "Malformed or empty region id list"),
+        (status = 404, description = "A requested region is not readable by this profile")
+    )
+)]
+pub async fn region_composition(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<RegionCompositionQuery>,
+) -> ApiResult<Json<AtlasSubgraph>> {
+    let ids: Vec<Uuid> = q
+        .ids
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(Uuid::parse_str)
+        .collect::<Result<_, _>>()
+        .map_err(|e| ApiError::BadRequest(format!("invalid region id: {e}")))?;
+    graph_service::region_composition_slice(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        &ids,
+        q.depth.unwrap_or(1),
+    )
+    .await
+    .map(Json)
+}
+
 /// GET /api/graph/home — the you→teams→cogmaps membership home.
 #[utoipa::path(
     get,
