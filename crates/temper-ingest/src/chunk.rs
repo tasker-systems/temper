@@ -55,7 +55,7 @@ const MAX_TOKENS: usize = 510;
 const CHARS_PER_TOKEN: f64 = 2.8;
 
 /// Approximate max characters that fit within the token budget.
-const MAX_CHARS: usize = (MAX_TOKENS as f64 * CHARS_PER_TOKEN) as usize; // ~1785
+pub(crate) const MAX_CHARS: usize = (MAX_TOKENS as f64 * CHARS_PER_TOKEN) as usize; // ~1428
 
 /// Estimate token count from character length.
 pub fn estimate_tokens(text: &str) -> usize {
@@ -240,12 +240,29 @@ fn split_paragraphs(lines: &[String]) -> Vec<String> {
 }
 
 /// Last-resort split: accumulate individual lines until the budget is hit.
+/// A single line that is itself over budget is hard-split at char boundaries
+/// rather than packed whole — one long unwrapped line must not escape the
+/// size guarantee (issue #316).
 fn split_by_lines(text: &str) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
     let mut current: Vec<&str> = Vec::new();
     let mut current_len: usize = 0;
 
     for line in text.split('\n') {
+        if line.len() > MAX_CHARS {
+            if !current.is_empty() {
+                let content = current.join("\n");
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    chunks.push(trimmed.to_string());
+                }
+                current.clear();
+                current_len = 0;
+            }
+            chunks.extend(hard_split_line(line));
+            continue;
+        }
+
         let line_len = line.len() + if current_len > 0 { 1 } else { 0 };
 
         if current_len > 0 && current_len + line_len > MAX_CHARS {
@@ -271,6 +288,25 @@ fn split_by_lines(text: &str) -> Vec<String> {
     }
 
     chunks
+}
+
+/// Split a single newline-free line into pieces of at most `MAX_CHARS` bytes,
+/// breaking only at char boundaries.
+fn hard_split_line(line: &str) -> Vec<String> {
+    let mut pieces: Vec<String> = Vec::new();
+    let mut start = 0;
+    while start < line.len() {
+        let mut end = (start + MAX_CHARS).min(line.len());
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        let piece = line[start..end].trim();
+        if !piece.is_empty() {
+            pieces.push(piece.to_string());
+        }
+        start = end;
+    }
+    pieces
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +531,49 @@ mod tests {
                 chunk.content.len()
             );
         }
+    }
+
+    #[test]
+    fn hard_splits_single_oversized_line() {
+        // One line with no internal newline, far over MAX_CHARS — the
+        // unwrapped-paragraph / wide-table-row shape from issue #316.
+        let line = "cell ".repeat(2000); // ~10,000 chars, zero '\n'
+        let input = format!("# Wide\n\n{line}");
+        let chunks = chunk_markdown(&input);
+
+        assert!(
+            chunks.len() > 1,
+            "expected the oversized line to be split, got {} chunk(s)",
+            chunks.len()
+        );
+        for chunk in &chunks {
+            assert!(
+                chunk.content.len() <= MAX_CHARS,
+                "chunk {} exceeds budget: {} chars",
+                chunk.chunk_index,
+                chunk.content.len()
+            );
+        }
+    }
+
+    #[test]
+    fn hard_split_respects_utf8_char_boundaries() {
+        // Multi-byte chars with no whitespace: a byte-index split would panic.
+        let line = "é".repeat(3000); // 6,000 bytes, zero '\n'
+        let chunks = chunk_markdown(&line);
+
+        assert!(chunks.len() > 1, "expected a split, got {}", chunks.len());
+        for chunk in &chunks {
+            assert!(
+                chunk.content.len() <= MAX_CHARS,
+                "chunk {} exceeds budget: {} chars",
+                chunk.chunk_index,
+                chunk.content.len()
+            );
+        }
+        // No content is lost: pieces rejoin to the original line.
+        let rejoined: String = chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(rejoined, line);
     }
 
     #[test]

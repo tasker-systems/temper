@@ -184,8 +184,7 @@ fn load_model() -> Result<&'static Model> {
 
         let session = build_session()?;
 
-        let tokenizer =
-            Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
+        let tokenizer = load_tokenizer()?;
 
         Ok(Model {
             session: Mutex::new(session),
@@ -228,6 +227,21 @@ fn build_session() -> std::result::Result<Session, String> {
 }
 
 // ---- Tokenization ----
+
+/// Load the bundled tokenizer with truncation configured to the model's
+/// token limit, so `encode_batch` bounds its own work per input instead of
+/// relying on the downstream [`truncate_encoding`] trim.
+fn load_tokenizer() -> std::result::Result<Tokenizer, String> {
+    let mut tokenizer =
+        Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
+    tokenizer
+        .with_truncation(Some(tokenizers::TruncationParams {
+            max_length: MAX_MODEL_TOKENS,
+            ..Default::default()
+        }))
+        .map_err(|e| format!("tokenizer truncation config: {e}"))?;
+    Ok(tokenizer)
+}
 
 /// Tokenize a batch of texts using the model's tokenizer.
 pub fn tokenize(tokenizer: &Tokenizer, texts: &[&str]) -> Result<Vec<Encoding>> {
@@ -461,6 +475,22 @@ mod tests {
         assert!((result[0][0] - 1.0).abs() < 1e-6);
         assert!((result[0][1] - 2.0).abs() < 1e-6);
         assert!((result[0][2] - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tokenizer_truncates_oversized_input_at_encode_time() {
+        // Truncation must be configured on the tokenizer itself so
+        // encode_batch bounds its own work per input — not left to the
+        // downstream truncate_encoding trim (issue #316).
+        let tokenizer = load_tokenizer().expect("load tokenizer");
+        let huge = "word ".repeat(50_000); // ~250k chars, far over 512 tokens
+        let encodings = tokenize(&tokenizer, &[huge.as_str()]).expect("tokenize");
+        assert!(
+            encodings[0].get_ids().len() <= MAX_MODEL_TOKENS,
+            "expected encoding truncated to {} tokens, got {}",
+            MAX_MODEL_TOKENS,
+            encodings[0].get_ids().len()
+        );
     }
 
     // ---- Integration tests (require model — may be slow on first run) ----

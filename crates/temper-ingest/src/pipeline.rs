@@ -78,6 +78,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-embed")]
+    fn prepare_markdown_handles_single_oversized_line() {
+        // Regression for issue #316: a document whose body is one long
+        // unwrapped line (wide table row / rejoined prose) used to escape the
+        // chunk size budget unsplit and hang the embed path indefinitely.
+        let line = "wage $42.17 rate 1.5x overtime | ".repeat(400); // ~13k chars, zero '\n'
+        let content = format!("# Contract\n\n{line}");
+        let chunks = prepare_markdown(&content).expect("should embed without hanging");
+
+        assert!(chunks.len() > 1, "oversized line should be split");
+        for chunk in &chunks {
+            assert!(
+                chunk.content.len() <= crate::chunk::MAX_CHARS,
+                "chunk {} exceeds budget: {} chars",
+                chunk.chunk_index,
+                chunk.content.len()
+            );
+            assert_eq!(chunk.embedding.len(), 768);
+        }
+    }
+
+    #[test]
     fn prepare_markdown_empty_input() {
         let chunks = prepare_markdown("").expect("should succeed");
         assert!(chunks.is_empty());
