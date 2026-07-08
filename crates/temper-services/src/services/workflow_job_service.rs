@@ -145,6 +145,30 @@ pub async fn complete_resource(
     Ok(id)
 }
 
+/// Re-drive `dead` resource-keyed jobs — re-enqueue a fresh pending job per resource that has a dead
+/// job, up to `limit` resources. Returns the re-enqueued resource ids. Skips any resource that already
+/// has a live job (the underlying `ON CONFLICT DO NOTHING` against the resource in-flight index), so a
+/// re-drive never creates a duplicate active job. The dead rows are left as an accountability trail.
+pub async fn redrive_resource(
+    pool: &PgPool,
+    persona: &str,
+    dispatch_type: &str,
+    limit: i32,
+) -> ApiResult<Vec<Uuid>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT resource_id AS "resource_id!: Uuid"
+          FROM workflow_job_redrive_resource($1, $2, $3)
+        "#,
+        persona,
+        dispatch_type,
+        limit,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.resource_id).collect())
+}
+
 /// Reap expired-lease jobs → retry (or dead at max attempts). Returns the count reaped.
 pub async fn reap(pool: &PgPool, error: &str) -> ApiResult<i32> {
     let n = sqlx::query_scalar!(r#"SELECT workflow_job_reap($1) AS "n!: i32""#, error)
@@ -330,5 +354,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(total, 2, "both scopes hold a row");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn redrive_resource_reenqueues_dead_and_skips_active(pool: PgPool) {
+        let dead = a_resource(&pool).await;
+        let dead_job = enqueue_resource(&pool, dead, "embed", "embed")
+            .await
+            .unwrap()
+            .expect("enqueue");
+        sqlx::query("UPDATE kb_workflow_jobs SET status = 'dead' WHERE id = $1")
+            .bind(dead_job)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // A resource with a live job must be untouched by re-drive (single-flight preserved).
+        let live = a_resource(&pool).await;
+        enqueue_resource(&pool, live, "embed", "embed")
+            .await
+            .unwrap()
+            .expect("enqueue");
+
+        let redriven = redrive_resource(&pool, "embed", "embed", 10).await.unwrap();
+        assert_eq!(
+            redriven,
+            vec![dead],
+            "only the dead-jobbed resource is re-driven"
+        );
+
+        // The dead row stays as history; a fresh pending row now exists for the same resource.
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_workflow_jobs WHERE resource_id = $1 AND status = 'pending'",
+        )
+        .bind(dead)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pending, 1, "dead job re-enqueued as a new pending row");
+        assert_eq!(
+            status_of(&pool, dead_job).await,
+            "dead",
+            "dead row preserved"
+        );
+
+        // Idempotent while the re-driven job is live: a second pass re-drives nothing.
+        assert!(redrive_resource(&pool, "embed", "embed", 10)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

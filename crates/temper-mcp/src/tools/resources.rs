@@ -11,6 +11,7 @@ use temper_core::types::authorship::ActInput;
 use temper_core::types::cognitive_maps::{GrantCapabilityRequest, RevokeCapabilityRequest};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::workflow_job::EmbeddingStatus;
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::error::ApiError;
 use temper_services::services::access_service;
@@ -250,6 +251,10 @@ pub struct EnrichedResource {
     pub managed_meta: Option<ManagedMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<serde_json::Value>,
+    /// Derived embedding-readiness (issue #299, Phase 4): `ready` once the resource's vector is
+    /// searchable, `pending` while an async embed is in flight, `failed` when it needs re-driving.
+    /// FTS is always immediate; this tracks only the eventually-consistent vector under async embed.
+    pub embedding_status: EmbeddingStatus,
 }
 
 /// Assemble an [`EnrichedResource`] from a row plus its already-fetched
@@ -263,6 +268,7 @@ fn build_enriched(
     row: &temper_workflow::types::resource::ResourceRow,
     managed_meta: Option<ManagedMeta>,
     open_meta: Option<serde_json::Value>,
+    embedding_status: EmbeddingStatus,
 ) -> EnrichedResource {
     EnrichedResource {
         id: row.id.into(),
@@ -281,6 +287,7 @@ fn build_enriched(
         updated: row.updated,
         managed_meta,
         open_meta,
+        embedding_status,
     }
 }
 
@@ -301,13 +308,31 @@ pub async fn enrich_resources(
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
 
+    // One batch read of derived embedding-readiness alongside the meta fetch (design §8) — keeps the
+    // list/enrich path off an N+1. Absent ids (shouldn't happen) default to `ready`.
+    let raw_ids: Vec<Uuid> = ids.iter().map(|id| Uuid::from(*id)).collect();
+    let statuses = temper_services::services::embed_service::embedding_status_batch(pool, &raw_ids)
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to get embedding status: {e}"), None)
+        })?;
+
     let mut enriched = Vec::with_capacity(rows.len());
     for row in rows {
         let (managed_meta, open_meta) = meta
             .remove(&row.id)
             .map(|m| (m.managed_meta, m.open_meta))
             .unwrap_or((None, None));
-        enriched.push(build_enriched(row, managed_meta, open_meta));
+        let embedding_status = statuses
+            .get(&Uuid::from(row.id))
+            .copied()
+            .unwrap_or(EmbeddingStatus::Ready);
+        enriched.push(build_enriched(
+            row,
+            managed_meta,
+            open_meta,
+            embedding_status,
+        ));
     }
     Ok(enriched)
 }
@@ -583,7 +608,19 @@ pub async fn get_resource(
         None
     };
 
-    let enriched = build_enriched(&row, meta.managed_meta, meta.open_meta);
+    let embedding_status = temper_services::services::embed_service::embedding_status_batch(
+        pool,
+        &[Uuid::from(row.id)],
+    )
+    .await
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("Failed to get embedding status: {e}"), None)
+    })?
+    .get(&Uuid::from(row.id))
+    .copied()
+    .unwrap_or(EmbeddingStatus::Ready);
+
+    let enriched = build_enriched(&row, meta.managed_meta, meta.open_meta, embedding_status);
 
     let enriched_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -1207,8 +1244,9 @@ mod build_enriched_tests {
     #[test]
     fn build_enriched_uses_row_names_and_decorated_ref() {
         let row = sample_row();
-        let e = build_enriched(&row, None, None);
+        let e = build_enriched(&row, None, None, EmbeddingStatus::Ready);
         assert_eq!(e.context_name, "temper");
+        assert_eq!(e.embedding_status, EmbeddingStatus::Ready);
         assert_eq!(e.doc_type_name, "task");
         assert_eq!(
             e.r#ref,

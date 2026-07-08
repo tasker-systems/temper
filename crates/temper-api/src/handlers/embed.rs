@@ -14,11 +14,17 @@ use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::embed_service;
 use temper_services::state::AppState;
 
-/// Query params for the drain: an optional per-tick cap (defaults to the service default).
+/// Query params for the drain: an optional per-tick cap (defaults to the service default) and an
+/// optional re-drive flag.
 #[derive(Debug, Deserialize)]
 pub struct DispatchQuery {
     /// Max resources to embed this pass. Omitted → the service default.
     pub cap: Option<i32>,
+    /// When true, re-enqueue `dead` embed jobs before claiming (Phase 4 recovery) so this same pass
+    /// drains them. Omitted/false → the normal per-minute cron behavior (no re-drive); recovery is
+    /// operator-gated so a persistently-failing resource stays observably `dead`.
+    #[serde(default)]
+    pub redrive: bool,
 }
 
 /// Constant-time equality over the presented bearer token and the configured secret — avoids a
@@ -42,7 +48,10 @@ fn secret_matches(presented: &str, expected: &str) -> bool {
     get,
     path = "/api/embed/dispatch",
     tag = "Embed",
-    params(("cap" = Option<i32>, Query, description = "Max resources to embed this pass")),
+    params(
+        ("cap" = Option<i32>, Query, description = "Max resources to embed this pass"),
+        ("redrive" = Option<bool>, Query, description = "Re-enqueue dead embed jobs before claiming (Phase 4 recovery)"),
+    ),
     responses((status = 200, description = "One embed-dispatch pass summary", body = EmbedDispatchSummary)),
 )]
 pub async fn dispatch(
@@ -72,8 +81,9 @@ pub async fn dispatch(
         ));
     }
 
-    let summary = embed_service::dispatch_tick(&state.pool, q.cap).await?;
+    let summary = embed_service::dispatch_tick(&state.pool, q.cap, q.redrive).await?;
     tracing::info!(
+        redriven = summary.redriven,
         claimed = summary.claimed,
         completed = summary.completed,
         failed = summary.failed,
