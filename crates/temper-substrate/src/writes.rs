@@ -238,7 +238,24 @@ pub async fn update_resource_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    update_resource_in_tx(&mut tx, p, ctx).await?;
+    update_resource_in_tx(&mut tx, p, ctx, false).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`update_resource_with`] with embedding **deferred** (issue #299) — the update twin of
+/// [`create_resource_deferred_with`]. When the caller supplies no precomputed `chunks`, the revised
+/// body block is re-chunked but NOT embedded (its chunks land with a NULL vector); the caller enqueues
+/// the backfill. A body revise makes the new chunks `is_current` and the old generation non-current,
+/// so a backfill (keyed on `is_current AND embedding IS NULL`) only ever embeds the current revision —
+/// create-then-quick-update supersede is automatic.
+pub async fn update_resource_deferred_with(
+    pool: &PgPool,
+    p: UpdateParams<'_>,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    update_resource_in_tx(&mut tx, p, ctx, true).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -251,6 +268,7 @@ pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     p: UpdateParams<'_>,
     ctx: EventContext,
+    defer: bool,
 ) -> Result<()> {
     if let Some(body) = p.body {
         let block_id = match p.content_block {
@@ -296,9 +314,10 @@ pub async fn update_resource_in_tx(
                 }
             }
         };
-        let mut prepared = match p.chunks {
-            Some(chunks) => prepare_block_from_chunks(0, None, chunks),
-            None => prepare_block(0, None, body)?,
+        let mut prepared = match (p.chunks, defer) {
+            (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
+            (None, false) => prepare_block(0, None, body)?,
+            (None, true) => crate::content::prepare_block_deferred(0, None, body),
         };
         if prepared.chunks.is_empty() {
             anyhow::bail!(

@@ -589,6 +589,9 @@ impl DbBackend {
                             emitter: ctx.emitter,
                         },
                         ctx.act.clone(),
+                        // Corpus reconcile always carries precomputed chunks (bring-your-own vectors),
+                        // so there is nothing to defer — inline.
+                        false,
                     )
                     .await
                     .map_err(api_err)?;
@@ -900,27 +903,53 @@ impl Backend for DbBackend {
         };
         // Block-provenance: the body's declared sources, position → accretion `seq`.
         let sources = body_sources(cmd.body.as_ref());
-        let new_id = writes::create_resource_with(
-            &self.pool,
-            writes::CreateParams {
-                title: &cmd.title,
-                origin_uri: &origin_uri,
-                body: &body,
-                doc_type: &cmd.doctype,
-                home,
-                owner,
-                // A fresh create's originator is its owner (the caller); a distinct originator only
-                // arises via synthesis carrying a production row's history.
-                originator: owner,
-                emitter,
-                properties: &properties,
-                chunks: incoming_chunks,
-                sources,
-            },
-            act_ctx,
-        )
-        .await
+        // Defer embedding (issue #299) only for the SERVER-COMPUTED case — no precomputed chunks and a
+        // non-empty body — and only when this deployment has the drain enabled. Caller-supplied chunks
+        // (CLI/API bring-your-own vectors) always persist inline; there is nothing to defer.
+        let defer = incoming_chunks.is_none()
+            && !body.is_empty()
+            && crate::services::embed_service::async_embed_enabled();
+        let params = writes::CreateParams {
+            title: &cmd.title,
+            origin_uri: &origin_uri,
+            body: &body,
+            doc_type: &cmd.doctype,
+            home,
+            owner,
+            // A fresh create's originator is its owner (the caller); a distinct originator only
+            // arises via synthesis carrying a production row's history.
+            originator: owner,
+            emitter,
+            properties: &properties,
+            chunks: incoming_chunks,
+            sources,
+        };
+        let new_id = if defer {
+            writes::create_resource_deferred_with(&self.pool, params, act_ctx).await
+        } else {
+            writes::create_resource_with(&self.pool, params, act_ctx).await
+        }
         .map_err(api_err)?;
+
+        if defer {
+            // Enqueue the off-request embed backfill. A failed enqueue must NOT fail the create — the
+            // resource is fully formed and FTS-searchable; it just stays vector-unsearchable until a
+            // re-drive (a failed-job sweep / reindex) recovers it. Log and proceed.
+            if let Err(e) = crate::services::workflow_job_service::enqueue_resource(
+                &self.pool,
+                new_id.uuid(),
+                Persona::Embed.as_str(),
+                DispatchType::Embed.as_str(),
+            )
+            .await
+            {
+                tracing::warn!(
+                    resource_id = %new_id.uuid(),
+                    error = %e,
+                    "failed to enqueue embed backfill; resource is FTS-only until re-driven"
+                );
+            }
+        }
 
         let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
             .await?;
@@ -1059,24 +1088,50 @@ impl Backend for DbBackend {
             invocation: cmd.act.invocation,
             authorship: cmd.act.authorship,
         };
-        writes::update_resource_with(
-            &self.pool,
-            writes::UpdateParams {
-                resource: ResourceId::from(new_id),
-                body: body.as_deref(),
-                title: title.as_deref(),
-                origin_uri: None,
-                properties: &properties,
-                chunks: incoming_chunks,
-                sources: body_sources(cmd.body.as_ref()),
-                content_block: cmd.body.as_ref().and_then(|b| b.content_block),
-                rehome_to,
-                emitter,
-            },
-            act_ctx,
-        )
-        .await
+        // Defer embedding (issue #299) only when this revise re-blocks the body server-side: a
+        // non-empty body change with no precomputed chunks, and the deployment drain is enabled. A
+        // meta-only update (body None) re-chunks nothing, so there is nothing to defer or enqueue.
+        let defer = incoming_chunks.is_none()
+            && body.as_deref().is_some_and(|b| !b.is_empty())
+            && crate::services::embed_service::async_embed_enabled();
+        let params = writes::UpdateParams {
+            resource: ResourceId::from(new_id),
+            body: body.as_deref(),
+            title: title.as_deref(),
+            origin_uri: None,
+            properties: &properties,
+            chunks: incoming_chunks,
+            sources: body_sources(cmd.body.as_ref()),
+            content_block: cmd.body.as_ref().and_then(|b| b.content_block),
+            rehome_to,
+            emitter,
+        };
+        if defer {
+            writes::update_resource_deferred_with(&self.pool, params, act_ctx).await
+        } else {
+            writes::update_resource_with(&self.pool, params, act_ctx).await
+        }
         .map_err(api_err)?;
+
+        if defer {
+            // Enqueue the off-request backfill for the revised chunks. Resource-id single-flight means a
+            // re-enqueue over an in-flight embed dedups; the reaper covers a lost one. A failed enqueue
+            // never fails the revise (the body is FTS-searchable now).
+            if let Err(e) = crate::services::workflow_job_service::enqueue_resource(
+                &self.pool,
+                new_id,
+                Persona::Embed.as_str(),
+                DispatchType::Embed.as_str(),
+            )
+            .await
+            {
+                tracing::warn!(
+                    resource_id = %new_id,
+                    error = %e,
+                    "failed to enqueue embed backfill on update; resource is FTS-only until re-driven"
+                );
+            }
+        }
 
         let row =
             native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;

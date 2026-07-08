@@ -17,6 +17,17 @@ use temper_core::types::workflow_job::{
     DEFAULT_EMBED_LEASE_SECONDS,
 };
 
+/// Whether this deployment defers server-computed embeddings to the async drain (issue #299). Read
+/// from `TEMPER_ASYNC_EMBED` (`1`/`true` ⇒ on) per call — a deployment toggle flipped on once the
+/// embed-dispatch cron is confirmed running. Default **OFF**: server-computed embeds run inline
+/// (exactly as before), so a deployment without the drain never strands chunks unembedded. Caller-
+/// supplied `chunks_packed` (bring-your-own vectors) is never affected — there is nothing to defer.
+pub fn async_embed_enabled() -> bool {
+    std::env::var("TEMPER_ASYNC_EMBED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// Run one embed-dispatch pass: reap → claim up to `cap` embed jobs → embed each resource → complete
 /// the clean ones. Returns a [`EmbedDispatchSummary`] for cron/operator observability. `cap` defaults
 /// to [`DEFAULT_EMBED_DISPATCH_CAP`] when `None`.
