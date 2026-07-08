@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest';
+import { contextHref, contextGraphHref, resourceHref, searchHref } from './vault-url';
+import type { ResourceRow } from './types/generated/resource';
+
+const ID = '019f420c-cf01-7bc1-87c9-09684b0fa69e';
+
+function makeRow(partial: Partial<ResourceRow>): ResourceRow {
+	return {
+		id: ID,
+		kb_context_id: '00000000-0000-0000-0003-000000000001',
+		origin_uri: '',
+		title: 'T',
+		originator_profile_id: '00000000-0000-0000-0000-000000000001',
+		owner_profile_id: '00000000-0000-0000-0000-000000000001',
+		is_active: true,
+		created: '2026-07-08T00:00:00Z',
+		updated: '2026-07-08T00:00:00Z',
+		context_name: 'Temper',
+		doc_type_name: 'task',
+		owner_handle: 'j-cole-taylor',
+		context_slug: 'temper',
+		context_owner_ref: '@j-cole-taylor',
+		cogmap_id: null,
+		cogmap_name: null,
+		stage: null,
+		seq: null,
+		mode: null,
+		effort: null,
+		body_hash: null,
+		...partial
+	};
+}
+
+describe('contextHref', () => {
+	it('builds /vault/{ownerRef}/{slug} without encoding the sigil', () => {
+		expect(contextHref('@j-cole-taylor', 'temper')).toBe('/vault/@j-cole-taylor/temper');
+		expect(contextHref('+acme-team', 'ops')).toBe('/vault/+acme-team/ops');
+	});
+
+	it('encodes the slug defensively', () => {
+		expect(contextHref('@me', 'my context')).toBe('/vault/@me/my%20context');
+	});
+});
+
+describe('contextGraphHref', () => {
+	it('appends /graph to the context path', () => {
+		expect(contextGraphHref('+acme-team', 'ops')).toBe('/vault/+acme-team/ops/graph');
+	});
+});
+
+describe('resourceHref', () => {
+	it('builds the full resource path for a context-homed resource', () => {
+		expect(resourceHref(makeRow({}))).toBe(`/vault/@j-cole-taylor/temper/task/${ID}`);
+	});
+
+	it('uses the exact doc_type and the bare id (no decorated ref)', () => {
+		expect(resourceHref(makeRow({ doc_type_name: 'session' }))).toBe(
+			`/vault/@j-cole-taylor/temper/session/${ID}`
+		);
+	});
+
+	it('returns null for a cogmap-homed resource (null context fields)', () => {
+		expect(
+			resourceHref(
+				makeRow({ context_owner_ref: null, context_slug: null, cogmap_id: 'x', cogmap_name: 'Map' })
+			)
+		).toBe(null);
+	});
+});
+
+describe('searchHref', () => {
+	it('encodes the query', () => {
+		expect(searchHref('auth flow')).toBe('/vault/search?q=auth%20flow');
+	});
+});
