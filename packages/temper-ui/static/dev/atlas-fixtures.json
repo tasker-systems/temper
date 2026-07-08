@@ -1,1682 +1,1942 @@
 {
- "home": {
-  "owner": "@me",
-  "cogmapId": null,
-  "cogmapName": null,
-  "scopeFilter": null,
-  "tier": 0,
-  "focus": {
-   "kind": "none"
-  },
-  "territories": null,
-  "neighborhood": null,
-  "selection": {
-   "kind": "none"
-  },
-  "trail": null,
-  "resourceRow": null,
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [],
-  "crumbTerritory": null,
-  "home": {
-   "build": [
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000001",
-     "name": "platform",
-     "owner_ref": "@me",
-     "resource_count": 331,
-     "last_active_at": "2026-07-04T22:15:00Z",
-     "slug": "platform"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000002",
-     "name": "lattice",
-     "owner_ref": "@me",
-     "resource_count": 120,
-     "last_active_at": "2026-07-01T09:30:00Z",
-     "slug": "lattice"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000003",
-     "name": "beacon",
-     "owner_ref": "@me",
-     "resource_count": 42,
-     "last_active_at": "2026-06-20T14:00:00Z",
-     "slug": "beacon"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000004",
-     "name": "cedar",
-     "owner_ref": "@me",
-     "resource_count": 63,
-     "last_active_at": "2026-06-01T00:00:00Z",
-     "slug": "cedar"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000005",
-     "name": "harbor",
-     "owner_ref": "@me",
-     "resource_count": 18,
-     "last_active_at": "2026-05-01T00:00:00Z",
-     "slug": "harbor"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000006",
-     "name": "meadow",
-     "owner_ref": "@me",
-     "resource_count": 9,
-     "last_active_at": null,
-     "slug": "meadow"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000007",
-     "name": "roadmap",
-     "owner_ref": "+ripple",
-     "resource_count": 47,
-     "last_active_at": "2026-07-04T18:30:00Z",
-     "slug": "roadmap"
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000008",
-     "name": "orbit",
-     "owner_ref": "+ripple",
-     "resource_count": 210,
-     "last_active_at": "2026-06-25T00:00:00Z",
-     "slug": "orbit"
-    }
-   ],
-   "research": [
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000021",
-     "name": "Ember prairie survey",
-     "owner_ref": "verdant",
-     "team_ids": [],
-     "region_count": 12,
-     "facet_count": 20
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000022",
-     "name": "Summit cascade map",
-     "owner_ref": "+ripple",
-     "team_ids": [],
-     "region_count": 15,
-     "facet_count": 31
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000023",
-     "name": "Willow anchor field",
-     "owner_ref": "+kestrel",
-     "team_ids": [],
-     "region_count": 8,
-     "facet_count": 14
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000024",
-     "name": "Marble thicket",
-     "owner_ref": "+ripple",
-     "team_ids": [],
-     "region_count": 5,
-     "facet_count": 9
-    },
-    {
-     "id": "0191d0c0-0b00-7000-8000-000000000025",
-     "name": "Ripple runbook",
-     "owner_ref": "+kestrel",
-     "team_ids": [],
-     "region_count": 2,
-     "facet_count": 4
-    }
-   ]
-  }
- },
- "nodeNeighborhood": {
-  "owner": "@me",
-  "cogmapId": null,
-  "cogmapName": null,
-  "scopeFilter": null,
-  "tier": 2,
-  "focus": {
-   "kind": "node",
-   "id": "0191d0c0-0058-7000-8000-000000000058"
-  },
-  "territories": null,
-  "neighborhood": {
-   "nodes": [
-    {
-     "id": "0191d0c0-005b-7000-8000-00000000005b",
-     "title": "Cobalt lucid atlas meadow lattice",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 5,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0058-7000-8000-000000000058",
-     "title": "Lucid atlas",
-     "doc_type": "commitment",
-     "home": "cogmap",
-     "degree": 5,
-     "excerpt": "Lattice cedar marble delta cobalt — Thicket beacon prairie verdant meridian signal."
-    },
-    {
-     "id": "0191d0c0-0059-7000-8000-000000000059",
-     "title": "Signal ember ripple",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 10,
-     "excerpt": "Anchor cascade kestrel harbor orbit quartz summit — Meadow lattice."
-    },
-    {
-     "id": "0191d0c0-005c-7000-8000-00000000005c",
-     "title": "Meridian signal ember ripple thicket beacon",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 7,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-005d-7000-8000-00000000005d",
-     "title": "Orbit quartz summit willow anchor cascade kestrel",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 4,
-     "excerpt": "Ripple thicket beacon — Willow anchor cascade kestrel."
-    },
-    {
-     "id": "0191d0c0-005e-7000-8000-00000000005e",
-     "title": "Delta cobalt",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 2,
-     "excerpt": "Atlas meadow lattice cedar marble — Ember ripple thicket beacon prairie verdant."
-    },
-    {
-     "id": "0191d0c0-005f-7000-8000-00000000005f",
-     "title": "Verdant meridian signal",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 3,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0060-7000-8000-000000000060",
-     "title": "Harbor orbit quartz summit",
-     "doc_type": "domain",
-     "home": "cogmap",
-     "degree": 5,
-     "excerpt": "Summit willow anchor cascade kestrel harbor orbit — Lucid atlas."
-    },
-    {
-     "id": "0191d0c0-0061-7000-8000-000000000061",
-     "title": "Marble delta cobalt lucid atlas",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 5,
-     "excerpt": "Signal ember ripple — Quartz summit willow anchor."
-    }
-   ],
-   "edges": [
-    {
-     "id": "0191d0c0-0062-7000-8000-000000000062",
-     "source": "0191d0c0-0058-7000-8000-000000000058",
-     "target": "0191d0c0-0059-7000-8000-000000000059",
-     "edge_kind": "contains",
-     "polarity": "inverse",
-     "label": "part_of",
-     "weight": 0.9
-    },
-    {
-     "id": "0191d0c0-0063-7000-8000-000000000063",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005b-7000-8000-00000000005b",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0064-7000-8000-000000000064",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005e-7000-8000-00000000005e",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0065-7000-8000-000000000065",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005c-7000-8000-00000000005c",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "relates_to",
-     "weight": 0.6
-    },
-    {
-     "id": "0191d0c0-0066-7000-8000-000000000066",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005f-7000-8000-00000000005f",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0067-7000-8000-000000000067",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-0060-7000-8000-000000000060",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "spans",
-     "weight": 0.9
-    },
-    {
-     "id": "0191d0c0-0068-7000-8000-000000000068",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-0061-7000-8000-000000000061",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0069-7000-8000-000000000069",
-     "source": "0191d0c0-0058-7000-8000-000000000058",
-     "target": "0191d0c0-005b-7000-8000-00000000005b",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-006a-7000-8000-00000000006a",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005d-7000-8000-00000000005d",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-006b-7000-8000-00000000006b",
-     "source": "0191d0c0-0058-7000-8000-000000000058",
-     "target": "0191d0c0-0061-7000-8000-000000000061",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    }
-   ]
-  },
-  "selection": {
-   "kind": "node",
-   "id": "0191d0c0-0058-7000-8000-000000000058"
-  },
-  "trail": {
-   "element_kind": "node",
-   "element_id": "0191d0c0-0058-7000-8000-000000000058",
-   "events": [
-    {
-     "event_id": "0191d0c0-006c-7000-8000-00000000006c",
-     "kind": "resource_created",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "system",
-     "payload": {
-      "note": "Cobalt lucid atlas meadow lattice"
-     }
-    },
-    {
-     "event_id": "0191d0c0-006e-7000-8000-00000000006e",
-     "kind": "property_set",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "Meridian signal ember ripple thicket beacon",
-     "payload": {
-      "property_key": "temper-stage",
-      "value": "in-progress",
-      "weight": 1
-     }
-    },
-    {
-     "event_id": "0191d0c0-006f-7000-8000-00000000006f",
-     "kind": "property_set",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "system",
-     "payload": {
-      "property_key": "temper-stage",
-      "value": "in-progress",
-      "weight": 1
-     }
-    }
-   ]
-  },
-  "resourceRow": {
-   "id": "0191d0c0-0058-7000-8000-000000000058",
-   "kb_context_id": null,
-   "origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
-   "title": "Lucid atlas",
-   "originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
-   "owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
-   "is_active": true,
-   "created": "2026-07-05T00:03:08.777170Z",
-   "updated": "2026-07-05T00:03:08.777170Z",
-   "context_name": null,
-   "doc_type_name": "commitment",
-   "owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
-   "context_slug": null,
-   "context_owner_ref": null,
-   "cogmap_id": "0191d0c0-0004-7000-8000-000000000004",
-   "cogmap_name": "Summit willow anchor cascade kestrel harbor orbit",
-   "stage": null,
-   "seq": null,
-   "mode": null,
-   "effort": null,
-   "body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
-  },
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [
-   {
-    "kind": "node",
-    "id": "0191d0c0-0058-7000-8000-000000000058"
-   }
-  ],
-  "crumbTerritory": null,
-  "home": null
- },
- "nodeSelected": {
-  "owner": "@me",
-  "cogmapId": null,
-  "cogmapName": null,
-  "scopeFilter": null,
-  "tier": 2,
-  "focus": {
-   "kind": "node",
-   "id": "0191d0c0-0058-7000-8000-000000000058"
-  },
-  "territories": null,
-  "neighborhood": {
-   "nodes": [
-    {
-     "id": "0191d0c0-005b-7000-8000-00000000005b",
-     "title": "Cobalt lucid atlas meadow lattice",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 5,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0058-7000-8000-000000000058",
-     "title": "Lucid atlas",
-     "doc_type": "commitment",
-     "home": "cogmap",
-     "degree": 5,
-     "excerpt": "Lattice cedar marble delta cobalt — Thicket beacon prairie verdant meridian signal."
-    },
-    {
-     "id": "0191d0c0-0059-7000-8000-000000000059",
-     "title": "Signal ember ripple",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 10,
-     "excerpt": "Anchor cascade kestrel harbor orbit quartz summit — Meadow lattice."
-    },
-    {
-     "id": "0191d0c0-005c-7000-8000-00000000005c",
-     "title": "Meridian signal ember ripple thicket beacon",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 7,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-005d-7000-8000-00000000005d",
-     "title": "Orbit quartz summit willow anchor cascade kestrel",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 4,
-     "excerpt": "Ripple thicket beacon — Willow anchor cascade kestrel."
-    },
-    {
-     "id": "0191d0c0-005e-7000-8000-00000000005e",
-     "title": "Delta cobalt",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 2,
-     "excerpt": "Atlas meadow lattice cedar marble — Ember ripple thicket beacon prairie verdant."
-    },
-    {
-     "id": "0191d0c0-005f-7000-8000-00000000005f",
-     "title": "Verdant meridian signal",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 3,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0060-7000-8000-000000000060",
-     "title": "Harbor orbit quartz summit",
-     "doc_type": "domain",
-     "home": "cogmap",
-     "degree": 5,
-     "excerpt": "Summit willow anchor cascade kestrel harbor orbit — Lucid atlas."
-    },
-    {
-     "id": "0191d0c0-0061-7000-8000-000000000061",
-     "title": "Marble delta cobalt lucid atlas",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 5,
-     "excerpt": "Signal ember ripple — Quartz summit willow anchor."
-    }
-   ],
-   "edges": [
-    {
-     "id": "0191d0c0-0062-7000-8000-000000000062",
-     "source": "0191d0c0-0058-7000-8000-000000000058",
-     "target": "0191d0c0-0059-7000-8000-000000000059",
-     "edge_kind": "contains",
-     "polarity": "inverse",
-     "label": "part_of",
-     "weight": 0.9
-    },
-    {
-     "id": "0191d0c0-0063-7000-8000-000000000063",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005b-7000-8000-00000000005b",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0064-7000-8000-000000000064",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005e-7000-8000-00000000005e",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0065-7000-8000-000000000065",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005c-7000-8000-00000000005c",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "relates_to",
-     "weight": 0.6
-    },
-    {
-     "id": "0191d0c0-0066-7000-8000-000000000066",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005f-7000-8000-00000000005f",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0067-7000-8000-000000000067",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-0060-7000-8000-000000000060",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "spans",
-     "weight": 0.9
-    },
-    {
-     "id": "0191d0c0-0068-7000-8000-000000000068",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-0061-7000-8000-000000000061",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-0069-7000-8000-000000000069",
-     "source": "0191d0c0-0058-7000-8000-000000000058",
-     "target": "0191d0c0-005b-7000-8000-00000000005b",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-006a-7000-8000-00000000006a",
-     "source": "0191d0c0-0059-7000-8000-000000000059",
-     "target": "0191d0c0-005d-7000-8000-00000000005d",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    },
-    {
-     "id": "0191d0c0-006b-7000-8000-00000000006b",
-     "source": "0191d0c0-0058-7000-8000-000000000058",
-     "target": "0191d0c0-0061-7000-8000-000000000061",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1
-    }
-   ]
-  },
-  "selection": {
-   "kind": "node",
-   "id": "0191d0c0-0058-7000-8000-000000000058"
-  },
-  "trail": {
-   "element_kind": "node",
-   "element_id": "0191d0c0-0058-7000-8000-000000000058",
-   "events": [
-    {
-     "event_id": "0191d0c0-006c-7000-8000-00000000006c",
-     "kind": "resource_created",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "system",
-     "payload": {
-      "note": "Cobalt lucid atlas meadow lattice"
-     }
-    },
-    {
-     "event_id": "0191d0c0-006e-7000-8000-00000000006e",
-     "kind": "property_set",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "Meridian signal ember ripple thicket beacon",
-     "payload": {
-      "property_key": "temper-stage",
-      "value": "in-progress",
-      "weight": 1
-     }
-    },
-    {
-     "event_id": "0191d0c0-006f-7000-8000-00000000006f",
-     "kind": "property_set",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "system",
-     "payload": {
-      "property_key": "temper-stage",
-      "value": "in-progress",
-      "weight": 1
-     }
-    }
-   ]
-  },
-  "resourceRow": {
-   "id": "0191d0c0-0058-7000-8000-000000000058",
-   "kb_context_id": null,
-   "origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
-   "title": "Lucid atlas",
-   "originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
-   "owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
-   "is_active": true,
-   "created": "2026-07-05T00:03:08.777170Z",
-   "updated": "2026-07-05T00:03:08.777170Z",
-   "context_name": null,
-   "doc_type_name": "commitment",
-   "owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
-   "context_slug": null,
-   "context_owner_ref": null,
-   "cogmap_id": "0191d0c0-0004-7000-8000-000000000004",
-   "cogmap_name": "Summit willow anchor cascade kestrel harbor orbit",
-   "stage": null,
-   "seq": null,
-   "mode": null,
-   "effort": null,
-   "body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
-  },
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [
-   {
-    "kind": "node",
-    "id": "0191d0c0-0058-7000-8000-000000000058"
-   }
-  ],
-  "crumbTerritory": null,
-  "home": null
- },
- "cogmapPanorama": {
-  "owner": "@me",
-  "cogmapId": "0191d0c0-0004-7000-8000-000000000004",
-  "cogmapName": "Summit willow anchor cascade kestrel harbor orbit",
-  "scopeFilter": null,
-  "tier": 0,
-  "focus": {
-   "kind": "none"
-  },
-  "territories": {
-   "territories": [
-    {
-     "id": "0191d0c0-003d-7000-8000-00000000003d",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.5,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Attention economy",
-     "coherence": 0.55
-    },
-    {
-     "id": "0191d0c0-003c-7000-8000-00000000003c",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.35577684880772725,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Salience blend",
-     "coherence": 0.62
-    },
-    {
-     "id": "0191d0c0-003b-7000-8000-00000000003b",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.34652032538219196,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Region cohesion",
-     "coherence": 0.69
-    },
-    {
-     "id": "0191d0c0-003a-7000-8000-00000000003a",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.32756148928901563,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Field projection",
-     "coherence": 0.76
-    },
-    {
-     "id": "0191d0c0-0039-7000-8000-000000000039",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 0.7281445394712567,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Telos alignment",
-     "coherence": 0.83
-    },
-    {
-     "id": "0191d0c0-0038-7000-8000-000000000038",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.36478831456460187,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Event sourcing",
-     "coherence": 0.9
-    },
-    {
-     "id": "0191d0c0-0037-7000-8000-000000000037",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3652999160222276,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Derivable state",
-     "coherence": 0.57
-    },
-    {
-     "id": "0191d0c0-0036-7000-8000-000000000036",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3943783397436045,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Projection class",
-     "coherence": 0.64
-    },
-    {
-     "id": "0191d0c0-0035-7000-8000-000000000035",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 0.7329724542291716,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Orientation act",
-     "coherence": 0.71
-    },
-    {
-     "id": "0191d0c0-0034-7000-8000-000000000034",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.38283168309667576,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Wayfinding funnel",
-     "coherence": 0.78
-    },
-    {
-     "id": "0191d0c0-0033-7000-8000-000000000033",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.36218668369077894,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Boundary sensing",
-     "coherence": 0.85
-    },
-    {
-     "id": "0191d0c0-0032-7000-8000-000000000032",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.352143901451509,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Recall pinpoint",
-     "coherence": 0.92
-    },
-    {
-     "id": "0191d0c0-0031-7000-8000-000000000031",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3444151755339052,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Composition depth",
-     "coherence": 0.59
-    },
-    {
-     "id": "0191d0c0-0030-7000-8000-000000000030",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.32987810628352393,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Attention contract",
-     "coherence": 0.66
-    },
-    {
-     "id": "0191d0c0-002f-7000-8000-00000000002f",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3974816480911899,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Cognitive map",
-     "coherence": 0.73
-    },
-    {
-     "id": "0191d0c0-002e-7000-8000-00000000002e",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 0.7009450660019307,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Steward cadence",
-     "coherence": 0.8
-    },
-    {
-     "id": "0191d0c0-002d-7000-8000-00000000002d",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.34544570183094586,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Charter genesis",
-     "coherence": 0.87
-    },
-    {
-     "id": "0191d0c0-002c-7000-8000-00000000002c",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 0.7420406764286109,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Membership scope",
-     "coherence": 0.94
-    },
-    {
-     "id": "0191d0c0-002b-7000-8000-00000000002b",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3659077704415216,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Visibility gate",
-     "coherence": 0.61
-    },
-    {
-     "id": "0191d0c0-002a-7000-8000-00000000002a",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.4057314411340299,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Access grant",
-     "coherence": 0.68
-    },
-    {
-     "id": "0191d0c0-0029-7000-8000-000000000029",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.38234910269987954,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Bridge ribbon",
-     "coherence": 0.75
-    },
-    {
-     "id": "0191d0c0-0028-7000-8000-000000000028",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3767353436010433,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Territory pack",
-     "coherence": 0.82
-    },
-    {
-     "id": "0191d0c0-0027-7000-8000-000000000027",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.39804645951207523,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Node neighborhood",
-     "coherence": 0.89
-    },
-    {
-     "id": "0191d0c0-0026-7000-8000-000000000026",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.35911727970126606,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Force layout",
-     "coherence": 0.56
-    },
-    {
-     "id": "0191d0c0-0025-7000-8000-000000000025",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.36396747705349464,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Panorama tier",
-     "coherence": 0.63
-    },
-    {
-     "id": "0191d0c0-0024-7000-8000-000000000024",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3872705407583198,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Content cohesion as a member-to-centroid cosine",
-     "coherence": 0.7
-    },
-    {
-     "id": "0191d0c0-0023-7000-8000-000000000023",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.3393736159555762,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Salience-gated legibility across a packed field",
-     "coherence": 0.77
-    },
-    {
-     "id": "0191d0c0-0022-7000-8000-000000000022",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.39352913264463135,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Deterministic force separation for the knowledge field",
-     "coherence": 0.84
-    },
-    {
-     "id": "0191d0c0-0021-7000-8000-000000000021",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.37633165232049237,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Derived label from the top visible member",
-     "coherence": 0.91
-    },
-    {
-     "id": "0191d0c0-0020-7000-8000-000000000020",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.38457137547686293,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Attention economy",
-     "coherence": 0.58
-    },
-    {
-     "id": "0191d0c0-001f-7000-8000-00000000001f",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 1.842484560347327,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Salience blend",
-     "coherence": 0.65
-    },
-    {
-     "id": "0191d0c0-001e-7000-8000-00000000001e",
-     "kind": "region",
-     "member_count": 3,
-     "salience": 3.8033295731057226,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Region cohesion",
-     "coherence": 0.72
-    },
-    {
-     "id": "0191d0c0-001d-7000-8000-00000000001d",
-     "kind": "region",
-     "member_count": 3,
-     "salience": 4.334801131082132,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Field projection",
-     "coherence": 0.79
-    },
-    {
-     "id": "0191d0c0-001c-7000-8000-00000000001c",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 2.2612837814756905,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Telos alignment",
-     "coherence": 0.86
-    },
-    {
-     "id": "0191d0c0-001b-7000-8000-00000000001b",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9887957287559783,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Event sourcing",
-     "coherence": 0.93
-    },
-    {
-     "id": "0191d0c0-001a-7000-8000-00000000001a",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 1.904145185126084,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Derivable state",
-     "coherence": 0.6
-    },
-    {
-     "id": "0191d0c0-0019-7000-8000-000000000019",
-     "kind": "region",
-     "member_count": 2,
-     "salience": 3.0657732630991306,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Projection class",
-     "coherence": 0.67
-    },
-    {
-     "id": "0191d0c0-0018-7000-8000-000000000018",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 1.2502915149469445,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Orientation act",
-     "coherence": 0.74
-    },
-    {
-     "id": "0191d0c0-0017-7000-8000-000000000017",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6646672688029097,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Wayfinding funnel",
-     "coherence": 0.81
-    },
-    {
-     "id": "0191d0c0-0016-7000-8000-000000000016",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9242325158105357,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Boundary sensing",
-     "coherence": 0.88
-    },
-    {
-     "id": "0191d0c0-0015-7000-8000-000000000015",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9637721988993528,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Recall pinpoint",
-     "coherence": 0.55
-    },
-    {
-     "id": "0191d0c0-0014-7000-8000-000000000014",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9595813441918523,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Composition depth",
-     "coherence": 0.62
-    },
-    {
-     "id": "0191d0c0-0013-7000-8000-000000000013",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 1.5620509425729598,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Attention contract",
-     "coherence": 0.69
-    },
-    {
-     "id": "0191d0c0-0012-7000-8000-000000000012",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6572154331442284,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Cognitive map",
-     "coherence": 0.76
-    },
-    {
-     "id": "0191d0c0-0011-7000-8000-000000000011",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6548199516244748,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Steward cadence",
-     "coherence": 0.83
-    },
-    {
-     "id": "0191d0c0-0010-7000-8000-000000000010",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6639576238163531,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Charter genesis",
-     "coherence": 0.9
-    },
-    {
-     "id": "0191d0c0-000f-7000-8000-00000000000f",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9765508355220984,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Membership scope",
-     "coherence": 0.57
-    },
-    {
-     "id": "0191d0c0-000e-7000-8000-00000000000e",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6506624881263776,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Visibility gate",
-     "coherence": 0.64
-    },
-    {
-     "id": "0191d0c0-000d-7000-8000-00000000000d",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9702302472587135,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Access grant",
-     "coherence": 0.71
-    },
-    {
-     "id": "0191d0c0-000c-7000-8000-00000000000c",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6363091370692712,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Bridge ribbon",
-     "coherence": 0.78
-    },
-    {
-     "id": "0191d0c0-000b-7000-8000-00000000000b",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9237087786891482,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Territory pack",
-     "coherence": 0.85
-    },
-    {
-     "id": "0191d0c0-000a-7000-8000-00000000000a",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.690466509209176,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Node neighborhood",
-     "coherence": 0.92
-    },
-    {
-     "id": "0191d0c0-0009-7000-8000-000000000009",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6915974748372177,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Force layout",
-     "coherence": 0.59
-    },
-    {
-     "id": "0191d0c0-0008-7000-8000-000000000008",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9384770708833157,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Panorama tier",
-     "coherence": 0.66
-    },
-    {
-     "id": "0191d0c0-0007-7000-8000-000000000007",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.9583416544869441,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Content cohesion as a member-to-centroid cosine",
-     "coherence": 0.73
-    },
-    {
-     "id": "0191d0c0-0006-7000-8000-000000000006",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6331295771367771,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Salience-gated legibility across a packed field",
-     "coherence": 0.8
-    },
-    {
-     "id": "0191d0c0-0005-7000-8000-000000000005",
-     "kind": "region",
-     "member_count": 1,
-     "salience": 0.6387030392828167,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "label": "Deterministic force separation for the knowledge field",
-     "coherence": 0.87
-    }
-   ],
-   "orphan_nodes": [
-    {
-     "id": "0191d0c0-0072-7000-8000-000000000072",
-     "title": "Kestrel harbor orbit quartz summit willow anchor",
-     "doc_type": "fact",
-     "degree": 5,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
-    },
-    {
-     "id": "0191d0c0-0073-7000-8000-000000000073",
-     "title": "Cedar marble",
-     "doc_type": "commitment",
-     "degree": 5,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
-    },
-    {
-     "id": "0191d0c0-0074-7000-8000-000000000074",
-     "title": "Beacon prairie verdant",
-     "doc_type": "commitment",
-     "degree": 5,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
-    },
-    {
-     "id": "0191d0c0-0075-7000-8000-000000000075",
-     "title": "Cascade kestrel harbor orbit",
-     "doc_type": "decision",
-     "degree": 4,
-     "anchor_id": "0191d0c0-0004-7000-8000-000000000004",
-     "anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
-    }
-   ],
-   "bridges": []
-  },
-  "neighborhood": null,
-  "selection": {
-   "kind": "none"
-  },
-  "trail": null,
-  "resourceRow": null,
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [],
-  "crumbTerritory": null,
-  "home": null
- },
- "leafBare": {
-  "owner": "@me",
-  "cogmapId": null,
-  "cogmapName": null,
-  "scopeFilter": null,
-  "tier": 2,
-  "focus": {
-   "kind": "node",
-   "id": "0191d0c0-0058-7000-8000-000000000058"
-  },
-  "territories": null,
-  "neighborhood": {
-   "nodes": [],
-   "edges": []
-  },
-  "selection": {
-   "kind": "node",
-   "id": "0191d0c0-0058-7000-8000-000000000058"
-  },
-  "trail": {
-   "element_kind": "node",
-   "element_id": "0191d0c0-0058-7000-8000-000000000058",
-   "events": [
-    {
-     "event_id": "0191d0c0-006c-7000-8000-00000000006c",
-     "kind": "resource_created",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "system",
-     "payload": {
-      "note": "Cobalt lucid atlas meadow lattice"
-     }
-    },
-    {
-     "event_id": "0191d0c0-006e-7000-8000-00000000006e",
-     "kind": "property_set",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "Meridian signal ember ripple thicket beacon",
-     "payload": {
-      "property_key": "temper-stage",
-      "value": "in-progress",
-      "weight": 1
-     }
-    },
-    {
-     "event_id": "0191d0c0-006f-7000-8000-00000000006f",
-     "kind": "property_set",
-     "actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
-     "occurred_at": "2026-07-05T00:03:08.777170+00:00",
-     "actor_name": "system",
-     "payload": {
-      "property_key": "temper-stage",
-      "value": "in-progress",
-      "weight": 1
-     }
-    }
-   ]
-  },
-  "resourceRow": {
-   "id": "0191d0c0-0058-7000-8000-000000000058",
-   "kb_context_id": null,
-   "origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
-   "title": "Lucid atlas",
-   "originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
-   "owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
-   "is_active": true,
-   "created": "2026-07-05T00:03:08.777170Z",
-   "updated": "2026-07-05T00:03:08.777170Z",
-   "context_name": null,
-   "doc_type_name": "commitment",
-   "owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
-   "context_slug": null,
-   "context_owner_ref": null,
-   "cogmap_id": "0191d0c0-0004-7000-8000-000000000004",
-   "cogmap_name": "Summit willow anchor cascade kestrel harbor orbit",
-   "stage": null,
-   "seq": null,
-   "mode": null,
-   "effort": null,
-   "body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
-  },
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [
-   {
-    "kind": "node",
-    "id": "0191d0c0-0058-7000-8000-000000000058"
-   }
-  ],
-  "crumbTerritory": null,
-  "home": null
- },
- "_meta": {
-  "synthetic": true,
-  "note": "Synthetic, personal-data-free Atlas fixtures. Regenerate via scripts/sanitize-atlas-fixtures.mjs from a local capture (see README)."
- },
- "regionDrill": {
-  "owner": "@me",
-  "cogmapId": "0191d0c0-0700-7000-8000-000000000700",
-  "cogmapName": "Lucid atlas field",
-  "scopeFilter": null,
-  "tier": 1,
-  "focus": {
-   "kind": "territory",
-   "id": "0191d0c0-0701-7000-8000-000000000a01"
-  },
-  "territories": null,
-  "home": null,
-  "neighborhood": {
-   "nodes": [
-    {
-     "id": "0191d0c0-0701-7000-8000-000000000701",
-     "title": "Verdant meridian lattice",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 5,
-     "excerpt": "Cobalt harbor signal — ember quartz cascade willow."
-    },
-    {
-     "id": "0191d0c0-0702-7000-8000-000000000702",
-     "title": "Cobalt harbor signal",
-     "doc_type": "concept",
-     "home": "cogmap",
-     "degree": 3,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0703-7000-8000-000000000703",
-     "title": "Ember quartz cascade",
-     "doc_type": "fact",
-     "home": "cogmap",
-     "degree": 4,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0704-7000-8000-000000000704",
-     "title": "Thicket beacon prairie",
-     "doc_type": "domain",
-     "home": "cogmap",
-     "degree": 2,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0705-7000-8000-000000000705",
-     "title": "Willow prairie ledger",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 2,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0706-7000-8000-000000000706",
-     "title": "Marble thicket beacon",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 2,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0707-7000-8000-000000000707",
-     "title": "Cedar delta orbit",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 1,
-     "excerpt": null
-    }
-   ],
-   "edges": [
-    {
-     "id": "0191d0c0-0801-7000-8000-000000000801",
-     "source": "0191d0c0-0702-7000-8000-000000000702",
-     "target": "0191d0c0-0701-7000-8000-000000000701",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "relates_to",
-     "weight": 0.7
-    },
-    {
-     "id": "0191d0c0-0802-7000-8000-000000000802",
-     "source": "0191d0c0-0703-7000-8000-000000000703",
-     "target": "0191d0c0-0701-7000-8000-000000000701",
-     "edge_kind": "contains",
-     "polarity": "inverse",
-     "label": "part_of",
-     "weight": 0.9
-    },
-    {
-     "id": "0191d0c0-0803-7000-8000-000000000803",
-     "source": "0191d0c0-0701-7000-8000-000000000701",
-     "target": "0191d0c0-0704-7000-8000-000000000704",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "spans",
-     "weight": 0.6
-    },
-    {
-     "id": "0191d0c0-0804-7000-8000-000000000804",
-     "source": "0191d0c0-0701-7000-8000-000000000701",
-     "target": "0191d0c0-0705-7000-8000-000000000705",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0805-7000-8000-000000000805",
-     "source": "0191d0c0-0701-7000-8000-000000000701",
-     "target": "0191d0c0-0706-7000-8000-000000000706",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0806-7000-8000-000000000806",
-     "source": "0191d0c0-0702-7000-8000-000000000702",
-     "target": "0191d0c0-0707-7000-8000-000000000707",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0807-7000-8000-000000000807",
-     "source": "0191d0c0-0703-7000-8000-000000000703",
-     "target": "0191d0c0-0705-7000-8000-000000000705",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    }
-   ]
-  },
-  "selection": {
-   "kind": "none"
-  },
-  "trail": null,
-  "resourceRow": null,
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [
-   {
-    "kind": "territory",
-    "id": "0191d0c0-0701-7000-8000-000000000a01"
-   }
-  ],
-  "crumbTerritory": {
-   "id": "0191d0c0-0701-7000-8000-000000000a01",
-   "label": null
-  }
- },
- "regionDrillUnion": {
-  "owner": "@me",
-  "cogmapId": "0191d0c0-0700-7000-8000-000000000700",
-  "cogmapName": "Lucid atlas field",
-  "scopeFilter": null,
-  "tier": 1,
-  "focus": {
-   "kind": "territory",
-   "id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02"
-  },
-  "territories": null,
-  "home": null,
-  "neighborhood": {
-   "nodes": [
-    {
-     "id": "0191d0c0-0701-7000-8000-000000000701",
-     "title": "Verdant meridian lattice",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 5,
-     "excerpt": "Cobalt harbor signal — ember quartz cascade willow."
-    },
-    {
-     "id": "0191d0c0-0702-7000-8000-000000000702",
-     "title": "Cobalt harbor signal",
-     "doc_type": "concept",
-     "home": "cogmap",
-     "degree": 3,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0703-7000-8000-000000000703",
-     "title": "Ember quartz cascade",
-     "doc_type": "fact",
-     "home": "cogmap",
-     "degree": 4,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0704-7000-8000-000000000704",
-     "title": "Thicket beacon prairie",
-     "doc_type": "domain",
-     "home": "cogmap",
-     "degree": 2,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0705-7000-8000-000000000705",
-     "title": "Willow prairie ledger",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 2,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0706-7000-8000-000000000706",
-     "title": "Marble thicket beacon",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 2,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0707-7000-8000-000000000707",
-     "title": "Cedar delta orbit",
-     "doc_type": "session",
-     "home": "context",
-     "degree": 1,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0708-7000-8000-000000000708",
-     "title": "Meadow orbit harbor",
-     "doc_type": "theme",
-     "home": "cogmap",
-     "degree": 3,
-     "excerpt": null
-    },
-    {
-     "id": "0191d0c0-0709-7000-8000-000000000709",
-     "title": "Basalt fern summit",
-     "doc_type": "task",
-     "home": "context",
-     "degree": 1,
-     "excerpt": null
-    }
-   ],
-   "edges": [
-    {
-     "id": "0191d0c0-0801-7000-8000-000000000801",
-     "source": "0191d0c0-0702-7000-8000-000000000702",
-     "target": "0191d0c0-0701-7000-8000-000000000701",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "relates_to",
-     "weight": 0.7
-    },
-    {
-     "id": "0191d0c0-0802-7000-8000-000000000802",
-     "source": "0191d0c0-0703-7000-8000-000000000703",
-     "target": "0191d0c0-0701-7000-8000-000000000701",
-     "edge_kind": "contains",
-     "polarity": "inverse",
-     "label": "part_of",
-     "weight": 0.9
-    },
-    {
-     "id": "0191d0c0-0803-7000-8000-000000000803",
-     "source": "0191d0c0-0701-7000-8000-000000000701",
-     "target": "0191d0c0-0704-7000-8000-000000000704",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "spans",
-     "weight": 0.6
-    },
-    {
-     "id": "0191d0c0-0804-7000-8000-000000000804",
-     "source": "0191d0c0-0701-7000-8000-000000000701",
-     "target": "0191d0c0-0705-7000-8000-000000000705",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0805-7000-8000-000000000805",
-     "source": "0191d0c0-0701-7000-8000-000000000701",
-     "target": "0191d0c0-0706-7000-8000-000000000706",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0806-7000-8000-000000000806",
-     "source": "0191d0c0-0702-7000-8000-000000000702",
-     "target": "0191d0c0-0707-7000-8000-000000000707",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0807-7000-8000-000000000807",
-     "source": "0191d0c0-0703-7000-8000-000000000703",
-     "target": "0191d0c0-0705-7000-8000-000000000705",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    },
-    {
-     "id": "0191d0c0-0808-7000-8000-000000000808",
-     "source": "0191d0c0-0708-7000-8000-000000000708",
-     "target": "0191d0c0-0701-7000-8000-000000000701",
-     "edge_kind": "near",
-     "polarity": "forward",
-     "label": "relates_to",
-     "weight": 0.5
-    },
-    {
-     "id": "0191d0c0-0809-7000-8000-000000000809",
-     "source": "0191d0c0-0708-7000-8000-000000000708",
-     "target": "0191d0c0-0709-7000-8000-000000000709",
-     "edge_kind": "express",
-     "polarity": "forward",
-     "label": "derived_from",
-     "weight": 1.0
-    }
-   ]
-  },
-  "selection": {
-   "kind": "none"
-  },
-  "trail": null,
-  "resourceRow": null,
-  "filters": {
-   "lensId": null,
-   "edgeKinds": [],
-   "docTypes": []
-  },
-  "focusPath": [
-   {
-    "kind": "territory",
-    "id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02"
-   }
-  ],
-  "crumbTerritory": {
-   "id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02",
-   "label": "2 regions"
-  }
- }
+	"home": {
+		"owner": "@me",
+		"cogmapId": null,
+		"cogmapName": null,
+		"scopeFilter": null,
+		"tier": 0,
+		"focus": {
+			"kind": "none"
+		},
+		"territories": null,
+		"neighborhood": null,
+		"selection": {
+			"kind": "none"
+		},
+		"trail": null,
+		"resourceRow": null,
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [],
+		"crumbTerritory": null,
+		"home": {
+			"build": [
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000001",
+					"name": "platform",
+					"owner_ref": "@me",
+					"resource_count": 331,
+					"last_active_at": "2026-07-04T22:15:00Z",
+					"slug": "platform"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000002",
+					"name": "lattice",
+					"owner_ref": "@me",
+					"resource_count": 120,
+					"last_active_at": "2026-07-01T09:30:00Z",
+					"slug": "lattice"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000003",
+					"name": "beacon",
+					"owner_ref": "@me",
+					"resource_count": 42,
+					"last_active_at": "2026-06-20T14:00:00Z",
+					"slug": "beacon"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000004",
+					"name": "cedar",
+					"owner_ref": "@me",
+					"resource_count": 63,
+					"last_active_at": "2026-06-01T00:00:00Z",
+					"slug": "cedar"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000005",
+					"name": "harbor",
+					"owner_ref": "@me",
+					"resource_count": 18,
+					"last_active_at": "2026-05-01T00:00:00Z",
+					"slug": "harbor"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000006",
+					"name": "meadow",
+					"owner_ref": "@me",
+					"resource_count": 9,
+					"last_active_at": null,
+					"slug": "meadow"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000007",
+					"name": "roadmap",
+					"owner_ref": "+ripple",
+					"resource_count": 47,
+					"last_active_at": "2026-07-04T18:30:00Z",
+					"slug": "roadmap"
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000008",
+					"name": "orbit",
+					"owner_ref": "+ripple",
+					"resource_count": 210,
+					"last_active_at": "2026-06-25T00:00:00Z",
+					"slug": "orbit"
+				}
+			],
+			"research": [
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000021",
+					"name": "Ember prairie survey",
+					"owner_ref": "verdant",
+					"team_ids": [],
+					"region_count": 12,
+					"facet_count": 20
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000022",
+					"name": "Summit cascade map",
+					"owner_ref": "+ripple",
+					"team_ids": [],
+					"region_count": 15,
+					"facet_count": 31
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000023",
+					"name": "Willow anchor field",
+					"owner_ref": "+kestrel",
+					"team_ids": [],
+					"region_count": 8,
+					"facet_count": 14
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000024",
+					"name": "Marble thicket",
+					"owner_ref": "+ripple",
+					"team_ids": [],
+					"region_count": 5,
+					"facet_count": 9
+				},
+				{
+					"id": "0191d0c0-0b00-7000-8000-000000000025",
+					"name": "Ripple runbook",
+					"owner_ref": "+kestrel",
+					"team_ids": [],
+					"region_count": 2,
+					"facet_count": 4
+				}
+			]
+		}
+	},
+	"nodeNeighborhood": {
+		"owner": "@me",
+		"cogmapId": null,
+		"cogmapName": null,
+		"scopeFilter": null,
+		"tier": 2,
+		"focus": {
+			"kind": "node",
+			"id": "0191d0c0-0058-7000-8000-000000000058"
+		},
+		"territories": null,
+		"neighborhood": {
+			"nodes": [
+				{
+					"id": "0191d0c0-005b-7000-8000-00000000005b",
+					"title": "Cobalt lucid atlas meadow lattice",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 5,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0058-7000-8000-000000000058",
+					"title": "Lucid atlas",
+					"doc_type": "commitment",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Lattice cedar marble delta cobalt \u2014 Thicket beacon prairie verdant meridian signal."
+				},
+				{
+					"id": "0191d0c0-0059-7000-8000-000000000059",
+					"title": "Signal ember ripple",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 10,
+					"excerpt": "Anchor cascade kestrel harbor orbit quartz summit \u2014 Meadow lattice."
+				},
+				{
+					"id": "0191d0c0-005c-7000-8000-00000000005c",
+					"title": "Meridian signal ember ripple thicket beacon",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 7,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-005d-7000-8000-00000000005d",
+					"title": "Orbit quartz summit willow anchor cascade kestrel",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 4,
+					"excerpt": "Ripple thicket beacon \u2014 Willow anchor cascade kestrel."
+				},
+				{
+					"id": "0191d0c0-005e-7000-8000-00000000005e",
+					"title": "Delta cobalt",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 2,
+					"excerpt": "Atlas meadow lattice cedar marble \u2014 Ember ripple thicket beacon prairie verdant."
+				},
+				{
+					"id": "0191d0c0-005f-7000-8000-00000000005f",
+					"title": "Verdant meridian signal",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 3,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0060-7000-8000-000000000060",
+					"title": "Harbor orbit quartz summit",
+					"doc_type": "domain",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Summit willow anchor cascade kestrel harbor orbit \u2014 Lucid atlas."
+				},
+				{
+					"id": "0191d0c0-0061-7000-8000-000000000061",
+					"title": "Marble delta cobalt lucid atlas",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 5,
+					"excerpt": "Signal ember ripple \u2014 Quartz summit willow anchor."
+				}
+			],
+			"edges": [
+				{
+					"id": "0191d0c0-0062-7000-8000-000000000062",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-0059-7000-8000-000000000059",
+					"edge_kind": "contains",
+					"polarity": "inverse",
+					"label": "part_of",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0063-7000-8000-000000000063",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005b-7000-8000-00000000005b",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0064-7000-8000-000000000064",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005e-7000-8000-00000000005e",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0065-7000-8000-000000000065",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005c-7000-8000-00000000005c",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "relates_to",
+					"weight": 0.6
+				},
+				{
+					"id": "0191d0c0-0066-7000-8000-000000000066",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005f-7000-8000-00000000005f",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0067-7000-8000-000000000067",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-0060-7000-8000-000000000060",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "spans",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0068-7000-8000-000000000068",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-0061-7000-8000-000000000061",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0069-7000-8000-000000000069",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-005b-7000-8000-00000000005b",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-006a-7000-8000-00000000006a",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005d-7000-8000-00000000005d",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-006b-7000-8000-00000000006b",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-0061-7000-8000-000000000061",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				}
+			]
+		},
+		"selection": {
+			"kind": "node",
+			"id": "0191d0c0-0058-7000-8000-000000000058"
+		},
+		"trail": {
+			"element_kind": "node",
+			"element_id": "0191d0c0-0058-7000-8000-000000000058",
+			"events": [
+				{
+					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
+					"kind": "resource_created",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
+				},
+				{
+					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				},
+				{
+					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				}
+			]
+		},
+		"resourceRow": {
+			"id": "0191d0c0-0058-7000-8000-000000000058",
+			"kb_context_id": null,
+			"origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
+			"title": "Lucid atlas",
+			"originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"is_active": true,
+			"created": "2026-07-05T00:03:08.777170Z",
+			"updated": "2026-07-05T00:03:08.777170Z",
+			"context_name": null,
+			"doc_type_name": "commitment",
+			"owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
+			"context_slug": null,
+			"context_owner_ref": null,
+			"cogmap_id": "0191d0c0-0004-7000-8000-000000000004",
+			"cogmap_name": "Summit willow anchor cascade kestrel harbor orbit",
+			"stage": null,
+			"seq": null,
+			"mode": null,
+			"effort": null,
+			"body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
+		},
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [
+			{
+				"kind": "node",
+				"id": "0191d0c0-0058-7000-8000-000000000058"
+			}
+		],
+		"crumbTerritory": null,
+		"home": null
+	},
+	"nodeSelected": {
+		"owner": "@me",
+		"cogmapId": null,
+		"cogmapName": null,
+		"scopeFilter": null,
+		"tier": 2,
+		"focus": {
+			"kind": "node",
+			"id": "0191d0c0-0058-7000-8000-000000000058"
+		},
+		"territories": null,
+		"neighborhood": {
+			"nodes": [
+				{
+					"id": "0191d0c0-005b-7000-8000-00000000005b",
+					"title": "Cobalt lucid atlas meadow lattice",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 5,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0058-7000-8000-000000000058",
+					"title": "Lucid atlas",
+					"doc_type": "commitment",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Lattice cedar marble delta cobalt \u2014 Thicket beacon prairie verdant meridian signal."
+				},
+				{
+					"id": "0191d0c0-0059-7000-8000-000000000059",
+					"title": "Signal ember ripple",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 10,
+					"excerpt": "Anchor cascade kestrel harbor orbit quartz summit \u2014 Meadow lattice."
+				},
+				{
+					"id": "0191d0c0-005c-7000-8000-00000000005c",
+					"title": "Meridian signal ember ripple thicket beacon",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 7,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-005d-7000-8000-00000000005d",
+					"title": "Orbit quartz summit willow anchor cascade kestrel",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 4,
+					"excerpt": "Ripple thicket beacon \u2014 Willow anchor cascade kestrel."
+				},
+				{
+					"id": "0191d0c0-005e-7000-8000-00000000005e",
+					"title": "Delta cobalt",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 2,
+					"excerpt": "Atlas meadow lattice cedar marble \u2014 Ember ripple thicket beacon prairie verdant."
+				},
+				{
+					"id": "0191d0c0-005f-7000-8000-00000000005f",
+					"title": "Verdant meridian signal",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 3,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0060-7000-8000-000000000060",
+					"title": "Harbor orbit quartz summit",
+					"doc_type": "domain",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Summit willow anchor cascade kestrel harbor orbit \u2014 Lucid atlas."
+				},
+				{
+					"id": "0191d0c0-0061-7000-8000-000000000061",
+					"title": "Marble delta cobalt lucid atlas",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 5,
+					"excerpt": "Signal ember ripple \u2014 Quartz summit willow anchor."
+				}
+			],
+			"edges": [
+				{
+					"id": "0191d0c0-0062-7000-8000-000000000062",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-0059-7000-8000-000000000059",
+					"edge_kind": "contains",
+					"polarity": "inverse",
+					"label": "part_of",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0063-7000-8000-000000000063",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005b-7000-8000-00000000005b",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0064-7000-8000-000000000064",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005e-7000-8000-00000000005e",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0065-7000-8000-000000000065",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005c-7000-8000-00000000005c",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "relates_to",
+					"weight": 0.6
+				},
+				{
+					"id": "0191d0c0-0066-7000-8000-000000000066",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005f-7000-8000-00000000005f",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0067-7000-8000-000000000067",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-0060-7000-8000-000000000060",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "spans",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0068-7000-8000-000000000068",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-0061-7000-8000-000000000061",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0069-7000-8000-000000000069",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-005b-7000-8000-00000000005b",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-006a-7000-8000-00000000006a",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005d-7000-8000-00000000005d",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-006b-7000-8000-00000000006b",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-0061-7000-8000-000000000061",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				}
+			]
+		},
+		"selection": {
+			"kind": "node",
+			"id": "0191d0c0-0058-7000-8000-000000000058"
+		},
+		"trail": {
+			"element_kind": "node",
+			"element_id": "0191d0c0-0058-7000-8000-000000000058",
+			"events": [
+				{
+					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
+					"kind": "resource_created",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
+				},
+				{
+					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				},
+				{
+					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				}
+			]
+		},
+		"resourceRow": {
+			"id": "0191d0c0-0058-7000-8000-000000000058",
+			"kb_context_id": null,
+			"origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
+			"title": "Lucid atlas",
+			"originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"is_active": true,
+			"created": "2026-07-05T00:03:08.777170Z",
+			"updated": "2026-07-05T00:03:08.777170Z",
+			"context_name": null,
+			"doc_type_name": "commitment",
+			"owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
+			"context_slug": null,
+			"context_owner_ref": null,
+			"cogmap_id": "0191d0c0-0004-7000-8000-000000000004",
+			"cogmap_name": "Summit willow anchor cascade kestrel harbor orbit",
+			"stage": null,
+			"seq": null,
+			"mode": null,
+			"effort": null,
+			"body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
+		},
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [
+			{
+				"kind": "node",
+				"id": "0191d0c0-0058-7000-8000-000000000058"
+			}
+		],
+		"crumbTerritory": null,
+		"home": null
+	},
+	"nodeSelectedContext": {
+		"owner": "@me",
+		"cogmapId": null,
+		"cogmapName": null,
+		"scopeFilter": null,
+		"tier": 2,
+		"focus": {
+			"kind": "node",
+			"id": "0191d0c0-005b-7000-8000-00000000005b"
+		},
+		"territories": null,
+		"neighborhood": {
+			"nodes": [
+				{
+					"id": "0191d0c0-005b-7000-8000-00000000005b",
+					"title": "Cobalt lucid atlas meadow lattice",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 5,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0058-7000-8000-000000000058",
+					"title": "Lucid atlas",
+					"doc_type": "commitment",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Lattice cedar marble delta cobalt \u2014 Thicket beacon prairie verdant meridian signal."
+				},
+				{
+					"id": "0191d0c0-0059-7000-8000-000000000059",
+					"title": "Signal ember ripple",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 10,
+					"excerpt": "Anchor cascade kestrel harbor orbit quartz summit \u2014 Meadow lattice."
+				},
+				{
+					"id": "0191d0c0-005c-7000-8000-00000000005c",
+					"title": "Meridian signal ember ripple thicket beacon",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 7,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-005d-7000-8000-00000000005d",
+					"title": "Orbit quartz summit willow anchor cascade kestrel",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 4,
+					"excerpt": "Ripple thicket beacon \u2014 Willow anchor cascade kestrel."
+				},
+				{
+					"id": "0191d0c0-005e-7000-8000-00000000005e",
+					"title": "Delta cobalt",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 2,
+					"excerpt": "Atlas meadow lattice cedar marble \u2014 Ember ripple thicket beacon prairie verdant."
+				},
+				{
+					"id": "0191d0c0-005f-7000-8000-00000000005f",
+					"title": "Verdant meridian signal",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 3,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0060-7000-8000-000000000060",
+					"title": "Harbor orbit quartz summit",
+					"doc_type": "domain",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Summit willow anchor cascade kestrel harbor orbit \u2014 Lucid atlas."
+				},
+				{
+					"id": "0191d0c0-0061-7000-8000-000000000061",
+					"title": "Marble delta cobalt lucid atlas",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 5,
+					"excerpt": "Signal ember ripple \u2014 Quartz summit willow anchor."
+				}
+			],
+			"edges": [
+				{
+					"id": "0191d0c0-0062-7000-8000-000000000062",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-0059-7000-8000-000000000059",
+					"edge_kind": "contains",
+					"polarity": "inverse",
+					"label": "part_of",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0063-7000-8000-000000000063",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005b-7000-8000-00000000005b",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0064-7000-8000-000000000064",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005e-7000-8000-00000000005e",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0065-7000-8000-000000000065",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005c-7000-8000-00000000005c",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "relates_to",
+					"weight": 0.6
+				},
+				{
+					"id": "0191d0c0-0066-7000-8000-000000000066",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005f-7000-8000-00000000005f",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0067-7000-8000-000000000067",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-0060-7000-8000-000000000060",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "spans",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0068-7000-8000-000000000068",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-0061-7000-8000-000000000061",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-0069-7000-8000-000000000069",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-005b-7000-8000-00000000005b",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-006a-7000-8000-00000000006a",
+					"source": "0191d0c0-0059-7000-8000-000000000059",
+					"target": "0191d0c0-005d-7000-8000-00000000005d",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				},
+				{
+					"id": "0191d0c0-006b-7000-8000-00000000006b",
+					"source": "0191d0c0-0058-7000-8000-000000000058",
+					"target": "0191d0c0-0061-7000-8000-000000000061",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1
+				}
+			]
+		},
+		"selection": {
+			"kind": "node",
+			"id": "0191d0c0-005b-7000-8000-00000000005b"
+		},
+		"trail": {
+			"element_kind": "node",
+			"element_id": "0191d0c0-0058-7000-8000-000000000058",
+			"events": [
+				{
+					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
+					"kind": "resource_created",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
+				},
+				{
+					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				},
+				{
+					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				}
+			]
+		},
+		"resourceRow": {
+			"id": "0191d0c0-005b-7000-8000-00000000005b",
+			"kb_context_id": null,
+			"origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
+			"title": "Cobalt lucid atlas meadow lattice",
+			"originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"is_active": true,
+			"created": "2026-07-05T00:03:08.777170Z",
+			"updated": "2026-07-05T00:03:08.777170Z",
+			"context_name": "Workshop",
+			"doc_type_name": "task",
+			"owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
+			"context_slug": "workshop",
+			"context_owner_ref": "@builder",
+			"cogmap_id": null,
+			"cogmap_name": null,
+			"stage": null,
+			"seq": null,
+			"mode": null,
+			"effort": null,
+			"body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
+		},
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [
+			{
+				"kind": "node",
+				"id": "0191d0c0-0058-7000-8000-000000000058"
+			}
+		],
+		"crumbTerritory": null,
+		"home": null
+	},
+	"cogmapPanorama": {
+		"owner": "@me",
+		"cogmapId": "0191d0c0-0004-7000-8000-000000000004",
+		"cogmapName": "Summit willow anchor cascade kestrel harbor orbit",
+		"scopeFilter": null,
+		"tier": 0,
+		"focus": {
+			"kind": "none"
+		},
+		"territories": {
+			"territories": [
+				{
+					"id": "0191d0c0-003d-7000-8000-00000000003d",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.5,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Attention economy",
+					"coherence": 0.55
+				},
+				{
+					"id": "0191d0c0-003c-7000-8000-00000000003c",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.35577684880772725,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Salience blend",
+					"coherence": 0.62
+				},
+				{
+					"id": "0191d0c0-003b-7000-8000-00000000003b",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.34652032538219196,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Region cohesion",
+					"coherence": 0.69
+				},
+				{
+					"id": "0191d0c0-003a-7000-8000-00000000003a",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.32756148928901563,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Field projection",
+					"coherence": 0.76
+				},
+				{
+					"id": "0191d0c0-0039-7000-8000-000000000039",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 0.7281445394712567,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Telos alignment",
+					"coherence": 0.83
+				},
+				{
+					"id": "0191d0c0-0038-7000-8000-000000000038",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.36478831456460187,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Event sourcing",
+					"coherence": 0.9
+				},
+				{
+					"id": "0191d0c0-0037-7000-8000-000000000037",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3652999160222276,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Derivable state",
+					"coherence": 0.57
+				},
+				{
+					"id": "0191d0c0-0036-7000-8000-000000000036",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3943783397436045,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Projection class",
+					"coherence": 0.64
+				},
+				{
+					"id": "0191d0c0-0035-7000-8000-000000000035",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 0.7329724542291716,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Orientation act",
+					"coherence": 0.71
+				},
+				{
+					"id": "0191d0c0-0034-7000-8000-000000000034",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.38283168309667576,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Wayfinding funnel",
+					"coherence": 0.78
+				},
+				{
+					"id": "0191d0c0-0033-7000-8000-000000000033",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.36218668369077894,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Boundary sensing",
+					"coherence": 0.85
+				},
+				{
+					"id": "0191d0c0-0032-7000-8000-000000000032",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.352143901451509,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Recall pinpoint",
+					"coherence": 0.92
+				},
+				{
+					"id": "0191d0c0-0031-7000-8000-000000000031",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3444151755339052,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Composition depth",
+					"coherence": 0.59
+				},
+				{
+					"id": "0191d0c0-0030-7000-8000-000000000030",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.32987810628352393,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Attention contract",
+					"coherence": 0.66
+				},
+				{
+					"id": "0191d0c0-002f-7000-8000-00000000002f",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3974816480911899,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Cognitive map",
+					"coherence": 0.73
+				},
+				{
+					"id": "0191d0c0-002e-7000-8000-00000000002e",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 0.7009450660019307,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Steward cadence",
+					"coherence": 0.8
+				},
+				{
+					"id": "0191d0c0-002d-7000-8000-00000000002d",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.34544570183094586,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Charter genesis",
+					"coherence": 0.87
+				},
+				{
+					"id": "0191d0c0-002c-7000-8000-00000000002c",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 0.7420406764286109,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Membership scope",
+					"coherence": 0.94
+				},
+				{
+					"id": "0191d0c0-002b-7000-8000-00000000002b",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3659077704415216,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Visibility gate",
+					"coherence": 0.61
+				},
+				{
+					"id": "0191d0c0-002a-7000-8000-00000000002a",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.4057314411340299,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Access grant",
+					"coherence": 0.68
+				},
+				{
+					"id": "0191d0c0-0029-7000-8000-000000000029",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.38234910269987954,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Bridge ribbon",
+					"coherence": 0.75
+				},
+				{
+					"id": "0191d0c0-0028-7000-8000-000000000028",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3767353436010433,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Territory pack",
+					"coherence": 0.82
+				},
+				{
+					"id": "0191d0c0-0027-7000-8000-000000000027",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.39804645951207523,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Node neighborhood",
+					"coherence": 0.89
+				},
+				{
+					"id": "0191d0c0-0026-7000-8000-000000000026",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.35911727970126606,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Force layout",
+					"coherence": 0.56
+				},
+				{
+					"id": "0191d0c0-0025-7000-8000-000000000025",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.36396747705349464,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Panorama tier",
+					"coherence": 0.63
+				},
+				{
+					"id": "0191d0c0-0024-7000-8000-000000000024",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3872705407583198,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Content cohesion as a member-to-centroid cosine",
+					"coherence": 0.7
+				},
+				{
+					"id": "0191d0c0-0023-7000-8000-000000000023",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.3393736159555762,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Salience-gated legibility across a packed field",
+					"coherence": 0.77
+				},
+				{
+					"id": "0191d0c0-0022-7000-8000-000000000022",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.39352913264463135,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Deterministic force separation for the knowledge field",
+					"coherence": 0.84
+				},
+				{
+					"id": "0191d0c0-0021-7000-8000-000000000021",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.37633165232049237,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Derived label from the top visible member",
+					"coherence": 0.91
+				},
+				{
+					"id": "0191d0c0-0020-7000-8000-000000000020",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.38457137547686293,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Attention economy",
+					"coherence": 0.58
+				},
+				{
+					"id": "0191d0c0-001f-7000-8000-00000000001f",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 1.842484560347327,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Salience blend",
+					"coherence": 0.65
+				},
+				{
+					"id": "0191d0c0-001e-7000-8000-00000000001e",
+					"kind": "region",
+					"member_count": 3,
+					"salience": 3.8033295731057226,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Region cohesion",
+					"coherence": 0.72
+				},
+				{
+					"id": "0191d0c0-001d-7000-8000-00000000001d",
+					"kind": "region",
+					"member_count": 3,
+					"salience": 4.334801131082132,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Field projection",
+					"coherence": 0.79
+				},
+				{
+					"id": "0191d0c0-001c-7000-8000-00000000001c",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 2.2612837814756905,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Telos alignment",
+					"coherence": 0.86
+				},
+				{
+					"id": "0191d0c0-001b-7000-8000-00000000001b",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9887957287559783,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Event sourcing",
+					"coherence": 0.93
+				},
+				{
+					"id": "0191d0c0-001a-7000-8000-00000000001a",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 1.904145185126084,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Derivable state",
+					"coherence": 0.6
+				},
+				{
+					"id": "0191d0c0-0019-7000-8000-000000000019",
+					"kind": "region",
+					"member_count": 2,
+					"salience": 3.0657732630991306,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Projection class",
+					"coherence": 0.67
+				},
+				{
+					"id": "0191d0c0-0018-7000-8000-000000000018",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 1.2502915149469445,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Orientation act",
+					"coherence": 0.74
+				},
+				{
+					"id": "0191d0c0-0017-7000-8000-000000000017",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6646672688029097,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Wayfinding funnel",
+					"coherence": 0.81
+				},
+				{
+					"id": "0191d0c0-0016-7000-8000-000000000016",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9242325158105357,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Boundary sensing",
+					"coherence": 0.88
+				},
+				{
+					"id": "0191d0c0-0015-7000-8000-000000000015",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9637721988993528,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Recall pinpoint",
+					"coherence": 0.55
+				},
+				{
+					"id": "0191d0c0-0014-7000-8000-000000000014",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9595813441918523,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Composition depth",
+					"coherence": 0.62
+				},
+				{
+					"id": "0191d0c0-0013-7000-8000-000000000013",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 1.5620509425729598,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Attention contract",
+					"coherence": 0.69
+				},
+				{
+					"id": "0191d0c0-0012-7000-8000-000000000012",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6572154331442284,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Cognitive map",
+					"coherence": 0.76
+				},
+				{
+					"id": "0191d0c0-0011-7000-8000-000000000011",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6548199516244748,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Steward cadence",
+					"coherence": 0.83
+				},
+				{
+					"id": "0191d0c0-0010-7000-8000-000000000010",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6639576238163531,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Charter genesis",
+					"coherence": 0.9
+				},
+				{
+					"id": "0191d0c0-000f-7000-8000-00000000000f",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9765508355220984,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Membership scope",
+					"coherence": 0.57
+				},
+				{
+					"id": "0191d0c0-000e-7000-8000-00000000000e",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6506624881263776,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Visibility gate",
+					"coherence": 0.64
+				},
+				{
+					"id": "0191d0c0-000d-7000-8000-00000000000d",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9702302472587135,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Access grant",
+					"coherence": 0.71
+				},
+				{
+					"id": "0191d0c0-000c-7000-8000-00000000000c",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6363091370692712,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Bridge ribbon",
+					"coherence": 0.78
+				},
+				{
+					"id": "0191d0c0-000b-7000-8000-00000000000b",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9237087786891482,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Territory pack",
+					"coherence": 0.85
+				},
+				{
+					"id": "0191d0c0-000a-7000-8000-00000000000a",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.690466509209176,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Node neighborhood",
+					"coherence": 0.92
+				},
+				{
+					"id": "0191d0c0-0009-7000-8000-000000000009",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6915974748372177,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Force layout",
+					"coherence": 0.59
+				},
+				{
+					"id": "0191d0c0-0008-7000-8000-000000000008",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9384770708833157,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Panorama tier",
+					"coherence": 0.66
+				},
+				{
+					"id": "0191d0c0-0007-7000-8000-000000000007",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.9583416544869441,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Content cohesion as a member-to-centroid cosine",
+					"coherence": 0.73
+				},
+				{
+					"id": "0191d0c0-0006-7000-8000-000000000006",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6331295771367771,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Salience-gated legibility across a packed field",
+					"coherence": 0.8
+				},
+				{
+					"id": "0191d0c0-0005-7000-8000-000000000005",
+					"kind": "region",
+					"member_count": 1,
+					"salience": 0.6387030392828167,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"label": "Deterministic force separation for the knowledge field",
+					"coherence": 0.87
+				}
+			],
+			"orphan_nodes": [
+				{
+					"id": "0191d0c0-0072-7000-8000-000000000072",
+					"title": "Kestrel harbor orbit quartz summit willow anchor",
+					"doc_type": "fact",
+					"degree": 5,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
+				},
+				{
+					"id": "0191d0c0-0073-7000-8000-000000000073",
+					"title": "Cedar marble",
+					"doc_type": "commitment",
+					"degree": 5,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
+				},
+				{
+					"id": "0191d0c0-0074-7000-8000-000000000074",
+					"title": "Beacon prairie verdant",
+					"doc_type": "commitment",
+					"degree": 5,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
+				},
+				{
+					"id": "0191d0c0-0075-7000-8000-000000000075",
+					"title": "Cascade kestrel harbor orbit",
+					"doc_type": "decision",
+					"degree": 4,
+					"anchor_id": "0191d0c0-0004-7000-8000-000000000004",
+					"anchor_label": "Summit willow anchor cascade kestrel harbor orbit"
+				}
+			],
+			"bridges": []
+		},
+		"neighborhood": null,
+		"selection": {
+			"kind": "none"
+		},
+		"trail": null,
+		"resourceRow": null,
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [],
+		"crumbTerritory": null,
+		"home": null
+	},
+	"leafBare": {
+		"owner": "@me",
+		"cogmapId": null,
+		"cogmapName": null,
+		"scopeFilter": null,
+		"tier": 2,
+		"focus": {
+			"kind": "node",
+			"id": "0191d0c0-0058-7000-8000-000000000058"
+		},
+		"territories": null,
+		"neighborhood": {
+			"nodes": [],
+			"edges": []
+		},
+		"selection": {
+			"kind": "node",
+			"id": "0191d0c0-0058-7000-8000-000000000058"
+		},
+		"trail": {
+			"element_kind": "node",
+			"element_id": "0191d0c0-0058-7000-8000-000000000058",
+			"events": [
+				{
+					"event_id": "0191d0c0-006c-7000-8000-00000000006c",
+					"kind": "resource_created",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"note": "Cobalt lucid atlas meadow lattice"
+					}
+				},
+				{
+					"event_id": "0191d0c0-006e-7000-8000-00000000006e",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "Meridian signal ember ripple thicket beacon",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				},
+				{
+					"event_id": "0191d0c0-006f-7000-8000-00000000006f",
+					"kind": "property_set",
+					"actor_entity_id": "0191d0c0-006d-7000-8000-00000000006d",
+					"occurred_at": "2026-07-05T00:03:08.777170+00:00",
+					"actor_name": "system",
+					"payload": {
+						"property_key": "temper-stage",
+						"value": "in-progress",
+						"weight": 1
+					}
+				}
+			]
+		},
+		"resourceRow": {
+			"id": "0191d0c0-0058-7000-8000-000000000058",
+			"kb_context_id": null,
+			"origin_uri": "mcp://agent/0191d0c0-0070-7000-8000-000000000070",
+			"title": "Lucid atlas",
+			"originator_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"owner_profile_id": "0191d0c0-0071-7000-8000-000000000071",
+			"is_active": true,
+			"created": "2026-07-05T00:03:08.777170Z",
+			"updated": "2026-07-05T00:03:08.777170Z",
+			"context_name": null,
+			"doc_type_name": "commitment",
+			"owner_handle": "prairie-verdant-meridian-signal-ember-ripple",
+			"context_slug": null,
+			"context_owner_ref": null,
+			"cogmap_id": "0191d0c0-0004-7000-8000-000000000004",
+			"cogmap_name": "Summit willow anchor cascade kestrel harbor orbit",
+			"stage": null,
+			"seq": null,
+			"mode": null,
+			"effort": null,
+			"body_hash": "92e97cc0eeaf30fc44ed1d71b9d921e471069580baa190cb9812cbe4cc9001fc"
+		},
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [
+			{
+				"kind": "node",
+				"id": "0191d0c0-0058-7000-8000-000000000058"
+			}
+		],
+		"crumbTerritory": null,
+		"home": null
+	},
+	"_meta": {
+		"synthetic": true,
+		"note": "Synthetic, personal-data-free Atlas fixtures. Regenerate via scripts/sanitize-atlas-fixtures.mjs from a local capture (see README)."
+	},
+	"regionDrill": {
+		"owner": "@me",
+		"cogmapId": "0191d0c0-0700-7000-8000-000000000700",
+		"cogmapName": "Lucid atlas field",
+		"scopeFilter": null,
+		"tier": 1,
+		"focus": {
+			"kind": "territory",
+			"id": "0191d0c0-0701-7000-8000-000000000a01"
+		},
+		"territories": null,
+		"home": null,
+		"neighborhood": {
+			"nodes": [
+				{
+					"id": "0191d0c0-0701-7000-8000-000000000701",
+					"title": "Verdant meridian lattice",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Cobalt harbor signal \u2014 ember quartz cascade willow."
+				},
+				{
+					"id": "0191d0c0-0702-7000-8000-000000000702",
+					"title": "Cobalt harbor signal",
+					"doc_type": "concept",
+					"home": "cogmap",
+					"degree": 3,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0703-7000-8000-000000000703",
+					"title": "Ember quartz cascade",
+					"doc_type": "fact",
+					"home": "cogmap",
+					"degree": 4,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0704-7000-8000-000000000704",
+					"title": "Thicket beacon prairie",
+					"doc_type": "domain",
+					"home": "cogmap",
+					"degree": 2,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0705-7000-8000-000000000705",
+					"title": "Willow prairie ledger",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 2,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0706-7000-8000-000000000706",
+					"title": "Marble thicket beacon",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 2,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0707-7000-8000-000000000707",
+					"title": "Cedar delta orbit",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 1,
+					"excerpt": null
+				}
+			],
+			"edges": [
+				{
+					"id": "0191d0c0-0801-7000-8000-000000000801",
+					"source": "0191d0c0-0702-7000-8000-000000000702",
+					"target": "0191d0c0-0701-7000-8000-000000000701",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "relates_to",
+					"weight": 0.7
+				},
+				{
+					"id": "0191d0c0-0802-7000-8000-000000000802",
+					"source": "0191d0c0-0703-7000-8000-000000000703",
+					"target": "0191d0c0-0701-7000-8000-000000000701",
+					"edge_kind": "contains",
+					"polarity": "inverse",
+					"label": "part_of",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0803-7000-8000-000000000803",
+					"source": "0191d0c0-0701-7000-8000-000000000701",
+					"target": "0191d0c0-0704-7000-8000-000000000704",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "spans",
+					"weight": 0.6
+				},
+				{
+					"id": "0191d0c0-0804-7000-8000-000000000804",
+					"source": "0191d0c0-0701-7000-8000-000000000701",
+					"target": "0191d0c0-0705-7000-8000-000000000705",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0805-7000-8000-000000000805",
+					"source": "0191d0c0-0701-7000-8000-000000000701",
+					"target": "0191d0c0-0706-7000-8000-000000000706",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0806-7000-8000-000000000806",
+					"source": "0191d0c0-0702-7000-8000-000000000702",
+					"target": "0191d0c0-0707-7000-8000-000000000707",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0807-7000-8000-000000000807",
+					"source": "0191d0c0-0703-7000-8000-000000000703",
+					"target": "0191d0c0-0705-7000-8000-000000000705",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				}
+			]
+		},
+		"selection": {
+			"kind": "none"
+		},
+		"trail": null,
+		"resourceRow": null,
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [
+			{
+				"kind": "territory",
+				"id": "0191d0c0-0701-7000-8000-000000000a01"
+			}
+		],
+		"crumbTerritory": {
+			"id": "0191d0c0-0701-7000-8000-000000000a01",
+			"label": null
+		}
+	},
+	"regionDrillUnion": {
+		"owner": "@me",
+		"cogmapId": "0191d0c0-0700-7000-8000-000000000700",
+		"cogmapName": "Lucid atlas field",
+		"scopeFilter": null,
+		"tier": 1,
+		"focus": {
+			"kind": "territory",
+			"id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02"
+		},
+		"territories": null,
+		"home": null,
+		"neighborhood": {
+			"nodes": [
+				{
+					"id": "0191d0c0-0701-7000-8000-000000000701",
+					"title": "Verdant meridian lattice",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 5,
+					"excerpt": "Cobalt harbor signal \u2014 ember quartz cascade willow."
+				},
+				{
+					"id": "0191d0c0-0702-7000-8000-000000000702",
+					"title": "Cobalt harbor signal",
+					"doc_type": "concept",
+					"home": "cogmap",
+					"degree": 3,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0703-7000-8000-000000000703",
+					"title": "Ember quartz cascade",
+					"doc_type": "fact",
+					"home": "cogmap",
+					"degree": 4,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0704-7000-8000-000000000704",
+					"title": "Thicket beacon prairie",
+					"doc_type": "domain",
+					"home": "cogmap",
+					"degree": 2,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0705-7000-8000-000000000705",
+					"title": "Willow prairie ledger",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 2,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0706-7000-8000-000000000706",
+					"title": "Marble thicket beacon",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 2,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0707-7000-8000-000000000707",
+					"title": "Cedar delta orbit",
+					"doc_type": "session",
+					"home": "context",
+					"degree": 1,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0708-7000-8000-000000000708",
+					"title": "Meadow orbit harbor",
+					"doc_type": "theme",
+					"home": "cogmap",
+					"degree": 3,
+					"excerpt": null
+				},
+				{
+					"id": "0191d0c0-0709-7000-8000-000000000709",
+					"title": "Basalt fern summit",
+					"doc_type": "task",
+					"home": "context",
+					"degree": 1,
+					"excerpt": null
+				}
+			],
+			"edges": [
+				{
+					"id": "0191d0c0-0801-7000-8000-000000000801",
+					"source": "0191d0c0-0702-7000-8000-000000000702",
+					"target": "0191d0c0-0701-7000-8000-000000000701",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "relates_to",
+					"weight": 0.7
+				},
+				{
+					"id": "0191d0c0-0802-7000-8000-000000000802",
+					"source": "0191d0c0-0703-7000-8000-000000000703",
+					"target": "0191d0c0-0701-7000-8000-000000000701",
+					"edge_kind": "contains",
+					"polarity": "inverse",
+					"label": "part_of",
+					"weight": 0.9
+				},
+				{
+					"id": "0191d0c0-0803-7000-8000-000000000803",
+					"source": "0191d0c0-0701-7000-8000-000000000701",
+					"target": "0191d0c0-0704-7000-8000-000000000704",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "spans",
+					"weight": 0.6
+				},
+				{
+					"id": "0191d0c0-0804-7000-8000-000000000804",
+					"source": "0191d0c0-0701-7000-8000-000000000701",
+					"target": "0191d0c0-0705-7000-8000-000000000705",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0805-7000-8000-000000000805",
+					"source": "0191d0c0-0701-7000-8000-000000000701",
+					"target": "0191d0c0-0706-7000-8000-000000000706",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0806-7000-8000-000000000806",
+					"source": "0191d0c0-0702-7000-8000-000000000702",
+					"target": "0191d0c0-0707-7000-8000-000000000707",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0807-7000-8000-000000000807",
+					"source": "0191d0c0-0703-7000-8000-000000000703",
+					"target": "0191d0c0-0705-7000-8000-000000000705",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				},
+				{
+					"id": "0191d0c0-0808-7000-8000-000000000808",
+					"source": "0191d0c0-0708-7000-8000-000000000708",
+					"target": "0191d0c0-0701-7000-8000-000000000701",
+					"edge_kind": "near",
+					"polarity": "forward",
+					"label": "relates_to",
+					"weight": 0.5
+				},
+				{
+					"id": "0191d0c0-0809-7000-8000-000000000809",
+					"source": "0191d0c0-0708-7000-8000-000000000708",
+					"target": "0191d0c0-0709-7000-8000-000000000709",
+					"edge_kind": "express",
+					"polarity": "forward",
+					"label": "derived_from",
+					"weight": 1.0
+				}
+			]
+		},
+		"selection": {
+			"kind": "none"
+		},
+		"trail": null,
+		"resourceRow": null,
+		"filters": {
+			"lensId": null,
+			"edgeKinds": [],
+			"docTypes": []
+		},
+		"focusPath": [
+			{
+				"kind": "territory",
+				"id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02"
+			}
+		],
+		"crumbTerritory": {
+			"id": "0191d0c0-0701-7000-8000-000000000a01~0191d0c0-0701-7000-8000-000000000a02",
+			"label": "2 regions"
+		}
+	}
 }

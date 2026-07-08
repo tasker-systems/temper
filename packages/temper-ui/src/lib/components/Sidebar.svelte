@@ -6,14 +6,13 @@
 	interface Props {
 		contexts: ContextRowWithCounts[];
 		user: { display_name: string; email: string } | null;
-		isAdmin: boolean;
 		/** Operator-configured instance brand ("temper @ acme"); null → default. */
 		instanceName?: string | null;
 		collapsed: boolean;
 		onToggle: () => void;
 	}
 
-	let { contexts, user, isAdmin, instanceName = null, collapsed, onToggle }: Props = $props();
+	let { contexts, user, instanceName = null, collapsed, onToggle }: Props = $props();
 
 	let brand = $derived(instanceName?.trim() || 'temper');
 
@@ -65,35 +64,15 @@
 			</a>
 
 			{#if myContexts.length > 0}
-				<ContextNavGroup label="Contexts" ownerPrefix="@me" contexts={myContexts} />
+				<ContextNavGroup label="Contexts" contexts={myContexts} />
 			{/if}
 
 			{#if teamContexts.length > 0}
-				<ContextNavGroup label="Teams" ownerPrefix="+team" contexts={teamContexts} />
+				<ContextNavGroup label="Teams" contexts={teamContexts} />
 			{/if}
 		</nav>
 
 		<div class="border-t border-zinc-800 py-2">
-			<a
-				href="/teams"
-				class="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200"
-			>
-				<span class="w-1.5 h-1.5 rounded-sm bg-zinc-600"></span>Teams
-			</a>
-			{#if isAdmin}
-				<a
-					href="/admin/access"
-					class="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200"
-				>
-					<span class="w-1.5 h-1.5 rounded-sm bg-zinc-600"></span>Admin
-				</a>
-			{/if}
-			<a
-				href="/settings"
-				class="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200"
-			>
-				<span class="w-1.5 h-1.5 rounded-sm bg-zinc-600"></span>Settings
-			</a>
 			<a
 				href="/auth/logout"
 				class="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200"

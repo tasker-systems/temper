@@ -24,8 +24,16 @@ export const load: PageLoad = async ({ fetch }) => {
 	if (!dev) throw error(404, 'Not found');
 
 	// Prefer a local capture if present; otherwise fall back to the committed default.
-	const local = await fetch('/dev/atlas-fixtures.local.json');
-	const res = local.ok ? local : await fetch('/dev/atlas-fixtures.json');
+	// In dev, a server-side `fetch` of an absent static file *throws* (ENOENT) rather
+	// than resolving to a non-ok Response, so the local probe must be guarded — without
+	// the catch, a fresh checkout with no local override 500s instead of falling back.
+	let res: Response;
+	try {
+		const local = await fetch('/dev/atlas-fixtures.local.json');
+		res = local.ok ? local : await fetch('/dev/atlas-fixtures.json');
+	} catch {
+		res = await fetch('/dev/atlas-fixtures.json');
+	}
 	if (!res.ok) {
 		throw error(
 			500,

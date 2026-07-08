@@ -11,6 +11,7 @@
 	import { relativeTime } from '$lib/graph/atlas/relativeTime';
 	import { summarizeEvent } from '$lib/graph/atlas/eventSummary';
 	import { flattenPayload } from '$lib/graph/atlas/payloadRows';
+	import { resourceHref } from '$lib/vault-url';
 
 	interface Props {
 		selection: SelectedElement;
@@ -60,6 +61,9 @@
 	function drillIn() {
 		if (node) goto(buildDrillNodeUrl($page.url, node.id));
 	}
+	// Bridge to the full resource page. null for cogmap-homed nodes (no context
+	// route) and for edges — gate the button on it.
+	const viewHref = $derived(isNode && resourceRow ? resourceHref(resourceRow) : null);
 </script>
 
 {#if selection.kind !== 'none'}
@@ -70,9 +74,16 @@
 		</header>
 		<h2 class="title">{nodeTitle ?? (edge ? `${edge.edge_kind}` : '')}</h2>
 
-		{#if canDrill}
+		{#if canDrill || viewHref}
 			<section class="actions">
-				<button class="drill-in" onclick={drillIn}>Drill into neighborhood →</button>
+				{#if canDrill}
+					<button class="drill-in" onclick={drillIn}>Drill into neighborhood →</button>
+				{/if}
+				{#if viewHref}
+					<a class="view-resource" href={viewHref} data-testid="view-full-resource"
+						>View full resource →</a
+					>
+				{/if}
 			</section>
 		{/if}
 
@@ -272,6 +283,25 @@
 	.drill-in:hover {
 		background: color-mix(in srgb, var(--hue) 22%, transparent);
 		border-color: color-mix(in srgb, var(--hue) 70%, transparent);
+	}
+	.view-resource {
+		display: block;
+		width: 100%;
+		margin-top: 6px;
+		text-align: left;
+		background: transparent;
+		border: 1px solid color-mix(in srgb, var(--hue) 35%, transparent);
+		border-radius: 6px;
+		padding: 7px 10px;
+		color: color-mix(in srgb, var(--hue) 80%, white);
+		font-size: 12px;
+		letter-spacing: 0.02em;
+		text-decoration: none;
+		cursor: pointer;
+	}
+	.view-resource:hover {
+		background: color-mix(in srgb, var(--hue) 12%, transparent);
+		border-color: color-mix(in srgb, var(--hue) 55%, transparent);
 	}
 
 	/* ─── Excerpt — read-first body preview, directly under the title ─── */

@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { contextHref, contextGraphHref } from '$lib/vault-url';
 	import type { ContextRowWithCounts } from '$lib/types';
 
 	interface Props {
 		label: string;
-		ownerPrefix: string;
 		contexts: ContextRowWithCounts[];
 	}
 
-	let { label, ownerPrefix, contexts }: Props = $props();
+	let { label, contexts }: Props = $props();
 
 	function isActive(ctx: ContextRowWithCounts): boolean {
-		return $page.params.owner === ownerPrefix && $page.params.context === ctx.name;
+		return $page.params.owner === ctx.owner_ref && $page.params.context === ctx.slug;
 	}
 
 	function isGraphActive(ctx: ContextRowWithCounts): boolean {
@@ -24,7 +24,7 @@
 </div>
 {#each contexts as ctx}
 	<a
-		href="/vault/{ownerPrefix}/{ctx.name}"
+		href={contextHref(ctx.owner_ref, ctx.slug)}
 		class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
 		       {isActive(ctx)
 			? 'border-l-2 border-quiet-accent bg-zinc-800/50 text-zinc-100 pl-[calc(0.75rem-2px)]'
@@ -38,7 +38,7 @@
 	</a>
 	{#if isActive(ctx)}
 		<a
-			href="/vault/{ownerPrefix}/{ctx.name}/graph"
+			href={contextGraphHref(ctx.owner_ref, ctx.slug)}
 			class="flex items-center gap-2 pl-8 pr-3 py-1.5 text-sm transition-colors
 			       {isGraphActive(ctx)
 				? 'border-l-2 border-quiet-accent bg-zinc-800/50 text-zinc-100 pl-[calc(2rem-2px)]'

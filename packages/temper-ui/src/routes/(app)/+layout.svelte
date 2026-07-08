@@ -32,7 +32,6 @@
 		user={data.profile
 			? { display_name: data.profile.display_name, email: data.profile.email ?? '' }
 			: null}
-		isAdmin={data.entitlements?.is_admin ?? false}
 		instanceName={data.instanceName ?? null}
 		collapsed={sidebarCollapsed.value}
 		onToggle={() => sidebarCollapsed.toggle()}
