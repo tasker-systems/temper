@@ -1,23 +1,11 @@
 import type { PageServerLoad } from './$types';
-import { apiGet } from '$lib/server/api';
-import type { SubgraphResponse } from '$lib/types/generated/graph';
+import { redirect } from '@sveltejs/kit';
+import { contextGraphHref } from '$lib/vault-url';
 
-export const load: PageServerLoad = async ({ locals, params }) => {
-	// Build the decorated context ref from the route segments.
-	// [owner] is already in sigil form (@me, @handle, +team-slug) and [context] is the slug,
-	// so the decorated ref is `<owner>/<context>`. The API resolves this server-side via
-	// parse_context_ref → resolve_context_ref (visibility-gated) rather than accepting a
-	// bare context name.
-	const contextRef = `${params.owner}/${params.context}`;
-	const query = new URLSearchParams({ context_ref: contextRef });
-	const subgraph = await apiGet<SubgraphResponse>(
-		`/api/graph/subgraph?${query}`,
-		locals.accessToken!
-	);
-
-	return {
-		owner: params.owner,
-		context: params.context,
-		subgraph
-	};
+// Beat E: the legacy Cytoscape context graph moved to the Atlas context door
+// (`/graph/[owner]?context=<slug>`). This 308 keeps old `/vault/<owner>/<slug>/graph`
+// bookmarks working until Task 12 deletes this route wholesale. 308 (not 303) so the
+// method and the permanence are preserved — this is a durable relocation, not a one-off.
+export const load: PageServerLoad = async ({ params }) => {
+	throw redirect(308, contextGraphHref(params.owner, params.context));
 };

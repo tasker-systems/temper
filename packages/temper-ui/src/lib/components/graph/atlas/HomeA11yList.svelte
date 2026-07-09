@@ -23,6 +23,7 @@
 	} from '$lib/graph/atlas/nav';
 	import { deriveScopeChips } from '$lib/graph/atlas/scopeChips';
 	import { relativeTime } from '$lib/graph/atlas/relativeTime';
+	import { contextGraphHref } from '$lib/vault-url';
 
 	interface Props {
 		home: AtlasHome;
@@ -89,7 +90,7 @@
 			<ul>
 				{#each buildFiltered as c (c.id)}
 					<li>
-						<a href={`/vault/${c.owner_ref}`}
+						<a href={contextGraphHref(c.owner_ref, c.slug)}
 							>{c.name} — {c.owner_ref} · {c.resource_count} resources · last active {lastActiveText(
 								c.last_active_at
 							)}</a

@@ -27,6 +27,7 @@
 	import { TERRITORY_TINTS } from '$lib/graph/atlas/palette';
 	import { intensityFor, buildTint, researchTint, recencyGlow } from '$lib/graph/atlas/homeTint';
 	import { deriveScopeChips } from '$lib/graph/atlas/scopeChips';
+	import { contextGraphHref } from '$lib/vault-url';
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 
 	interface Props {
@@ -143,10 +144,11 @@
 		goto(clearHomeLensUrl($page.url), { keepFocus: true, noScroll: true });
 	}
 
-	// Body navigation. Research → the cogmap panorama (Beat A). Build → the context's
-	// resource list (`/vault/[owner]/[context]`, resolving `context_ref = owner/slug`).
+	// Body navigation. Research → the cogmap panorama (Beat A). Build → the Atlas
+	// context door (`/graph/[owner]?context=<slug>`, Beat E) via the single
+	// `contextGraphHref` authority, so the field and its a11y mirror route identically.
 	function enterContext(ownerRef: string, slug: string) {
-		goto(`/vault/${ownerRef}/${slug}`);
+		goto(contextGraphHref(ownerRef, slug));
 	}
 	// The `shared` owner-scope (a context visible only via a cross-owner read-grant,
 	// no team) has no routable owner segment — suppress navigation rather than 404.

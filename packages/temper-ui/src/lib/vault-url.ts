@@ -14,8 +14,14 @@ export function contextHref(ownerRef: string, slug: string): string {
 	return `/vault/${ownerRef}/${encodeURIComponent(slug)}`;
 }
 
+/**
+ * The Atlas context door. Both the left-nav "Graph" link and the Home build
+ * circle resolve here, so there is exactly one context-graph URL in the app.
+ * `ownerRef` keeps its sigils (a valid path segment); the slug is the `?context`
+ * scope and is percent-encoded.
+ */
 export function contextGraphHref(ownerRef: string, slug: string): string {
-	return `${contextHref(ownerRef, slug)}/graph`;
+	return `/graph/${ownerRef}?context=${encodeURIComponent(slug)}`;
 }
 
 /**

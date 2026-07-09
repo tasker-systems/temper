@@ -18,10 +18,27 @@ bun run dev
 ```
 
 Pick a **scenario** (home / nodeNeighborhood / nodeSelected / nodeSelectedContext /
-cogmapPanorama / leafBare / regionDrill / regionDrillUnion) and a **viewport** preset (or type w/h).
+cogmapPanorama / leafBare / regionDrill / regionDrillUnion / contextPanorama /
+contextDrill) and a **viewport** preset (or type w/h).
 The frame clips like a real bounded viewport and is drag-resizable from its corner.
 On a fresh checkout the harness runs against the committed synthetic fixtures — no
 local capture required.
+
+### The two context-door scenarios (Beat E)
+
+- **`contextPanorama`** — the context door's Tier 0: several goal-container territories
+  with a heavy-tailed `member_count` spread (so the `log1p` intensity ramp is visible)
+  plus a non-empty residual tray (buckets for the resources that reach no container).
+- **`contextDrill`** — a Tier-1 container drill (`focus: container`, `coreHome: 'context'`):
+  the goal seed plus its members, mixing `home: 'context'` (rounded-square) and
+  `home: 'cogmap'` (circle) nodes so both cross-home mark shapes render under the
+  inverted radial.
+
+Unlike the other eight scenarios, these two were **hand-authored** synthetically
+(exactly conforming to `AtlasViewData` / `ContextPanorama` / `AtlasSubgraph`), **not
+captured** from prod: the context door predates any deployed instance of it, so there
+was nothing live to capture. Regenerate them by editing the committed bundle directly
+(the capture console script below has no context-door path).
 
 ## Fixtures
 
