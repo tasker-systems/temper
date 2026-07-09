@@ -216,6 +216,27 @@ script = [
   "ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts"
 ]
 
+[tasks.openapi]
+description = "Emit the OpenAPI contract (product of the router) to openapi.json at the repo root"
+script = [
+  "out=${CARGO_MAKE_WORKING_DIRECTORY}/openapi.json",
+  "cargo run --quiet -p temper-api --bin emit-openapi > \"$out\"",
+  "if [ ! -s \"$out\" ]; then echo 'ERROR: openapi.json is missing or empty'; exit 1; fi",
+  "echo \"OpenAPI spec written: $out ($(wc -c < \"$out\" | tr -d ' ') bytes)\""
+]
+
+[tasks.openapi-check]
+description = "Verify the committed openapi.json matches a fresh emission from the router"
+script = [
+  "committed=${CARGO_MAKE_WORKING_DIRECTORY}/openapi.json",
+  "if [ ! -s \"$committed\" ]; then echo 'ERROR: openapi.json is missing or empty — run: cargo make openapi'; exit 1; fi",
+  "fresh=$(mktemp)",
+  "trap 'rm -f \"$fresh\"' EXIT",
+  "cargo run --quiet -p temper-api --bin emit-openapi > \"$fresh\"",
+  "if ! diff -u \"$committed\" \"$fresh\"; then echo 'ERROR: openapi.json is out of date with the router — run: cargo make openapi'; exit 1; fi",
+  "echo 'openapi.json is up to date with the router'"
+]
+
 # =============================================================================
 # Docker Tasks
 # =============================================================================
