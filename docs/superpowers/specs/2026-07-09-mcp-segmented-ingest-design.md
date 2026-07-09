@@ -95,6 +95,8 @@ the repo's convention on fixes whose story is "this PR's new code path surfaced 
 - `AppendBlockPayload.chunks_packed: Option<String>` — `Some` = caller chunked and embedded (CLI);
   `None` = server chunks (MCP, steward). Mirrors `IngestPayload`.
 - `BlocksResponse.body_hash: String` — additive; the CLI ignores it.
+- `SegmentedBeginResponse.body_hash: String` — the same value after block 0, so a session that
+  appends nothing still has something to echo at finalize.
 - `AppendBlockPayload.content` / `.content_hash` become load-bearing (§3), documented as such.
 
 ### Substrate (`temper-substrate`)
