@@ -342,7 +342,9 @@ pub async fn cogmap_neighborhood_slice(
             degree,
             salience: None, // neighborhood-tier salience deferred (no per-node source yet)
             excerpt: first_chunk.as_deref().and_then(compute_excerpt),
-            stage: None, // Task 3 wires the real value from graph_atlas_nodes_visible
+            // graph_atlas_nodes_cogmap does not return a stage column (only the
+            // graph_atlas_nodes_visible read was widened for it, spec D8), so None here.
+            stage: None,
         },
     )
     .collect();
@@ -535,16 +537,24 @@ pub async fn region_composition_slice(
 
     let nodes: Vec<AtlasNode> = sqlx::query_as::<
         _,
-        (Uuid, String, Option<String>, String, i32, Option<String>),
+        (
+            Uuid,
+            String,
+            Option<String>,
+            String,
+            i32,
+            Option<String>,
+            Option<String>,
+        ),
     >(
-        "SELECT id, title, doc_type, home, degree, first_chunk FROM graph_atlas_nodes_visible($1, $2)",
+        "SELECT id, title, doc_type, home, degree, first_chunk, stage FROM graph_atlas_nodes_visible($1, $2)",
     )
     .bind(profile_id.as_uuid())
     .bind(&node_ids)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(id, title, doc_type, home, degree, first_chunk)| AtlasNode {
+    .map(|(id, title, doc_type, home, degree, first_chunk, stage)| AtlasNode {
         id,
         title,
         doc_type,
@@ -556,7 +566,7 @@ pub async fn region_composition_slice(
         degree,
         salience: None,
         excerpt: first_chunk.as_deref().and_then(compute_excerpt),
-        stage: None, // Task 3 wires the real value from graph_atlas_nodes_visible
+        stage,
     })
     .collect();
 

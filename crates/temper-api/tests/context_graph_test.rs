@@ -112,3 +112,44 @@ async fn container_counts_survive_the_parent_of_to_advances_conversion(pool: PgP
     );
     let _ = goal;
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn atlas_nodes_visible_reports_task_stage(pool: PgPool) {
+    // Spec D8: the widened graph_atlas_nodes_visible must surface a task's workflow stage.
+    // Stage is stored under property_key `temper-stage` (NOT `stage`) as a jsonb scalar,
+    // exactly like the legacy subgraph's `stage_raw`. There is no `set_resource_stage`
+    // helper, so the seed writes the kb_properties row directly, mirroring how the shared
+    // seed_resource helper writes `doc_type`.
+    let (profile, _ctx, _goal) = seed_context_with_goal_and_tasks(&pool, 1).await;
+
+    let task_id: Uuid = sqlx::query_scalar(
+        "SELECT owner_id FROM kb_properties WHERE property_key='doc_type'
+           AND property_value #>> '{}' = 'task' LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("a task");
+
+    // Write the stage the way the codebase stores it: a `temper-stage` kb_properties row
+    // holding a jsonb string. Reuse an existing event row to satisfy the FK.
+    sqlx::query(
+        "INSERT INTO kb_properties \
+             (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id) \
+         VALUES ('kb_resources', $1, 'temper-stage', to_jsonb('in-progress'::text), \
+                 (SELECT id FROM kb_events LIMIT 1), (SELECT id FROM kb_events LIMIT 1))",
+    )
+    .bind(task_id)
+    .execute(&pool)
+    .await
+    .expect("insert temper-stage property");
+
+    let stage: Option<String> =
+        sqlx::query_scalar("SELECT stage FROM graph_atlas_nodes_visible($1, $2)")
+            .bind(profile)
+            .bind(&[task_id][..])
+            .fetch_one(&pool)
+            .await
+            .expect("node row");
+
+    assert_eq!(stage.as_deref(), Some("in-progress"));
+}
