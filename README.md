@@ -95,8 +95,11 @@ For version pinning, uninstall instructions, and building from source (including
 ## Quick Start
 
 ```bash
-# Initialize — temper configures auth and ensures your default context server-side
+# Initialize — temper writes your config and ensures your default context server-side
 temper init
+
+# Log in (browser OAuth, PKCE). `temper auth status` shows where you stand.
+temper auth login
 
 # Create a context for your project on the server
 temper context create myapp
@@ -105,48 +108,59 @@ temper context create myapp
 temper context subscribe myapp
 
 # Materialize a local projection of the context
-temper pull myapp
+temper pull @me/myapp
 
 # Add a document — temper extracts markdown and ingests it via the cloud pipeline
-temper resource create --from ~/projects/myapp/docs/design.md --context myapp
+temper resource create --from ~/projects/myapp/docs/design.md --context @me/myapp
 
-# Search across your vault
+# Search across your knowledge base
 temper search "authentication decisions"
 
 # Generate and install the Claude Code skill
 temper skill install
 
 # Write a session note (body via --body @file or piped stdin)
-temper resource create --type session --context myapp --title "Implemented auth flow, chose JWT rotation"
+temper resource create --type session --context @me/myapp --title "Implemented auth flow, chose JWT rotation"
 ```
+
+> **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable: `--context myapp` and `temper pull myapp` are both rejected. The two exceptions are `temper context create` and `temper context subscribe`, which take a plain name because they are naming a context rather than resolving one.
+>
+> A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every row printed by `list`, `show`, and `search` carries a `ref` field: copy it, paste it.
 
 ## The Vault
 
-The vault is a directory of markdown files with YAML frontmatter. This is deliberate:
+The vault is a directory of markdown files with YAML frontmatter — a **read-only projection** of cloud state, materialized on demand by `temper pull`. Writes route through the API, never through the files. Deleting a projected file is a local cache miss, not a deletion; `temper resource delete <ref>` is the real thing.
 
-- **Human-readable.** Browse your vault in any editor, in Obsidian, or on GitHub. No proprietary formats.
-- **Version-controllable.** Git tracks changes. Diffs are readable. History is auditable.
+Markdown-on-disk is deliberate:
+
+- **Human-readable.** Browse the projection in any editor, in Obsidian, or on GitHub. No proprietary formats.
+- **Inspectable.** Diffs are readable, so you can see what a pull changed.
 - **AI-native.** Language models understand markdown and YAML frontmatter natively. No parsing overhead.
 - **Portable.** The knowledge base is the unit of value, not the tool.
 
 ## Commands
 
+Every command accepts the global flags `--format json|toon`, `--color auto|always|never`, and `--vault <path>`. Output defaults to TOON on a TTY and **JSON otherwise** — so an agent piping `temper` gets machine-readable output with no flag at all. Precedence runs flag → env (`TEMPER_FORMAT` / `TEMPER_COLOR`) → the `[cli]` section of your config → the TTY-aware default. Edit those defaults with `temper config edit`.
+
 ### Core
 
 | Command | Description |
 |---------|-------------|
-| `temper init` | Initialize a new vault |
-| `temper check` | Verify vault integrity and tool health |
-| `temper status` | Vault overview |
-| `temper warmup [--context <ctx>]` | Context primer for new sessions |
-| `temper pull <ctx>` | Materialize a context's projection from the cloud |
+| `temper init` | Initialize config and a local projection directory |
+| `temper check` | Check projection integrity and tool health |
+| `temper status` | Overview of your contexts and recent work |
+| `temper warmup [--context <ctx-ref>]` | Context primer for new sessions |
+| `temper pull <ctx-ref>` | Materialize a context's projection from the cloud |
 
 ### Search
 
 | Command | Description |
 |---------|-------------|
 | `temper search <query>` | Hybrid full-text + semantic search |
+| `temper search <query> --limit <n>` | Cap the result count (default 10) |
 | `temper search <query> --edge-type <k> --depth <n>` | Search with graph expansion along typed edges |
+| `temper search <query> --cogmap <ref>` | Scope the search to a single cognitive map |
+| `temper search <query> --wayfind [--lens <ref>]` | Lens-driven region-salience search across your visible maps |
 
 ### Content
 
@@ -156,14 +170,16 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
 | `temper resource list --type <t>` | List resources of a type |
 | `temper resource show <ref>` | Show a resource by ref |
+| `temper resource show <ref> --meta-only` | Frontmatter only — a cheap orientation read, no body |
+| `temper resource show <ref> --edges` | Show a resource plus its graph edges |
 
 ### Goals and Tasks
 
 | Command | Description |
 |---------|-------------|
-| `temper resource create --type task --title <t> --context <ctx>` | Create a task |
-| `temper resource create --type goal --title <t> --context <ctx>` | Create a goal |
-| `temper resource list --type task [--context <ctx>]` | List tasks (or any doc type) |
+| `temper resource create --type task --title <t> --context <ctx-ref>` | Create a task |
+| `temper resource create --type goal --title <t> --context <ctx-ref>` | Create a goal |
+| `temper resource list --type task [--context <ctx-ref>]` | List tasks (or any doc type) |
 | `temper resource update <ref> --stage done` | Mark a task done |
 
 > `temper resource create` writes *into* a context (`--context`). `temper resource update`, `show`, and `delete` take a single **ref** — a UUID or the decorated `slug-<uuid>` form — and need no `--type`/`--context`.
@@ -173,8 +189,26 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | Command | Description |
 |---------|-------------|
 | `temper edge assert <source> <target> --kind <k> --polarity <p> --label <l>` | Assert a typed edge (kinds: express, contains, leads-to, near; polarity forward/inverse) |
+| `temper edge retype <edge-handle> --kind <k> --polarity <p>` | Change an edge's kind and polarity |
 | `temper edge reweight <edge-handle> --weight <n>` | Change an edge's weight |
 | `temper edge fold <edge-handle>` | Fold (supersede) an edge |
+
+### Cognitive Maps
+
+A cognitive map is a telos-seeded region of the substrate. Nodes are *distilled* resources — a map node is never the same row as its source. Authoring into a map happens under an **invocation envelope**, so every act is correlated and auditable.
+
+| Command | Description |
+|---------|-------------|
+| `temper cogmap shape <ref>` | Read a map's materialized regions |
+| `temper cogmap analytics <ref>` | Map-level analytics (telos, staleness, regulation) |
+| `temper cogmap region-metrics <ref>` | Per-region analytics metrics |
+| `temper invocation open --cogmap <ref> --trigger-kind manual` | Open an envelope; the server mints the id |
+| `temper invocation close <ref> --disposition completed` | Close an envelope with a terminal disposition |
+| `temper invocation show <ref>` | Read one envelope plus its acts |
+| `temper resource create --cogmap <ref> --sources <refs> …` | Author a node into a map, citing its sources |
+| `temper resource facet <ref> --values '<json>'` | Set a typed facet on a resource |
+
+Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. See [cognitive maps](https://temperkb.io/cognitive-maps).
 
 ### Contexts and Skills
 
@@ -184,16 +218,24 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper context subscribe <n>` | Subscribe locally so `temper pull` materializes it |
 | `temper context unsubscribe <n>` | Unsubscribe locally |
 | `temper context list` | List contexts visible to you on the server |
+| `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (admin-only; `@me` shorthand not accepted here) |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
 
-### Cloud
+### Cloud and Auth
 
 | Command | Description |
 |---------|-------------|
-| `temper auth` | Authenticate with temper cloud |
-| `temper pull <context>` | Materialize a local projection of a context |
+| `temper auth login` | Log in via browser OAuth (PKCE flow) |
+| `temper auth status` | Show current auth status |
+| `temper auth export-token` | Export a refreshed access token (for CI) |
+| `temper auth request-access` | Request access on an invite-only instance |
+| `temper invitations` | List pending team invitations addressed to you |
+| `temper team join <token>` | Accept a team invitation |
+| `temper pull <ctx-ref>` | Materialize a local projection of a context |
 | `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
+
+`temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? `temper init` takes `--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience`, and `--idp` — see [docs/guides/self-hosting.md](docs/guides/self-hosting.md).
 
 ## Semantic Search
 
@@ -221,7 +263,7 @@ To automatically prime new Claude Code sessions with recent context, add a `Sess
     "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "temper warmup --context myapp"
+        "command": "temper warmup --context @me/myapp"
       }]
     }]
   }
