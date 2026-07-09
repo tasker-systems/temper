@@ -4,6 +4,17 @@ use crate::actions::{runtime, search as search_actions};
 use crate::error::Result;
 use crate::format::OutputFormat;
 
+/// Envelope for `temper search --format json`.
+///
+/// Search previously rendered a bare top-level array, which forced every
+/// consumer to special-case it against the object every other command emits.
+/// Rows stay `serde_json::Value` because `inject_ref` has already decorated
+/// them with a `ref` key that is not on the wire type.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct SearchResultsResponse {
+    pub results: Vec<serde_json::Value>,
+}
+
 /// Run a search. `args` carries the CLI-derived query/filter/graph fields
 /// (including the already-resolved query `embedding`); the caller builds it
 /// — see `main.rs`'s `Commands::Search` arm.
@@ -38,7 +49,11 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
             crate::commands::resource::inject_ref(row);
         }
     }
-    let rendered = crate::format::render(&results_value, fmt)?;
+    let results = match results_value {
+        serde_json::Value::Array(rows) => rows,
+        other => vec![other],
+    };
+    let rendered = crate::format::render(&SearchResultsResponse { results }, fmt)?;
     crate::output::plain(rendered);
 
     Ok(())

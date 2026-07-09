@@ -36,9 +36,14 @@ pub struct CloseInvocationRequest {
 
 /// Acknowledgement returned by the open endpoint — carries the minted
 /// invocation id, fed back into the close call.
+///
+/// `id` is the generic create-response key (a duplicate of `invocation_id`), so a
+/// caller's "create X, capture its id" helper reads `id` from every create-style ack
+/// without knowing the per-command alias. Both surfaces (CLI + MCP) inherit it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct InvocationAck {
+    pub id: Uuid,
     pub invocation_id: Uuid,
 }
 
@@ -51,4 +56,21 @@ pub struct InvocationAck {
 pub struct InvocationCloseAck {
     pub invocation_id: Uuid,
     pub disposition: Disposition,
+}
+
+#[cfg(test)]
+mod ack_tests {
+    use super::*;
+
+    #[test]
+    fn invocation_ack_carries_both_id_and_invocation_id() {
+        let iid = uuid::Uuid::nil();
+        let ack = InvocationAck {
+            id: iid,
+            invocation_id: iid,
+        };
+        let v = serde_json::to_value(&ack).expect("serialize");
+        assert_eq!(v["id"], v["invocation_id"], "id must alias invocation_id");
+        assert!(v.get("id").is_some(), "generic `id` key present: {v}");
+    }
 }

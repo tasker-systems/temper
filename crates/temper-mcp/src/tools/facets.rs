@@ -90,6 +90,7 @@ pub async fn facet_set(
         .map_err(|e| map_err(e, "facet_set"))?;
 
     let ack = FacetAck {
+        id: Uuid::from(out.value),
         property_id: Uuid::from(out.value),
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
