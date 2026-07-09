@@ -59,10 +59,17 @@ export const LIGHT_MODE_RING = '#2a2f38';
 /**
  * Low-opacity cartographic hull washes for Tier-0 territories: region is
  * warm-neutral, context is cool, cogmap is warm.
+ *
+ * Temperature encodes the AXIS, not container-ness — warm = the knowledge axis
+ * (regions, cogmaps, authored doc-types), cool = the builder axis (contexts and
+ * the workflow doc-types). So a warm field means "you are in knowledge" and a
+ * cool field means "you are in your work", with no legend needed. A goal
+ * territory in a context panorama therefore borrows the region's FORM (sized,
+ * force-separated, label-gated, enterable) but keeps the cool context tint.
  */
 export const TERRITORY_TINTS: Record<TerritoryKind, string> = {
 	region: '#e0b060',
-	context: '#6fa8c7',
+	context: '#7dbae8',
 	cogmap: '#e8942e'
 };
 
