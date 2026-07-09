@@ -1,9 +1,13 @@
 // nav.test.ts
 import { describe, expect, it } from 'vitest';
 import {
+	focusToken,
 	activeFilterCount,
 	buildAscendUrl,
 	buildCogmapUrl,
+	buildContextUrl,
+	buildDrillBucketUrl,
+	buildDrillContainerUrl,
 	buildDrillNodeUrl,
 	buildDrillTerritoriesUrl,
 	buildDrillTerritoryUrl,
@@ -19,6 +23,7 @@ import {
 	clearSelectionUrl,
 	deriveTier,
 	parseCogmap,
+	parseContextScope,
 	parseFilters,
 	parseFocus,
 	territoryIds,
@@ -270,5 +275,75 @@ describe('territory union (Beat D)', () => {
 
 	it('buildDrillTerritoriesUrl commits a whole selection as a union', () => {
 		expect(idsAfter(buildDrillTerritoriesUrl(u(''), ['A', 'B', 'C']))).toEqual(['A', 'B', 'C']);
+	});
+});
+
+describe('context door', () => {
+	const u = (s: string) => new URL(`http://x${s}`);
+
+	it('reads the ?context scope', () => {
+		expect(parseContextScope(u('/graph/@me?context=temper'))).toBe('temper');
+		expect(parseContextScope(u('/graph/@me'))).toBeNull();
+	});
+
+	it('entering a context clears any focus', () => {
+		expect(buildContextUrl(u('/graph/@me?focus=node:abc'), 'temper')).toBe('/graph/@me?context=temper');
+	});
+
+	it('parses a container focus and puts it on tier 1', () => {
+		const f = parseFocus(u('/graph/@me?context=temper&focus=container:9f2e').searchParams);
+		expect(f).toEqual({ kind: 'container', id: '9f2e' });
+		expect(deriveTier(f)).toBe(1);
+	});
+
+	it('parses a bucket focus and puts it on tier 1', () => {
+		const f = parseFocus(u('/graph/@me?context=temper&focus=bucket:doc_type:session').searchParams);
+		expect(f).toEqual({ kind: 'bucket', groupKey: 'doc_type', value: 'session' });
+		expect(deriveTier(f)).toBe(1);
+	});
+
+	it('round-trips a bucket value containing a colon', () => {
+		const url = buildDrillBucketUrl(u('/graph/@me?context=temper'), 'stage', 'in:progress');
+		expect(parseFocus(new URL(`http://x${url}`).searchParams)).toEqual({
+			kind: 'bucket',
+			groupKey: 'stage',
+			value: 'in:progress'
+		});
+	});
+
+	it('builds a container drill', () => {
+		expect(buildDrillContainerUrl(u('/graph/@me?context=temper'), '9f2e')).toBe(
+			'/graph/@me?context=temper&focus=container%3A9f2e'
+		);
+	});
+});
+
+describe('focusToken', () => {
+	// The inverse of parseFocusToken. A `bucket` focus carries no `id`, so the two call
+	// sites that used to interpolate `f.id` (crumb path encoder, AtlasPage viewKey)
+	// silently produced "bucket:undefined". One authority, one token.
+	it('serializes id-bearing focus kinds', () => {
+		expect(focusToken({ kind: 'node', id: 'n1' })).toBe('node:n1');
+		expect(focusToken({ kind: 'territory', id: 't1' })).toBe('territory:t1');
+		expect(focusToken({ kind: 'container', id: 'c1' })).toBe('container:c1');
+	});
+
+	it('serializes a bucket by (groupKey, value), never undefined', () => {
+		expect(focusToken({ kind: 'bucket', groupKey: 'doc_type', value: 'session' })).toBe(
+			'bucket:doc_type:session'
+		);
+	});
+
+	it('round-trips every kind through parseFocusToken via parseFocus', () => {
+		const kinds: Parameters<typeof focusToken>[0][] = [
+			{ kind: 'node', id: 'n1' },
+			{ kind: 'territory', id: 't1' },
+			{ kind: 'container', id: 'c1' },
+			{ kind: 'bucket', groupKey: 'stage', value: 'in:progress' }
+		];
+		for (const f of kinds) {
+			const params = new URLSearchParams({ focus: focusToken(f) });
+			expect(parseFocus(params)).toEqual(f);
+		}
 	});
 });

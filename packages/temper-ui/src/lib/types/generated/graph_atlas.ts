@@ -21,7 +21,14 @@ export type AtlasNode = { id: string, title: string, doc_type: string | null, ho
  * body, or on any read that doesn't source a first chunk. Renders as the
  * EXCERPT block in the TrailRail and the hover-card snippet.
  */
-excerpt: string | null, };
+excerpt: string | null, 
+/**
+ * Workflow stage (`backlog`/`in-progress`/`done`/`cancelled`) for doc-types that
+ * carry one — tasks, chiefly. `None` for every other doc-type and for reads that
+ * do not source it. Ported from the legacy subgraph's `stage_raw` (spec D8): stage
+ * is load-bearing on a builder surface.
+ */
+stage: string | null, };
 
 /**
  * The response body for an R4 neighborhood slice.

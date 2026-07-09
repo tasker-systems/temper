@@ -46,4 +46,37 @@ describe('forceNeighborhood radial-by-home', () => {
 		const contextMean = (radius('c1') + radius('c2')) / 2;
 		expect(contextMean).toBeGreaterThan(facetMean);
 	});
+
+	// A deterministic subgraph with BOTH homes present, so the coreHome tests can
+	// compare the mean radius of each home. No randomness — the ring init is fixed.
+	const mixedSubgraph: AtlasSubgraph = {
+		nodes: [
+			node('f1', 'cogmap'),
+			node('f2', 'cogmap'),
+			node('c1', 'context'),
+			node('c2', 'context')
+		],
+		edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')]
+	} as AtlasSubgraph;
+
+	it('inverts the radial when coreHome is context', () => {
+		const laid = forceNeighborhood(mixedSubgraph, [], { width: 1040, height: 620, coreHome: 'context' });
+		const mean = (home: string) => {
+			const rs = laid.nodes.filter((n) => n.home === home)
+				.map((n) => Math.hypot(n.x - 520, n.y - 310));
+			return rs.reduce((a, b) => a + b, 0) / rs.length;
+		};
+		// Context resources are the SUBJECT: they hold the core; cogmap distillations ring them.
+		expect(mean('cogmap')).toBeGreaterThan(mean('context'));
+	});
+
+	it('defaults to coreHome cogmap — Beat D behaviour is unchanged', () => {
+		const laid = forceNeighborhood(mixedSubgraph, [], { width: 1040, height: 620 });
+		const mean = (home: string) => {
+			const rs = laid.nodes.filter((n) => n.home === home)
+				.map((n) => Math.hypot(n.x - 520, n.y - 310));
+			return rs.reduce((a, b) => a + b, 0) / rs.length;
+		};
+		expect(mean('context')).toBeGreaterThan(mean('cogmap'));
+	});
 });

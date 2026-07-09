@@ -42,6 +42,12 @@ pub struct AtlasNode {
     /// EXCERPT block in the TrailRail and the hover-card snippet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
+    /// Workflow stage (`backlog`/`in-progress`/`done`/`cancelled`) for doc-types that
+    /// carry one — tasks, chiefly. `None` for every other doc-type and for reads that
+    /// do not source it. Ported from the legacy subgraph's `stage_raw` (spec D8): stage
+    /// is load-bearing on a builder surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
 }
 
 /// A directed edge on the Atlas canvas. `label` is nullable (matches
@@ -104,6 +110,7 @@ mod tests {
             degree: 3,
             salience: Some(0.8),
             excerpt: None,
+            stage: None,
         };
         let json = serde_json::to_string(&n).unwrap();
         let back: AtlasNode = serde_json::from_str(&json).unwrap();

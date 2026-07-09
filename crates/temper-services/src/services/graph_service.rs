@@ -342,6 +342,7 @@ pub async fn cogmap_neighborhood_slice(
             degree,
             salience: None, // neighborhood-tier salience deferred (no per-node source yet)
             excerpt: first_chunk.as_deref().and_then(compute_excerpt),
+            stage: None, // Task 3 wires the real value from graph_atlas_nodes_visible
         },
     )
     .collect();
@@ -555,6 +556,7 @@ pub async fn region_composition_slice(
         degree,
         salience: None,
         excerpt: first_chunk.as_deref().and_then(compute_excerpt),
+        stage: None, // Task 3 wires the real value from graph_atlas_nodes_visible
     })
     .collect();
 

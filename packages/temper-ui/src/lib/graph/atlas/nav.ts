@@ -18,7 +18,9 @@ export type Tier = 0 | 1 | 2;
 export type Focus =
 	| { kind: 'none' }
 	| { kind: 'territory'; id: string }
-	| { kind: 'node'; id: string };
+	| { kind: 'node'; id: string }
+	| { kind: 'container'; id: string }
+	| { kind: 'bucket'; groupKey: string; value: string };
 
 export interface GraphFilters {
 	/** Optional lens id driving Tier-0 salience sizing (R2 `?lens_id`). */
@@ -34,10 +36,25 @@ export function parseCogmap(url: URL): string | null {
 	return url.searchParams.get('cogmap');
 }
 
-/** Parse one `kind:id` focus token; null if malformed. */
-function parseFocusToken(raw: string): Focus | null {
-	const [kind, id] = raw.split(':', 2);
-	if (id && (kind === 'territory' || kind === 'node')) return { kind, id };
+/** `?context` addressing — the builder-axis sibling of the cogmap door (Beat E). */
+export function parseContextScope(url: URL): string | null {
+	return url.searchParams.get('context');
+}
+
+/** Parse one focus token; null if malformed. Most tokens are `kind:id`, but a bucket
+ *  token is `bucket:<groupKey>:<value>` and a group VALUE may itself contain `:`
+ *  (e.g. a stage `in:progress`) — so the value is everything after the group key. */
+function parseFocusToken(tok: string): Focus | null {
+	const [kind, ...rest] = tok.split(':');
+	if (kind === 'bucket') {
+		const groupKey = rest[0];
+		const value = rest.slice(1).join(':'); // values may contain ':'
+		return groupKey && value ? { kind: 'bucket', groupKey, value } : null;
+	}
+	const id = rest.join(':');
+	if (id && (kind === 'territory' || kind === 'node' || kind === 'container')) {
+		return { kind, id } as Focus;
+	}
 	return null;
 }
 
@@ -104,6 +121,8 @@ export function selectedElement(focus: Focus, url: URL): SelectedElement {
 export function deriveTier(focus: Focus): Tier {
 	switch (focus.kind) {
 		case 'territory':
+		case 'container':
+		case 'bucket':
 			return 1;
 		case 'node':
 			return 2;
@@ -157,6 +176,42 @@ export function buildCogmapUrl(base: URL, cogmapId: string): string {
 		p.set('cogmap', cogmapId);
 		p.delete('focus');
 	});
+}
+
+/** Enter a context door: set context, clear focus and cogmap (re-scope resets to Tier 0).
+ *  The context and cogmap doors are mutually exclusive scopes, so entering one drops the
+ *  other. */
+export function buildContextUrl(base: URL, slug: string): string {
+	return withParams(base, (p) => {
+		p.set('context', slug);
+		p.delete('focus');
+		p.delete('cogmap');
+	});
+}
+
+/** Drill into a goal container (a resource uuid). Kept distinct from the `territory:` token:
+ *  `territoryIds()` splits territory tokens on `~` for the Beat-D region union, and region
+ *  ids are ephemeral — a container id is a stable resource uuid, so the token kinds stay
+ *  separate. */
+/**
+ * The inverse of `parseFocusToken` — the single authority for serializing a focus.
+ *
+ * Not every focus carries an `id`: a `bucket` is addressed by `(groupKey, value)`. Call
+ * sites that hand-rolled `` `${f.kind}:${f.id}` `` (the crumb path encoder, AtlasPage's
+ * canvas remount key) went silently `undefined` on a bucket, so the token lives here once.
+ */
+export function focusToken(f: Exclude<Focus, { kind: 'none' }>): string {
+	return f.kind === 'bucket' ? `bucket:${f.groupKey}:${f.value}` : `${f.kind}:${f.id}`;
+}
+
+export function buildDrillContainerUrl(base: URL, id: string): string {
+	return withParams(base, (p) => p.set('focus', focusToken({ kind: 'container', id })));
+}
+
+/** Drill into a residual bucket. The token is `bucket:<groupKey>:<value>`; a value may
+ *  contain `:`, so `parseFocusToken` splits the value as everything past the group key. */
+export function buildDrillBucketUrl(base: URL, groupKey: string, value: string): string {
+	return withParams(base, (p) => p.set('focus', focusToken({ kind: 'bucket', groupKey, value })));
 }
 
 /** Union separator inside a territory token. `~` is URL-unreserved (RFC 3986) and

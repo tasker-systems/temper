@@ -1,4 +1,4 @@
-import type { Focus } from './nav';
+import { focusToken, type Focus } from './nav';
 
 export interface CrumbSegment {
 	label: string;
@@ -17,12 +17,14 @@ export interface CrumbInput {
 	scopeFilter: string | null;
 }
 
-/** Focus entries that actually appear in a drill path always carry an id;
- *  `{ kind: 'none' }` never reaches here (guarded below), but the union includes
- *  it so we narrow explicitly to keep this typesafe. */
+/** Focus entries that actually appear in a drill path; `{ kind: 'none' }` never reaches
+ *  here (guarded below), but the union includes it so we narrow explicitly to stay
+ *  typesafe. Note a `bucket` focus carries no `id` — it is addressed by
+ *  `(groupKey, value)` — which is why the token comes from `focusToken`, not from
+ *  interpolating `f.id`. */
 type DrillFocus = Exclude<Focus, { kind: 'none' }>;
 
-const encode = (path: DrillFocus[]): string => path.map((f) => `${f.kind}:${f.id}`).join(',');
+const encode = (path: DrillFocus[]): string => path.map(focusToken).join(',');
 
 /** Derive the ordered breadcrumb segments from URL/loaded state. Pure. */
 export function crumbModel(input: CrumbInput): CrumbSegment[] {
