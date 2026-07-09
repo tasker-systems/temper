@@ -44,6 +44,10 @@ temper-core = { path = "../../crates/temper-core" }
 # real-embedding chunks and assert server/CLI query-vector parity. Already in the graph via
 # temper-substrate → temper-ingest(embed), so naming it adds no new linked footprint.
 temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
+# Referenced only by the sdk-emitter regression, which asserts against the real
+# `writes::resolve_emitter` `fetch_one` rather than retyping its query. Already in the graph via
+# temper-api → temper-services → temper-substrate, so naming it adds no new linked footprint.
+temper-substrate = { path = "../../crates/temper-substrate" }
 temper-workflow = { path = "../../crates/temper-workflow" }
 temper-mcp = { path = "../../crates/temper-mcp" }
 temp-env = "0.3"

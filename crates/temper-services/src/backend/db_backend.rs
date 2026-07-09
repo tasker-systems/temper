@@ -231,16 +231,6 @@ fn facet_is_nonempty(facets: &serde_json::Value) -> bool {
     facets.as_object().is_some_and(|o| !o.is_empty())
 }
 
-/// Map an inbound [`Surface`] to the synthesized per-surface emitter marker (`pete@<marker>`, §1b).
-/// The HTTP/API surface maps to the web emitter (temperkb.io's surface).
-fn surface_marker(s: Surface) -> &'static str {
-    match s {
-        Surface::CliCloud => "cli",
-        Surface::Mcp => "mcp",
-        Surface::ApiHttp => "web",
-    }
-}
-
 /// Split a command's `managed_meta` + `open_meta` into the `(key, value)` property pairs the live write
 /// path asserts: Property-fated managed keys (§7) + every open key, dropping nulls. `doc_type` rides the
 /// `ResourceCreate` separately, and Die/Edge/ReconcileToDocType managed keys are excluded by fate.
@@ -1084,7 +1074,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, prod_profile)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         // Correlation-integrity gate for any claimed invocation — additive to the create authz above,
@@ -1277,7 +1267,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
 
@@ -1465,7 +1455,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         let act_ctx = EventContext {
@@ -1549,7 +1539,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         let act_ctx = EventContext {
@@ -1590,7 +1580,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         let act_ctx = EventContext {
@@ -1623,7 +1613,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         let act_ctx = EventContext {
@@ -1655,7 +1645,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         let act_ctx = EventContext {
@@ -1687,7 +1677,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
         let act_ctx = EventContext {
@@ -1983,7 +1973,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
 
@@ -2042,7 +2032,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
 
@@ -2299,7 +2289,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, origin.marker())
             .await
             .map_err(api_err)?;
 
@@ -2374,7 +2364,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(origin))
+        let emitter = writes::resolve_emitter(&self.pool, owner, origin.marker())
             .await
             .map_err(api_err)?;
 
