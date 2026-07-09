@@ -94,11 +94,14 @@ temper invocation close <INV> --disposition completed \
 ```
 
 The **authored-4** are `create_resource` · `assert_relationship` · `facet_set` ·
-`fold_relationship`. On the CLI these are `resource create --cogmap`, `edge assert`, and
-`edge fold`; **`facet_set` is agent-surface only** (the `facet_set` MCP tool) — use it for a
-node's *semantic* properties (a resolved question, a stance), never for provenance.
-**Materialize** (recompute regions) is likewise agent-surface: `cogmap_materialize` /
-`cogmap_materialize_delta`. Regions only exist *after* a materialize.
+`fold_relationship`. Every one of them is on the CLI: `resource create --cogmap`,
+`edge assert`, `resource facet`, and `edge fold`. Use `resource facet` for a node's
+*semantic* properties (a resolved question, a stance), never for provenance —
+provenance is stamped for you in `managed_meta`.
+
+**Materialize** (recompute regions) is `temper cogmap materialize <MAP> [--threshold N]`
+on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface.
+Regions only exist *after* a materialize.
 
 ### The act envelope — a hard invariant
 
@@ -123,7 +126,9 @@ Before creating a node, **search the map for an existing one**:
 `temper search "<concept>" --cogmap <MAP>`. If a node already covers it, don't duplicate.
 
 When **two sources both assert one concept**, distill **one** node that cites **both** in
-`--sources` (and one `derived_from` edge per source) — not two near-duplicate nodes. Match
+`--sources` — not two near-duplicate nodes. `--sources` records *block provenance*, not
+graph edges; pass `--sources-as-edges` to also assert one `derived_from` edge per
+resource-valued source (remote URLs are skipped — they have no node to point at). Match
 the source count to what the node honestly distills, not to its label (a `decision`
 synthesized from two sources is fine).
 
@@ -233,7 +238,7 @@ temper edge assert <NEW_NODE_REF> <SOURCE_REF> --kind express --polarity forward
 
 # 7. Close, then materialize so regions pick up the change.
 temper invocation close "$inv" --disposition completed --outcome '{"nodes":1,"edges":1,"folds":1}'
-#    then cogmap_materialize (MCP) on <MAP>
+temper cogmap materialize <MAP>
 ```
 
 The result: one closed invocation correlating every act, a fresh on-telos node with clean
