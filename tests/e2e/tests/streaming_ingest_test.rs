@@ -210,6 +210,7 @@ async fn segmented_create_roundtrips_large_body(pool: PgPool) {
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
                     sources: Vec::new(),
+                    sources_as_edges: false,
                 },
             )
             .expect("segmented cloud create should succeed")

@@ -16,6 +16,13 @@ pub(crate) struct CreateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
     pub resource: temper_workflow::types::resource::ResourceRow,
+    /// Targets of the `derived_from` edges asserted by `--sources-as-edges`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub edges_asserted: Vec<uuid::Uuid>,
+    /// Sources whose edge assert failed. The resource exists; re-assert with
+    /// `temper edge assert` (idempotent) rather than re-running the create.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub edges_failed: Vec<uuid::Uuid>,
 }
 
 /// Flat result emitted by `temper resource update`.
@@ -189,6 +196,10 @@ pub struct CreateResourceArgs<'a> {
     /// Provenance source refs (`--sources`) — resolved to `ProvenanceSource::Resource`
     /// via `parse_ref` and attached to the body block. Requires a body.
     pub sources: Vec<String>,
+    /// `--sources-as-edges` — also assert a `derived_from` edge to each resource-valued
+    /// source, in addition to the block-provenance record. Gated on `sources` by clap
+    /// (`requires = "sources"`).
+    pub sources_as_edges: bool,
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
@@ -203,6 +214,25 @@ fn resolve_provenance_sources(
 ) -> Result<Vec<temper_core::types::provenance::ProvenanceSource>> {
     refs.iter()
         .map(|r| temper_workflow::operations::resolve_provenance_source(r))
+        .collect()
+}
+
+/// The subset of `--sources` that can become `derived_from` graph edges.
+///
+/// Only `ProvenanceSource::Resource` has a resource target. `Remote` (an external URL)
+/// and `Event` (a kb_events id) are recorded as block provenance but have no node to
+/// point an edge at, so they are silently skipped rather than erroring — citing a URL
+/// alongside two resources is a normal thing to do.
+fn source_edge_targets(
+    sources: &[temper_core::types::provenance::ProvenanceSource],
+) -> Vec<uuid::Uuid> {
+    use temper_core::types::provenance::ProvenanceSource;
+    sources
+        .iter()
+        .filter_map(|s| match s {
+            ProvenanceSource::Resource(id) => Some(*id),
+            ProvenanceSource::Remote(_) | ProvenanceSource::Event(_) => None,
+        })
         .collect()
 }
 
@@ -221,6 +251,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         body_flag,
         from,
         sources,
+        sources_as_edges,
         format,
         act,
     } = args;
@@ -306,11 +337,20 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         ));
     }
 
+    // `resolved_sources` is moved into `cmd.body` below; `--sources-as-edges` needs its
+    // own copy to select edge targets after the create (build_backend/create_resource
+    // consume `cmd`, so we can't reach back into it post-create).
+    let sources_for_edges = resolved_sources.clone();
+
     // Resolve --goal ref → goal resource id (trailing-UUID-only, like `edge assert`); the server
     // projects the live `advances`→goal edge after create. An unparseable ref is a hard error.
     let goal_resolved = goal
         .map(temper_workflow::operations::parse_ref)
         .transpose()?;
+
+    // `act` (an `ActInput`) is consumed by `.into_act_context()?` below; `--sources-as-edges`
+    // needs its own copy to attach authorship to the post-create edge asserts.
+    let act_for_edges = act.clone();
 
     let cmd = temper_workflow::operations::CreateResource {
         slug: slug_resolved,
@@ -407,9 +447,56 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         );
     }
 
+    // `--sources-as-edges`: one `derived_from` edge per resource-valued source.
+    //
+    // Deliberately NOT atomic and deliberately NOT fatal. The create has already
+    // committed and is not idempotent (content dedup was retired, #219), so failing
+    // here would push an author toward re-running the create and duplicating the
+    // node. `relationship_assert` upserts on the active-edge invariant, so a failed
+    // edge is safely re-assertable with `temper edge assert`. Mirrors `link_session_to_task`.
+    let (edges_asserted, edges_failed) = if sources_as_edges {
+        use temper_core::types::relationship_requests::AssertRelationshipRequest;
+        // Structural triple for the frontmatter `derived_from` relation — sourced from
+        // the one legacy-mapping table so the CLI never restates it by hand.
+        let (edge_kind, polarity, label) =
+            temper_workflow::types::graph::EdgeType::DerivedFrom.legacy_mapping();
+
+        let targets = source_edge_targets(&sources_for_edges);
+        let mut asserted = Vec::new();
+        let mut failed = Vec::new();
+
+        for target in targets {
+            let req = AssertRelationshipRequest {
+                source: created_resource.id,
+                target: temper_core::types::ids::ResourceId::from(target),
+                edge_kind,
+                polarity,
+                label: label.to_string(),
+                weight: 1.0,
+                act: act_for_edges.clone(),
+            };
+            let outcome = runtime.block_on(client.relationships().assert(&req));
+            match outcome {
+                Ok(_) => asserted.push(target),
+                Err(e) => {
+                    output::warning(format!(
+                        "could not assert derived_from edge to {target}: {e} \
+                         (resource created; re-run `temper edge assert` — it is idempotent)"
+                    ));
+                    failed.push(target);
+                }
+            }
+        }
+        (asserted, failed)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
     let result = CreateActionResult {
         status: "ok",
         resource: created_resource,
+        edges_asserted,
+        edges_failed,
     };
     let rendered = crate::format::render(&result, format)?;
     println!("{rendered}");
@@ -1701,6 +1788,8 @@ mod action_result_tests {
         let result = CreateActionResult {
             status: "ok",
             resource: row,
+            edges_asserted: Vec::new(),
+            edges_failed: Vec::new(),
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
@@ -1745,6 +1834,8 @@ mod action_result_tests {
         let result = CreateActionResult {
             status: "ok",
             resource: row,
+            edges_asserted: Vec::new(),
+            edges_failed: Vec::new(),
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
@@ -2256,5 +2347,36 @@ mod build_show_document_tests {
             doc.get("provenance").is_none(),
             "no provenance key when not requested: {doc}"
         );
+    }
+}
+
+#[cfg(test)]
+mod source_edge_targets_tests {
+    use super::source_edge_targets;
+
+    #[test]
+    fn source_edge_targets_selects_only_resource_sources() {
+        use temper_core::types::provenance::ProvenanceSource;
+
+        let a = uuid::Uuid::from_u128(1);
+        let b = uuid::Uuid::from_u128(2);
+        let sources = vec![
+            ProvenanceSource::Resource(a),
+            ProvenanceSource::Remote("https://example.com/post".to_string()),
+            ProvenanceSource::Resource(b),
+            ProvenanceSource::Event(uuid::Uuid::from_u128(3)),
+        ];
+
+        let targets = source_edge_targets(&sources);
+
+        // Remote URLs and event ids have no resource target — they cannot become edges.
+        assert_eq!(targets, vec![a, b]);
+    }
+
+    #[test]
+    fn source_edge_targets_is_empty_without_resource_sources() {
+        use temper_core::types::provenance::ProvenanceSource;
+        let sources = vec![ProvenanceSource::Remote("https://x.test".to_string())];
+        assert!(source_edge_targets(&sources).is_empty());
     }
 }

@@ -72,6 +72,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             format: temper_cli::format::OutputFormat::Json,
             act: Default::default(),
             sources: Vec::new(),
+            sources_as_edges: false,
         },
     )
     .unwrap();
@@ -112,6 +113,7 @@ pub fn create_task(
             format: temper_cli::format::OutputFormat::Json,
             act: Default::default(),
             sources: Vec::new(),
+            sources_as_edges: false,
         },
     )
     .unwrap();

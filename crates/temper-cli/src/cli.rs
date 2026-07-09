@@ -350,6 +350,14 @@ pub enum ResourceAction {
         /// block-provenance record on the resource's body block (URLs via the 'remote' kind).
         #[arg(long, value_delimiter = ',')]
         sources: Vec<String>,
+        /// Also assert a `derived_from` edge from the new resource to each
+        /// resource-valued `--sources` entry. Remote URLs are skipped (no edge target).
+        ///
+        /// Not atomic: the edges are asserted after the create commits. A failed edge
+        /// warns rather than failing the command — `edge assert` is idempotent, so
+        /// re-asserting is safe, while re-running a create is not.
+        #[arg(long, requires = "sources")]
+        sources_as_edges: bool,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
