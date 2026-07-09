@@ -162,18 +162,40 @@ log_section "Pushing and creating PR"
 git push -u origin "$RELEASE_BRANCH"
 
 PR_TITLE="release: v${NEXT_VERSION}"
+
+# GitHub rejects PR bodies over 65536 characters. Summarize the merge stream
+# rather than every commit, and cap it so a long release cannot overrun.
+MAX_LOG_BYTES=50000
+
+REPO_URL="$(gh repo view --json url --jq .url)"
+COMPARE_URL="${REPO_URL}/compare/${CHANGES_BASE_REF}...${RELEASE_BRANCH}"
+
+FULL_LOG="$(git log "${CHANGES_BASE_REF}..HEAD" --oneline --no-decorate --first-parent)"
+TOTAL_LINES="$(printf '%s\n' "$FULL_LOG" | wc -l | tr -d ' ')"
+LOG="$(printf '%s\n' "$FULL_LOG" |
+    awk -v max="$MAX_LOG_BYTES" '{ n += length($0) + 1; if (n > max) exit; print }')"
+SHOWN_LINES="$(printf '%s\n' "$LOG" | wc -l | tr -d ' ')"
+
 PR_BODY="## Release v${NEXT_VERSION}"$'\n\n'
 PR_BODY+="Prepared by \`cargo make release-prepare\`."$'\n\n'
-PR_BODY+="### Changes since ${CHANGES_BASE_REF}"$'\n\n'
+PR_BODY+="### Merges since ${CHANGES_BASE_REF}"$'\n\n'
 PR_BODY+="\`\`\`"$'\n'
-PR_BODY+="$(git log "${CHANGES_BASE_REF}..HEAD" --oneline --no-decorate)"$'\n'
-PR_BODY+="\`\`\`"$'\n\n'
+PR_BODY+="${LOG}"$'\n'
+PR_BODY+="\`\`\`"$'\n'
+if (( SHOWN_LINES < TOTAL_LINES )); then
+    PR_BODY+=$'\n'"_Truncated: showing ${SHOWN_LINES} of ${TOTAL_LINES} merges._"$'\n'
+fi
+PR_BODY+=$'\n'"[Full diff](${COMPARE_URL})"$'\n\n'
 PR_BODY+="### On merge"$'\n\n'
 PR_BODY+="The \`release-tag\` workflow will automatically push the \`v${NEXT_VERSION}\` tag, which triggers \`release.yml\` to build and publish the binaries."$'\n'
 
+PR_BODY_FILE="$(mktemp)"
+trap 'rm -f "$PR_BODY_FILE"' EXIT
+printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+
 gh pr create \
     --title "$PR_TITLE" \
-    --body "$PR_BODY" \
+    --body-file "$PR_BODY_FILE" \
     --base main \
     --head "$RELEASE_BRANCH"
 
