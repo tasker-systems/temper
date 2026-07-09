@@ -350,6 +350,14 @@ pub enum ResourceAction {
         /// block-provenance record on the resource's body block (URLs via the 'remote' kind).
         #[arg(long, value_delimiter = ',')]
         sources: Vec<String>,
+        /// Also assert a `derived_from` edge from the new resource to each
+        /// resource-valued `--sources` entry. Remote URLs are skipped (no edge target).
+        ///
+        /// Not atomic: the edges are asserted after the create commits. A failed edge
+        /// warns rather than failing the command — `edge assert` is idempotent, so
+        /// re-asserting is safe, while re-running a create is not.
+        #[arg(long, requires = "sources")]
+        sources_as_edges: bool,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
@@ -978,6 +986,17 @@ pub enum CogmapCmd {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
     },
+    /// Re-materialize a cognitive map's regions when its event delta clears the threshold.
+    ///
+    /// Regions only exist *after* a materialize. A map below the threshold is a no-op
+    /// (`materialized: false`), not an error.
+    Materialize {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Minimum unmaterialized-event count required to trigger. Server default when omitted.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
     /// Bind a cognitive map to a team. Requires system-admin, OR that you manage the team
     /// (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to
     /// the team's shared resources.
@@ -1071,7 +1090,15 @@ pub enum InvocationCmd {
         /// The invocation to close, by ref (the UUID returned by `open`).
         invocation: String,
         /// Terminal disposition: completed | failed | abandoned.
-        #[arg(long, value_enum)]
+        #[arg(
+            long,
+            value_enum,
+            long_help = "Terminal disposition for the invocation.\n\n\
+                         completed  — the run achieved its purpose\n\
+                         failed     — the run errored or produced an unusable result\n\
+                         abandoned  — the run was cancelled, aborted, or superseded\n\n\
+                         There is no `cancelled` value: use `abandoned`."
+        )]
         disposition: DispositionArg,
         /// Opaque, agent-defined terminal outcome as a JSON value; omit for none.
         #[arg(long)]
@@ -1393,6 +1420,43 @@ mod meta_only_flag_tests {
     }
 
     #[test]
+    fn cogmap_materialize_parses() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "temper",
+            "cogmap",
+            "materialize",
+            "my-map-00000000-0000-0000-0000-000000000001",
+            "--threshold",
+            "25",
+        ])
+        .expect("cogmap materialize should parse");
+
+        match cli.command {
+            Commands::Cogmap {
+                cmd: CogmapCmd::Materialize { cogmap, threshold },
+            } => {
+                assert_eq!(cogmap, "my-map-00000000-0000-0000-0000-000000000001");
+                assert_eq!(threshold, Some(25));
+            }
+            _ => panic!("expected cogmap materialize"),
+        }
+    }
+
+    #[test]
+    fn cogmap_materialize_threshold_is_optional() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["temper", "cogmap", "materialize", "some-ref"])
+            .expect("threshold is optional");
+        match cli.command {
+            Commands::Cogmap {
+                cmd: CogmapCmd::Materialize { threshold, .. },
+            } => assert_eq!(threshold, None),
+            _ => panic!("expected cogmap materialize"),
+        }
+    }
+
+    #[test]
     fn list_accepts_meta_only_and_fields() {
         let cmd = Cli::command();
         let m = cmd.try_get_matches_from([
@@ -1559,6 +1623,76 @@ mod invocation_parse_tests {
                 assert!(outcome.is_none());
             }
             _ => panic!("expected invocation close variant"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod skill_content_verb_tests {
+    use super::*;
+
+    /// Every CLI verb the installable skill content names must resolve against the clap
+    /// command tree.
+    ///
+    /// Issue #330 was filed because `skill-content/cognitive-maps.md` told an agent that
+    /// `facet_set` was "agent-surface only" when `temper resource facet` had existed all
+    /// along. Prose cannot be type-checked; its referents can. If a verb is renamed or
+    /// removed, this fails and points at the doc that now lies.
+    #[test]
+    fn every_verb_named_by_the_skill_content_resolves() {
+        use clap::CommandFactory;
+
+        // The verb paths asserted by crates/temper-cli/skill-content/*.md.
+        const DOCUMENTED_VERBS: &[&[&str]] = &[
+            &["resource", "create"],
+            &["resource", "show"],
+            &["resource", "update"],
+            &["resource", "list"],
+            &["resource", "facet"],
+            &["resource", "grant"],
+            &["resource", "revoke"],
+            &["edge", "assert"],
+            &["edge", "fold"],
+            &["cogmap", "materialize"],
+            &["cogmap", "shape"],
+            &["cogmap", "analytics"],
+            &["cogmap", "grant"],
+            &["invocation", "open"],
+            &["invocation", "close"],
+            &["invocation", "show"],
+            &["search"],
+            &["context", "share"],
+            &["skill", "generate"],
+            &["skill", "install"],
+            &["invitations"],
+            &["team", "create"],
+            &["team", "list"],
+            &["team", "show"],
+            &["team", "add-member"],
+            &["team", "invite"],
+            &["team", "join"],
+            &["team", "decline"],
+            &["team", "invitations"],
+            &["team", "set-role"],
+            &["team", "remove-member"],
+            &["team", "leave"],
+            &["team", "update"],
+            &["team", "reassign"],
+            &["team", "delete"],
+        ];
+
+        let root = Cli::command();
+        for path in DOCUMENTED_VERBS {
+            let mut node = &root;
+            for (depth, segment) in path.iter().enumerate() {
+                node = node.find_subcommand(segment).unwrap_or_else(|| {
+                    panic!(
+                        "skill content names `temper {}`, but `{segment}` does not resolve \
+                         (depth {depth}). Either restore the verb or fix the docs.",
+                        path.join(" ")
+                    )
+                });
+            }
         }
     }
 }

@@ -147,6 +147,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     body,
                     from,
                     sources,
+                    sources_as_edges,
                     act,
                 } => {
                     if show_template {
@@ -175,6 +176,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             body_flag: body,
                             from,
                             sources,
+                            sources_as_edges,
                             format: output_format,
                             act: act.into_act_input()?,
                         },
@@ -322,7 +324,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     values,
                     weight,
                     act,
-                } => temper_cli::commands::facet::run(r#ref, values, weight, act),
+                } => temper_cli::commands::facet::run(r#ref, values, weight, act, output_format),
             }
         }
         Commands::Context { action } => match action {
@@ -771,7 +773,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 output_format,
             )
         }
-        Commands::Edge { action } => temper_cli::commands::edge::run(action),
+        Commands::Edge { action } => temper_cli::commands::edge::run(action, output_format),
         Commands::Cogmap { cmd } => match cmd {
             CogmapCmd::Reconcile {
                 r#ref,
@@ -790,6 +792,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 commands::cogmap::region_metrics(&cogmap, lens.as_deref(), output_format)
             }
             CogmapCmd::Analytics { cogmap } => commands::cogmap::analytics(&cogmap, output_format),
+            CogmapCmd::Materialize { cogmap, threshold } => {
+                commands::cogmap::materialize(&cogmap, threshold, output_format)
+            }
             CogmapCmd::Bind { r#ref, team } => commands::cogmap::bind(&r#ref, &team, output_format),
             CogmapCmd::Unbind { r#ref, team } => {
                 commands::cogmap::unbind(&r#ref, &team, output_format)

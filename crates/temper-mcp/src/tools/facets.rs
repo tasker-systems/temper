@@ -59,6 +59,9 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 
 // ── Tool handlers ──────────────────────────────────────────────────────────────
 
+/// Set a facet (typed property) on a resource — the steward's facet act.
+///
+/// CLI equivalent: `temper resource facet <ref> --values '<json>'`.
 pub async fn facet_set(
     svc: &TemperMcpService,
     input: FacetSetInput,

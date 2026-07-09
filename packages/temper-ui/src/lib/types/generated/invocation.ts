@@ -86,6 +86,15 @@ id: string,
  */
 status: string, 
 /**
+ * The terminal disposition, derived from `status`. `None` while the invocation is open.
+ *
+ * There is no `disposition` column. `invocation_close` writes the disposition into
+ * `status`; `outcome` holds only the caller's opaque payload, despite what the comment
+ * on `kb_invocations.outcome` in the canonical schema migration claims. Surfacing it
+ * under its own name here makes "did the close take?" answerable without knowing that.
+ */
+disposition: Disposition | null, 
+/**
  * What triggered this invocation.
  */
 trigger_kind: string, 

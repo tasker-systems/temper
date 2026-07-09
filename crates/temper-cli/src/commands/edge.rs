@@ -5,6 +5,7 @@
 
 use crate::cli::{CliEdgeKind, CliPolarity, EdgeAction};
 use crate::error::Result;
+use crate::format::OutputFormat;
 use crate::output;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::relationship_requests::{
@@ -32,7 +33,7 @@ impl From<CliPolarity> for Polarity {
     }
 }
 
-pub fn run(action: EdgeAction) -> Result<()> {
+pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
     match action {
         EdgeAction::Assert {
             source,
@@ -61,7 +62,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                         .assert(&req)
                         .await
                         .map_err(crate::commands::client_err)?;
-                    print_ack("asserted", &ack);
+                    print_ack("asserted", &ack, fmt)?;
                     Ok(())
                 })
             })
@@ -84,7 +85,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                         .retype(edge_handle, &req)
                         .await
                         .map_err(crate::commands::client_err)?;
-                    print_ack("retyped", &ack);
+                    print_ack("retyped", &ack, fmt)?;
                     Ok(())
                 })
             })
@@ -105,7 +106,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                         .reweight(edge_handle, &req)
                         .await
                         .map_err(crate::commands::client_err)?;
-                    print_ack("reweighted", &ack);
+                    print_ack("reweighted", &ack, fmt)?;
                     Ok(())
                 })
             })
@@ -126,7 +127,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                         .fold(edge_handle, &req)
                         .await
                         .map_err(crate::commands::client_err)?;
-                    print_ack("folded", &ack);
+                    print_ack("folded", &ack, fmt)?;
                     Ok(())
                 })
             })
@@ -134,9 +135,18 @@ pub fn run(action: EdgeAction) -> Result<()> {
     }
 }
 
-fn print_ack(verb: &str, ack: &RelationshipAck) {
-    output::success(format!("Relationship {}.", verb));
-    output::dim(format!("  edge_handle: {}", ack.edge_handle));
+fn print_ack(verb: &str, ack: &RelationshipAck, fmt: OutputFormat) -> Result<()> {
+    match fmt {
+        OutputFormat::Json => {
+            let rendered = crate::format::render(ack, fmt)?;
+            output::plain(rendered);
+        }
+        OutputFormat::Toon => {
+            output::success(format!("Relationship {}.", verb));
+            output::dim(format!("  edge_handle: {}", ack.edge_handle));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

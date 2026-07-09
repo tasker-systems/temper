@@ -80,6 +80,7 @@ async fn cli_create(
                     body_flag: Some(body),
                     from: None,
                     sources,
+                    sources_as_edges: false,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
                 },

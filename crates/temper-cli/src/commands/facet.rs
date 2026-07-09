@@ -5,11 +5,18 @@
 
 use crate::cli::ActArgs;
 use crate::error::Result;
+use crate::format::OutputFormat;
 use crate::output;
 use temper_core::types::facet_requests::{FacetAck, FacetSetRequest};
 
 /// Run `temper resource facet <ref> --values <json> [--weight <f64>]`.
-pub fn run(r#ref: String, values: String, weight: Option<f64>, act: ActArgs) -> Result<()> {
+pub fn run(
+    r#ref: String,
+    values: String,
+    weight: Option<f64>,
+    act: ActArgs,
+    fmt: OutputFormat,
+) -> Result<()> {
     let resource = temper_workflow::operations::parse_ref(&r#ref)?;
     let values: serde_json::Value = serde_json::from_str(&values)
         .map_err(|e| crate::error::TemperError::Project(format!("invalid --values JSON: {e}")))?;
@@ -26,15 +33,24 @@ pub fn run(r#ref: String, values: String, weight: Option<f64>, act: ActArgs) -> 
                 .set(&req)
                 .await
                 .map_err(crate::commands::client_err)?;
-            print_ack(&ack);
+            print_ack(&ack, fmt)?;
             Ok(())
         })
     })
 }
 
-fn print_ack(ack: &FacetAck) {
-    output::success("Facet set.".to_string());
-    output::dim(format!("  property_id: {}", ack.property_id));
+fn print_ack(ack: &FacetAck, fmt: OutputFormat) -> Result<()> {
+    match fmt {
+        OutputFormat::Json => {
+            let rendered = crate::format::render(ack, fmt)?;
+            output::plain(rendered);
+        }
+        OutputFormat::Toon => {
+            output::success("Facet set.".to_string());
+            output::dim(format!("  property_id: {}", ack.property_id));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
