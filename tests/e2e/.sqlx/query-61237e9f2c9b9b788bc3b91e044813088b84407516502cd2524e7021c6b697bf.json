@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT h.resource_id\n        FROM kb_team_contexts tc\n        JOIN kb_resource_homes h\n          ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id\n        WHERE tc.team_id = $1 AND h.owner_profile_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "61237e9f2c9b9b788bc3b91e044813088b84407516502cd2524e7021c6b697bf"
+}

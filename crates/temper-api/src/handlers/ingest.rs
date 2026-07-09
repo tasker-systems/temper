@@ -59,7 +59,6 @@ pub async fn create(
     // Segmented-begin metadata is consumed AFTER create lands block 0 (below); take it now so the
     // rest of the function can move `payload` field-by-field into the CreateResource command.
     let segmented = payload.segmented.clone();
-    let origin_uri_for_ingestion = payload.origin_uri.clone();
 
     // Resolve the home anchor — exactly one of a cognitive map or a context.
     // The cogmap branch takes precedence: when `home_cogmap_id` is set the home
@@ -147,39 +146,20 @@ pub async fn create(
     };
 
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
-    let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
 
     let Some(seg) = segmented else {
         // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
+        let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
         return Ok(IngestCreateResponse::OneShot(Box::new(out.value)));
     };
 
-    // Segmented begin: block 0 just landed via the ordinary create path above. Record the
-    // per-resource source-provenance row (design §4 point 4 — written "at begin"; a
-    // backend-specific write, not on the shared `Backend` trait, see `record_ingestion_source`),
-    // then read the landed set back (just block 0, at this point) via the same trait method
-    // `list_blocks` uses, so "the currently landed set" projection is computed in one place.
-    let resource_id = out.value.id;
-    backend
-        .record_ingestion_source(
-            resource_id,
-            &origin_uri_for_ingestion,
-            seg.source_hash.as_deref(),
-        )
+    // Segmented begin is ONE command: create block 0, record the source row, read the landed set.
+    // The handler dispatches; it does not compose.
+    let out = backend
+        .begin_segmented_ingest(cmd, seg)
         .await
         .map_err(ApiError::from)?;
-    let blocks = backend
-        .list_blocks(resource_id)
-        .await
-        .map_err(ApiError::from)?;
-
-    Ok(IngestCreateResponse::Segmented(SegmentedBeginResponse {
-        resource_id: out.value.id.uuid(),
-        // Client-side ingest-session id — see `SegmentedBeginResponse::correlation_id`'s doc for
-        // why this isn't (yet) threaded onto the server's event ledger.
-        correlation_id: uuid::Uuid::now_v7(),
-        blocks: blocks.value.blocks,
-    }))
+    Ok(IngestCreateResponse::Segmented(out.value))
 }
 
 #[utoipa::path(

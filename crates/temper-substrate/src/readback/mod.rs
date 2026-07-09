@@ -427,6 +427,37 @@ pub async fn resource_row(
     })
 }
 
+/// The heading breadcrumb a newly-appended segment resumes from: the `header_path` of the last
+/// chunk of the highest-`seq` live block. A server-chunked segment seeds its chunker with this so
+/// its chunks carry ancestor headings across the block boundary (see
+/// [`crate::content::prepare_block_with_prefix`]).
+///
+/// Empty when the resource has no live blocks, or when its trailing chunk is an unheaded preamble
+/// (NULL `header_path`) — in both cases the appended segment simply starts from no ancestors.
+///
+/// Not access-gated: the sole caller (`DbBackend::append_block`) has already passed
+/// `can_modify_resource`, and this returns no prose.
+pub async fn trailing_breadcrumb(pool: &PgPool, resource: ResourceId) -> Result<Vec<String>> {
+    let path: Option<String> = sqlx::query_scalar!(
+        r#"
+        SELECT c.header_path
+          FROM kb_content_blocks b
+          JOIN kb_chunks c ON c.block_id = b.id AND c.is_current
+         WHERE b.resource_id = $1 AND NOT b.is_folded
+         ORDER BY b.seq DESC, c.chunk_index DESC
+         LIMIT 1
+        "#,
+        resource.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    Ok(path
+        .map(|p| p.split(" > ").map(str::to_owned).collect())
+        .unwrap_or_default())
+}
+
 /// Reconstruct a resource's markdown body from its substrate chunks — the §9 body read floor.
 /// Reuses [`crate::content::reconstruct_body`] (the production `get_content` assembly) — the one body
 /// assembler (CONFORM, no second).

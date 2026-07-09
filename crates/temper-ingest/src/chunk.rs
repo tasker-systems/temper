@@ -371,15 +371,24 @@ pub fn chunk_markdown(text: &str) -> Vec<ChunkData> {
 /// `header_path` — the running heading stack scanned across prior segments is threaded in
 /// here as `initial_breadcrumb`.
 ///
-/// Every `initial_breadcrumb` entry is seeded into the internal stack at level 0
-/// (deliberately lower than any real heading, which is level 1-6): the existing
-/// pop-on-same-or-higher-level logic (`while stack.last().level >= new.level`) can then never
-/// pop a prefix entry, so a segment's own headings always nest **under** the full prefix,
-/// regardless of their own level. This is a known, accepted approximation — a segment whose
-/// own top-level heading would, in a whole-document scan, have popped some of the prefix's
-/// ancestors instead keeps the full prefix as its `header_path` ancestry. It only matters for
-/// the size-fallback case where a single oversized section is force-split across a segment
-/// boundary (native heading-aligned cuts carry no prefix mismatch to expose this).
+/// Each `initial_breadcrumb` entry is seeded at its **positional** level: the outermost ancestor
+/// at level 1, the next at 2, and so on. The pop-on-same-or-higher-level rule
+/// (`while stack.last().level >= new.level`) then treats the prefix exactly as a whole-document
+/// scan would, so a segment beginning with `## Usage` under the prefix `Manual > Setup` pops
+/// `Setup` and yields `Manual > Usage` — not `Manual > Setup > Usage`.
+///
+/// Seeding every entry at level 0 (the original approach) made prefix entries unpoppable, so a
+/// segment's headings nested under the *whole* prefix forever. That was documented as an
+/// approximation confined to the size-fallback case; it was not. A heading-aligned cut — the
+/// common case — leaves the previous section's heading in the prefix, and a sibling heading in the
+/// next segment must pop it. The e2e equivalence assertion (a segmented ingest must produce the
+/// same `header_path` set as a one-shot create) is what surfaced this.
+///
+/// The remaining approximation is narrow: an ancestor path that **skips heading levels** (`#` then
+/// `####`) is seeded as though it descended 1, 2, …, so a following heading whose level falls
+/// between the real and positional depths pops a different number of ancestors. `header_path`
+/// carries titles only, so real ancestor depths are not recoverable from it; recording them would
+/// mean widening the breadcrumb (and `kb_chunks`) to carry per-ancestor levels.
 ///
 /// With an empty `initial_breadcrumb` this is byte-identical to [`chunk_markdown`] — the
 /// empty-prefix case is a golden-equivalence invariant (`chunk_markdown` delegates here).
@@ -390,7 +399,8 @@ pub fn chunk_markdown_with_prefix(text: &str, initial_breadcrumb: &[String]) -> 
 
     let initial_stack: Vec<(usize, String)> = initial_breadcrumb
         .iter()
-        .map(|title| (0usize, title.clone()))
+        .enumerate()
+        .map(|(i, title)| (i + 1, title.clone()))
         .collect();
     let sections = collect_sections_with_stack(text, initial_stack);
     let mut chunks: Vec<ChunkData> = Vec::new();
@@ -652,10 +662,22 @@ mod tests {
     // --- chunk_markdown_with_prefix (streaming segment breadcrumb carry-over) ---
 
     #[test]
-    fn prefix_breadcrumb_prepends_ancestor_headings() {
-        // A segment that starts under "A > B" but whose text only contains "## C".
-        let out = super::chunk_markdown_with_prefix("## C\n\nbody", &["A".into(), "B".into()]);
-        assert_eq!(out[0].header_path, "A > B > C");
+    fn prefix_breadcrumb_pops_siblings_and_nests_descendants() {
+        // Prefix "A > B" means A is level 1 and B is level 2 (their positions in the path).
+        //
+        // A sibling of B pops it. Previously this asserted "A > B > C" — a path a whole-document
+        // scan can never produce, since `## C` at level 2 cannot nest under a level-2 `B`. The old
+        // expectation encoded the level-0 seeding bug.
+        let sibling = super::chunk_markdown_with_prefix("## C\n\nbody", &["A".into(), "B".into()]);
+        assert_eq!(sibling[0].header_path, "A > C");
+
+        // A descendant of B nests under it.
+        let child = super::chunk_markdown_with_prefix("### C\n\nbody", &["A".into(), "B".into()]);
+        assert_eq!(child[0].header_path, "A > B > C");
+
+        // Prose with no heading of its own inherits the whole prefix.
+        let prose = super::chunk_markdown_with_prefix("body", &["A".into(), "B".into()]);
+        assert_eq!(prose[0].header_path, "A > B");
     }
 
     #[test]
@@ -674,5 +696,55 @@ mod tests {
         // "hello world" = 11 chars → ~3 tokens at 3.5 c/t
         let tokens = estimate_tokens("hello world");
         assert!((2..=5).contains(&tokens), "got {tokens}");
+    }
+
+    // Splitting a document at heading boundaries and chunking each segment with the running
+    // breadcrumb must reproduce whole-document chunking exactly. This is the property the whole
+    // streaming/segmented ingest design rests on, and the one a level-0 prefix seed broke: a
+    // sibling heading in the next segment could not pop the previous section's heading, so paths
+    // grew without bound (`Manual > Setup > Usage > Caveats`).
+    #[test]
+    fn segmented_chunking_reproduces_whole_document_header_paths() {
+        let segments = [
+            "# Manual\n\nIntro line.\n\n## Setup\n\nInstall it.\n",
+            "## Usage\n\nRun it.\n\n## Caveats\n\nMind the gap.\n",
+            "## Appendix\n\nReferences follow.\n",
+        ];
+        let whole: String = segments.concat();
+
+        let expected: Vec<(String, u8)> = chunk_markdown(&whole)
+            .into_iter()
+            .map(|c| (c.header_path, c.heading_depth))
+            .collect();
+
+        // Walk the segments the way the streaming segmenter does: carry the trailing breadcrumb.
+        let mut actual: Vec<(String, u8)> = Vec::new();
+        let mut breadcrumb: Vec<String> = Vec::new();
+        for segment in segments {
+            let chunks = chunk_markdown_with_prefix(segment, &breadcrumb);
+            if let Some(last) = chunks.last() {
+                breadcrumb = if last.header_path.is_empty() {
+                    Vec::new()
+                } else {
+                    last.header_path.split(" > ").map(str::to_owned).collect()
+                };
+            }
+            actual.extend(chunks.into_iter().map(|c| (c.header_path, c.heading_depth)));
+        }
+
+        assert_eq!(actual, expected);
+    }
+
+    // A segment cut mid-section (no heading of its own) inherits the full ancestor path, and its
+    // innermost ancestor's depth — exactly what a whole-document scan gives the continuation chunk
+    // of an oversized section, which is the same situation seen from the other side.
+    #[test]
+    fn a_mid_section_segment_inherits_its_ancestors() {
+        let chunks = chunk_markdown_with_prefix(
+            "beta continues here\n",
+            &["Manual".to_owned(), "Setup".to_owned()],
+        );
+        assert_eq!(chunks[0].header_path, "Manual > Setup");
+        assert_eq!(chunks[0].heading_depth, 2);
     }
 }

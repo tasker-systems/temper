@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event_id AS \"event_id!\", kind AS \"kind!\",\n                          actor_entity_id AS \"actor_entity_id!\", actor_name AS \"actor_name!\",\n                          occurred_at AS \"occurred_at!\", metadata AS \"metadata!\",\n                          payload AS \"payload!\"\n                     FROM element_trail_node($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "actor_entity_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "actor_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "occurred_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "metadata!",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "payload!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "9debc4ef653dcf982082a9b563fba58238b3f42776985c1742b461ed42ec18a3"
+}

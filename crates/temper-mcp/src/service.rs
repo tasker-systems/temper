@@ -453,6 +453,54 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Begin a segmented (multi-block) ingest for a body too large to send in one call, landing its first segment. Prefer create_resource for anything that fits a single call — segmented ingest costs extra round-trips. content is segment 0's text and content_hash is its bare-hex sha256. Returns resource_id, the landed block set, and an opaque body_hash. Follow with ingest_append for each further segment, then ingest_finalize."
+    )]
+    async fn ingest_begin(
+        &self,
+        Parameters(input): Parameters<tools::ingest::IngestBeginInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::ingest_begin(self, input).await
+    }
+
+    #[tool(
+        description = "Append one segment to an in-progress segmented ingest. Segments are zero-indexed and segment 0 landed at ingest_begin, so start at seq=1 and send them in order. content_hash is the bare-hex sha256 of content; a mismatch is rejected. Re-appending an already-landed segment is a safe no-op, which is what makes retry and resume safe. Returns the landed block set and the body_hash to echo at finalize. You do not chunk or embed anything — send raw markdown text."
+    )]
+    async fn ingest_append(
+        &self,
+        Parameters(input): Parameters<tools::ingest::IngestAppendInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::ingest_append(self, input).await
+    }
+
+    #[tool(
+        description = "Declare a segmented ingest complete. expected_blocks is the total segment count including segment 0; expected_body_hash is the opaque body_hash from your most recent ingest_append or ingest_blocks response, echoed back verbatim. Fails if the landed set does not match, which means a segment is missing — call ingest_blocks to see which."
+    )]
+    async fn ingest_finalize(
+        &self,
+        Parameters(input): Parameters<tools::ingest::IngestFinalizeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::ingest_finalize(self, input).await
+    }
+
+    #[tool(
+        description = "Read back the segments that have landed for an in-progress segmented ingest. This is how you resume after an interruption: compare the returned seq set against your segments, re-send only the missing ones with ingest_append, then ingest_finalize. Also returns the current body_hash."
+    )]
+    async fn ingest_blocks(
+        &self,
+        Parameters(input): Parameters<tools::ingest::IngestBlocksInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::ingest_blocks(self, input).await
+    }
+
+    #[tool(
         description = "Open an agent-invocation envelope — an append-only accountability record for one agent run against a cognitive map. Returns the server-minted invocation_id; feed it into invocation_close when the run terminates. Pass the originating map by ref."
     )]
     async fn invocation_open(
@@ -739,5 +787,35 @@ impl rmcp::ServerHandler for TemperMcpService {
         }
         let profile = self.require_profile().await?;
         crate::resources::read_resource(&self.api_state, &profile, request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TemperMcpService;
+
+    /// A `#[tool]` written into the wrong impl block compiles fine and is simply never advertised.
+    /// Assert the router actually carries the segmented-ingest four, rather than inferring it from
+    /// "it compiled". Needs no database — `tool_router()` is a pure associated function.
+    #[test]
+    fn the_four_ingest_tools_are_advertised_by_the_router() {
+        let router = TemperMcpService::tool_router();
+        let names: Vec<String> = router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for expected in [
+            "ingest_begin",
+            "ingest_append",
+            "ingest_finalize",
+            "ingest_blocks",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "{expected} is not advertised; router has {names:?}"
+            );
+        }
     }
 }

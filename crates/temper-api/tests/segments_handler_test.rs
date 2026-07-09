@@ -92,8 +92,8 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
     let append_payload = AppendBlockPayload {
         seq: 1,
         content: "second segment".to_string(),
-        content_hash: "unused-client-text-hash".to_string(),
-        chunks_packed: one_chunk_packed("second segment", "bb"),
+        content_hash: temper_core::hash::sha256_hex(b"second segment"),
+        chunks_packed: Some(one_chunk_packed("second segment", "bb")),
     };
     let append_resp = app
         .client
@@ -196,8 +196,8 @@ async fn append_on_other_profile_resource_returns_403(pool: PgPool) {
     let append_payload = AppendBlockPayload {
         seq: 1,
         content: "second segment".to_string(),
-        content_hash: "unused-client-text-hash".to_string(),
-        chunks_packed: one_chunk_packed("second segment", "dd"),
+        content_hash: temper_core::hash::sha256_hex(b"second segment"),
+        chunks_packed: Some(one_chunk_packed("second segment", "dd")),
     };
     let resp = app
         .client
@@ -237,8 +237,8 @@ async fn append_without_auth_returns_401(pool: PgPool) {
         .json(&AppendBlockPayload {
             seq: 1,
             content: "x".to_string(),
-            content_hash: "y".to_string(),
-            chunks_packed: one_chunk_packed("x", "ee"),
+            content_hash: temper_core::hash::sha256_hex(b"x"),
+            chunks_packed: Some(one_chunk_packed("x", "ee")),
         })
         .send()
         .await

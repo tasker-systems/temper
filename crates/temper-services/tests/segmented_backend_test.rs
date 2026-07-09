@@ -70,6 +70,328 @@ fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
     pack_chunks(&[chunk]).expect("pack chunk")
 }
 
+/// Seed a profile + context + a segmented resource whose block 0 has landed, returning the
+/// backend bound to the owning profile and the created resource.
+async fn seed_segmented_resource(
+    pool: &PgPool,
+    email: &str,
+    slug: &str,
+) -> (DbBackend, temper_workflow::types::resource::ResourceRow) {
+    let (profile, context) = seed_profile_with_context(pool, email).await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let created = backend
+        .create_resource(CreateResource {
+            slug: slug.to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: slug.to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            goal: None,
+            origin_uri: Some(format!("test://{slug}")),
+            chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("create block 0")
+        .value;
+    (backend, created)
+}
+
+/// Seed a resource whose block 0 is chunked **server-side** from `body` (no caller-supplied
+/// chunks), so its trailing chunk carries a real `header_path` for the append path's breadcrumb
+/// carry to pick up. Requires ONNX (the server embeds inline), hence `test-embed`.
+#[cfg(feature = "test-embed")]
+async fn seed_resource_with_body(
+    pool: &PgPool,
+    email: &str,
+    slug: &str,
+    body: &str,
+) -> (DbBackend, temper_workflow::types::resource::ResourceRow) {
+    use temper_workflow::operations::BodyUpdate;
+    let (profile, context) = seed_profile_with_context(pool, email).await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let created = backend
+        .create_resource(CreateResource {
+            slug: slug.to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: slug.to_string(),
+            body: Some(BodyUpdate {
+                content: body.to_string(),
+                content_hash: None,
+                chunks_packed: None,
+                sources: Vec::new(),
+                content_block: None,
+            }),
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            goal: None,
+            origin_uri: Some(format!("test://{slug}")),
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("create block 0 (server-chunked)")
+        .value;
+    (backend, created)
+}
+
+// The MCP caller: no chunker, no embedder. It sends raw segment text and the server chunks it,
+// seeding the heading breadcrumb from the prior block so `header_path` stays continuous across the
+// block boundary.
+#[cfg(feature = "test-embed")]
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn server_chunks_an_append_with_no_packed_chunks_and_carries_the_breadcrumb(pool: PgPool) {
+    // Block 0 ends inside "## Section", so block 1's chunks must inherit "Title > Section".
+    let (backend, created) = seed_resource_with_body(
+        &pool,
+        "server-chunk@example.com",
+        "zz-server-chunk",
+        "# Title\n\nalpha\n\n## Section\n\nbeta\n",
+    )
+    .await;
+
+    let text = "beta continues here\n";
+    backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
+                content: text.to_string(),
+                chunks_packed: None,
+            },
+            Surface::ApiHttp,
+        )
+        .await
+        .expect("server-side chunking lands the block");
+
+    let paths: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT c.header_path FROM kb_chunks c \
+           JOIN kb_content_blocks b ON b.id = c.block_id \
+          WHERE b.resource_id = $1 AND b.seq = 1 AND c.is_current ORDER BY c.chunk_index",
+    )
+    .bind(created.id.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert!(!paths.is_empty(), "the appended block must have chunks");
+    assert_eq!(
+        paths[0].as_deref(),
+        Some("Title > Section"),
+        "a server-chunked segment inherits the prior block's trailing breadcrumb"
+    );
+}
+
+// A server-chunked append needs prose to chunk; an empty body would otherwise reach `block_append`
+// and surface as a raw "empty chunk set" database exception.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn append_with_no_chunks_and_empty_content_is_rejected(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "empty-append@example.com", "zz-empty-append").await;
+
+    let err = backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: String::new(),
+                content_hash: temper_core::hash::sha256_hex(b""),
+                chunks_packed: None,
+            },
+            Surface::ApiHttp,
+        )
+        .await
+        .expect_err("an empty server-chunked append must be rejected");
+
+    assert!(
+        matches!(err, TemperError::BadRequest(ref m) if m.contains("non-empty content")),
+        "expected a caller-legible BadRequest, got {err:?}"
+    );
+}
+
+// Begin is one command, not three: the surfaces must not compose create + record_ingestion_source
+// + list_blocks themselves (the HTTP handler used to, which MCP would have had to duplicate).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn begin_segmented_ingest_lands_block_zero_and_records_the_source(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "begin@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let out = backend
+        .begin_segmented_ingest(
+            CreateResource {
+                slug: "zz-begin-probe".to_string(),
+                doctype: "research".to_string(),
+                home: HomeAnchor::Context(ContextId::from(context)),
+                title: "ZZ begin probe".to_string(),
+                body: None,
+                managed_meta: ManagedMeta::default(),
+                open_meta: None,
+                goal: None,
+                origin_uri: Some("test://begin-probe".to_string()),
+                chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+                content_hash: None,
+                act: ActContext::default(),
+                origin: Surface::Mcp,
+            },
+            temper_core::types::ingest::SegmentedBegin {
+                total_blocks_hint: Some(2),
+                block_budget: 262_144,
+                source_hash: Some("sha256:abc".to_owned()),
+            },
+        )
+        .await
+        .expect("begin succeeds")
+        .value;
+
+    assert_eq!(out.blocks.len(), 1, "block 0 landed");
+    assert_eq!(out.blocks[0].seq, 0);
+    assert!(
+        !out.body_hash.is_empty(),
+        "begin returns the live body_hash, so a session that appends nothing can still finalize"
+    );
+
+    let source_hash: Option<String> =
+        sqlx::query_scalar("SELECT source_hash FROM kb_ingestion_records WHERE resource_id = $1")
+            .bind(out.resource_id)
+            .fetch_one(&pool)
+            .await
+            .expect("begin wrote the ingestion record");
+    assert_eq!(source_hash.as_deref(), Some("sha256:abc"));
+}
+
+// Every other Backend write threads `cmd.origin`; append/finalize hardcoded Surface::ApiHttp.
+// Harmless while the API was the only caller — wrong the moment MCP appends a block, which would
+// then be attributed to the `web` emitter. The surface marker lives in `kb_entities.name` as
+// `<handle>@<surface>` (see `writes::resolve_emitter`), not in a column of its own.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_mcp_append_is_attributed_to_the_mcp_emitter(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "mcp-emitter@example.com", "zz-mcp-emitter").await;
+
+    let text = "second segment";
+    backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: text.to_string(),
+                content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
+                chunks_packed: Some(one_chunk_packed(text, "bb")),
+            },
+            Surface::Mcp,
+        )
+        .await
+        .expect("append succeeds");
+
+    let emitter_name: String = sqlx::query_scalar(
+        "SELECT e.name FROM kb_events ev \
+           JOIN kb_entities e ON e.id = ev.emitter_entity_id \
+           JOIN kb_event_types t ON t.id = ev.event_type_id \
+          WHERE t.name = 'block_created' \
+          ORDER BY ev.id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("a block_created event was emitted");
+
+    assert!(
+        emitter_name.ends_with("@mcp"),
+        "an MCP append must not be attributed to web; got {emitter_name}"
+    );
+}
+
+// The declared segment-text hash is the one integrity check a caller that does not chunk locally
+// can honor, so every caller honors it: a mismatch is rejected before anything lands.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn append_rejects_a_content_hash_that_does_not_match_content(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "hash-mismatch@example.com", "zz-hash-mismatch").await;
+
+    let err = backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: "second segment".to_string(),
+                content_hash: "deadbeef".to_string(), // not sha256("second segment")
+                chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+            },
+            Surface::ApiHttp,
+        )
+        .await
+        .expect_err("a mismatched content_hash must be rejected");
+
+    assert!(
+        matches!(err, TemperError::BadRequest(ref m) if m.contains("content_hash")),
+        "expected BadRequest naming content_hash, got {err:?}"
+    );
+
+    let blocks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded",
+    )
+    .bind(created.id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(blocks, 1, "a rejected append must land nothing");
+}
+
+// `body_hash` is what a non-chunking caller echoes back at finalize, so append must report the
+// same value finalize will compare against.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn append_returns_the_live_body_hash(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "body-hash@example.com", "zz-body-hash").await;
+
+    let text = "second segment";
+    let out = backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: text.to_string(),
+                content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
+                chunks_packed: Some(one_chunk_packed(text, "bb")),
+            },
+            Surface::ApiHttp,
+        )
+        .await
+        .expect("append with a correct hash succeeds")
+        .value;
+
+    let stored: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+        .bind(created.id.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        out.body_hash, stored,
+        "BlocksResponse.body_hash must be the value finalize will compare against"
+    );
+
+    // And it round-trips: echoing it back finalizes cleanly.
+    backend
+        .finalize_ingest(
+            created.id,
+            FinalizePayload {
+                expected_blocks: 2,
+                expected_body_hash: out.body_hash,
+            },
+            Surface::ApiHttp,
+        )
+        .await
+        .expect("the echoed body_hash finalizes");
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
     let (profile, context) = seed_profile_with_context(&pool, "segmented@example.com").await;
@@ -104,11 +426,10 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
-                // Unused server-side in Beat 2 (the server keys off `chunks_packed`'s own merkle,
-                // not this client text-identity hash) — any value is accepted.
-                content_hash: "unused-client-text-hash".to_string(),
-                chunks_packed: one_chunk_packed("second segment", "bb"),
+                content_hash: temper_core::hash::sha256_hex(b"second segment"),
+                chunks_packed: Some(one_chunk_packed("second segment", "bb")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("append seq 1")
@@ -128,9 +449,10 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
-                content_hash: "unused-client-text-hash".to_string(),
-                chunks_packed: one_chunk_packed("second segment", "bb"),
+                content_hash: temper_core::hash::sha256_hex(b"second segment"),
+                chunks_packed: Some(one_chunk_packed("second segment", "bb")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("re-append seq 1 is a no-op")
@@ -165,6 +487,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 expected_blocks: 2,
                 expected_body_hash: actual_hash,
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("finalize");
@@ -177,6 +500,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 expected_blocks: 5,
                 expected_body_hash: "deadbeef".to_string(),
             },
+            Surface::ApiHttp,
         )
         .await;
     assert!(bad.is_err(), "wrong expected_blocks/hash must error");
@@ -219,9 +543,10 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
-                content_hash: "unused-client-text-hash".to_string(),
-                chunks_packed: one_chunk_packed("second segment", "dd"),
+                content_hash: temper_core::hash::sha256_hex(b"second segment"),
+                chunks_packed: Some(one_chunk_packed("second segment", "dd")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect_err("non-owner append must be denied");

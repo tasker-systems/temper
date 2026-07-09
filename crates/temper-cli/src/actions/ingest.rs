@@ -79,18 +79,6 @@ pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
 // Segmented (streaming) create orchestration (Beat 3)
 // ---------------------------------------------------------------------------
 
-/// Raw (unprefixed) lowercase-hex sha256 — the format `kb_ingestion_records.source_hash`
-/// (`VARCHAR(64)`) and the manifest's `source_hash` both expect. Deliberately distinct from
-/// `temper_core::hash::compute_body_hash`, which returns a `"sha256:"`-prefixed 71-char
-/// string sized for a different column; that prefix would overflow this one.
-#[cfg(feature = "embed")]
-fn sha256_hex_raw(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
-}
-
 /// Chunk `text` (already prefix-seeded by the caller) and embed+pack it into the
 /// `chunks_packed` wire format — the per-segment twin of
 /// `temper_ingest::pipeline::prepare_markdown`, operating on chunks the caller already
@@ -242,7 +230,7 @@ pub async fn run_segmented_create(
         .as_ref()
         .map(|b| b.content.as_str())
         .unwrap_or_default();
-    let source_hash = sha256_hex_raw(content.as_bytes());
+    let source_hash = temper_core::hash::sha256_hex(content.as_bytes());
 
     let SegmentPlan {
         segments,
@@ -312,8 +300,10 @@ pub async fn run_segmented_create(
         let append_payload = AppendBlockPayload {
             seq,
             content: segments[idx].text.clone(),
-            content_hash: sha256_hex_raw(segments[idx].text.as_bytes()),
-            chunks_packed,
+            content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
+            // The CLI always chunks + embeds client-side; the server-chunk branch is for callers
+            // without an embedder (MCP).
+            chunks_packed: Some(chunks_packed),
         };
         let response = client
             .ingest()

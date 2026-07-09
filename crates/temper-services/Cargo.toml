@@ -29,6 +29,11 @@ utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
 [features]
 test-db = []
+# Gates tests that drive the server-side chunk+embed path (ONNX at runtime): the
+# segmented-append `chunks_packed: None` branch. temper-services links ort unconditionally via
+# temper-substrate → temper-ingest(embed), so only the runtime dylib is missing outside the
+# Embed CI job. Run locally with ORT installed; CI runs it in "Embed & MCP Round-Trip Tests".
+test-embed = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
