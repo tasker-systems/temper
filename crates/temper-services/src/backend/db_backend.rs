@@ -2246,6 +2246,7 @@ impl Backend for DbBackend {
         &self,
         resource: ResourceId,
         payload: AppendBlockPayload,
+        origin: Surface,
     ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(resource.uuid()).await?;
@@ -2254,7 +2255,7 @@ impl Backend for DbBackend {
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(Surface::ApiHttp))
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(origin))
             .await
             .map_err(api_err)?;
 
@@ -2322,13 +2323,14 @@ impl Backend for DbBackend {
         &self,
         resource: ResourceId,
         payload: FinalizePayload,
+        origin: Surface,
     ) -> Result<CommandOutput<()>, TemperError> {
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(resource.uuid()).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(Surface::ApiHttp))
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(origin))
             .await
             .map_err(api_err)?;
 

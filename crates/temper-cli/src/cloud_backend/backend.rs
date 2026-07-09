@@ -301,10 +301,15 @@ mod embed_impl {
         // the shared `Backend` trait — e.g. a future explicit resume/status surface — dispatched
         // the same way every other `CloudBackend` write is: translate ids to the wire shape,
         // call `temper-client`, wrap the response.
+        // `origin` is unused here: this backend forwards over HTTP, and the server attributes the
+        // event to the surface it actually received (`Surface::ApiHttp`). Carrying the CLI's origin
+        // across the wire would need a header or payload field — a separate concern from making the
+        // parameter honest for in-process callers (MCP, API).
         async fn append_block(
             &self,
             resource: temper_core::types::ids::ResourceId,
             payload: temper_core::types::ingest::AppendBlockPayload,
+            _origin: temper_workflow::operations::Surface,
         ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
         {
             let resource_uuid = uuid::Uuid::from(resource);
@@ -326,6 +331,7 @@ mod embed_impl {
             &self,
             resource: temper_core::types::ids::ResourceId,
             payload: temper_core::types::ingest::FinalizePayload,
+            _origin: temper_workflow::operations::Surface,
         ) -> Result<CommandOutput<()>, TemperError> {
             let resource_uuid = uuid::Uuid::from(resource);
             self.client
@@ -624,6 +630,7 @@ mod non_embed_impl {
             &self,
             _resource: temper_core::types::ids::ResourceId,
             _payload: temper_core::types::ingest::AppendBlockPayload,
+            _origin: temper_workflow::operations::Surface,
         ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
         {
             Err(TemperError::BadRequest(
@@ -635,6 +642,7 @@ mod non_embed_impl {
             &self,
             _resource: temper_core::types::ids::ResourceId,
             _payload: temper_core::types::ingest::FinalizePayload,
+            _origin: temper_workflow::operations::Surface,
         ) -> Result<CommandOutput<()>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),

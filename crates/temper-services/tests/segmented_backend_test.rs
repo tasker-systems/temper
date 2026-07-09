@@ -167,6 +167,7 @@ async fn server_chunks_an_append_with_no_packed_chunks_and_carries_the_breadcrum
                 content: text.to_string(),
                 chunks_packed: None,
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("server-side chunking lands the block");
@@ -205,6 +206,7 @@ async fn append_with_no_chunks_and_empty_content_is_rejected(pool: PgPool) {
                 content_hash: temper_core::hash::sha256_hex(b""),
                 chunks_packed: None,
             },
+            Surface::ApiHttp,
         )
         .await
         .expect_err("an empty server-chunked append must be rejected");
@@ -212,6 +214,47 @@ async fn append_with_no_chunks_and_empty_content_is_rejected(pool: PgPool) {
     assert!(
         matches!(err, TemperError::BadRequest(ref m) if m.contains("non-empty content")),
         "expected a caller-legible BadRequest, got {err:?}"
+    );
+}
+
+// Every other Backend write threads `cmd.origin`; append/finalize hardcoded Surface::ApiHttp.
+// Harmless while the API was the only caller — wrong the moment MCP appends a block, which would
+// then be attributed to the `web` emitter. The surface marker lives in `kb_entities.name` as
+// `<handle>@<surface>` (see `writes::resolve_emitter`), not in a column of its own.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_mcp_append_is_attributed_to_the_mcp_emitter(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "mcp-emitter@example.com", "zz-mcp-emitter").await;
+
+    let text = "second segment";
+    backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: text.to_string(),
+                content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
+                chunks_packed: Some(one_chunk_packed(text, "bb")),
+            },
+            Surface::Mcp,
+        )
+        .await
+        .expect("append succeeds");
+
+    let emitter_name: String = sqlx::query_scalar(
+        "SELECT e.name FROM kb_events ev \
+           JOIN kb_entities e ON e.id = ev.emitter_entity_id \
+           JOIN kb_event_types t ON t.id = ev.event_type_id \
+          WHERE t.name = 'block_created' \
+          ORDER BY ev.id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("a block_created event was emitted");
+
+    assert!(
+        emitter_name.ends_with("@mcp"),
+        "an MCP append must not be attributed to web; got {emitter_name}"
     );
 }
 
@@ -231,6 +274,7 @@ async fn append_rejects_a_content_hash_that_does_not_match_content(pool: PgPool)
                 content_hash: "deadbeef".to_string(), // not sha256("second segment")
                 chunks_packed: Some(one_chunk_packed("second segment", "bb")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect_err("a mismatched content_hash must be rejected");
@@ -267,6 +311,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
                 content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
                 chunks_packed: Some(one_chunk_packed(text, "bb")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("append with a correct hash succeeds")
@@ -291,6 +336,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
                 expected_blocks: 2,
                 expected_body_hash: out.body_hash,
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("the echoed body_hash finalizes");
@@ -333,6 +379,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: Some(one_chunk_packed("second segment", "bb")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("append seq 1")
@@ -355,6 +402,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: Some(one_chunk_packed("second segment", "bb")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("re-append seq 1 is a no-op")
@@ -389,6 +437,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 expected_blocks: 2,
                 expected_body_hash: actual_hash,
             },
+            Surface::ApiHttp,
         )
         .await
         .expect("finalize");
@@ -401,6 +450,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 expected_blocks: 5,
                 expected_body_hash: "deadbeef".to_string(),
             },
+            Surface::ApiHttp,
         )
         .await;
     assert!(bad.is_err(), "wrong expected_blocks/hash must error");
@@ -446,6 +496,7 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
                 content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: Some(one_chunk_packed("second segment", "dd")),
             },
+            Surface::ApiHttp,
         )
         .await
         .expect_err("non-owner append must be denied");

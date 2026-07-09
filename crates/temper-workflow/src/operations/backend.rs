@@ -26,6 +26,7 @@ use super::commands::{
     SearchResources, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
+use super::surface::Surface;
 
 /// Lightweight summary of a resource for `list` results.
 #[derive(Debug, Clone)]
@@ -178,25 +179,34 @@ pub trait Backend: Send + Sync {
     // landed set back. All three gate on `can_modify_resource` before touching anything — an
     // in-progress segmented ingest is caller-private, including the read.
 
-    /// Append one already-chunked segment to a resource whose block 0 already landed.
-    /// Idempotent in the substrate on `(resource, seq, block merkle)` — re-appending an
-    /// already-landed segment is a no-op that still returns the current landed set.
+    /// Append one segment to a resource whose block 0 already landed. Idempotent in the substrate
+    /// on `(resource, seq, block merkle)` — re-appending an already-landed segment is a no-op that
+    /// still returns the current landed set.
+    ///
+    /// `payload.chunks_packed` may be absent, in which case the backend chunks the segment text
+    /// itself (the MCP surface has no embedder). `origin` attributes the emitted `block_created`
+    /// event to the calling surface — a parameter, not a constant, because CLI, API, and MCP all
+    /// reach this path.
     async fn append_block(
         &self,
         resource: ResourceId,
         payload: AppendBlockPayload,
+        origin: Surface,
     ) -> Result<CommandOutput<BlocksResponse>, TemperError>;
 
     /// Declare a segmented ingest complete: validates the landed block count + body merkle
-    /// against the caller's expectation, then fires `resource_finalized`.
+    /// against the caller's expectation, then fires `resource_finalized`. `origin` attributes that
+    /// event to the calling surface, as on [`Self::append_block`].
     async fn finalize_ingest(
         &self,
         resource: ResourceId,
         payload: FinalizePayload,
+        origin: Surface,
     ) -> Result<CommandOutput<()>, TemperError>;
 
-    /// The currently landed segment set for a resource — backs the resume/progress read
-    /// `GET /api/resources/{id}/blocks`.
+    /// The currently landed segment set for a resource, plus its live `body_hash` — backs the
+    /// resume/progress read `GET /api/resources/{id}/blocks`. Takes no `origin`: it emits no event,
+    /// so it resolves no emitter, and a parameter nothing consumes would be a lie.
     async fn list_blocks(
         &self,
         resource: ResourceId,
