@@ -678,9 +678,15 @@ LANGUAGE sql STABLE AS $$
         WHERE p.owner_table = 'kb_resources' AND p.property_key = 'doc_type' AND NOT p.is_folded
     ),
     stg AS (
+        -- The key is `temper-stage`, NOT `stage`. A bare `stage` matches ZERO rows (prod:
+        -- 748 `temper-stage`, 0 `stage`), so it would silently yield NULL forever while every
+        -- test still passed. The legacy `stage_raw` used `temper-stage` too
+        -- (20260624000002:1375). Verify with:
+        --   psql "$DATABASE_URL" -c "SELECT property_key, count(*) FROM kb_properties
+        --     WHERE property_key LIKE '%stage%' GROUP BY 1;"
         SELECT p.owner_id AS rid, (p.property_value #>> '{}') AS st
         FROM kb_properties p
-        WHERE p.owner_table = 'kb_resources' AND p.property_key = 'stage' AND NOT p.is_folded
+        WHERE p.owner_table = 'kb_resources' AND p.property_key = 'temper-stage' AND NOT p.is_folded
     )
     SELECT r.id, r.title, d.dt AS doc_type, h.home,
            COALESCE(deg.degree, 0) AS degree,
@@ -1401,8 +1407,15 @@ git commit -m "feat(atlas): residual tray — a doorway, not a landmark"
 ## Task 9: Reads, loader, tier dispatch, crumbs
 
 **Files:**
-- Modify: `packages/temper-ui/src/lib/server/graph-reads.ts`, `src/routes/(app)/graph/[owner]/+page.server.ts`, `src/lib/components/graph/atlas/AtlasCanvas.svelte`, `src/lib/graph/atlas/crumbModel.ts`, `src/lib/graph/atlas/viewData.ts`
+- Modify: `packages/temper-ui/src/lib/server/graph-reads.ts`, `src/routes/(app)/graph/[owner]/+page.server.ts`, `src/lib/components/graph/atlas/AtlasCanvas.svelte`, `src/lib/components/graph/atlas/TierPanorama.svelte`, `src/lib/graph/atlas/crumbModel.ts`, `src/lib/graph/atlas/viewData.ts`
 - Test: `packages/temper-ui/src/lib/server/graph-reads.paths.test.ts`, `crumbModel.test.ts`
+
+> **Carried over from Task 8 — lift the residual tray out of the camera.** Task 8 could only
+> mount `<ResidualTray>` via a `<foreignObject>` inside `AtlasCanvas`'s camera-transformed `<g>`,
+> so it currently pans and scales with the d3 camera. Spec §7: a doorway must not pan away. The
+> component is already pure HTML and needs **zero changes** — move its render site to an HTML
+> sibling of the `<svg>` in `AtlasCanvas.svelte` (which this task already modifies), remove the
+> `foreignObject` wrapper from `TierPanorama.svelte`, and pass `residual` down from the loader.
 
 **Interfaces:**
 - Consumes: Task 5's endpoints, Task 6's nav.
