@@ -12,7 +12,11 @@
 
 mod backend;
 pub mod ctx;
-mod translators;
+// `pub(crate)` (not private): `actions::ingest::run_segmented_create` (Beat 3) reuses
+// `translators::cmd_to_segmented_begin_payload` to build segment 0's wire payload with the
+// same home/managed_meta/open_meta/goal/act mapping `cmd_to_ingest_payload` uses, without
+// duplicating that logic outside `cloud_backend`.
+pub(crate) mod translators;
 
 #[cfg(test)]
 mod tests;

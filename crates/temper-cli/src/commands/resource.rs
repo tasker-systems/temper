@@ -339,9 +339,38 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     temper_workflow::operations::validate_create(&cmd)
         .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
-    // Acquire the cloud backend + client and dispatch the create.
+    // Acquire the cloud backend + client and dispatch the create. A body over
+    // `SEGMENT_BUDGET_BYTES` streams through the segmented ingest endpoints (Beat 3,
+    // `actions::ingest::run_segmented_create`); everything at or under the budget takes the
+    // existing one-shot `create_resource` path, unchanged (`actions::ingest::ingest_mode` is
+    // the seam that decides). Segmented dispatch is embed-gated exactly like the one-shot
+    // path's own body-trio computation (`compute_body_chunks`) already is — a no-embed build
+    // falls straight through to `backend.create_resource`, which already returns the
+    // "cloud mode requires --features embed" error for any body, so no separate fallback
+    // message is needed there.
     let (runtime, backend, client) = crate::backend_select::build_backend(config, &ctx)?;
-    let output = runtime.block_on(backend.create_resource(cmd))?;
+
+    #[cfg(feature = "embed")]
+    let created_resource = {
+        let body_len = cmd.body.as_ref().map(|b| b.content.len()).unwrap_or(0);
+        let budget = temper_ingest::stream::SEGMENT_BUDGET_BYTES;
+        if crate::actions::ingest::ingest_mode(body_len, budget)
+            == crate::actions::ingest::IngestMode::Segmented
+        {
+            let params = crate::actions::ingest::SegmentedCreateParams {
+                client: &client,
+                vault_root: &config.vault_root,
+                cmd: &cmd,
+                context_ref: &ctx,
+                budget,
+            };
+            runtime.block_on(crate::actions::ingest::run_segmented_create(params))?
+        } else {
+            runtime.block_on(backend.create_resource(cmd))?.value
+        }
+    };
+    #[cfg(not(feature = "embed"))]
+    let created_resource = runtime.block_on(backend.create_resource(cmd))?.value;
 
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
@@ -349,7 +378,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
         &client,
         &config.vault_root,
-        &output.value,
+        &created_resource,
     )) {
         output::warning(format!("could not write projection file: {e}"));
     }
@@ -359,12 +388,19 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // effort tail — an unknown task warns and skips rather than failing the
     // (already-committed) create.
     if let Some(task_slug) = task {
-        link_session_to_task(config, &runtime, &client, &ctx, output.value.id, task_slug);
+        link_session_to_task(
+            config,
+            &runtime,
+            &client,
+            &ctx,
+            created_resource.id,
+            task_slug,
+        );
     }
 
     let result = CreateActionResult {
         status: "ok",
-        resource: output.value,
+        resource: created_resource,
     };
     let rendered = crate::format::render(&result, format)?;
     println!("{rendered}");

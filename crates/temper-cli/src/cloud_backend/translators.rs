@@ -74,6 +74,54 @@ pub(crate) fn cmd_to_ingest_payload(
         }
     };
 
+    cmd_to_ingest_payload_base(cmd, context_ref, content, content_hash, chunks_packed)
+}
+
+/// Translate a `CreateResource` command into the segment-0 `IngestPayload` for a segmented
+/// (multi-block, streaming) create — `POST /api/ingest` with `segmented: Some(..)` set
+/// (temper-core's `SegmentedBegin` marker; see `temper_core::types::ingest::SegmentedBegin`).
+///
+/// Shares every field-mapping rule with the one-shot [`cmd_to_ingest_payload`] (home/
+/// managed_meta/open_meta/goal/act) via [`cmd_to_ingest_payload_base`] — the only
+/// differences are: `content`/`chunks_packed` come from the caller's already-chunked-and-
+/// embedded segment 0 (never the whole body — segmented create never runs
+/// `compute_body_chunks` over the full document), `content_hash` is `None` (segment 0's text
+/// is not the resource's whole-body content, so the one-shot dedup hash doesn't apply here;
+/// `segmented.source_hash` is the resume/dedup identity for the segmented path), and
+/// `segmented` is populated instead of left `None`.
+#[cfg(feature = "embed")]
+pub(crate) fn cmd_to_segmented_begin_payload(
+    cmd: &CreateResource,
+    context_ref: &str,
+    segment0_content: String,
+    segment0_chunks_packed: String,
+    segmented: temper_core::types::ingest::SegmentedBegin,
+) -> Result<IngestPayload> {
+    let mut payload = cmd_to_ingest_payload_base(
+        cmd,
+        context_ref,
+        segment0_content,
+        None,
+        Some(segment0_chunks_packed),
+    )?;
+    payload.segmented = Some(segmented);
+    Ok(payload)
+}
+
+/// Shared field-mapping core for [`cmd_to_ingest_payload`] (one-shot) and
+/// [`cmd_to_segmented_begin_payload`] (segmented begin): every `IngestPayload` field except
+/// the body trio (`content`/`content_hash`/`chunks_packed`, which the two callers resolve
+/// differently) and `segmented` (always `None` here; the segmented-begin caller sets it after
+/// calling this). Keeping this logic in one place means a segmented create can never drift
+/// from the one-shot path's home/managed_meta/open_meta/goal/act mapping.
+#[cfg(feature = "embed")]
+fn cmd_to_ingest_payload_base(
+    cmd: &CreateResource,
+    context_ref: &str,
+    content: String,
+    content_hash: Option<String>,
+    chunks_packed: Option<String>,
+) -> Result<IngestPayload> {
     // managed_meta is Property-only; identity travels first-class as the payload's
     // top-level title/slug (set below). No identity injection into managed_meta.
     let managed_meta = Some(
@@ -252,13 +300,16 @@ pub(crate) fn wire_resource_to_resource_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_workflow::operations::{MoveSpec, Surface, UpdateResource};
+    use temper_workflow::operations::{
+        BodyUpdate, CreateResource, MoveSpec, Surface, UpdateResource,
+    };
     use temper_workflow::types::ManagedMeta;
 
-    #[cfg(feature = "test-embed")]
-    use temper_workflow::operations::{BodyUpdate, CreateResource};
-
-    #[cfg(feature = "test-embed")]
+    // `sample_cmd` itself needs no ONNX (it's a plain data literal) — only tests that
+    // exercise `cmd_to_ingest_payload`'s `compute_body_chunks` fallback need `test-embed`.
+    // `cmd_to_segmented_begin_payload` never calls `compute_body_chunks` (its caller always
+    // supplies pre-packed segment chunks), so its tests below use this same builder
+    // ungated.
     fn sample_cmd() -> CreateResource {
         CreateResource {
             slug: "2026-05-18-test".to_string(),
@@ -346,6 +397,99 @@ mod tests {
                 "managed_meta must be Property-only, no identity keys; got: {mm}"
             );
         }
+    }
+
+    // --- cmd_to_segmented_begin_payload (Beat 3) ---
+    //
+    // Unlike `cmd_to_ingest_payload`, this never calls `compute_body_chunks` — the caller
+    // (`actions::ingest::run_segmented_create`) always supplies segment 0's already-chunked-
+    // and-embedded `chunks_packed`. These tests run under plain `embed` (no ONNX needed).
+
+    #[test]
+    fn segmented_begin_payload_carries_segment_zero_content_and_marker() {
+        let cmd = sample_cmd();
+        let segmented = temper_core::types::ingest::SegmentedBegin {
+            total_blocks_hint: Some(3),
+            block_budget: 262_144,
+            source_hash: Some("a".repeat(64)),
+        };
+        let payload = cmd_to_segmented_begin_payload(
+            &cmd,
+            "@me/temper",
+            "segment zero text".to_string(),
+            "not-real-msgpack-but-opaque".to_string(),
+            segmented,
+        )
+        .expect("should succeed");
+
+        assert_eq!(payload.content, "segment zero text");
+        assert_eq!(
+            payload.chunks_packed.as_deref(),
+            Some("not-real-msgpack-but-opaque")
+        );
+        assert!(
+            payload.content_hash.is_none(),
+            "segment 0's text is not the whole-body content; no one-shot dedup hash"
+        );
+        let segmented = payload.segmented.expect("segmented marker must be set");
+        assert_eq!(segmented.block_budget, 262_144);
+        assert_eq!(segmented.total_blocks_hint, Some(3));
+        assert_eq!(
+            segmented.source_hash.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+    }
+
+    #[test]
+    fn segmented_begin_payload_shares_home_managed_meta_and_identity_mapping() {
+        // Same field-mapping guarantees as the one-shot translator: title top-level,
+        // managed_meta serialized, context_ref forwarded verbatim for a context home.
+        let cmd = sample_cmd();
+        let segmented = temper_core::types::ingest::SegmentedBegin {
+            total_blocks_hint: None,
+            block_budget: 262_144,
+            source_hash: None,
+        };
+        let payload = cmd_to_segmented_begin_payload(
+            &cmd,
+            "@me/temper",
+            "seg0".to_string(),
+            "packed".to_string(),
+            segmented,
+        )
+        .expect("should succeed");
+
+        assert_eq!(payload.title, "Test task");
+        assert_eq!(payload.context_ref, "@me/temper");
+        assert!(payload.home_cogmap_id.is_none());
+        let mm = payload
+            .managed_meta
+            .expect("managed_meta should be present");
+        assert_eq!(mm["temper-mode"], "plan");
+        assert_eq!(mm["temper-effort"], "small");
+    }
+
+    #[test]
+    fn segmented_begin_payload_empties_context_ref_for_a_cogmap_home() {
+        let mut cmd = sample_cmd();
+        let cogmap_id = temper_core::types::ids::CogmapId::new();
+        cmd.home = temper_core::types::home::HomeAnchor::Cogmap(cogmap_id);
+        let segmented = temper_core::types::ingest::SegmentedBegin {
+            total_blocks_hint: None,
+            block_budget: 262_144,
+            source_hash: None,
+        };
+        let payload = cmd_to_segmented_begin_payload(
+            &cmd,
+            "@me/temper",
+            "seg0".to_string(),
+            "packed".to_string(),
+            segmented,
+        )
+        .expect("should succeed");
+
+        assert_eq!(payload.home_cogmap_id, Some(cogmap_id.uuid()));
+        assert_eq!(payload.context_ref, "", "cogmap home ignores context_ref");
     }
 
     fn sample_update() -> UpdateResource {

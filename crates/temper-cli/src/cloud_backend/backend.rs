@@ -293,38 +293,75 @@ mod embed_impl {
             ))
         }
 
-        // Segmented (multi-block) ingest is on the trait (Beat 2) but the CLI's streaming
-        // begin/append/finalize orchestration is Beat 3 — these stubs satisfy the trait until
-        // that cutover wires them.
+        // Segmented (multi-block) ingest is on the trait (Beat 2); the CLI's own streaming
+        // begin/append/finalize orchestration (Beat 3, `actions::ingest::run_segmented_create`)
+        // dispatches segment 0 straight through `IngestClient::begin_segmented` (the
+        // `CreateResource` command this trait's `create_resource` takes has no field for the
+        // `segmented` wire marker), so these three methods exist for the *other* callers of
+        // the shared `Backend` trait — e.g. a future explicit resume/status surface — dispatched
+        // the same way every other `CloudBackend` write is: translate ids to the wire shape,
+        // call `temper-client`, wrap the response.
         async fn append_block(
             &self,
-            _resource: temper_core::types::ids::ResourceId,
-            _payload: temper_core::types::ingest::AppendBlockPayload,
+            resource: temper_core::types::ids::ResourceId,
+            payload: temper_core::types::ingest::AppendBlockPayload,
         ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
         {
-            Err(TemperError::Project(
-                "CloudBackend::append_block not wired until cutover".to_string(),
-            ))
+            let resource_uuid = uuid::Uuid::from(resource);
+            let blocks = self
+                .client
+                .ingest()
+                .append_block(resource_uuid, &payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            Ok(CommandOutput {
+                value: blocks,
+                events: vec![DomainEvent::RemoteSynced {
+                    resource_id: resource,
+                }],
+            })
         }
 
         async fn finalize_ingest(
             &self,
-            _resource: temper_core::types::ids::ResourceId,
-            _payload: temper_core::types::ingest::FinalizePayload,
+            resource: temper_core::types::ids::ResourceId,
+            payload: temper_core::types::ingest::FinalizePayload,
         ) -> Result<CommandOutput<()>, TemperError> {
-            Err(TemperError::Project(
-                "CloudBackend::finalize_ingest not wired until cutover".to_string(),
-            ))
+            let resource_uuid = uuid::Uuid::from(resource);
+            self.client
+                .ingest()
+                .finalize(resource_uuid, &payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            Ok(CommandOutput {
+                value: (),
+                events: vec![DomainEvent::RemoteSynced {
+                    resource_id: resource,
+                }],
+            })
         }
 
+        // A read (mirrors show_resource/list_resources/search_resources being "surface-direct"
+        // in spirit), but unlike those it dispatches for real: the segmented-ingest endpoints
+        // are new in Beat 2 with no pre-existing surface-direct call site, and the trait's own
+        // doc comment requires it ("all three gate on can_modify_resource ... including the
+        // read") — the server enforces that gate; this is just the wire translation.
         async fn list_blocks(
             &self,
-            _resource: temper_core::types::ids::ResourceId,
+            resource: temper_core::types::ids::ResourceId,
         ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
         {
-            Err(TemperError::Project(
-                "CloudBackend::list_blocks not wired until cutover".to_string(),
-            ))
+            let resource_uuid = uuid::Uuid::from(resource);
+            let blocks = self
+                .client
+                .ingest()
+                .list_blocks(resource_uuid)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            Ok(CommandOutput {
+                value: blocks,
+                events: vec![],
+            })
         }
     }
 
