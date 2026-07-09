@@ -506,7 +506,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         .await
         .expect("get_meta failed");
 
-    assert_eq!(meta.resource_id, resource.id);
+    assert_eq!(meta.id, resource.id);
     // The open tier round-trips verbatim — the caller-provided `tags` come back
     // on `open_meta`. (managed_meta is present but the seeded `temper-title` is
     // a §7-Die key — F1 — so it is NOT carried in the meta tier; the title

@@ -49,8 +49,10 @@ pub(crate) struct EdgesReport {
 /// Insert a derived `ref` key (the decorated, self-resolving identifier)
 /// into a serialized resource row, computed from its id + `title`. The
 /// `ref` is render-time only — never persisted, never on the wire type.
-/// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
-/// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
+/// Reads the anchor id from `id` (ResourceRow / ResourceDetail /
+/// ResourceMetaResponse) OR `resource_id` (UnifiedSearchResultRow, which still
+/// anchors on the longer name). Both branches are live — do not collapse them.
+/// No-op if the id is absent or unparseable.
 ///
 /// Also injects `context_ref` — the decorated home-context ref
 /// (`{context_owner_ref}/{context_slug}`) — when both fields are present
@@ -706,7 +708,7 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
             .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
             .take();
         let filtered_rows =
-            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "resource_id")
+            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
                 .map_err(map_projection_error)?;
         envelope["rows"] = filtered_rows;
     }
@@ -1044,12 +1046,11 @@ fn show_meta_only(
     let mut value = serde_json::to_value(&meta)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
     // Inject `ref` before the `--fields` filter (parity with `list`): the
-    // anchor `resource_id` is always preserved, and `ref` is kept only when
+    // anchor `id` is always preserved, and `ref` is kept only when
     // requested — so `--fields` controls its visibility consistently.
     inject_ref(&mut value);
-    let filtered =
-        temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
-            .map_err(map_projection_error)?;
+    let filtered = temper_core::projection::apply_top_level_filter(value, &fields_inner, "id")
+        .map_err(map_projection_error)?;
     let rendered = crate::format::render(&filtered, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -2086,18 +2087,14 @@ mod list_meta_only_tests {
         let envelope = serde_json::json!({
             "rows": [
                 {
-                    "resource_id": "11111111-1111-1111-1111-111111111111",
+                    "id": "11111111-1111-1111-1111-111111111111",
                     "managed_meta": {"stage": "in-progress"},
-                    "open_meta": {"tags": []},
-                    "managed_hash": "sha256:a",
-                    "open_hash": "sha256:b"
+                    "open_meta": {"tags": []}
                 },
                 {
-                    "resource_id": "22222222-2222-2222-2222-222222222222",
+                    "id": "22222222-2222-2222-2222-222222222222",
                     "managed_meta": {"stage": "done"},
-                    "open_meta": null,
-                    "managed_hash": "sha256:c",
-                    "open_hash": "sha256:d"
+                    "open_meta": null
                 }
             ],
             "total": 2,
@@ -2108,14 +2105,13 @@ mod list_meta_only_tests {
         // to envelope.rows specifically, not to the whole envelope).
         let rows = envelope.get("rows").cloned().expect("rows");
         let filtered_rows =
-            apply_top_level_filter(rows, &["managed_meta".to_string()], "resource_id")
-                .expect("filter");
+            apply_top_level_filter(rows, &["managed_meta".to_string()], "id").expect("filter");
 
-        // Each row should have only resource_id + managed_meta
+        // Each row should have only id + managed_meta
         let arr = filtered_rows.as_array().expect("array");
         assert_eq!(arr.len(), 2);
         for row in arr {
-            assert!(row.get("resource_id").is_some(), "anchor missing in {row}");
+            assert!(row.get("id").is_some(), "anchor missing in {row}");
             assert!(
                 row.get("managed_meta").is_some(),
                 "managed_meta missing in {row}"
@@ -2152,14 +2148,12 @@ mod show_meta_only_tests {
 
     fn fake_meta_response() -> ResourceMetaResponse {
         ResourceMetaResponse {
-            resource_id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
+            id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
             managed_meta: Some(ManagedMeta {
                 stage: Some("in-progress".to_string()),
                 ..Default::default()
             }),
             open_meta: Some(serde_json::json!({"tags": ["x"]})),
-            managed_hash: "sha256:test".to_string(),
-            open_hash: "sha256:test".to_string(),
         }
     }
 
@@ -2167,9 +2161,9 @@ mod show_meta_only_tests {
     fn show_meta_only_fields_filter_preserves_anchor_and_managed_meta_only() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
-        let filtered = apply_top_level_filter(value, &["managed_meta".to_string()], "resource_id")
-            .expect("filter");
-        assert!(filtered.get("resource_id").is_some(), "anchor missing");
+        let filtered =
+            apply_top_level_filter(value, &["managed_meta".to_string()], "id").expect("filter");
+        assert!(filtered.get("id").is_some(), "anchor missing");
         assert!(
             filtered.get("managed_meta").is_some(),
             "managed_meta missing"
@@ -2178,17 +2172,13 @@ mod show_meta_only_tests {
             filtered.get("open_meta").is_none(),
             "open_meta should be filtered out"
         );
-        assert!(
-            filtered.get("managed_hash").is_none(),
-            "managed_hash should be filtered out"
-        );
     }
 
     #[test]
     fn show_meta_only_no_fields_returns_full_response() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
-        let unfiltered = apply_top_level_filter(value.clone(), &[], "resource_id").expect("filter");
+        let unfiltered = apply_top_level_filter(value.clone(), &[], "id").expect("filter");
         assert_eq!(unfiltered, value);
     }
 }

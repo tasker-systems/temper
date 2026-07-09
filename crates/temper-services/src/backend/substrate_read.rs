@@ -273,7 +273,10 @@ pub async fn get_content_select(
 }
 
 /// `get_meta` — managed/open frontmatter for one resource (`readback::meta`, the §7 inverse fate).
-/// `managed_hash`/`open_hash` are §7-dissolved (emitted empty; §9 non-invariants).
+///
+/// Carries no meta hashes: `managed_hash`/`open_hash` were §7-dissolved and had been
+/// emitted as empty strings ever since, so the fields were removed rather than kept as two
+/// permanently-meaningless keys. The real `body_hash` lives on `ResourceRow`.
 pub async fn get_meta_select(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -286,11 +289,9 @@ pub async fn get_meta_select(
     let managed: ManagedMeta =
         serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
     Ok(ResourceMetaResponse {
-        resource_id: ResourceId::from(new_id),
+        id: ResourceId::from(new_id),
         managed_meta: Some(managed),
         open_meta: Some(serde_json::Value::Object(rb.open)),
-        managed_hash: String::new(),
-        open_hash: String::new(),
     })
 }
 
