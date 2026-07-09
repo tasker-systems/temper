@@ -335,13 +335,13 @@ mod tests {
     }
 
     #[test]
-    fn render_search_results_json_is_passthrough_array() {
+    fn render_search_results_json_is_object_with_results_key() {
         use temper_core::types::api::UnifiedSearchResultRow;
-        let rows: Vec<UnifiedSearchResultRow> = vec![UnifiedSearchResultRow {
+        let rows = [UnifiedSearchResultRow {
             resource_id: uuid::Uuid::nil(),
-            title: "Test Resource".to_string(),
-            slug: "test-resource".to_string(),
-            kb_uri: "kb://temper/test-resource".to_string(),
+            slug: "some-slug".to_string(),
+            title: "Some Title".to_string(),
+            kb_uri: "kb://temper/some-slug".to_string(),
             origin_uri: "file:///some/path.md".to_string(),
             context: None,
             doc_type: "task".to_string(),
@@ -353,9 +353,22 @@ mod tests {
             context_slug: None,
             context_owner_ref: None,
         }];
+        let rows_value: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| serde_json::to_value(r).expect("row to value"))
+            .collect();
+        let doc = crate::commands::search_cmd::SearchResultsResponse {
+            results: rows_value,
+        };
         let out =
-            crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");
-        assert!(out.starts_with('['), "json should be an array: {out}");
+            crate::format::render(&doc, crate::format::OutputFormat::Json).expect("json render");
+
+        assert!(out.starts_with('{'), "json should be an object: {out}");
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("single json document");
+        assert!(
+            parsed["results"].is_array(),
+            "results must be an array: {out}"
+        );
         assert!(out.contains("\"slug\""), "json: {out}");
         assert!(out.contains("\"title\""), "json: {out}");
     }
