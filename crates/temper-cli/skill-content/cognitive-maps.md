@@ -96,8 +96,12 @@ temper invocation close <INV> --disposition completed \
 The **authored-4** are `create_resource` · `assert_relationship` · `facet_set` ·
 `fold_relationship`. Every one of them is on the CLI: `resource create --cogmap`,
 `edge assert`, `resource facet`, and `edge fold`. Use `resource facet` for a node's
-*semantic* properties (a resolved question, a stance), never for provenance —
-provenance is stamped for you in `managed_meta`.
+*semantic* properties (a resolved question, a stance), never for provenance — and
+"provenance" means two different things here: the **authorship trio**
+(`temper-provenance`/`temper-llm-model`/`temper-llm-run`) is stamped into `managed_meta`
+for you on every `create`; **source provenance** — which source(s) a node was distilled
+from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` edges), never
+`managed_meta`. Neither belongs in a facet.
 
 **Materialize** (recompute regions) is `temper cogmap materialize <MAP> [--threshold N]`
 on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface.
@@ -128,7 +132,8 @@ Before creating a node, **search the map for an existing one**:
 When **two sources both assert one concept**, distill **one** node that cites **both** in
 `--sources` — not two near-duplicate nodes. `--sources` records *block provenance*, not
 graph edges; pass `--sources-as-edges` to also assert one `derived_from` edge per
-resource-valued source (remote URLs are skipped — they have no node to point at). Match
+resource-valued source (remote URLs and event-id sources are both skipped — neither has
+a node to point at). Match
 the source count to what the node honestly distills, not to its label (a `decision`
 synthesized from two sources is fine).
 
