@@ -70,6 +70,7 @@ mod tests {
         let view = InvocationView {
             id: Uuid::from_u128(1),
             status: "open".to_string(),
+            disposition: None,
             trigger_kind: "manual".to_string(),
             originating_cogmap_id: Uuid::from_u128(2),
             parent_cogmap_id: None,
