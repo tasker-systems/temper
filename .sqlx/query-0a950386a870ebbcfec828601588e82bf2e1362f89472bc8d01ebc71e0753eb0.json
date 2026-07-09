@@ -1,26 +1,26 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT jr.id, jr.team_id, jr.requesting_profile_id,\n               jr.status as \"status: JoinRequestStatus\",\n               jr.message, jr.source, jr.accepted_terms_version, jr.accepted_terms_at,\n               jr.reviewed_by_profile_id, jr.reviewed_at, jr.decision_note,\n               jr.created, jr.updated\n          FROM kb_join_requests jr\n          JOIN kb_teams t ON t.id = jr.team_id\n         WHERE jr.requesting_profile_id = $1\n           AND t.slug = $2\n         ORDER BY jr.created DESC\n         LIMIT 1\n        ",
+  "query": "\n        SELECT id as \"id!\", team_id as \"team_id!\",\n               requesting_profile_id as \"requesting_profile_id!\",\n               status as \"status!: JoinRequestStatus\",\n               message, source as \"source!\", accepted_terms_version, accepted_terms_at,\n               reviewed_by_profile_id, reviewed_at, decision_note,\n               created as \"created!\", updated as \"updated!\"\n          FROM vw_join_requests\n         WHERE requesting_profile_id = $1\n           AND team_slug = $2\n         ORDER BY created DESC\n         LIMIT 1\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 1,
-        "name": "team_id",
+        "name": "team_id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 2,
-        "name": "requesting_profile_id",
+        "name": "requesting_profile_id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 3,
-        "name": "status: JoinRequestStatus",
+        "name": "status!: JoinRequestStatus",
         "type_info": {
           "Custom": {
             "name": "join_request_status",
@@ -42,7 +42,7 @@
       },
       {
         "ordinal": 5,
-        "name": "source",
+        "name": "source!",
         "type_info": "Varchar"
       },
       {
@@ -72,12 +72,12 @@
       },
       {
         "ordinal": 11,
-        "name": "created",
+        "name": "created!",
         "type_info": "Timestamptz"
       },
       {
         "ordinal": 12,
-        "name": "updated",
+        "name": "updated!",
         "type_info": "Timestamptz"
       }
     ],
@@ -88,20 +88,20 @@
       ]
     },
     "nullable": [
-      false,
-      false,
-      false,
-      false,
-      true,
-      false,
       true,
       true,
       true,
       true,
       true,
-      false,
-      false
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "62253ce24a6e6081b1fef21fd72c4b725571b39b852dd7053eba3ffe3716e63d"
+  "hash": "0a950386a870ebbcfec828601588e82bf2e1362f89472bc8d01ebc71e0753eb0"
 }

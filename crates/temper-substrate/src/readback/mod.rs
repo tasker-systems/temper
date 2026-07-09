@@ -115,9 +115,11 @@ pub struct ListRow {
 ///
 /// The doctype and the three workflow fields all live in `kb_properties` (synthesis writes
 /// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
-/// inner JOIN — every synthesized resource has one; the workflow keys are LEFT JOINs so a resource
-/// without them comes back with `NULL` (not dropped). Property values are JSON scalars, extracted to
-/// text with `#>> '{}'` (the doc-type-as-property extraction).
+/// inner JOIN — every synthesized resource has one; the workflow keys come from a LEFT JOIN on the
+/// `kb_resource_workflow_props` pivot view (migration `20260709000002` — the one statement of the
+/// per-key pivot, shared with `resource_row` and temper-services' `filtered_visible_page`), so a
+/// resource without them comes back with `NULL` (not dropped). Property values are JSON scalars,
+/// extracted to text with `#>> '{}'` (the doc-type-as-property extraction).
 ///
 /// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
 /// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
@@ -167,23 +169,15 @@ pub async fn list(pool: &PgPool, principal: ProfileId) -> Result<Vec<ListRow>> {
         "SELECT r.origin_uri,
                 r.title,
                 dt.property_value #>> '{}' AS doc_type,
-                st.property_value #>> '{}' AS stage,
-                md.property_value #>> '{}' AS mode,
-                ef.property_value #>> '{}' AS effort
+                wp.stage,
+                wp.mode,
+                wp.effort
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
            JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN kb_properties st
-             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
-            AND st.property_key = 'temper-stage' AND NOT st.is_folded
-           LEFT JOIN kb_properties md
-             ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
-            AND md.property_key = 'temper-mode' AND NOT md.is_folded
-           LEFT JOIN kb_properties ef
-             ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
-            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
+           LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
           ORDER BY r.origin_uri, r.id",
     )
     .bind(principal)
@@ -379,10 +373,10 @@ pub async fn resource_row(
                 h.originator_profile_id,
                 p.handle          AS owner_handle,
                 dt.property_value #>> '{}' AS doc_type_name,
-                st.property_value #>> '{}' AS stage,
-                md.property_value #>> '{}' AS mode,
-                ef.property_value #>> '{}' AS effort,
-                sq.property_value #>> '{}' AS seq
+                wp.stage,
+                wp.mode,
+                wp.effort,
+                wp.seq
            FROM kb_resources r
            JOIN kb_resource_homes h ON h.resource_id = r.id
            LEFT JOIN kb_contexts c
@@ -393,18 +387,7 @@ pub async fn resource_row(
            JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN kb_properties st
-             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
-            AND st.property_key = 'temper-stage' AND NOT st.is_folded
-           LEFT JOIN kb_properties md
-             ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
-            AND md.property_key = 'temper-mode' AND NOT md.is_folded
-           LEFT JOIN kb_properties ef
-             ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
-            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
-           LEFT JOIN kb_properties sq
-             ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
-            AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
+           LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
           WHERE r.id = $1",
     )
     .bind(new_id)

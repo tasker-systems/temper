@@ -54,15 +54,15 @@ struct VisiblePage {
 
 /// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
 /// reaches SQL) so it is injection-safe to interpolate. Columns ground against the
-/// substrate: `kb_resources` (updated/created/title), `kb_contexts.name`, and the
-/// `kb_properties` workflow keys (`temper-stage`/`temper-seq`/`doc_type`).
+/// substrate: `kb_resources` (updated/created/title), `kb_contexts.name`, the
+/// `kb_resource_workflow_props` pivot view (`stage`/`seq`), and the `doc_type` property.
 fn sort_column_sql(field: ResourceSortField) -> &'static str {
     match field {
         ResourceSortField::Updated => "r.updated",
         ResourceSortField::Created => "r.created",
         ResourceSortField::Title => "r.title",
-        ResourceSortField::Stage => "st.property_value #>> '{}'",
-        ResourceSortField::Seq => "(sq.property_value #>> '{}')::bigint",
+        ResourceSortField::Stage => "wp.stage",
+        ResourceSortField::Seq => "wp.seq::bigint",
         ResourceSortField::ContextName => "c.name",
         ResourceSortField::DocTypeName => "dt.property_value #>> '{}'",
     }
@@ -115,7 +115,8 @@ async fn filtered_visible_page(
     };
 
     // INNER JOIN dt (every resource carries exactly one `doc_type` property, as in
-    // `readback::reconstruct`); LEFT JOIN the optional workflow keys used by filters/sort.
+    // `readback::reconstruct`); LEFT JOIN the `kb_resource_workflow_props` pivot view
+    // (migration 20260709000002) for the optional workflow keys used by filters/sort.
     let sql = format!(
         "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name
            FROM kb_resources r
@@ -127,16 +128,11 @@ async fn filtered_visible_page(
            JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN kb_properties st
-             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
-            AND st.property_key = 'temper-stage' AND NOT st.is_folded
-           LEFT JOIN kb_properties sq
-             ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
-            AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
+           LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
           WHERE r.is_active
             AND ($2::uuid IS NULL OR c.id = $2)
             AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
-            AND ($4::text IS NULL OR st.property_value #>> '{{}}' = $4)
+            AND ($4::text IS NULL OR wp.stage = $4)
             AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
             AND ($6::text IS NULL OR p.handle = $6)
             AND ($7::text IS NULL OR r.title ILIKE '%' || $7 || '%')
