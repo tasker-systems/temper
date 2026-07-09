@@ -60,6 +60,25 @@ pub fn analytics(cogmap_ref: &str, fmt: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+/// `temper cogmap materialize <cogmap_ref> [--threshold N]` — recompute the map's regions.
+///
+/// The write-side counterpart to `shape`/`region-metrics`/`analytics`: regions only exist
+/// after a materialize, so an authoring pass that creates nodes and asserts edges must
+/// materialize before the read tier reflects them.
+pub fn materialize(cogmap_ref: &str, threshold: Option<i64>, fmt: OutputFormat) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+
+    let ack = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            crate::actions::cogmap::materialize_api(client, cogmap_id, threshold).await
+        })
+    })?;
+
+    let rendered = crate::format::render(&ack, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (system-admin, or a team
 /// manager who administers the map).
 ///

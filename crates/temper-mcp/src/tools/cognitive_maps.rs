@@ -262,6 +262,8 @@ pub async fn cogmap_materialize_delta(
 
 /// Re-materialize a cogmap's regions when its formation delta clears the threshold; a no-op below.
 /// Dispatches through `DbBackend` (auth-before-write + the threshold gate live there).
+///
+/// CLI equivalent: `temper cogmap materialize <ref> [--threshold N]`.
 pub async fn cogmap_materialize(
     svc: &TemperMcpService,
     input: MaterializeTriggerInput,

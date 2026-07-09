@@ -55,6 +55,10 @@ async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
         .expect("opened invocation must be present");
     assert_eq!(view.status, "open", "freshly opened: {view:?}");
     assert!(view.outcome.is_none(), "no outcome while open: {view:?}");
+    assert!(
+        view.disposition.is_none(),
+        "an open invocation has no disposition"
+    );
 
     // close — Completed with an outcome payload.
     backend
@@ -80,6 +84,11 @@ async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
     assert!(
         closed.closed_at.is_some(),
         "closed_at set after close: {closed:?}"
+    );
+    assert_eq!(
+        closed.disposition,
+        Some(Disposition::Completed),
+        "the disposition derived from `status` must survive a real close+show round-trip"
     );
 
     // append-only: close is a one-shot terminal transition. Re-closing a completed envelope is a

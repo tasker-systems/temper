@@ -26,6 +26,31 @@ pub enum Disposition {
     Abandoned,
 }
 
+impl TryFrom<&str> for Disposition {
+    type Error = String;
+
+    /// Parse a terminal `kb_invocations.status` into its disposition.
+    ///
+    /// There is no `disposition` column: `invocation_close` writes the disposition into
+    /// `status` directly (`outcome` holds only the caller's opaque payload, despite what
+    /// the comment on `kb_invocations.outcome` in the canonical schema migration claims).
+    ///
+    /// `open` and any unknown value are errors, not `None`: the column's CHECK
+    /// constraint admits exactly `open|completed|failed|abandoned`, so an unparseable
+    /// terminal status means an invariant broke and must be loud. Callers map `open`
+    /// to `None` before calling.
+    fn try_from(status: &str) -> Result<Self, Self::Error> {
+        match status {
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "abandoned" => Ok(Self::Abandoned),
+            other => Err(format!(
+                "not a terminal disposition: `{other}` (expected completed|failed|abandoned)"
+            )),
+        }
+    }
+}
+
 /// One act of an invocation: a `kb_events` row stamped with this invocation's
 /// `invocation_id`. The acts are the per-step accountability trail folded under
 /// the envelope's show projection.
@@ -66,6 +91,14 @@ pub struct InvocationView {
     pub id: Uuid,
     /// Lifecycle status: one of `open|completed|failed|abandoned`.
     pub status: String,
+    /// The terminal disposition, derived from `status`. `None` while the invocation is open.
+    ///
+    /// There is no `disposition` column. `invocation_close` writes the disposition into
+    /// `status`; `outcome` holds only the caller's opaque payload, despite what the comment
+    /// on `kb_invocations.outcome` in the canonical schema migration claims. Surfacing it
+    /// under its own name here makes "did the close take?" answerable without knowing that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disposition: Option<Disposition>,
     /// What triggered this invocation.
     pub trigger_kind: String,
     /// The cognitive map this invocation runs against.
@@ -177,6 +210,7 @@ mod tests {
         let view = InvocationView {
             id: Uuid::from_u128(1),
             status: "open".to_string(),
+            disposition: None,
             trigger_kind: "agent_run".to_string(),
             originating_cogmap_id: Uuid::from_u128(2),
             parent_cogmap_id: None,
@@ -203,8 +237,35 @@ mod tests {
         let json = serde_json::to_string(&view).expect("serialize");
         // open invocation: null closed_at survives the round-trip
         assert!(json.contains("\"closed_at\":null"), "json: {json}");
+        // an open invocation has no disposition; the key is omitted, not emitted as null
+        assert!(!json.contains("disposition"), "json: {json}");
         // per-act authorship rides on the wire row
         assert!(json.contains("\"confidence\":\"probable\""), "json: {json}");
+        let back: InvocationView = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, view);
+    }
+
+    #[test]
+    fn invocation_view_serializes_disposition_when_closed() {
+        let view = InvocationView {
+            id: Uuid::from_u128(1),
+            status: "completed".to_string(),
+            disposition: Some(Disposition::Completed),
+            trigger_kind: "agent_run".to_string(),
+            originating_cogmap_id: Uuid::from_u128(2),
+            parent_cogmap_id: None,
+            scoped_entity_id: Uuid::from_u128(3),
+            telos_resource_id: Uuid::from_u128(4),
+            outcome: None,
+            opened_at: Utc::now(),
+            closed_at: Some(Utc::now()),
+            acts: vec![],
+        };
+        let json = serde_json::to_string(&view).expect("serialize");
+        assert!(
+            json.contains("\"disposition\":\"completed\""),
+            "json: {json}"
+        );
         let back: InvocationView = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, view);
     }
@@ -310,5 +371,34 @@ mod tests {
         let input: InvocationListInput = serde_json::from_value(json).unwrap();
         assert!(input.cogmap.is_none());
         assert!(input.status.is_none());
+    }
+}
+
+#[cfg(test)]
+mod disposition_tests {
+    use super::*;
+
+    #[test]
+    fn disposition_parses_every_terminal_status() {
+        assert_eq!(
+            Disposition::try_from("completed").unwrap(),
+            Disposition::Completed
+        );
+        assert_eq!(
+            Disposition::try_from("failed").unwrap(),
+            Disposition::Failed
+        );
+        assert_eq!(
+            Disposition::try_from("abandoned").unwrap(),
+            Disposition::Abandoned
+        );
+    }
+
+    #[test]
+    fn disposition_rejects_open_and_unknown() {
+        // `open` is not a disposition — it is the absence of one.
+        assert!(Disposition::try_from("open").is_err());
+        // An unknown status means the DB CHECK was violated: escalate, never silently degrade.
+        assert!(Disposition::try_from("cancelled").is_err());
     }
 }

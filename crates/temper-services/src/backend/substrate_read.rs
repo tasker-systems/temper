@@ -29,7 +29,9 @@ use temper_core::types::cognitive_maps::{
     CogmapStaleness,
 };
 use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
-use temper_core::types::invocation::{InvocationActRow, InvocationSummary, InvocationView};
+use temper_core::types::invocation::{
+    Disposition, InvocationActRow, InvocationSummary, InvocationView,
+};
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_substrate::readback;
 use temper_workflow::types::managed_meta::{
@@ -691,9 +693,20 @@ pub async fn invocation_show_select(
     else {
         return Ok(None);
     };
+    // There is no `disposition` column: `invocation_close` writes the disposition into
+    // `status` (`outcome` holds only the caller's opaque payload, despite what the comment
+    // on `kb_invocations.outcome` in the canonical schema migration claims). Derive it here,
+    // before `status` is moved below. `open` is the absence of a disposition, not an error;
+    // any other unparseable value means the DB CHECK's invariant broke, so it propagates as
+    // an error rather than silently degrading to `None`.
+    let disposition = match row.status.as_str() {
+        "open" => None,
+        terminal => Some(Disposition::try_from(terminal).map_err(api_err)?),
+    };
     Ok(Some(InvocationView {
         id: row.id,
         status: row.status,
+        disposition,
         trigger_kind: row.trigger_kind,
         originating_cogmap_id: row.originating_cogmap_id,
         parent_cogmap_id: row.parent_cogmap_id,
