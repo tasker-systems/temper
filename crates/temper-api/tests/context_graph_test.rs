@@ -192,3 +192,80 @@ async fn composition_from_a_container_includes_its_members(pool: PgPool) {
     assert_eq!(sg.nodes.len(), 4, "goal + 3 tasks");
     assert_eq!(sg.edges.len(), 3);
 }
+
+// ─── Axum-level handler tests (auth + request-shape) ────────────────────────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn panorama_endpoint_404s_for_an_invisible_context(pool: PgPool) {
+    // Deny-as-absence: a stranger asking for a profile-owned context they cannot see gets 404,
+    // NEVER a 403 that would confirm the context exists. The context is owned by the seed's
+    // "owner" profile; the stranger is a fully-provisioned but unrelated profile.
+    let app = common::setup_test_app(pool).await;
+    let (_owner, ctx, _goal) = seed_context_with_goal_and_tasks(&app.pool, 1).await;
+
+    let email = format!("stranger-{}@test.com", Uuid::now_v7());
+    let stranger = common::fixtures::create_test_profile(&app.pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{stranger}"), &email);
+
+    let res = app
+        .client
+        .get(app.url(&format!(
+            "/api/graph/contexts/panorama?context_ref={ctx}&group_by=doc_type"
+        )))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("panorama request");
+
+    assert_eq!(
+        res.status().as_u16(),
+        404,
+        "invisible context is absent (404), not forbidden (403)"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn composition_endpoint_400s_without_exactly_one_target(pool: PgPool) {
+    // parse-don't-validate: the composition drill needs EXACTLY one of `container` / `group`.
+    // Neither → 400; both → 400. The context is the caller's own (visible), so the 400 comes
+    // from the request-shape check, not the visibility gate.
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("compose-{}@test.com", Uuid::now_v7());
+    let (profile, ctx) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile}"), &email);
+
+    // Neither container nor group.
+    let neither = app
+        .client
+        .get(app.url(&format!(
+            "/api/graph/contexts/composition?context_ref={ctx}"
+        )))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("composition (neither) request");
+    assert_eq!(
+        neither.status().as_u16(),
+        400,
+        "neither container nor group must be rejected"
+    );
+
+    // Both container and group.
+    let both = app
+        .client
+        .get(app.url(&format!(
+            "/api/graph/contexts/composition?context_ref={ctx}&container={}&group=doc_type:task",
+            Uuid::now_v7()
+        )))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("composition (both) request");
+    assert_eq!(
+        both.status().as_u16(),
+        400,
+        "supplying both container and group must be rejected"
+    );
+}

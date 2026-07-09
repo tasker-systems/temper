@@ -44,6 +44,8 @@ use temper_workflow::types::resource::{
         crate::handlers::edges::fold,
         crate::handlers::facets::set_facet,
         crate::handlers::graph::get_subgraph,
+        crate::handlers::graph::context_panorama,
+        crate::handlers::graph::context_composition,
         crate::handlers::cognitive_maps::genesis,
         crate::handlers::cognitive_maps::reconcile,
         crate::handlers::cognitive_maps::shape,
@@ -102,6 +104,12 @@ use temper_workflow::types::resource::{
         temper_workflow::types::graph::GraphNode,
         temper_workflow::types::graph::GraphEdge,
         temper_workflow::types::graph::SubgraphResponse,
+        temper_core::types::graph_context::ContextPanorama,
+        temper_core::types::graph_context::ResidualGroups,
+        temper_core::types::graph_context::ResidualBucket,
+        temper_core::types::graph_context::GroupKeyMeta,
+        temper_core::types::graph_territory::Territory,
+        temper_core::types::graph_territory::TerritoryKind,
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
         temper_core::types::relationship_requests::AssertRelationshipRequest,
@@ -234,6 +242,8 @@ mod tests {
         assert!(json.contains("/api/relationships"));
         assert!(json.contains("/api/facets"));
         assert!(json.contains("/api/graph/subgraph"));
+        assert!(json.contains("/api/graph/contexts/panorama"));
+        assert!(json.contains("/api/graph/contexts/composition"));
         assert!(json.contains("/api/cognitive-maps/{id}/shape"));
         assert!(json.contains("/api/cognitive-maps/{id}/region-metrics"));
         assert!(json.contains("/api/cognitive-maps/{id}/analytics"));

@@ -101,6 +101,14 @@ pub fn create_app(state: AppState) -> Router {
             "/api/graph/regions/composition",
             get(handlers::graph::region_composition),
         )
+        .route(
+            "/api/graph/contexts/panorama",
+            get(handlers::graph::context_panorama),
+        )
+        .route(
+            "/api/graph/contexts/composition",
+            get(handlers::graph::context_composition),
+        )
         .route("/api/graph/home", get(handlers::graph::atlas_home))
         .route(
             "/api/graph/cogmaps/{id}/panorama",
