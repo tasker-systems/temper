@@ -217,6 +217,56 @@ async fn append_with_no_chunks_and_empty_content_is_rejected(pool: PgPool) {
     );
 }
 
+// Begin is one command, not three: the surfaces must not compose create + record_ingestion_source
+// + list_blocks themselves (the HTTP handler used to, which MCP would have had to duplicate).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn begin_segmented_ingest_lands_block_zero_and_records_the_source(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "begin@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let out = backend
+        .begin_segmented_ingest(
+            CreateResource {
+                slug: "zz-begin-probe".to_string(),
+                doctype: "research".to_string(),
+                home: HomeAnchor::Context(ContextId::from(context)),
+                title: "ZZ begin probe".to_string(),
+                body: None,
+                managed_meta: ManagedMeta::default(),
+                open_meta: None,
+                goal: None,
+                origin_uri: Some("test://begin-probe".to_string()),
+                chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+                content_hash: None,
+                act: ActContext::default(),
+                origin: Surface::Mcp,
+            },
+            temper_core::types::ingest::SegmentedBegin {
+                total_blocks_hint: Some(2),
+                block_budget: 262_144,
+                source_hash: Some("sha256:abc".to_owned()),
+            },
+        )
+        .await
+        .expect("begin succeeds")
+        .value;
+
+    assert_eq!(out.blocks.len(), 1, "block 0 landed");
+    assert_eq!(out.blocks[0].seq, 0);
+    assert!(
+        !out.body_hash.is_empty(),
+        "begin returns the live body_hash, so a session that appends nothing can still finalize"
+    );
+
+    let source_hash: Option<String> =
+        sqlx::query_scalar("SELECT source_hash FROM kb_ingestion_records WHERE resource_id = $1")
+            .bind(out.resource_id)
+            .fetch_one(&pool)
+            .await
+            .expect("begin wrote the ingestion record");
+    assert_eq!(source_hash.as_deref(), Some("sha256:abc"));
+}
+
 // Every other Backend write threads `cmd.origin`; append/finalize hardcoded Surface::ApiHttp.
 // Harmless while the API was the only caller — wrong the moment MCP appends a block, which would
 // then be attributed to the `web` emitter. The surface marker lives in `kb_entities.name` as

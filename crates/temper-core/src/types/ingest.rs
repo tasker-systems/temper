@@ -112,6 +112,9 @@ pub struct SegmentedBeginResponse {
     /// single correlation id is deferred to the reaper work (design §12).
     pub correlation_id: uuid::Uuid,
     pub blocks: Vec<SegmentInfo>,
+    /// The live `body_hash` after block 0 — see [`BlocksResponse::body_hash`]. Present here too so a
+    /// session that appends nothing still has a value to echo at finalize.
+    pub body_hash: String,
 }
 
 /// Append one segment to an in-progress (segmented-begin'd) resource —
@@ -544,12 +547,17 @@ mod tests {
                 seq: 0,
                 content_hash: "h0".to_owned(),
             }],
+            body_hash: "sha256:beef".to_owned(),
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: SegmentedBeginResponse = serde_json::from_str(&j).unwrap();
         assert_eq!(back.resource_id, r.resource_id);
         assert_eq!(back.correlation_id, r.correlation_id);
         assert_eq!(back.blocks.len(), 1);
+        assert_eq!(
+            back.body_hash, "sha256:beef",
+            "begin hands the caller its first echo-back value"
+        );
     }
 
     #[test]

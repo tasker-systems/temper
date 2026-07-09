@@ -301,6 +301,29 @@ mod embed_impl {
         // the shared `Backend` trait — e.g. a future explicit resume/status surface — dispatched
         // the same way every other `CloudBackend` write is: translate ids to the wire shape,
         // call `temper-client`, wrap the response.
+        async fn begin_segmented_ingest(
+            &self,
+            cmd: CreateResource,
+            seg: temper_core::types::ingest::SegmentedBegin,
+        ) -> Result<CommandOutput<temper_core::types::ingest::SegmentedBeginResponse>, TemperError>
+        {
+            // Same translation the one-shot create uses; the `segmented` marker is what makes the
+            // server take the begin branch and answer with a SegmentedBeginResponse.
+            let mut payload = cmd_to_ingest_payload(&cmd, &self.context_ref)?;
+            payload.segmented = Some(seg);
+            let begin = self
+                .client
+                .ingest()
+                .begin_segmented(&payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let resource_id = temper_core::types::ids::ResourceId::from(begin.resource_id);
+            Ok(CommandOutput {
+                value: begin,
+                events: vec![DomainEvent::RemoteSynced { resource_id }],
+            })
+        }
+
         // `origin` is unused here: this backend forwards over HTTP, and the server attributes the
         // event to the surface it actually received (`Surface::ApiHttp`). Carrying the CLI's origin
         // across the wire would need a header or payload field — a separate concern from making the
@@ -620,6 +643,17 @@ mod non_embed_impl {
             &self,
             _cmd: MaterializeOnThreshold,
         ) -> Result<CommandOutput<temper_core::types::materialize::MaterializeAck>, TemperError>
+        {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn begin_segmented_ingest(
+            &self,
+            _cmd: CreateResource,
+            _seg: temper_core::types::ingest::SegmentedBegin,
+        ) -> Result<CommandOutput<temper_core::types::ingest::SegmentedBeginResponse>, TemperError>
         {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),

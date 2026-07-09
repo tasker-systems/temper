@@ -19,7 +19,8 @@ use temper_core::types::ids::{
     CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
 use temper_core::types::ingest::{
-    AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentInfo,
+    AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentInfo, SegmentedBegin,
+    SegmentedBeginResponse,
 };
 use temper_core::types::materialize::{
     MaterializeAck, DEFAULT_MATERIALIZE_LENS, DEFAULT_MATERIALIZE_THRESHOLD,
@@ -455,15 +456,15 @@ impl DbBackend {
     }
 
     /// Record the per-resource source-provenance row for a segmented-begin create (design §4
-    /// point 4: written "at begin"). Deliberately NOT part of the `Backend` trait — a
-    /// backend-specific write (per this module's own doc: "Backend-specific operations ... live
-    /// on the backend's concrete type, not on the shared trait") that only the API ingest
-    /// handler calls, directly on the concrete `DbBackend` it already holds, right after
-    /// `create_resource` lands block 0. `conversion_tool` is fixed to `"passthrough"`: every
-    /// caller of `IngestPayload.segmented` already holds extracted markdown (extract → chunk →
-    /// embed happens client-side before this request); there is no server-side kreuzberg
-    /// conversion on this path.
-    pub async fn record_ingestion_source(
+    /// point 4: written "at begin"). Private, and called from exactly one place —
+    /// [`Backend::begin_segmented_ingest`], which composes it with the create and the landed-set
+    /// read so no surface has to. It was briefly `pub` because the HTTP handler did that composition
+    /// itself; MCP needing the same three steps is what made the seam obvious.
+    ///
+    /// `conversion_tool` is fixed to `"passthrough"`: every segmented caller already holds extracted
+    /// markdown (the CLI extracts and chunks client-side; MCP sends prose it composed), so there is
+    /// no server-side kreuzberg conversion on this path.
+    async fn record_ingestion_source(
         &self,
         resource: ResourceId,
         source_uri: &str,
@@ -2239,6 +2240,35 @@ impl Backend for DbBackend {
             threshold,
             regions: Some(outcome.regions as i64),
             membership_fingerprint: Some(outcome.membership_fingerprint),
+        }))
+    }
+
+    async fn begin_segmented_ingest(
+        &self,
+        cmd: CreateResource,
+        seg: SegmentedBegin,
+    ) -> Result<CommandOutput<SegmentedBeginResponse>, TemperError> {
+        // `origin_uri` feeds the ingestion record below, so take it before `cmd` moves into create.
+        let origin_uri = cmd.origin_uri.clone().unwrap_or_default();
+
+        // Block 0 lands via the ordinary create path — segmented ingest changes how the *rest* of
+        // the body arrives, not how a resource is created. Auth, home resolution, and doc-type
+        // defaults all come along with it.
+        let out = self.create_resource(cmd).await?;
+        let resource_id = out.value.id;
+
+        // The per-resource source-provenance row, written at begin (design §4 point 4).
+        self.record_ingestion_source(resource_id, &origin_uri, seg.source_hash.as_deref())
+            .await?;
+
+        let landed = Self::landed_blocks(&self.pool, resource_id).await?;
+        Ok(CommandOutput::new(SegmentedBeginResponse {
+            resource_id: resource_id.uuid(),
+            // Client-side ingest-session id — see `SegmentedBeginResponse::correlation_id`'s doc
+            // for why this is not yet threaded onto the server's event ledger.
+            correlation_id: uuid::Uuid::now_v7(),
+            blocks: landed.blocks,
+            body_hash: landed.body_hash,
         }))
     }
 

@@ -63,6 +63,7 @@ async fn begin_segmented_posts_to_ingest_and_parses_response() {
             seq: 0,
             content_hash: "h0".to_string(),
         }],
+        body_hash: "sha256:live".to_string(),
     };
 
     Mock::given(method("POST"))

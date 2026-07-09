@@ -16,7 +16,9 @@ use async_trait::async_trait;
 use crate::types::resource::ResourceRow;
 use temper_core::error::TemperError;
 use temper_core::types::ids::{EdgeId, PropertyId, ResourceId};
-use temper_core::types::ingest::{AppendBlockPayload, BlocksResponse, FinalizePayload};
+use temper_core::types::ingest::{
+    AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentedBegin, SegmentedBeginResponse,
+};
 use temper_core::types::materialize::MaterializeAck;
 
 use super::commands::{
@@ -171,13 +173,30 @@ pub trait Backend: Send + Sync {
         cmd: MaterializeOnThreshold,
     ) -> Result<CommandOutput<MaterializeAck>, TemperError>;
 
-    // ── segmented (multi-block) ingest — streaming/resumable ingestion, Beat 2 ──
-    // Block 0 always lands via `create_resource` (the `IngestPayload.segmented` marker just
-    // changes what the API handler returns, not how the resource is created — see
-    // `temper_core::types::ingest::SegmentedBegin`). These three cover the rest of the segmented
-    // session: appending block `seq >= 1`, declaring the session complete, and reading the
-    // landed set back. All three gate on `can_modify_resource` before touching anything — an
-    // in-progress segmented ingest is caller-private, including the read.
+    // ── segmented (multi-block) ingest — streaming/resumable ingestion ──
+    // The whole session: `begin_segmented_ingest` creates the resource with block 0 and records the
+    // source row; `append_block` lands `seq >= 1`; `finalize_ingest` declares it complete;
+    // `list_blocks` reads the landed set back (the resume/progress read). Block 0 still lands
+    // through the ordinary create path internally — `begin` composes it — so the create semantics
+    // are shared with every other resource.
+    //
+    // The three post-begin methods gate on `can_modify_resource` before touching anything: an
+    // in-progress segmented ingest is caller-private, including the read. `begin` gates through the
+    // create path's own home/authorship checks.
+
+    /// Begin a segmented (multi-block) ingest: create the resource with segment 0 as its body
+    /// block, record the per-resource source-provenance row (`kb_ingestion_records`), and return
+    /// the landed set plus the live `body_hash`.
+    ///
+    /// One command per inbound call — surfaces do not compose these steps themselves. `cmd.origin`
+    /// attributes the create; `seg.total_blocks_hint` and `seg.block_budget` are recorded by the
+    /// caller's own bookkeeping and are deliberately not validated here (the budget is a client-side
+    /// determinism aid, not a server-enforced limit).
+    async fn begin_segmented_ingest(
+        &self,
+        cmd: CreateResource,
+        seg: SegmentedBegin,
+    ) -> Result<CommandOutput<SegmentedBeginResponse>, TemperError>;
 
     /// Append one segment to a resource whose block 0 already landed. Idempotent in the substrate
     /// on `(resource, seq, block merkle)` — re-appending an already-landed segment is a no-op that
