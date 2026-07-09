@@ -138,16 +138,27 @@ fn packed_to_incoming(
     }
 }
 
-/// The declared segment-text hash must match the segment text. This is the one integrity check a
-/// caller that does not chunk locally can honor, so it is the check every caller honors — the CLI
-/// already sends exactly these two fields and, before this, had them read by nothing.
-fn verify_content_hash(payload: &AppendBlockPayload) -> Result<(), TemperError> {
+/// Everything an append must satisfy before any write.
+///
+/// The declared segment-text hash must match the segment text — the one integrity check a caller
+/// that does not chunk locally can honor, so it is the check every caller honors. The CLI already
+/// sends exactly these two fields and, before this, had them read by nothing.
+///
+/// And a server-chunked append needs prose to chunk: empty content would otherwise reach
+/// `block_append`, which raises a raw `empty chunk set` database exception rather than anything a
+/// caller can act on.
+fn validate_append(payload: &AppendBlockPayload) -> Result<(), TemperError> {
     let actual = temper_core::hash::sha256_hex(payload.content.as_bytes());
     if actual != payload.content_hash {
         return Err(TemperError::BadRequest(format!(
             "content_hash mismatch for seq {}: declared {}, computed {}",
             payload.seq, payload.content_hash, actual
         )));
+    }
+    if payload.chunks_packed.is_none() && payload.content.is_empty() {
+        return Err(TemperError::BadRequest(
+            "append with no chunks_packed requires non-empty content".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -2239,7 +2250,7 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(resource.uuid()).await?;
         // Then the payload's own integrity, before anything is prepared or written.
-        verify_content_hash(&payload)?;
+        validate_append(&payload)?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -2247,11 +2258,46 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
 
-        // Same no-embed chunk path as create/update: the client already extracted, chunked, and
-        // embedded this segment — `seq` is authoritative (`AppendParams.block.seq`).
-        let chunks = unpack_incoming_chunks(&payload.chunks_packed)?;
-        let block =
-            temper_substrate::content::prepare_block_from_chunks(payload.seq as i32, None, chunks);
+        // Bring-your-own chunks (the CLI) ride through verbatim — ONNX-free, `seq` authoritative
+        // (`AppendParams.block.seq`), same no-embed path as create/update. Absent chunks (MCP, and
+        // any programmatic client without an embedder) are chunked server-side, seeding the heading
+        // breadcrumb from the prior block so `header_path` is continuous across the boundary.
+        let block = match payload.chunks_packed.as_deref() {
+            Some(packed) => {
+                let chunks = unpack_incoming_chunks(packed)?;
+                temper_substrate::content::prepare_block_from_chunks(
+                    payload.seq as i32,
+                    None,
+                    chunks,
+                )
+            }
+            None => {
+                let breadcrumb =
+                    temper_substrate::readback::trailing_breadcrumb(&self.pool, resource)
+                        .await
+                        .map_err(api_err)?;
+                // The create path's predicate (`chunks.is_none() && !body.is_empty() &&
+                // async_embed_enabled()`), reduced to its residual: this arm IS the chunks-absent
+                // case, and `validate_append` already guaranteed non-empty content.
+                let defer = crate::services::embed_service::async_embed_enabled();
+                if defer {
+                    temper_substrate::content::prepare_block_deferred_with_prefix(
+                        payload.seq as i32,
+                        None,
+                        &payload.content,
+                        &breadcrumb,
+                    )
+                } else {
+                    temper_substrate::content::prepare_block_with_prefix(
+                        payload.seq as i32,
+                        None,
+                        &payload.content,
+                        &breadcrumb,
+                    )
+                    .map_err(api_err)?
+                }
+            }
+        };
 
         writes::append_block(
             &self.pool,

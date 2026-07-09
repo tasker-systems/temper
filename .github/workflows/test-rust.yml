@@ -218,6 +218,10 @@ jobs:
         run: |
           cargo nextest run -p temper-api --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast
           cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1 --no-fail-fast
+          # temper-services' segmented-append server-chunking test (`chunks_packed: None`) is
+          # `#[cfg(feature = "test-embed")]` for the same reason: a test-db-only run compiles it
+          # out and never exercises the path every MCP append relies on.
+          cargo nextest run -p temper-services --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast
 
       - name: Run CLI-side embed pipeline tests
         # temper-cli unit tests gated on `feature = "test-embed"` cover

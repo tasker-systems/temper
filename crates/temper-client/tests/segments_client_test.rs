@@ -114,7 +114,7 @@ async fn append_block_posts_to_resources_blocks_path() {
         seq: 1,
         content: "second segment".to_string(),
         content_hash: temper_core::hash::sha256_hex(b"second segment"),
-        chunks_packed: "b64chunks".to_string(),
+        chunks_packed: Some("b64chunks".to_string()),
     };
     let got = client
         .ingest()

@@ -127,7 +127,13 @@ pub struct AppendBlockPayload {
     pub content_hash: String,
     /// Base64-encoded MessagePack of `Vec<PackedChunk>` — this segment's pre-chunked, pre-embedded
     /// content (same wire shape as `IngestPayload::chunks_packed`).
-    pub chunks_packed: String,
+    ///
+    /// `None` when the caller has no chunker or embedder (the MCP surface, and any programmatic
+    /// client that is not the CLI): the server then chunks [`Self::content`] itself, seeding the
+    /// heading breadcrumb from the prior block so `header_path` stays continuous across the block
+    /// boundary. Mirrors `IngestPayload::chunks_packed`'s optionality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_packed: Option<String>,
 }
 
 /// Response to append / `GET /api/resources/{id}/blocks`: the currently landed segment set.
@@ -462,11 +468,22 @@ mod tests {
             seq: 2,
             content: "x".into(),
             content_hash: "h".into(),
-            chunks_packed: "b64".into(),
+            chunks_packed: Some("b64".into()),
         };
         let j = serde_json::to_string(&p).unwrap();
         let back: super::AppendBlockPayload = serde_json::from_str(&j).unwrap();
         assert_eq!(back.seq, 2);
+        assert_eq!(back.chunks_packed.as_deref(), Some("b64"));
+    }
+
+    // The MCP shape: a caller with no chunker omits the field entirely, and it must neither be
+    // required on the way in nor emitted on the way out.
+    #[test]
+    fn append_payload_round_trips_without_packed_chunks() {
+        let json = r#"{"seq":2,"content":"x","content_hash":"h"}"#;
+        let p: super::AppendBlockPayload = serde_json::from_str(json).unwrap();
+        assert!(p.chunks_packed.is_none());
+        assert!(!serde_json::to_string(&p).unwrap().contains("chunks_packed"));
     }
 
     #[test]

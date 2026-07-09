@@ -301,7 +301,9 @@ pub async fn run_segmented_create(
             seq,
             content: segments[idx].text.clone(),
             content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
-            chunks_packed,
+            // The CLI always chunks + embeds client-side; the server-chunk branch is for callers
+            // without an embedder (MCP).
+            chunks_packed: Some(chunks_packed),
         };
         let response = client
             .ingest()
