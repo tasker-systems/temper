@@ -4,6 +4,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::ids::{ContextId, ProfileId};
+use temper_services::services::context_graph_service;
+
 mod common;
 use common::{seed_context_with_goal_and_tasks, seed_profile};
 
@@ -152,4 +155,40 @@ async fn atlas_nodes_visible_reports_task_stage(pool: PgPool) {
             .expect("node row");
 
     assert_eq!(stage.as_deref(), Some("in-progress"));
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn panorama_returns_containers_and_empty_residual(pool: PgPool) {
+    let (profile, ctx, goal) = seed_context_with_goal_and_tasks(&pool, 3).await;
+    let p = context_graph_service::context_panorama(
+        &pool,
+        ProfileId::from(profile),
+        ContextId::from(ctx),
+        "doc_type",
+        &["goal".to_string()],
+        2,
+    )
+    .await
+    .expect("panorama");
+
+    assert_eq!(p.containers.len(), 1);
+    assert_eq!(p.containers[0].id, goal);
+    assert_eq!(p.containers[0].member_count, 3);
+    assert_eq!(p.residual.group_key, "doc_type");
+    assert!(
+        p.residual.buckets.is_empty(),
+        "tray empties on well-edged data"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn composition_from_a_container_includes_its_members(pool: PgPool) {
+    let (profile, _ctx, goal) = seed_context_with_goal_and_tasks(&pool, 3).await;
+    let sg =
+        context_graph_service::context_composition(&pool, ProfileId::from(profile), &[goal], 1)
+            .await
+            .expect("composition");
+
+    assert_eq!(sg.nodes.len(), 4, "goal + 3 tasks");
+    assert_eq!(sg.edges.len(), 3);
 }

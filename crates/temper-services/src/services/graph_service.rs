@@ -442,6 +442,57 @@ pub async fn cogmap_panorama(
     })
 }
 
+/// Hydrate a resource-id set into [`AtlasNode`]s via `graph_atlas_nodes_visible`.
+///
+/// Visibility-gated **deny-as-absence**: the SQL joins `resources_visible_to`, so any id
+/// the profile cannot see (or that is not `is_active`) simply drops out of the result —
+/// its existence never leaks. Maps `home`/`first_chunk`/`stage` into the wire shape.
+///
+/// Shared by [`region_composition_slice`] (Beat D) and
+/// [`crate::services::context_graph_service::context_composition`] (Beat E) so the node
+/// projection cannot drift between the two composition reads — a bug that copy-paste
+/// across the service boundary would eventually produce (SG-3).
+pub(crate) async fn hydrate_atlas_nodes_visible(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    node_ids: &[Uuid],
+) -> ApiResult<Vec<AtlasNode>> {
+    Ok(sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Option<String>,
+            String,
+            i32,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT id, title, doc_type, home, degree, first_chunk, stage FROM graph_atlas_nodes_visible($1, $2)",
+    )
+    .bind(profile_id.as_uuid())
+    .bind(node_ids)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, title, doc_type, home, degree, first_chunk, stage)| AtlasNode {
+        id,
+        title,
+        doc_type,
+        home: if home == "cogmap" {
+            NodeHome::Cogmap
+        } else {
+            NodeHome::Context
+        },
+        degree,
+        salience: None,
+        excerpt: first_chunk.as_deref().and_then(compute_excerpt),
+        stage,
+    })
+    .collect())
+}
+
 /// Beat D — region → resources COMPOSITION drill. Given one or more regions
 /// (a shift-selected union), returns the two-axis force-graph: the regions'
 /// facets (knowledge axis) plus the context-homed resources they link to (the
@@ -535,40 +586,7 @@ pub async fn region_composition_slice(
         node_ids.truncate(NODE_CAP);
     }
 
-    let nodes: Vec<AtlasNode> = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            Option<String>,
-            String,
-            i32,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        "SELECT id, title, doc_type, home, degree, first_chunk, stage FROM graph_atlas_nodes_visible($1, $2)",
-    )
-    .bind(profile_id.as_uuid())
-    .bind(&node_ids)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(id, title, doc_type, home, degree, first_chunk, stage)| AtlasNode {
-        id,
-        title,
-        doc_type,
-        home: if home == "cogmap" {
-            NodeHome::Cogmap
-        } else {
-            NodeHome::Context
-        },
-        degree,
-        salience: None,
-        excerpt: first_chunk.as_deref().and_then(compute_excerpt),
-        stage,
-    })
-    .collect();
+    let nodes = hydrate_atlas_nodes_visible(pool, profile_id, &node_ids).await?;
 
     // Keep only edges whose BOTH endpoints made the final (capped + visibility- and
     // is_active-gated) node set, so the wire payload never references a node the
