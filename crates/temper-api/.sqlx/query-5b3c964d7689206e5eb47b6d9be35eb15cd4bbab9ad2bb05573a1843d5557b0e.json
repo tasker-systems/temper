@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM kb_team_members\n            WHERE team_id = $1 AND profile_id = $2\n              AND NOT (\n                  role = 'owner'\n                  AND (SELECT COUNT(*) FROM kb_team_members\n                         WHERE team_id = $1 AND role = 'owner') = 1\n              )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5b3c964d7689206e5eb47b6d9be35eb15cd4bbab9ad2bb05573a1843d5557b0e"
+}

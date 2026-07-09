@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)\n        VALUES ($1, $2, $3, $4, $5)\n        RETURNING id, name,\n                  owner_table AS \"kb_owner_table!\",\n                  owner_id AS \"kb_owner_id!\",\n                  created,\n                  created AS \"updated!\",\n                  slug,\n                  CASE owner_table\n                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)\n                    ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)\n                  END AS \"owner_ref!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "0aaf23309979bf92d2ec96d9f14353632b515d28aaf347229c6ea7a69071e3fb"
+}

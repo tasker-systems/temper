@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 WHERE cogmap_id=$2 AND lens_id=$3 AND NOT is_folded",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0408f31a6c222fff673589eac7eea0d2a0780b94617bfa0f607e99fb15bfbdec"
+}

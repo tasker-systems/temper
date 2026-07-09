@@ -16,6 +16,7 @@ node_modules
 .neon
 .logs
 .env*
+tmp/
 
 # ts-rs writes here when TS_RS_EXPORT_DIR is unset (i.e. any bare `cargo test -p temper-core
 # --all-features`, which enables the `typescript` feature). The authoritative output lives in
