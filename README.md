@@ -41,7 +41,7 @@ In the personal-knowledge projection, goals hold the vision, tasks carry the wor
   <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from goals through tasks down to sessions" width="700" />
 </p>
 
-This isn't a ticketing system competing with Linear. It's a structured vault of markdown files where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
+This isn't a ticketing system competing with Linear. It's a structured knowledge base where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
 
 ## Session continuity
 
@@ -50,7 +50,7 @@ Every new session starts with `temper warmup`, which injects active tasks, recen
 At the end of each session, a session note (`temper resource create --type session`) captures what happened — decisions made, tasks updated, next steps identified — written straight through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
-  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the vault" width="700" />
+  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the knowledge base" width="700" />
 </p>
 
 ## Goals and tasks
@@ -63,13 +63,13 @@ Temper gives you two building blocks:
 
 ## For humans and agents
 
-Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach the vault three ways:
+Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach your knowledge base three ways:
 
 - **CLI** — `temper warmup`, `temper search`, `temper resource create`. Claude Code hooks call `temper warmup` automatically at session start.
-- **MCP Server** — vault operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
-- **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your vault's structure and workflow conventions.
+- **MCP Server** — knowledge-base operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
+- **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your knowledge base's structure and workflow conventions.
 
-If it can read files, it can use temper.
+If it can read markdown, it can use temper.
 
 ## Install
 
@@ -95,75 +95,83 @@ For version pinning, uninstall instructions, and building from source (including
 ## Quick Start
 
 ```bash
-# Initialize — temper configures auth and ensures your default context server-side
+# Initialize — temper writes your config and ensures your default context server-side
 temper init
+
+# Log in (browser OAuth, PKCE). `temper auth status` shows where you stand.
+temper auth login
 
 # Create a context for your project on the server
 temper context create myapp
 
-# Subscribe locally so `temper pull` materializes it
-temper context subscribe myapp
-
-# Materialize a local projection of the context
-temper pull myapp
-
 # Add a document — temper extracts markdown and ingests it via the cloud pipeline
-temper resource create --from ~/projects/myapp/docs/design.md --context myapp
+temper resource create --from ~/projects/myapp/docs/design.md --context @me/myapp
 
-# Search across your vault
+# Search across your knowledge base
 temper search "authentication decisions"
 
 # Generate and install the Claude Code skill
 temper skill install
 
 # Write a session note (body via --body @file or piped stdin)
-temper resource create --type session --context myapp --title "Implemented auth flow, chose JWT rotation"
+temper resource create --type session --context @me/myapp --title "Implemented auth flow, chose JWT rotation"
 ```
 
-## The Vault
+> **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable, so `--context myapp` is rejected. Of the commands below, only `temper context create` takes a plain name — it is naming a context, not resolving one.
+>
+> A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every resource-returning command — `create`, `update`, `list`, `show`, `search` — carries a `ref` field: copy it, paste it. A script that just created a resource can address it straight from the response.
 
-The vault is a directory of markdown files with YAML frontmatter. This is deliberate:
+## Everything Resolves to Markdown
 
-- **Human-readable.** Browse your vault in any editor, in Obsidian, or on GitHub. No proprietary formats.
-- **Version-controllable.** Git tracks changes. Diffs are readable. History is auditable.
+A resource *is* a markdown body with YAML frontmatter, and that is the form you read it in — through `temper resource show`, an agent over MCP, or the web UI. The cloud is the source of truth, and every write routes through the API.
+
+Markdown is deliberate:
+
+- **Human-readable.** No proprietary formats. A resource reads the same in a terminal, in the web UI, and in an agent's context window.
 - **AI-native.** Language models understand markdown and YAML frontmatter natively. No parsing overhead.
 - **Portable.** The knowledge base is the unit of value, not the tool.
 
 ## Commands
 
+Every command accepts the global flags `--format json|toon` and `--color auto|always|never`. Output defaults to TOON on a TTY and **JSON otherwise** — so an agent piping `temper` gets machine-readable output with no flag at all. Precedence runs flag → env (`TEMPER_FORMAT` / `TEMPER_COLOR`) → the `[cli]` section of your config → the TTY-aware default. Edit those defaults with `temper config edit`.
+
 ### Core
 
 | Command | Description |
 |---------|-------------|
-| `temper init` | Initialize a new vault |
-| `temper check` | Verify vault integrity and tool health |
-| `temper status` | Vault overview |
-| `temper warmup [--context <ctx>]` | Context primer for new sessions |
-| `temper pull <ctx>` | Materialize a context's projection from the cloud |
+| `temper init` | Initialize your config and default context |
+| `temper check` | Check cloud configuration and tool health |
+| `temper status` | Overview of your contexts and recent work |
+| `temper warmup [--context <ctx-ref>]` | Context primer for new sessions |
 
 ### Search
 
 | Command | Description |
 |---------|-------------|
 | `temper search <query>` | Hybrid full-text + semantic search |
+| `temper search <query> --limit <n>` | Cap the result count (default 10) |
 | `temper search <query> --edge-type <k> --depth <n>` | Search with graph expansion along typed edges |
+| `temper search <query> --cogmap <ref>` | Scope the search to a single cognitive map |
+| `temper search <query> --wayfind [--lens <ref>]` | Lens-driven region-salience search across your visible maps |
 
 ### Content
 
 | Command | Description |
 |---------|-------------|
-| `temper resource create --type <t> --title <t>` | Create a resource (goal, task, session, research, decision, concept) |
+| `temper resource create --type <type> --title <title>` | Create a resource (goal, task, session, research, decision, concept) |
 | `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
-| `temper resource list --type <t>` | List resources of a type |
+| `temper resource list --type <type>` | List resources of a type |
 | `temper resource show <ref>` | Show a resource by ref |
+| `temper resource show <ref> --meta-only` | Frontmatter only — a cheap orientation read, no body |
+| `temper resource show <ref> --edges` | Show a resource plus its graph edges |
 
 ### Goals and Tasks
 
 | Command | Description |
 |---------|-------------|
-| `temper resource create --type task --title <t> --context <ctx>` | Create a task |
-| `temper resource create --type goal --title <t> --context <ctx>` | Create a goal |
-| `temper resource list --type task [--context <ctx>]` | List tasks (or any doc type) |
+| `temper resource create --type task --title <title> --context <ctx-ref>` | Create a task |
+| `temper resource create --type goal --title <title> --context <ctx-ref>` | Create a goal |
+| `temper resource list --type task [--context <ctx-ref>]` | List tasks (or any doc type) |
 | `temper resource update <ref> --stage done` | Mark a task done |
 
 > `temper resource create` writes *into* a context (`--context`). `temper resource update`, `show`, and `delete` take a single **ref** — a UUID or the decorated `slug-<uuid>` form — and need no `--type`/`--context`.
@@ -173,27 +181,55 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | Command | Description |
 |---------|-------------|
 | `temper edge assert <source> <target> --kind <k> --polarity <p> --label <l>` | Assert a typed edge (kinds: express, contains, leads-to, near; polarity forward/inverse) |
+| `temper edge retype <edge-handle> --kind <k> --polarity <p>` | Change an edge's kind and polarity |
 | `temper edge reweight <edge-handle> --weight <n>` | Change an edge's weight |
 | `temper edge fold <edge-handle>` | Fold (supersede) an edge |
+
+### Cognitive Maps
+
+A cognitive map is a telos-seeded region of the substrate. Nodes are *distilled* resources — a map node is never the same row as its source. Authoring into a map happens under an **invocation envelope**, so every act is correlated and auditable.
+
+| Command | Description |
+|---------|-------------|
+| `temper invocation open --cogmap <ref> --trigger-kind manual` | Open an envelope; the server mints the id |
+| `temper resource create --cogmap <ref> --sources <refs> [--sources-as-edges]` | Author a node into a map, citing its sources |
+| `temper resource facet <ref> --values '<json>'` | Set a typed facet on a resource |
+| `temper invocation close <ref> --disposition completed` | Close an envelope (`completed`, `failed`, or `abandoned`) |
+| `temper cogmap materialize <ref> [--threshold <n>]` | Recompute the map's regions |
+| `temper cogmap shape <ref>` | Read a map's materialized regions |
+| `temper cogmap analytics <ref>` | Map-level analytics (telos, staleness, regulation) |
+| `temper cogmap region-metrics <ref>` | Per-region analytics metrics |
+| `temper invocation show <ref>` | Read one envelope plus its acts |
+
+The table reads in authoring order: open an envelope, create nodes and facet them, close, materialize, then read. **Regions only exist after a materialize** — an authoring pass that creates nodes but never materializes leaves the read tier unchanged.
+
+Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. `--sources` records block-provenance on the body; adding `--sources-as-edges` also asserts a `derived_from` edge to each resource-valued source.
+
+Building one from a body of source material is its own discipline: [ingesting a corpus](docs/guides/corpus-ingestion.md), then [building a cognitive map](docs/guides/building-a-cognitive-map.md) from it. For the concept, see [cognitive maps](https://temperkb.io/cognitive-maps).
 
 ### Contexts and Skills
 
 | Command | Description |
 |---------|-------------|
-| `temper context create <n>` | Create a context on the server |
-| `temper context subscribe <n>` | Subscribe locally so `temper pull` materializes it |
-| `temper context unsubscribe <n>` | Unsubscribe locally |
+| `temper context create <name>` | Create a context on the server |
 | `temper context list` | List contexts visible to you on the server |
+| `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (admin-only; `@me` shorthand not accepted here) |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
 
-### Cloud
+### Cloud and Auth
 
 | Command | Description |
 |---------|-------------|
-| `temper auth` | Authenticate with temper cloud |
-| `temper pull <context>` | Materialize a local projection of a context |
+| `temper auth login` | Log in via browser OAuth (PKCE flow) |
+| `temper auth status` | Show current auth status |
+| `temper auth export-token` | Export a refreshed access token (for CI) |
+| `temper auth request-access` | Request access on an invite-only instance |
+| `temper invitations` | List pending team invitations addressed to you |
+| `temper team join <token>` | Accept a team invitation |
 | `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
+
+`temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? `temper init` takes `--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience`, and `--idp` — see [docs/guides/self-hosting.md](docs/guides/self-hosting.md).
 
 ## Semantic Search
 
@@ -205,7 +241,7 @@ temper search "design patterns" --limit 5
 
 ## Claude Code Integration
 
-Temper generates a Claude Code skill file tailored to your vault:
+Temper generates a Claude Code skill file tailored to your knowledge base:
 
 ```bash
 temper skill install
@@ -221,7 +257,7 @@ To automatically prime new Claude Code sessions with recent context, add a `Sess
     "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "temper warmup --context myapp"
+        "command": "temper warmup --context @me/myapp"
       }]
     }]
   }
@@ -232,11 +268,11 @@ This runs `temper warmup` on every new session, injecting active tasks, recent s
 
 ## Temper Cloud
 
-The cloud is the source of truth. Resources are created and updated via the API; the local vault is a projection cache materialized on demand via `temper pull <context>`. All content is stored as markdown with YAML frontmatter and remains human-readable — browse it in any editor, Obsidian, or on GitHub.
+The cloud is the source of truth. Resources are created and updated via the API. All content is stored as markdown with YAML frontmatter and remains human-readable — read it from the CLI, an agent over MCP, or the web UI.
 
 What cloud adds:
 
-- **Cross-machine access** — pull any context to any device with `temper pull`
+- **Cross-machine access** — the same knowledge base from any device, no sync to manage
 - **Semantic search** powered by pgvector embeddings
 - **MCP server** for direct agent integration
 - **Team contexts** with granular access control
@@ -244,7 +280,7 @@ What cloud adds:
 
 ### MCP Server
 
-The remote MCP server exposes vault operations as structured tools over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Agents authenticate via Auth0 using the standard OAuth 2.1 + PKCE flow — the server advertises Auth0's endpoints through RFC 8414 / RFC 9728 discovery so MCP clients handle the flow automatically.
+The remote MCP server exposes knowledge-base operations as structured tools over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Agents authenticate via Auth0 using the standard OAuth 2.1 + PKCE flow — the server advertises Auth0's endpoints through RFC 8414 / RFC 9728 discovery so MCP clients handle the flow automatically.
 
 **Available tools:**
 

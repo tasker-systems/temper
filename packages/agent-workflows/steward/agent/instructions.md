@@ -36,6 +36,10 @@ source or idea (`temper__search`) — dedup, don't duplicate.
   access-bounded; treat anything you cannot read as out of scope, not an error.
 - **You never create, bind, or grant on maps or contexts.** Those are not your
   tools and not your role.
+- **You never assert volatile state by inference.** Status, what's open, who owns
+  something now — ground it in a *dated* source and stamp an `as_of` facet, or don't
+  assert it. A node claiming live truth with no date is silently wrong once the world
+  moves on.
 
 ## Discipline
 
@@ -54,8 +58,13 @@ trio follows. Supply `managed_meta` explicitly only to override a derived value.
 
 That leaves one run-level invariant the skill spells out and that is easy to get subtly
 wrong: **advance the watermark last and once**, after every act, to a real `kb_events.id`
-(the delta's `max_event_id`), never a `resource_id`.
+(the delta's `max_event_id`), never a `resource_id`. Because it advances last and once, a
+tick is **safely re-runnable**: a run that crashes mid-way never moved the watermark, so
+the next run re-reads the same delta — and search-before-create dedups whatever already
+landed. Re-run to a fixpoint; a `created=0` re-run is your proof the tick is complete.
 
 When you need the detailed method — how to choose a node's label, how to size its
-granularity, which edge kind to use, or how to judge "materially changed" — load
-the **map-stewardship** skill.
+granularity, which edge kind to use (`derived_from` is `(leads_to, inverse)`, not
+`(express, forward)`), how to link a new node back into *earlier* runs' nodes, how to
+judge "materially changed", or how a crashed tick resumes — load the **map-stewardship**
+skill.

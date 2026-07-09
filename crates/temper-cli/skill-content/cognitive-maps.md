@@ -113,6 +113,35 @@ from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` ed
 on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface.
 Regions only exist *after* a materialize.
 
+### The node manifest — the single highest-leverage habit
+
+A **pass** is: open one invocation → loop `resource create` + `edge assert` from a small
+driver script → **record every created id to a node-manifest file** as you go. The manifest
+is what lets the *next* pass wire edges back to this pass's nodes — without it, cross-pass
+linkage is guesswork.
+
+- **Commit the manifest as you go.** A later revert or a fresh session then inherits the
+  resume/linkage state; a crash, a kill, or an auth expiry mid-run costs nothing.
+- **Make the loop idempotent via the manifest** — skip any source whose id the manifest
+  already records, so a re-run only creates what's missing.
+- **Verify completeness by re-running to a fixpoint.** `created=0` on a clean re-run is a
+  stronger proof that the pass is done than any progress log.
+
+### Cross-question linkage — what makes it a graph, not a pile
+
+Every pass after the first must **link back into the earlier ones**, or you get parallel
+piles, not a graph. The substrate will **not** infer these edges — author them deliberately
+as labeled `edge assert`s:
+
+- a structural-break theme `breaks →` the concept it defeats, and is `exhibited_by →` the
+  fact instances that show it;
+- a status node `settles →` or `concerns →` the concept it reports on, and `classifies →`
+  the patterns a methodology sorts.
+
+(Those arrows are edge **labels** — pick the label vocabulary your map's `map-stewardship`
+conventions define.) The payoff shows at **materialize**: a status node about a topic joins
+the region of the concept it concerns.
+
 ### The act envelope — a hard invariant
 
 Every authored act carries `--invocation` + `--confidence` + `--reasoning` (and `--model`).
@@ -129,6 +158,41 @@ An act missing them is real but **orphaned** — it will not appear under
 
 (The same three bands appear in `map-stewardship`; this rubric is the missing "which band
 when" a charter-only author otherwise has to invent.)
+
+### Breadth-with-confidence before depth
+
+Do **one charter question per invocation-pass** — each is then a clean, reviewable unit.
+Cover many instances **thinly and only where you can ground them**, rather than a few deeply.
+
+- On a first breadth pass, **skip the `tentative` band entirely** — if you can't ground it,
+  it doesn't get a node yet. Depth invites over-committing to claims you haven't reconciled;
+  earn that certainty in later passes.
+- Charter question-shapes that build on each other: **Q1 what recurs?** (concept layer +
+  fact instances) → **Q2 where does it structurally break?** (theme nodes that cross-link
+  back to Q1) → **Q3 what is settled vs still open?** (decision / concern / question nodes,
+  each dated).
+
+### Calibrate the voice on node #1
+
+Author **one** node, `resource show` it, and confirm depth + voice with the map owner
+*before* batching the next twenty. Cheap insurance against redoing a whole layer. Checkpoint
+with the map owner between passes, too.
+
+### Dated grounding — stamp `as_of`
+
+For anything **volatile** (status, "what's still open"), ground the node in a **dated
+source** and stamp an `as_of` facet — never assert current state by inference. Status
+drifts; a node that claims live truth without a date goes wrong silently.
+
+`as_of` is a *semantic* property, so it is a legitimate facet:
+
+```bash
+temper resource facet <NODE_REF> --values '{"as_of":"2026-07-09"}' \
+    --invocation "$inv" --confidence confident --reasoning "dated status source"
+```
+
+Source-provenance still never goes in a facet — that rides on `--sources` /
+`--sources-as-edges`, never a facet or `managed_meta`.
 
 ### Distillation, dedup & merge
 
