@@ -84,9 +84,14 @@ export type ResourceMetaListResponse = { rows: Array<ResourceMetaResponse>, tota
  */
 export type ResourceMetaResponse = { 
 /**
- * UUID of the resource
+ * UUID of the resource.
+ *
+ * Named `id` (not `resource_id`) so this response is a literal strict subset of
+ * [`crate::types::resource::ResourceDetail`]: `--meta-only` returns the same keys the
+ * full `show` does, and nothing else. With two different anchor names the subset
+ * relation is unachievable.
  */
-resource_id: ResourceId, 
+id: ResourceId, 
 /**
  * Typed managed (temper-*) frontmatter from the manifest — the closed
  * Property vocabulary. Only the named `temper-*` keys are represented;
@@ -102,12 +107,4 @@ managed_meta: ManagedMeta | null,
  * demand and ignores anything it doesn't recognize.
  * `None` only if the manifest row predates meta population.
  */
-open_meta: JsonValue | null, 
-/**
- * SHA-256 hash of the managed_meta JSON
- */
-managed_hash: string, 
-/**
- * SHA-256 hash of the open_meta JSON
- */
-open_hash: string, };
+open_meta: JsonValue | null, };

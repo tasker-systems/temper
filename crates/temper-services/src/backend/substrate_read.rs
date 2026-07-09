@@ -36,7 +36,7 @@ use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
 };
 use temper_workflow::types::resource::{
-    ContentResponse, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
+    ContentResponse, ResourceDetail, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
@@ -227,6 +227,33 @@ pub async fn show_select(
         .map_err(ApiError::from)
 }
 
+/// `show_detail` — one resource with both metadata tiers.
+///
+/// Composes the two existing readbacks rather than introducing a joined query: that keeps
+/// this free of a new `sqlx::query!` macro (and therefore of the `.sqlx` cache regeneration
+/// ritual). Two round-trips for a single resource is not an N+1.
+///
+/// Visibility is gated by `native_resource_row` (WS2); `get_meta_select` re-gates through
+/// `readback::meta`, so an unreadable resource 404s before either tier is assembled.
+///
+/// This is the composition `temper-mcp`'s `get_resource` performed inline.
+pub async fn show_detail_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+) -> ApiResult<ResourceDetail> {
+    let row = native_resource_row(pool, profile_id, id)
+        .await
+        .map_err(ApiError::from)?;
+    let meta = get_meta_select(pool, profile_id, id).await?;
+
+    Ok(ResourceDetail {
+        row,
+        managed_meta: meta.managed_meta,
+        open_meta: meta.open_meta,
+    })
+}
+
 /// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`
 /// (the meta tier is `get_meta`).
 pub async fn get_content_select(
@@ -246,7 +273,10 @@ pub async fn get_content_select(
 }
 
 /// `get_meta` — managed/open frontmatter for one resource (`readback::meta`, the §7 inverse fate).
-/// `managed_hash`/`open_hash` are §7-dissolved (emitted empty; §9 non-invariants).
+///
+/// Carries no meta hashes: `managed_hash`/`open_hash` were §7-dissolved and had been
+/// emitted as empty strings ever since, so the fields were removed rather than kept as two
+/// permanently-meaningless keys. The real `body_hash` lives on `ResourceRow`.
 pub async fn get_meta_select(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -259,11 +289,9 @@ pub async fn get_meta_select(
     let managed: ManagedMeta =
         serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
     Ok(ResourceMetaResponse {
-        resource_id: ResourceId::from(new_id),
+        id: ResourceId::from(new_id),
         managed_meta: Some(managed),
         open_meta: Some(serde_json::Value::Object(rb.open)),
-        managed_hash: String::new(),
-        open_hash: String::new(),
     })
 }
 

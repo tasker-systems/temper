@@ -335,6 +335,7 @@ pub async fn run_segmented_create(
         .resources()
         .get(resource_id)
         .await
+        .map(|detail| detail.row)
         .map_err(crate::actions::runtime::client_err_to_temper)
 }
 

@@ -49,8 +49,10 @@ pub(crate) struct EdgesReport {
 /// Insert a derived `ref` key (the decorated, self-resolving identifier)
 /// into a serialized resource row, computed from its id + `title`. The
 /// `ref` is render-time only — never persisted, never on the wire type.
-/// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
-/// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
+/// Reads the anchor id from `id` (ResourceRow / ResourceDetail /
+/// ResourceMetaResponse) OR `resource_id` (UnifiedSearchResultRow, which still
+/// anchors on the longer name). Both branches are live — do not collapse them.
+/// No-op if the id is absent or unparseable.
 ///
 /// Also injects `context_ref` — the decorated home-context ref
 /// (`{context_owner_ref}/{context_slug}`) — when both fields are present
@@ -62,7 +64,14 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
         .or_else(|| row.get("resource_id"))
         .and_then(|v| v.as_str());
     let Some(id) = id else { return };
-    let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    // A row carrying no `title` — the `--meta-only` projection is the one that doesn't —
+    // cannot form the decorated half of a ref. This used to default the title to `""` and
+    // emit `-<uuid>`: a malformed ref that resolved only by accident (resolution is
+    // trailing-UUID-only) and that made the meta projection disagree with the full `show`
+    // on the value of `ref`. Emit nothing instead; a bare UUID is itself a valid ref.
+    let Some(title) = row.get("title").and_then(|v| v.as_str()) else {
+        return;
+    };
     if let Ok(uuid) = uuid::Uuid::parse_str(id) {
         let decorated = temper_workflow::operations::decorated_ref(
             title,
@@ -706,7 +715,7 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
             .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
             .take();
         let filtered_rows =
-            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "resource_id")
+            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
                 .map_err(map_projection_error)?;
         envelope["rows"] = filtered_rows;
     }
@@ -842,6 +851,7 @@ pub fn delete(
 
     // Context-free read: fetch the row by id to learn its context (for the
     // write backend), doctype + slug (for projection removal + result shape).
+    // Only the row is needed here — `get` returns both meta tiers, which delete ignores.
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
@@ -850,7 +860,8 @@ pub fn delete(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })?
+    .row;
 
     let cmd = DeleteResource {
         resource: id,
@@ -945,7 +956,9 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     let config_clone = config.clone();
     let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            let row = client
+            // `get` returns a `ResourceDetail`: the row flattened, plus both meta tiers.
+            // The tiers are what make the full `show` a superset of `--meta-only`.
+            let detail = client
                 .resources()
                 .get(uuid::Uuid::from(id))
                 .await
@@ -956,16 +969,17 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-            // Per-resource projection refresh — best-effort.
+            // Per-resource projection refresh — best-effort. The projection writer takes the
+            // row; the meta tiers reach the file via `resp`'s managed/open fields.
             if let Err(e) = crate::projection::write_resource_file_from_parts(
                 &config_clone.vault_root,
-                &row,
+                &detail.row,
                 &resp,
             ) {
                 crate::output::warning(format!("could not refresh projection file: {e}"));
             }
 
-            let metadata = serde_json::to_value(&row)
+            let metadata = serde_json::to_value(&detail)
                 .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
             Ok((metadata, resp.markdown))
         })
@@ -1038,13 +1052,13 @@ fn show_meta_only(
 
     let mut value = serde_json::to_value(&meta)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    // Inject `ref` before the `--fields` filter (parity with `list`): the
-    // anchor `resource_id` is always preserved, and `ref` is kept only when
-    // requested — so `--fields` controls its visibility consistently.
+    // Inject `ref` before the `--fields` filter (parity with `list`): the anchor `id` is
+    // always preserved. The meta projection carries no `title`, so `inject_ref` is a no-op
+    // here — the row's `id` is itself a valid ref. Kept for shape parity with `list`, whose
+    // rows do carry a title.
     inject_ref(&mut value);
-    let filtered =
-        temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
-            .map_err(map_projection_error)?;
+    let filtered = temper_core::projection::apply_top_level_filter(value, &fields_inner, "id")
+        .map_err(map_projection_error)?;
     let rendered = crate::format::render(&filtered, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -1318,6 +1332,7 @@ fn resolve_update_target(
     temper_workflow::types::resource::ResourceRow,
 )> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
+    // Update needs only the row (doctype validation); `get` also carries both meta tiers.
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
@@ -1326,7 +1341,8 @@ fn resolve_update_target(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })?
+    .row;
     let _ = temper_workflow::frontmatter::DocType::from_str(&row.doc_type_name)?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
@@ -2079,18 +2095,14 @@ mod list_meta_only_tests {
         let envelope = serde_json::json!({
             "rows": [
                 {
-                    "resource_id": "11111111-1111-1111-1111-111111111111",
+                    "id": "11111111-1111-1111-1111-111111111111",
                     "managed_meta": {"stage": "in-progress"},
-                    "open_meta": {"tags": []},
-                    "managed_hash": "sha256:a",
-                    "open_hash": "sha256:b"
+                    "open_meta": {"tags": []}
                 },
                 {
-                    "resource_id": "22222222-2222-2222-2222-222222222222",
+                    "id": "22222222-2222-2222-2222-222222222222",
                     "managed_meta": {"stage": "done"},
-                    "open_meta": null,
-                    "managed_hash": "sha256:c",
-                    "open_hash": "sha256:d"
+                    "open_meta": null
                 }
             ],
             "total": 2,
@@ -2101,14 +2113,13 @@ mod list_meta_only_tests {
         // to envelope.rows specifically, not to the whole envelope).
         let rows = envelope.get("rows").cloned().expect("rows");
         let filtered_rows =
-            apply_top_level_filter(rows, &["managed_meta".to_string()], "resource_id")
-                .expect("filter");
+            apply_top_level_filter(rows, &["managed_meta".to_string()], "id").expect("filter");
 
-        // Each row should have only resource_id + managed_meta
+        // Each row should have only id + managed_meta
         let arr = filtered_rows.as_array().expect("array");
         assert_eq!(arr.len(), 2);
         for row in arr {
-            assert!(row.get("resource_id").is_some(), "anchor missing in {row}");
+            assert!(row.get("id").is_some(), "anchor missing in {row}");
             assert!(
                 row.get("managed_meta").is_some(),
                 "managed_meta missing in {row}"
@@ -2136,6 +2147,22 @@ mod inject_ref_tests {
             Some("my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2")
         );
     }
+
+    /// A titleless row (the `--meta-only` projection) gets no `ref` rather than a
+    /// fabricated `-<uuid>` one. Surfaced by the #330 differential e2e: the malformed ref
+    /// made `--meta-only` disagree with the full `show` on the same key.
+    #[test]
+    fn inject_ref_skips_rows_without_a_title() {
+        let mut row = serde_json::json!({
+            "id": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "managed_meta": {},
+        });
+        super::inject_ref(&mut row);
+        assert!(
+            row.get("ref").is_none(),
+            "no title means no decorated ref: {row}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2145,14 +2172,12 @@ mod show_meta_only_tests {
 
     fn fake_meta_response() -> ResourceMetaResponse {
         ResourceMetaResponse {
-            resource_id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
+            id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
             managed_meta: Some(ManagedMeta {
                 stage: Some("in-progress".to_string()),
                 ..Default::default()
             }),
             open_meta: Some(serde_json::json!({"tags": ["x"]})),
-            managed_hash: "sha256:test".to_string(),
-            open_hash: "sha256:test".to_string(),
         }
     }
 
@@ -2160,9 +2185,9 @@ mod show_meta_only_tests {
     fn show_meta_only_fields_filter_preserves_anchor_and_managed_meta_only() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
-        let filtered = apply_top_level_filter(value, &["managed_meta".to_string()], "resource_id")
-            .expect("filter");
-        assert!(filtered.get("resource_id").is_some(), "anchor missing");
+        let filtered =
+            apply_top_level_filter(value, &["managed_meta".to_string()], "id").expect("filter");
+        assert!(filtered.get("id").is_some(), "anchor missing");
         assert!(
             filtered.get("managed_meta").is_some(),
             "managed_meta missing"
@@ -2171,17 +2196,13 @@ mod show_meta_only_tests {
             filtered.get("open_meta").is_none(),
             "open_meta should be filtered out"
         );
-        assert!(
-            filtered.get("managed_hash").is_none(),
-            "managed_hash should be filtered out"
-        );
     }
 
     #[test]
     fn show_meta_only_no_fields_returns_full_response() {
         let response = fake_meta_response();
         let value = serde_json::to_value(&response).expect("serialize");
-        let unfiltered = apply_top_level_filter(value.clone(), &[], "resource_id").expect("filter");
+        let unfiltered = apply_top_level_filter(value.clone(), &[], "id").expect("filter");
         assert_eq!(unfiltered, value);
     }
 }

@@ -13,7 +13,7 @@
 
 use async_trait::async_trait;
 
-use crate::types::resource::ResourceRow;
+use crate::types::resource::{ResourceDetail, ResourceRow};
 use temper_core::error::TemperError;
 use temper_core::types::ids::{EdgeId, PropertyId, ResourceId};
 use temper_core::types::ingest::{
@@ -57,10 +57,13 @@ pub trait Backend: Send + Sync {
         cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError>;
 
+    /// Read one resource with both metadata tiers (`managed_meta` + `open_meta`).
+    /// `list_resources` keeps the lean `ResourceRow`; only the single-resource read pays
+    /// for the tiers.
     async fn show_resource(
         &self,
         cmd: ShowResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError>;
+    ) -> Result<CommandOutput<ResourceDetail>, TemperError>;
 
     async fn update_resource(
         &self,

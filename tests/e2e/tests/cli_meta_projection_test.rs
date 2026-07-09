@@ -6,7 +6,8 @@ use serde_json::Value;
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
 /// `temper resource show <slug> --meta-only --format json` returns
-/// the ResourceMetaResponse shape (resource_id + managed_meta + ...).
+/// the ResourceMetaResponse shape (id + managed_meta + open_meta) — a strict
+/// subset of the full `show` object.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -65,10 +66,7 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: Value = serde_json::from_slice(&output.stdout).expect("json parse");
-    assert!(
-        stdout.get("resource_id").is_some(),
-        "missing resource_id: {stdout}"
-    );
+    assert!(stdout.get("id").is_some(), "missing id anchor: {stdout}");
     assert!(stdout.get("managed_meta").is_some(), "missing managed_meta");
     // Confirm we DON'T have the body or row fields
     assert!(stdout.get("content").is_none(), "should not include body");
@@ -137,16 +135,15 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: Value = serde_json::from_slice(&output.stdout).expect("json parse");
-    assert!(stdout.get("resource_id").is_some(), "anchor missing");
+    assert!(stdout.get("id").is_some(), "anchor missing");
     assert!(stdout.get("managed_meta").is_some(), "managed_meta missing");
     assert!(
         stdout.get("open_meta").is_none(),
         "open_meta should be filtered"
     );
-    assert!(
-        stdout.get("managed_hash").is_none(),
-        "hash should be filtered"
-    );
+    // `managed_hash` no longer exists on the wire at all (§7-dissolved, field removed),
+    // so this holds structurally rather than because `--fields` filtered it.
+    assert!(stdout.get("managed_hash").is_none(), "hash must not exist");
 }
 
 /// Dotted path in --fields triggers a validation error mentioning "jq" and
@@ -287,7 +284,7 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
         .expect("array");
     assert!(rows.len() >= 2, "expected at least 2 rows: {stdout}");
     for row in rows {
-        assert!(row.get("resource_id").is_some(), "row missing resource_id");
+        assert!(row.get("id").is_some(), "row missing id anchor");
         assert!(
             row.get("managed_meta").is_some(),
             "row missing managed_meta"

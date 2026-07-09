@@ -626,15 +626,14 @@ pub async fn get_resource(
     let id = temper_workflow::operations::parse_ref(&input.id)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
-    let row = substrate_read::show_select(pool, ProfileId::from(profile.id), id)
+    // `show_detail_select` is the one place that composes the row + meta readbacks; it is
+    // what `GET /api/resources/{id}` returns too, so both surfaces read the same shape.
+    let detail = substrate_read::show_detail_select(pool, ProfileId::from(profile.id), id)
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
-
-    let meta = substrate_read::get_meta_select(pool, ProfileId::from(profile.id), row.id)
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
+    let row = detail.row;
 
     let body_markdown = if input.include_content.unwrap_or(false) {
         let content = substrate_read::get_content_select(pool, ProfileId::from(profile.id), row.id)
@@ -659,7 +658,12 @@ pub async fn get_resource(
     .copied()
     .unwrap_or(EmbeddingStatus::Ready);
 
-    let enriched = build_enriched(&row, meta.managed_meta, meta.open_meta, embedding_status);
+    let enriched = build_enriched(
+        &row,
+        detail.managed_meta,
+        detail.open_meta,
+        embedding_status,
+    );
 
     let enriched_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;

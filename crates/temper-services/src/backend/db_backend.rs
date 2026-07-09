@@ -38,7 +38,7 @@ use temper_workflow::operations::{
     RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
     StewardDispatchTick, Surface, UpdateResource,
 };
-use temper_workflow::types::resource::ResourceRow;
+use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
@@ -1123,13 +1123,22 @@ impl Backend for DbBackend {
                 None => None,
             };
 
+        // Fill the managed-tier provenance trio from the act envelope before validation.
+        // Must precede `validate_managed_meta_pipeline`, which serializes the managed_meta.
+        // Fill-missing: an explicit caller value (e.g. an MCP agent passing managed_meta)
+        // always wins. Safe against the pipeline — base.schema.json declares all three keys,
+        // every doc-type schema is `additionalProperties: true`, and neither strip list
+        // (IDENTITY_FIELDS / TIER1_SYSTEM_FIELDS) contains them.
+        let mut managed_meta = cmd.managed_meta.clone();
+        temper_workflow::operations::stamp_provenance(&mut managed_meta, &cmd.act);
+
         // Create-time guards (WS6 collapse Task F): the shared strip → defaults → identity-keys →
         // validate pipeline (see `validate_managed_meta_pipeline`), the same one the legacy
         // `ingest_service::ingest` ran. A fresh canonical id + `now()` seed the validation document
         // (not persisted — the substrate mints the real id in `writes::create_resource`). An empty
         // slug removes `temper-slug` (mirrors ingest's `injected_slug`).
         let managed = validate_managed_meta_pipeline(ManagedValidationParams {
-            raw_managed: serde_json::to_value(&cmd.managed_meta)
+            raw_managed: serde_json::to_value(&managed_meta)
                 .map_err(|e| TemperError::Api(e.to_string()))?,
             doc_type: &cmd.doctype,
             title: &cmd.title,
@@ -1235,17 +1244,22 @@ impl Backend for DbBackend {
     async fn show_resource(
         &self,
         cmd: ShowResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+    ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
         // The inbound id IS the substrate resource id — synthesis preserves resource ids verbatim, so
         // there is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
         let new_id = uuid::Uuid::from(cmd.resource);
-        // `native_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
-        // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
-        // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
-        // collapse masked real faults as 404.
-        let row =
-            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
-        Ok(CommandOutput::new(row))
+        // `show_detail_select` composes `native_resource_row` (which gates visibility per WS2 and maps
+        // the typed `ReadbackError` via `map_readback_err`: not-visible → NotFound (404, the leak-safe
+        // deny — never 403, no existence-leak oracle), a genuine fault → Api (500)) with the meta
+        // readback, so the full show carries both metadata tiers.
+        let detail = crate::backend::substrate_read::show_detail_select(
+            &self.pool,
+            self.profile_id,
+            ResourceId::from(new_id),
+        )
+        .await
+        .map_err(TemperError::from)?;
+        Ok(CommandOutput::new(detail))
     }
 
     async fn update_resource(

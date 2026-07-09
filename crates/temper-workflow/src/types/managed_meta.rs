@@ -4,6 +4,22 @@ use serde_json::Value;
 
 use temper_core::types::ids::ResourceId;
 
+/// `temper-provenance` value for a resource authored by a model.
+///
+/// This and [`PROVENANCE_USER_CREATED`] are the closed vocabulary declared by
+/// `schemas/base.schema.json` (`"enum": ["llm-discovered", "user-created"]`).
+///
+/// [`ManagedMeta::provenance`] stays a `String` rather than a typed enum: `ManagedMeta`
+/// is a `deny_unknown_fields` deserialization target for rows already in the database,
+/// and a closed enum would turn any historical value outside the pair into a hard
+/// readback failure.
+pub const PROVENANCE_LLM_DISCOVERED: &str = "llm-discovered";
+
+/// `temper-provenance` value for a resource authored by a person.
+///
+/// See [`PROVENANCE_LLM_DISCOVERED`].
+pub const PROVENANCE_USER_CREATED: &str = "user-created";
+
 /// Temper-governed **workflow + provenance** metadata for a vault resource.
 ///
 /// This is a **closed, temper-owned vocabulary** of exactly the `KeyFate::Property`
@@ -81,8 +97,13 @@ pub struct ManagedMeta {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceMetaResponse {
-    /// UUID of the resource
-    pub resource_id: ResourceId,
+    /// UUID of the resource.
+    ///
+    /// Named `id` (not `resource_id`) so this response is a literal strict subset of
+    /// [`crate::types::resource::ResourceDetail`]: `--meta-only` returns the same keys the
+    /// full `show` does, and nothing else. With two different anchor names the subset
+    /// relation is unachievable.
+    pub id: ResourceId,
     /// Typed managed (temper-*) frontmatter from the manifest — the closed
     /// Property vocabulary. Only the named `temper-*` keys are represented;
     /// there is no catch-all (a stored non-Property key is not surfaced here).
@@ -97,10 +118,6 @@ pub struct ResourceMetaResponse {
     /// `None` only if the manifest row predates meta population.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<Value>,
-    /// SHA-256 hash of the managed_meta JSON
-    pub managed_hash: String,
-    /// SHA-256 hash of the open_meta JSON
-    pub open_hash: String,
 }
 
 /// Paginated meta-only response for resource list endpoints.
@@ -166,6 +183,58 @@ pub struct ResourceManifestRow {
     pub open_hash: String,
     /// Timestamp of the last manifest update
     pub updated: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod meta_response_shape_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn meta_response_anchors_on_id_and_has_no_hashes() {
+        let resp = ResourceMetaResponse {
+            id: ResourceId::from(Uuid::nil()),
+            managed_meta: Some(ManagedMeta::default()),
+            open_meta: Some(serde_json::json!({})),
+        };
+        let v = serde_json::to_value(&resp).expect("serialize");
+
+        // Anchors on `id`, matching ResourceRow — this is what makes `--meta-only` a
+        // literal strict subset of the full `show` object.
+        assert!(v.get("id").is_some(), "anchor is `id`: {v}");
+        assert!(v.get("resource_id").is_none(), "old anchor gone: {v}");
+
+        // The §7-dissolved hashes are removed, not emitted empty.
+        assert!(v.get("managed_hash").is_none(), "{v}");
+        assert!(v.get("open_hash").is_none(), "{v}");
+    }
+
+    /// The whole point of Task 8: every key `--meta-only` emits must exist on the full
+    /// `ResourceDetail`. Checked structurally here; checked end-to-end over a real
+    /// server in `tests/e2e/tests/resource_meta_tiers_test.rs`.
+    #[test]
+    fn meta_response_keys_are_a_subset_of_resource_detail_keys() {
+        let meta = ResourceMetaResponse {
+            id: ResourceId::from(Uuid::nil()),
+            managed_meta: Some(ManagedMeta::default()),
+            open_meta: Some(serde_json::json!({ "k": "v" })),
+        };
+        let meta_v = serde_json::to_value(&meta).expect("serialize meta");
+
+        let detail_v = serde_json::json!({
+            "id": Uuid::nil(),
+            "title": "irrelevant",
+            "managed_meta": {},
+            "open_meta": { "k": "v" },
+        });
+
+        for key in meta_v.as_object().expect("object").keys() {
+            assert!(
+                detail_v.get(key).is_some(),
+                "`{key}` is emitted by --meta-only but absent from the full show shape"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
