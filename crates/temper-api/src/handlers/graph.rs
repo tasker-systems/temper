@@ -197,10 +197,13 @@ pub async fn atlas_home(
 
 // ─── Beat E: the context door (panorama + composition) ──────────────────────────
 
-/// Container-walk depth that defines container membership — and therefore which resources
-/// count as "already contained" and are excluded from the residual buckets. The composition
-/// drill reuses this (NOT its own `depth`) when resolving a bucket's seeds, so a bucket drill
-/// reproduces exactly the residual set the panorama displayed. Matches the panorama default.
+/// Default container-walk depth. The walk defines container membership — and therefore which
+/// resources count as "already contained" and are excluded from the residual buckets.
+///
+/// Both endpoints default to it, and a bucket drill must walk at the SAME depth the panorama
+/// walked or it resolves seeds the tray never showed. That is why `container_depth` is a
+/// parameter on the composition query rather than a constant read here: the caller echoes back
+/// whatever depth it passed to the panorama.
 const CONTAINER_WALK_DEPTH: i32 = 2;
 
 /// Container doc-types for a context walk: comma-split, defaulting to `["goal"]` (spec D4 — a
@@ -332,6 +335,10 @@ pub struct ContextCompositionQuery {
     pub container_types: Option<String>,
     /// Composition (drill) depth; defaults to 1, clamped to 3 by the service.
     pub depth: Option<i32>,
+    /// Container-walk depth used to resolve a `group` bucket's members. Must match the `depth`
+    /// the panorama was called with, or the drill yields a different set than the tray showed.
+    /// Ignored for a `container` drill. Defaults to 2.
+    pub container_depth: Option<i32>,
 }
 
 /// GET /api/graph/contexts/composition — Beat E Tier-1: the force-graph composition of a
@@ -366,8 +373,8 @@ pub async fn context_composition(
     let depth = q.depth.unwrap_or(1);
 
     // A container drill seeds with the single container id; a bucket drill resolves its member
-    // ids first. The bucket's container-walk uses CONTAINER_WALK_DEPTH (the panorama's depth),
-    // not the drill `depth`, so the seed set matches the bucket the panorama showed.
+    // ids first. The bucket's container-walk uses `container_depth` — the depth the panorama
+    // walked — not the drill `depth`, so the seed set is exactly the bucket the tray showed.
     let seeds: Vec<Uuid> = match target {
         CompositionTarget::Container(id) => vec![id],
         CompositionTarget::Bucket { key, value } => {
@@ -379,7 +386,7 @@ pub async fn context_composition(
                     group_key: key.as_str(),
                     group_value: value.as_str(),
                     container_types: container_types.as_slice(),
-                    depth: CONTAINER_WALK_DEPTH,
+                    depth: q.container_depth.unwrap_or(CONTAINER_WALK_DEPTH),
                 },
             )
             .await?

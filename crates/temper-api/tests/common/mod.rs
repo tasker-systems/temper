@@ -51,17 +51,57 @@ pub async fn seed_profile(pool: &PgPool, handle: &str) -> Uuid {
 /// canonical edge-visibility predicate. Mirrors `scripts/seed-graph-fixtures.sql` but built
 /// programmatically so tests can vary `n`.
 pub async fn seed_context_with_goal_and_tasks(pool: &PgPool, n: usize) -> (Uuid, Uuid, Uuid) {
-    let profile = seed_profile(pool, "owner").await;
+    let (profile, ctx, event) = seed_context_scaffold(pool).await;
+    let goal = seed_resource(pool, ctx, profile, event, "Goal", "goal").await;
 
-    // Emitter entity + one genesis event, reused as every asserted_by/last FK.
-    let entity = Uuid::now_v7();
-    sqlx::query("INSERT INTO kb_entities (id, profile_id, name) VALUES ($1, $2, $3)")
-        .bind(entity)
-        .bind(profile)
-        .bind("owner@web")
-        .execute(pool)
-        .await
-        .expect("insert entity");
+    for i in 0..n {
+        let task = seed_resource(pool, ctx, profile, event, &format!("Task {i}"), "task").await;
+        seed_contains_edge(pool, goal, task, ctx, event).await;
+    }
+
+    (profile, ctx, goal)
+}
+
+/// Seeds a profile-owned context holding a two-hop containment chain:
+/// `goal --parent_of--> task --parent_of--> session`. Returns
+/// `(profile_id, context_id, session_id)`.
+///
+/// The session sits two hops from the goal, so it is *contained* at container-walk depth 2 and
+/// *residual* at depth 1. That difference is what makes the walk depth observable: any read
+/// that resolves a bucket at a different depth than the panorama displayed it returns a
+/// different set.
+pub async fn seed_context_with_two_hop_session(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
+    let (profile, ctx, event) = seed_context_scaffold(pool).await;
+    let session = seed_two_hop_chain(pool, profile, ctx, event).await;
+    (profile, ctx, session)
+}
+
+/// Plant the `goal --> task --> session` chain into an *existing* context. Returns the session id.
+///
+/// Split out from [`seed_context_with_two_hop_session`] so a handler test can plant the chain in
+/// a context owned by a **JWT-reachable** profile (`fixtures::create_test_profile_with_context`),
+/// which [`seed_profile`] alone does not provision — it inserts no `kb_profile_auth_links` row,
+/// so a token minted for it never resolves.
+pub async fn seed_two_hop_chain_in(pool: &PgPool, profile: Uuid, ctx: Uuid) -> Uuid {
+    let event = seed_genesis_event(pool, profile, ctx).await;
+    seed_two_hop_chain(pool, profile, ctx, event).await
+}
+
+async fn seed_two_hop_chain(pool: &PgPool, profile: Uuid, ctx: Uuid, event: Uuid) -> Uuid {
+    let goal = seed_resource(pool, ctx, profile, event, "Goal", "goal").await;
+    let task = seed_resource(pool, ctx, profile, event, "Task", "task").await;
+    let session = seed_resource(pool, ctx, profile, event, "Session", "session").await;
+
+    seed_contains_edge(pool, goal, task, ctx, event).await;
+    seed_contains_edge(pool, task, session, ctx, event).await;
+
+    session
+}
+
+/// The profile + context + genesis event every context seed needs. Returns
+/// `(profile_id, context_id, event_id)`; the event is reused as every `asserted_by`/`last` FK.
+async fn seed_context_scaffold(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
+    let profile = seed_profile(pool, "owner").await;
 
     let ctx = Uuid::now_v7();
     sqlx::query(
@@ -74,6 +114,22 @@ pub async fn seed_context_with_goal_and_tasks(pool: &PgPool, n: usize) -> (Uuid,
     .execute(pool)
     .await
     .expect("insert context");
+
+    let event = seed_genesis_event(pool, profile, ctx).await;
+    (profile, ctx, event)
+}
+
+/// An emitter entity plus the one genesis event a context's seeded edges hang their
+/// `asserted_by_event_id` / `last_event_id` FKs on.
+async fn seed_genesis_event(pool: &PgPool, profile: Uuid, ctx: Uuid) -> Uuid {
+    let entity = Uuid::now_v7();
+    sqlx::query("INSERT INTO kb_entities (id, profile_id, name) VALUES ($1, $2, $3)")
+        .bind(entity)
+        .bind(profile)
+        .bind(format!("owner-{entity}@web"))
+        .execute(pool)
+        .await
+        .expect("insert entity");
 
     let event = Uuid::now_v7();
     sqlx::query(
@@ -89,30 +145,27 @@ pub async fn seed_context_with_goal_and_tasks(pool: &PgPool, n: usize) -> (Uuid,
     .await
     .expect("insert genesis event");
 
-    // One shared closure for the resource + home + doc_type property triple.
-    let goal = seed_resource(pool, ctx, profile, event, "Goal", "goal").await;
+    event
+}
 
-    for i in 0..n {
-        let task = seed_resource(pool, ctx, profile, event, &format!("Task {i}"), "task").await;
-        // goal --parent_of--> task : the historical containment spine (contains, forward),
-        // homed in the context. The backfill (20260709000005) rewrites this to advances.
-        sqlx::query(
-            "INSERT INTO kb_edges \
-                 (source_table, source_id, target_table, target_id, edge_kind, polarity, label, \
-                  home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
-             VALUES ('kb_resources', $1, 'kb_resources', $2, 'contains', 'forward', 'parent_of', \
-                     'kb_contexts', $3, $4, $4)",
-        )
-        .bind(goal)
-        .bind(task)
-        .bind(ctx)
-        .bind(event)
-        .execute(pool)
-        .await
-        .expect("insert parent_of edge");
-    }
-
-    (profile, ctx, goal)
+/// `source --parent_of--> target`: the historical containment spine (edge_kind `contains`,
+/// forward), homed in the context. The backfill (20260709000005) rewrites this to `advances`,
+/// reversing direction — which is precisely why container walks filter on neither.
+async fn seed_contains_edge(pool: &PgPool, source: Uuid, target: Uuid, ctx: Uuid, event: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_edges \
+             (source_table, source_id, target_table, target_id, edge_kind, polarity, label, \
+              home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
+         VALUES ('kb_resources', $1, 'kb_resources', $2, 'contains', 'forward', 'parent_of', \
+                 'kb_contexts', $3, $4, $4)",
+    )
+    .bind(source)
+    .bind(target)
+    .bind(ctx)
+    .bind(event)
+    .execute(pool)
+    .await
+    .expect("insert parent_of edge");
 }
 
 /// Insert one resource homed in `ctx` (owned + originated by `profile`) carrying a

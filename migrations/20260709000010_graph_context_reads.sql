@@ -129,30 +129,58 @@ CREATE FUNCTION graph_context_residual_members(
     p_container_types text[],
     p_depth           int
 ) RETURNS TABLE(id uuid) LANGUAGE sql STABLE AS $$
-    SELECT r.id
-      FROM kb_resources r
-      JOIN kb_resource_homes h ON h.resource_id = r.id
-                              AND h.anchor_table = 'kb_contexts'
-                              AND h.anchor_id = p_context_id
-      JOIN resources_visible_to(p_profile) v ON v.resource_id = r.id
-      LEFT JOIN kb_properties p ON p.owner_table = 'kb_resources' AND p.owner_id = r.id
-                               AND p.property_key = p_group_key AND NOT p.is_folded
-     WHERE r.is_active
-       AND COALESCE(p.property_value #>> '{}', '(none)') = p_group_value
-       AND r.id NOT IN (
-            SELECT rc.id FROM graph_context_containers(p_profile, p_context_id,
-                                                       p_container_types, p_depth) rc
-            UNION
-            SELECT e.target_id FROM kb_edges e
-              JOIN graph_context_containers(p_profile, p_context_id,
-                                            p_container_types, p_depth) c2 ON c2.id = e.source_id
-             WHERE NOT e.is_folded
-            UNION
-            SELECT e.source_id FROM kb_edges e
-              JOIN graph_context_containers(p_profile, p_context_id,
-                                            p_container_types, p_depth) c3 ON c3.id = e.target_id
-             WHERE NOT e.is_folded
-       );
+    -- The member ids behind ONE bucket of graph_context_residual_counts. The two functions are
+    -- two spellings of one set, so the exclusion below must be the identical depth-bounded walk
+    -- the counts function performs -- NOT a 1-hop neighbor check. A resource two hops from a
+    -- container is contained at p_depth >= 2; excluding only direct neighbors would hand the
+    -- drill a resource the tray had already classified as contained.
+    WITH RECURSIVE
+    vis AS (SELECT resource_id AS id FROM resources_visible_to(p_profile)),
+    doc AS (
+        SELECT p.owner_id AS rid, (p.property_value #>> '{}') AS dt
+          FROM kb_properties p
+         WHERE p.owner_table = 'kb_resources' AND p.property_key = 'doc_type'
+           AND NOT p.is_folded
+    ),
+    ctx AS (
+        SELECT r.id, d.dt
+          FROM kb_resources r
+          JOIN kb_resource_homes h ON h.resource_id = r.id
+                                  AND h.anchor_table = 'kb_contexts'
+                                  AND h.anchor_id = p_context_id
+          JOIN vis v ON v.id = r.id
+          LEFT JOIN doc d ON d.rid = r.id
+         WHERE r.is_active
+    ),
+    ie AS (
+        SELECT e.source_id, e.target_id
+          FROM kb_edges e
+          JOIN ctx s ON s.id = e.source_id
+          JOIN ctx t ON t.id = e.target_id
+         WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+           AND NOT e.is_folded
+           AND anchor_readable_by_profile(p_profile, e.home_anchor_table, e.home_anchor_id)
+    ),
+    reached AS (
+        SELECT c.id AS node_id, 0 AS depth FROM ctx c WHERE c.dt = ANY(p_container_types)
+        UNION
+        SELECT CASE WHEN ie.source_id = r.node_id THEN ie.target_id ELSE ie.source_id END,
+               r.depth + 1
+          FROM reached r
+          JOIN ie ON (ie.source_id = r.node_id OR ie.target_id = r.node_id)
+         WHERE r.depth < LEAST(p_depth, 3)
+    ),
+    grp AS (
+        SELECT p.owner_id AS rid, (p.property_value #>> '{}') AS gv
+          FROM kb_properties p
+         WHERE p.owner_table = 'kb_resources' AND p.property_key = p_group_key
+           AND NOT p.is_folded
+    )
+    SELECT c.id
+      FROM ctx c
+      LEFT JOIN grp g ON g.rid = c.id
+     WHERE COALESCE(g.gv, '(none)') = p_group_value
+       AND c.id NOT IN (SELECT node_id FROM reached);
 $$;
 
 -- Composition edges from an arbitrary visible seed set. NOT fenced to the context: the
