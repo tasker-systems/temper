@@ -203,7 +203,9 @@ A cognitive map is a telos-seeded region of the substrate. Nodes are *distilled*
 
 The table reads in authoring order: open an envelope, create nodes and facet them, close, materialize, then read. **Regions only exist after a materialize** — an authoring pass that creates nodes but never materializes leaves the read tier unchanged.
 
-Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. `--sources` records block-provenance on the body; adding `--sources-as-edges` also asserts a `derived_from` edge to each resource-valued source. See [cognitive maps](https://temperkb.io/cognitive-maps).
+Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. `--sources` records block-provenance on the body; adding `--sources-as-edges` also asserts a `derived_from` edge to each resource-valued source.
+
+Building one from a body of source material is its own discipline: [ingesting a corpus](docs/guides/corpus-ingestion.md), then [building a cognitive map](docs/guides/building-a-cognitive-map.md) from it. For the concept, see [cognitive maps](https://temperkb.io/cognitive-maps).
 
 ### Contexts and Skills
 
