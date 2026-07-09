@@ -99,15 +99,30 @@ the repo's convention on fixes whose story is "this PR's new code path surfaced 
   appends nothing still has something to echo at finalize.
 - `AppendBlockPayload.content` / `.content_hash` become load-bearing (§3), documented as such.
 
+### Ingest (`temper-ingest`) — two shipped bugs the equivalence test exposed
+`chunk_markdown_with_prefix` (`crates/temper-ingest/src/chunk.rs`) seeded every ancestor at **level
+0**, which the pop rule (`while stack.last().level >= new.level`) can never pop. Its doc called this
+"a known, accepted approximation" confined to the size-fallback case. It is not: a heading-aligned
+cut — the common case — leaves the previous section's heading in the prefix, and a sibling heading
+in the next segment must pop it. The CLI's streaming path has been producing `Manual > Setup > Usage`
+where a whole-document scan gives `Manual > Usage`, since #327.
+
+Seed each ancestor at its **positional** level instead (outermost = 1). The residual approximation
+is an ancestor path that skips heading levels; `header_path` carries titles only, so real ancestor
+depths are not recoverable without widening the schema.
+
+Consequently `map_heading` in `temper-substrate` must map `header_path` and `heading_depth`
+**independently** — the old rule (`depth == 0 ⇒ both NULL`) discarded the inherited path of a
+mid-section chunk, which under level-0 seeding always had depth 0.
+
 ### Substrate (`temper-substrate`)
 - `content::prepare_block_with_prefix` and `prepare_block_deferred_with_prefix`, taking an initial
-  heading breadcrumb and delegating to the already-shipped
-  `temper_ingest::chunk::chunk_markdown_with_prefix` (`crates/temper-ingest/src/chunk.rs:386`).
-  With an empty breadcrumb these are byte-identical to `prepare_block` / `prepare_block_deferred`
-  — the existing single-block path is untouched.
-- A readback helper for the trailing `header_path` of a resource's last landed block's last chunk,
-  which seeds the breadcrumb so a server-chunked segment beginning mid-section still carries its
-  ancestor path.
+  heading breadcrumb and delegating to `chunk_markdown_with_prefix`. With an empty breadcrumb these
+  are byte-identical to `prepare_block` / `prepare_block_deferred` — the existing single-block path
+  is untouched.
+- A readback helper (`trailing_breadcrumb`) for the `header_path` of a resource's last landed
+  block's last chunk, which seeds the breadcrumb so a server-chunked segment beginning mid-section
+  still carries its ancestor path.
 
 ### Services (`temper-services`)
 - `append_block`: verify the content hash; when `chunks_packed` is `None`, derive the breadcrumb
@@ -197,8 +212,15 @@ per-session, not enforced as a constant.
   an unmodified unit fixture.
 - **e2e** — the load-bearing assertion: **a segmented, server-chunked ingest of document D
   produces a body and chunk set identical to a one-shot create of D.** That single equivalence
-  covers breadcrumb continuity, segment reassembly, and merkle agreement at once. Plus interrupt →
-  `ingest_blocks` → append-the-gap → finalize.
+  covers breadcrumb continuity and segment-wise chunking agreement at once. Compare reassembled
+  text and the ordered `(header_path, heading_depth, content_hash)` sequence — not `body_hash`,
+  which folds in block structure (see §10). Resume compares against an *uninterrupted segmented*
+  ingest, which shares block structure, so its merkle is comparable. Plus interrupt →
+  `ingest_blocks` → append-the-gap → finalize, and idempotent replay.
+
+  Drive the **production caller**: build a real `TemperMcpService`, seed its profile via
+  `ensure_profile_from_parts`, and call `tools::ingest::*` — an HTTP stand-in would not prove the
+  tools are wired.
 
 Server-side chunking calls ONNX, so the e2e cases are `test-embed`-gated and land in the Embed CI
 job. Run locally with `cargo make test-e2e-embed`.
@@ -209,7 +231,11 @@ job. Run locally with `cargo make test-e2e-embed`.
       `ingest_append` → `ingest_finalize`, supplying no `chunks_packed`. This closes the
       predecessor spec's final open criterion.
 - [ ] The resulting body and chunk set are identical to a one-shot `create_resource` of the same
-      document — same `header_path` values across block boundaries, same `body_hash`.
+      document — same reassembled text, same `header_path` / `heading_depth` / `content_hash` per
+      chunk, in order. **Not** the same `body_hash`: that merkle folds in per-block hashes ordered
+      by `seq` (`_recompute_resource_body_hash`), so identical content arriving in a different
+      number of blocks hashes differently, by construction. A resumed segmented ingest *does* match
+      an uninterrupted segmented one, since block structure is then the same.
 - [ ] An interrupted MCP ingest resumes from `ingest_blocks` alone, with no client-side manifest,
       re-transmitting only the missing segments.
 - [ ] A block appended over MCP is attributed to the `mcp` emitter, not `web`.

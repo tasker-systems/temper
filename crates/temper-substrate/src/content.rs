@@ -571,8 +571,10 @@ mod tests {
             "a mid-section segment must inherit its ancestor path"
         );
         assert_eq!(
-            block.chunks[0].heading_depth, None,
-            "a continuation chunk begins no section, so reconstruct_body must not re-emit a heading"
+            block.chunks[0].heading_depth,
+            Some(2),
+            "it inherits its innermost ancestor's depth — the same value a whole-document scan \
+             gives the continuation chunk of an oversized section"
         );
     }
 

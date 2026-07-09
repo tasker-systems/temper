@@ -237,7 +237,7 @@ jobs:
         # graph_build_then_sync_materializes_edges, and
         # local_mode_session_create_wire_shape_regression — all retired in
         # PR #94's cloud-only sweep.
-        run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'
+        run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + binary(mcp_segmented_ingest_test) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'
 
       - name: Run cognitive-map artifact write-path tests
         # artifact-tests gates the write-path integration tests: bootseed,
