@@ -1626,3 +1626,50 @@ mod invocation_parse_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod skill_content_verb_tests {
+    use super::*;
+
+    /// Every CLI verb the installable skill content names must resolve against the clap
+    /// command tree.
+    ///
+    /// Issue #330 was filed because `skill-content/cognitive-maps.md` told an agent that
+    /// `facet_set` was "agent-surface only" when `temper resource facet` had existed all
+    /// along. Prose cannot be type-checked; its referents can. If a verb is renamed or
+    /// removed, this fails and points at the doc that now lies.
+    #[test]
+    fn every_verb_named_by_the_skill_content_resolves() {
+        use clap::CommandFactory;
+
+        // The verb paths asserted by crates/temper-cli/skill-content/*.md.
+        const DOCUMENTED_VERBS: &[&[&str]] = &[
+            &["resource", "create"],
+            &["resource", "show"],
+            &["resource", "update"],
+            &["resource", "facet"],
+            &["edge", "assert"],
+            &["edge", "fold"],
+            &["cogmap", "materialize"],
+            &["cogmap", "shape"],
+            &["invocation", "open"],
+            &["invocation", "close"],
+            &["invocation", "show"],
+            &["search"],
+        ];
+
+        let root = Cli::command();
+        for path in DOCUMENTED_VERBS {
+            let mut node = &root;
+            for (depth, segment) in path.iter().enumerate() {
+                node = node.find_subcommand(segment).unwrap_or_else(|| {
+                    panic!(
+                        "skill content names `temper {}`, but `{segment}` does not resolve \
+                         (depth {depth}). Either restore the verb or fix the docs.",
+                        path.join(" ")
+                    )
+                });
+            }
+        }
+    }
+}
