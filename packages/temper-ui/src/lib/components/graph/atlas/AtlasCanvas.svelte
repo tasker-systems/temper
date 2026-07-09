@@ -3,15 +3,21 @@
 	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 	import type { AtlasHome } from '$lib/types/generated/graph_home';
+	import type { ContextPanorama } from '$lib/types/generated/graph_context';
 	import type { Focus, GraphFilters } from '$lib/graph/atlas/nav';
 	import { attachCamera, type Camera } from '$lib/graph/atlas/camera';
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
 	import TierHome from './TierHome.svelte';
 	import TierPanorama from './TierPanorama.svelte';
 	import TierNeighborhood from './TierNeighborhood.svelte';
+	import ResidualTray from './ResidualTray.svelte';
 
 	interface Props {
 		cogmapId: string | null;
+		/** Beat E `?context` scope; null on every other door. Selects the context branch. */
+		contextSlug: string | null;
+		/** Beat E Tier-0 payload (container territories + residual tray) for the context door. */
+		panorama: ContextPanorama | null;
 		tier: number;
 		focus: Focus;
 		territories: TerritoryOverview | null;
@@ -19,7 +25,16 @@
 		home: AtlasHome | null;
 		filters: GraphFilters;
 	}
-	let { cogmapId, tier, focus, territories, neighborhood, home, filters }: Props = $props();
+	let { cogmapId, contextSlug, panorama, tier, focus, territories, neighborhood, home, filters }: Props =
+		$props();
+
+	// Beat E: a context panorama reuses TierPanorama by adapting its container territories into
+	// the TerritoryOverview shape (no orphan cogmaps, no bridges). The residual tray is NOT part
+	// of this — it is a doorway lifted out of the camera (see the HTML sibling below).
+	const contextOverview = $derived<TerritoryOverview | null>(
+		panorama ? { territories: panorama.containers, orphan_nodes: [], bridges: [] } : null
+	);
+	const residual = $derived(panorama?.residual ?? null);
 
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;
@@ -62,21 +77,41 @@
 	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Graph atlas">
 		<rect x="0" y="0" width={W} height={H} fill={CANVAS_BG} />
 		<g bind:this={viewportEl}>
-			{#if !cogmapId && home}
+			{#if !cogmapId && !contextSlug && home}
 				<TierHome {home} width={W} height={H} />
+			{:else if tier === 0 && contextSlug && contextOverview}
+				<TierPanorama overview={contextOverview} width={W} height={H} docTypes={filters.docTypes} />
 			{:else if tier === 0 && territories}
 				<TierPanorama overview={territories} width={W} height={H} docTypes={filters.docTypes} />
 			{:else if hasNeighbors && neighborhood}
-				<TierNeighborhood subgraph={neighborhood} {seedId} width={W} height={H} docTypes={filters.docTypes} />
+				<TierNeighborhood
+					subgraph={neighborhood}
+					{seedId}
+					width={W}
+					height={H}
+					docTypes={filters.docTypes}
+					coreHome={contextSlug ? 'context' : 'cogmap'}
+				/>
 			{:else}
 				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14">{emptyMessage}</text>
 			{/if}
 		</g>
 	</svg>
+	<!--
+		The residual tray is a doorway, not a field landmark (spec §7): it lives in page chrome
+		as an HTML sibling of the <svg>, OUTSIDE the camera-transformed <g>, so it never pans or
+		scales. It shows only on the context Tier-0 panorama, and only when residue exists — a
+		well-edged context absorbs everything into containers and the tray vanishes.
+	-->
+	{#if tier === 0 && contextSlug && residual && residual.buckets.length > 0}
+		<ResidualTray buckets={residual.buckets} groupKey={residual.group_key} width={W} />
+	{/if}
 </div>
 
 <style>
 	.atlas-canvas {
+		display: flex;
+		flex-direction: column;
 		width: 100%;
 		height: 100%;
 		min-height: 0;
@@ -90,6 +125,15 @@
 	.atlas-canvas svg {
 		display: block;
 		width: 100%;
-		height: 100%;
+		/* Fill the column; when the residual tray sibling is present it takes its natural
+		   height below and the svg letterboxes into the remaining space. */
+		flex: 1 1 auto;
+		min-height: 0;
+	}
+
+	/* The residual-tray doorway sits below the map, fixed to the page — it does not pan or
+	   scale with the d3 camera (spec §7). */
+	.atlas-canvas :global(.residual-tray) {
+		flex: 0 0 auto;
 	}
 </style>

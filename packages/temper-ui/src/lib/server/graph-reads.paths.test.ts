@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	atlasHomePath,
 	cogmapPanoramaPath,
+	contextCompositionPath,
+	contextPanoramaPath,
 	regionCompositionPath,
 	teamsListPath,
 	trailPath
@@ -28,5 +30,26 @@ describe('graph API path builders', () => {
 	it('cogmapPanoramaPath', () => {
 		expect(cogmapPanoramaPath('c1')).toBe('/api/graph/cogmaps/c1/panorama');
 		expect(cogmapPanoramaPath('c1', 'l2')).toBe('/api/graph/cogmaps/c1/panorama?lens_id=l2');
+	});
+	it('builds the context panorama path, percent-encoding the ref', () => {
+		expect(contextPanoramaPath('@me/temper', 'doc_type')).toBe(
+			'/api/graph/contexts/panorama?context_ref=%40me%2Ftemper&group_by=doc_type'
+		);
+	});
+	it('builds a container composition path', () => {
+		expect(contextCompositionPath('@me/temper', { kind: 'container', id: 'abc' }, 1)).toBe(
+			'/api/graph/contexts/composition?context_ref=%40me%2Ftemper&container=abc&depth=1'
+		);
+	});
+	it('builds a bucket composition path, encoding the group value and forwarding container_depth', () => {
+		expect(
+			contextCompositionPath(
+				'@me/temper',
+				{ kind: 'bucket', groupKey: 'doc_type', value: 'session' },
+				1
+			)
+		).toBe(
+			'/api/graph/contexts/composition?context_ref=%40me%2Ftemper&group=doc_type%3Asession&depth=1&container_depth=2'
+		);
 	});
 });

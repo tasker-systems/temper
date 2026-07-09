@@ -2,13 +2,16 @@ import { focusToken, type Focus } from './nav';
 
 export interface CrumbSegment {
 	label: string;
-	kind: 'home' | 'cogmap' | 'territory' | 'node' | 'scope';
-	/** The `?focus=` value this segment navigates to; null for home/scope segments. */
+	kind: 'home' | 'cogmap' | 'context' | 'territory' | 'node' | 'container' | 'bucket' | 'scope';
+	/** The `?focus=` value this segment navigates to; null for home/scope/context segments. */
 	focusPath: string | null;
 }
 
 export interface CrumbInput {
 	cogmapName: string | null;
+	/** Beat E — the `?context` scope slug, labelling the context root segment. Null off the
+	 *  context door. Mutually exclusive with a cogmap in practice (distinct doors). */
+	contextSlug: string | null;
 	focusPath: Focus[];
 	crumbTerritory: { id: string; label: string | null } | null;
 	seedTitle: string | null;
@@ -32,6 +35,8 @@ export function crumbModel(input: CrumbInput): CrumbSegment[] {
 
 	if (input.cogmapName) {
 		segs.push({ label: input.cogmapName, kind: 'cogmap', focusPath: null });
+	} else if (input.contextSlug) {
+		segs.push({ label: input.contextSlug, kind: 'context', focusPath: null });
 	} else if (input.scopeFilter) {
 		segs.push({ label: input.scopeFilter, kind: 'scope', focusPath: null });
 	}
@@ -44,6 +49,12 @@ export function crumbModel(input: CrumbInput): CrumbSegment[] {
 		if (f.kind === 'territory') {
 			const label = input.crumbTerritory?.id === f.id ? input.crumbTerritory.label : null;
 			segs.push({ label: label ?? 'Region', kind: 'territory', focusPath: encode(walked) });
+		} else if (f.kind === 'container') {
+			// A goal container's leaf is its title (resolved from the drill subgraph seed).
+			segs.push({ label: input.seedTitle ?? 'Container', kind: 'container', focusPath: encode(walked) });
+		} else if (f.kind === 'bucket') {
+			// A residual bucket carries no id/title — its label comes from the group value.
+			segs.push({ label: `Unfiled · ${f.value}`, kind: 'bucket', focusPath: encode(walked) });
 		} else {
 			segs.push({ label: input.seedTitle ?? 'Node', kind: 'node', focusPath: encode(walked) });
 		}

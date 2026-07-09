@@ -28,6 +28,8 @@ const REQUIRED_KEYS = {
 	owner: true,
 	cogmapId: true,
 	cogmapName: true,
+	contextSlug: true,
+	panorama: true,
 	tier: true,
 	focus: true,
 	home: true,

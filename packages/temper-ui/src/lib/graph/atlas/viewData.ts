@@ -9,6 +9,7 @@
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
+import type { ContextPanorama } from '$lib/types/generated/graph_context';
 import type { ResourceRow } from '$lib/types/generated/resource';
 import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 import type { Focus, GraphFilters, SelectedElement } from './nav';
@@ -30,6 +31,12 @@ export interface AtlasViewData {
 	// (team/cogmap) branches, which don't render Home. The committed lens is not
 	// carried here — TierHome derives it from the URL (`?home`).
 	home: AtlasHome | null;
+	// Beat E — the context door. `contextSlug` is the `?context` scope (null on every
+	// other branch); `panorama` carries the Tier-0 container territories + residual tray.
+	// Null when not on a context door, or on a context drill (Tier 1, which reads the
+	// composition into `neighborhood` instead).
+	contextSlug: string | null;
+	panorama: ContextPanorama | null;
 	territories: TerritoryOverview | null;
 	neighborhood: AtlasSubgraph | null;
 	selection: SelectedElement;

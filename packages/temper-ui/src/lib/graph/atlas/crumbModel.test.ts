@@ -5,6 +5,7 @@ describe('crumbModel', () => {
 	it('home only, no cogmap, no focus → just Atlas', () => {
 		const segs = crumbModel({
 			cogmapName: null,
+			contextSlug: null,
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
@@ -15,6 +16,7 @@ describe('crumbModel', () => {
 	it('a committed scope filter (no cogmap) adds a scope segment after home', () => {
 		const segs = crumbModel({
 			cogmapName: null,
+			contextSlug: null,
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
@@ -28,6 +30,7 @@ describe('crumbModel', () => {
 	it('a scope filter is suppressed once a cogmap is entered', () => {
 		const segs = crumbModel({
 			cogmapName: 'Team self-model',
+			contextSlug: null,
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
@@ -38,6 +41,7 @@ describe('crumbModel', () => {
 	it('cogmap scope, no focus → Atlas / <cogmap name>', () => {
 		const segs = crumbModel({
 			cogmapName: 'Team self-model',
+			contextSlug: null,
 			focusPath: [],
 			crumbTerritory: null,
 			seedTitle: null,
@@ -48,9 +52,77 @@ describe('crumbModel', () => {
 			['cogmap', 'Team self-model']
 		]);
 	});
+	it('context door, no focus → Atlas / <slug>', () => {
+		const segs = crumbModel({
+			cogmapName: null,
+			contextSlug: 'temper',
+			focusPath: [],
+			crumbTerritory: null,
+			seedTitle: null,
+			scopeFilter: null
+		});
+		expect(segs.map((s) => [s.kind, s.label])).toEqual([
+			['home', '⌂ Atlas'],
+			['context', 'temper']
+		]);
+	});
+	it('a scope filter is suppressed by an active context door', () => {
+		const segs = crumbModel({
+			cogmapName: null,
+			contextSlug: 'temper',
+			focusPath: [],
+			crumbTerritory: null,
+			seedTitle: null,
+			scopeFilter: '+tasker'
+		});
+		expect(segs.map((s) => s.kind)).toEqual(['home', 'context']);
+	});
+	it('a container drill leafs with the container title', () => {
+		const segs = crumbModel({
+			cogmapName: null,
+			contextSlug: 'temper',
+			focusPath: [{ kind: 'container', id: 'G' }],
+			crumbTerritory: null,
+			seedTitle: 'Ship Beat E',
+			scopeFilter: null
+		});
+		expect(segs.map((s) => [s.kind, s.label])).toEqual([
+			['home', '⌂ Atlas'],
+			['context', 'temper'],
+			['container', 'Ship Beat E']
+		]);
+		expect(segs.at(-1)?.focusPath).toBe('container:G');
+	});
+	it('a container drill falls back to a generic label when the title is unresolved', () => {
+		const segs = crumbModel({
+			cogmapName: null,
+			contextSlug: 'temper',
+			focusPath: [{ kind: 'container', id: 'G' }],
+			crumbTerritory: null,
+			seedTitle: null,
+			scopeFilter: null
+		});
+		expect(segs.at(-1)).toEqual({ kind: 'container', label: 'Container', focusPath: 'container:G' });
+	});
+	it('a bucket drill leafs with "Unfiled · <value>", labelled from the value', () => {
+		const segs = crumbModel({
+			cogmapName: null,
+			contextSlug: 'temper',
+			focusPath: [{ kind: 'bucket', groupKey: 'doc_type', value: 'session' }],
+			crumbTerritory: null,
+			seedTitle: null,
+			scopeFilter: null
+		});
+		expect(segs.at(-1)).toEqual({
+			kind: 'bucket',
+			label: 'Unfiled · session',
+			focusPath: 'bucket:doc_type:session'
+		});
+	});
 	it('territory focus adds the labeled territory hop', () => {
 		const segs = crumbModel({
 			cogmapName: 'Team self-model',
+			contextSlug: null,
 			focusPath: [{ kind: 'territory', id: 'R' }],
 			crumbTerritory: { id: 'R', label: 'Runbooks' },
 			seedTitle: null,
@@ -61,6 +133,7 @@ describe('crumbModel', () => {
 	it('node reached via a territory shows both hops', () => {
 		const segs = crumbModel({
 			cogmapName: 'Team self-model',
+			contextSlug: null,
 			focusPath: [
 				{ kind: 'territory', id: 'R' },
 				{ kind: 'node', id: 'N' }
@@ -77,6 +150,7 @@ describe('crumbModel', () => {
 	it('node drilled straight from panorama has no territory hop', () => {
 		const segs = crumbModel({
 			cogmapName: 'Team self-model',
+			contextSlug: null,
 			focusPath: [{ kind: 'node', id: 'N' }],
 			crumbTerritory: null,
 			seedTitle: 'Orphan doc',
@@ -88,6 +162,7 @@ describe('crumbModel', () => {
 	it('territory label falls back to a generic when unresolved', () => {
 		const segs = crumbModel({
 			cogmapName: 'Team self-model',
+			contextSlug: null,
 			focusPath: [{ kind: 'territory', id: 'R' }],
 			crumbTerritory: { id: 'R', label: null },
 			seedTitle: null,
