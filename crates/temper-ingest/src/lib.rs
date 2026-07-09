@@ -9,6 +9,8 @@ pub mod chunk;
 pub mod error;
 pub mod extract;
 pub mod merge;
+pub mod merkle;
+pub mod stream;
 
 #[cfg(any(feature = "embed", feature = "embed-download"))]
 pub mod embed;

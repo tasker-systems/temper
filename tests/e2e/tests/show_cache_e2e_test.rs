@@ -63,6 +63,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         embedding: vec![0.0_f32; 768],
     };
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Heal Me".to_string(),
         origin_uri: "test://show-heal".to_string(),
@@ -168,6 +169,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         embedding: vec![0.0_f32; 768],
     };
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Mismatch".to_string(),
         origin_uri: "test://show-mismatch".to_string(),

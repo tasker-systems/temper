@@ -3,6 +3,7 @@ pub mod cogmap;
 pub mod config;
 pub mod genesis;
 pub mod ingest;
+pub mod ingest_manifest;
 pub mod invocation;
 pub mod progress;
 pub mod reconcile;

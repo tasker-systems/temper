@@ -69,6 +69,7 @@ async fn deferred_create_is_fts_immediate_then_ready_after_drain(pool: sqlx::PgP
     // TEMPER_ASYNC_EMBED it DEFERS it — chunk text + FTS now, vector later.
     let content = "The kubernetes deployment guide covers rolling updates and canary releases.";
     let payload = IngestPayload {
+        segmented: None,
         title: "Deferred Embed Doc".to_string(),
         origin_uri: "test://ae/deferred".to_string(),
         context_ref: "@me/ae".to_string(),

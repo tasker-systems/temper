@@ -29,6 +29,7 @@ async fn seed(
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
 
     let payload = IngestPayload {
+        segmented: None,
         title: format!("Goal e2e {slug}"),
         origin_uri: format!("kb://{context}/{doc_type}/{slug}"),
         context_ref: format!("@me/{context}"),

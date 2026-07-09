@@ -16,5 +16,6 @@ pub mod profiles;
 pub mod reassign;
 pub mod resources;
 pub mod search;
+pub mod segments;
 pub mod steward;
 pub mod teams;

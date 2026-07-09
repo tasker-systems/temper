@@ -50,6 +50,9 @@ pub enum EventKind {
     RegionMaterialized,
     RelationshipFolded,
     BlockMutated,
+    /// The (now fired) `block_created` event — one appended segment of a segmented ingest
+    /// (`SeedAction::BlockAppend`). Was seeded but dormant before streaming ingestion (Beat 1).
+    BlockCreated,
     CharterSet,
     DelegatedLaunch,
     InvocationClosed,
@@ -74,6 +77,7 @@ impl EventKind {
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
             EventKind::BlockMutated => "block_mutated",
+            EventKind::BlockCreated => "block_created",
             EventKind::CharterSet => "charter_set",
             EventKind::DelegatedLaunch => "delegated_launch",
             EventKind::InvocationClosed => "invocation_closed",
@@ -103,6 +107,7 @@ impl EventKind {
             "region_materialized" => EventKind::RegionMaterialized,
             "relationship_folded" => EventKind::RelationshipFolded,
             "block_mutated" => EventKind::BlockMutated,
+            "block_created" => EventKind::BlockCreated,
             "charter_set" => EventKind::CharterSet,
             "delegated_launch" => EventKind::DelegatedLaunch,
             "invocation_closed" => EventKind::InvocationClosed,
@@ -236,6 +241,14 @@ pub enum SeedAction<'a> {
         incorporated: &'a [payloads::Incorporation],
         emitter: EntityId,
     },
+    /// Append a NEW block at `block.seq` to an existing resource (segmented ingest).
+    /// Unlike `BlockMutate` (revise-in-place), this creates a fresh block and fires
+    /// the `block_created` event. Idempotent in SQL on (resource, seq, block merkle).
+    BlockAppend {
+        resource: ResourceId,
+        block: &'a PreparedBlock,
+        emitter: EntityId,
+    },
     /// Replace a cogmap's telos charter with a full role-tagged block set (post-birth populate). The
     /// genesis leaves the telos empty and `BlockMutate` is revise-only, so this is the only primitive that
     /// can deliver (0→N) or re-deliver (N→M) a charter: it folds the prior blocks then projects `blocks`.
@@ -311,6 +324,7 @@ impl SeedAction<'_> {
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
+            SeedAction::BlockAppend { .. } => EventKind::BlockCreated,
             SeedAction::CharterSet { .. } => EventKind::CharterSet,
             SeedAction::ResourceDelete { .. } => EventKind::ResourceDeleted,
             SeedAction::ResourceUpdate { .. } => EventKind::ResourceUpdated,
@@ -755,6 +769,34 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("block_mutate returned null")?;
+            Ok(Fired::Block(BlockId::from(id)))
+        }
+
+        SeedAction::BlockAppend {
+            resource,
+            block,
+            emitter,
+        } => {
+            // block_created carries the block manifest (chunk structure/hashes, never
+            // prose — CAS rule) so replay reprojects via _project_block_created, exactly
+            // like resource_created. Prose/embeddings ride the transient sidecar.
+            let payload = payloads::BlockCreated {
+                resource_id: resource,
+                block: payloads::BlockManifest::from(block),
+            };
+            let sidecar =
+                serde_json::to_value(payloads::content_sidecar(std::slice::from_ref(block)))?;
+            let id = sqlx::query_scalar!(
+                "SELECT block_append($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                sidecar,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("block_append returned null")?;
             Ok(Fired::Block(BlockId::from(id)))
         }
 

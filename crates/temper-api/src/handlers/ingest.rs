@@ -1,4 +1,5 @@
 use axum::extract::{Path, State};
+use axum::response::IntoResponse;
 use axum::Json;
 use uuid::Uuid;
 
@@ -10,10 +11,32 @@ use temper_services::state::AppState;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
-use temper_core::types::ingest::IngestPayload;
+use temper_core::types::ingest::{IngestPayload, SegmentedBeginResponse};
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::ResourceRow;
+
+/// `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
+/// the one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`]
+/// when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
+/// discriminates by which fields are present (`SegmentedBeginResponse` always carries
+/// `correlation_id`/`blocks`, which `ResourceRow` never does).
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum IngestCreateResponse {
+    // Boxed: ResourceRow is much larger than SegmentedBeginResponse (clippy large_enum_variant).
+    OneShot(Box<ResourceRow>),
+    Segmented(SegmentedBeginResponse),
+}
+
+impl IntoResponse for IngestCreateResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            Self::OneShot(r) => Json(r).into_response(),
+            Self::Segmented(r) => Json(r).into_response(),
+        }
+    }
+}
 
 #[utoipa::path(
     post,
@@ -22,7 +45,7 @@ use temper_workflow::types::resource::ResourceRow;
     security(("bearer_auth" = [])),
     request_body = IngestPayload,
     responses(
-        (status = 200, description = "Resource created (or existing on dedup)", body = ResourceRow),
+        (status = 200, description = "Resource created (or existing on dedup); a SegmentedBeginResponse when the payload set `segmented`", body = IngestCreateResponse),
         (status = 400, description = "Invalid payload"),
         (status = 404, description = "Context not found"),
     )
@@ -31,8 +54,12 @@ pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(payload): Json<IngestPayload>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<IngestCreateResponse> {
     let profile_id = ProfileId::from(auth.0.profile.id);
+    // Segmented-begin metadata is consumed AFTER create lands block 0 (below); take it now so the
+    // rest of the function can move `payload` field-by-field into the CreateResource command.
+    let segmented = payload.segmented.clone();
+    let origin_uri_for_ingestion = payload.origin_uri.clone();
 
     // Resolve the home anchor — exactly one of a cognitive map or a context.
     // The cogmap branch takes precedence: when `home_cogmap_id` is set the home
@@ -121,7 +148,38 @@ pub async fn create(
 
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
-    Ok(Json(out.value))
+
+    let Some(seg) = segmented else {
+        // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
+        return Ok(IngestCreateResponse::OneShot(Box::new(out.value)));
+    };
+
+    // Segmented begin: block 0 just landed via the ordinary create path above. Record the
+    // per-resource source-provenance row (design §4 point 4 — written "at begin"; a
+    // backend-specific write, not on the shared `Backend` trait, see `record_ingestion_source`),
+    // then read the landed set back (just block 0, at this point) via the same trait method
+    // `list_blocks` uses, so "the currently landed set" projection is computed in one place.
+    let resource_id = out.value.id;
+    backend
+        .record_ingestion_source(
+            resource_id,
+            &origin_uri_for_ingestion,
+            seg.source_hash.as_deref(),
+        )
+        .await
+        .map_err(ApiError::from)?;
+    let blocks = backend
+        .list_blocks(resource_id)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(IngestCreateResponse::Segmented(SegmentedBeginResponse {
+        resource_id: out.value.id.uuid(),
+        // Client-side ingest-session id — see `SegmentedBeginResponse::correlation_id`'s doc for
+        // why this isn't (yet) threaded onto the server's event ledger.
+        correlation_id: uuid::Uuid::now_v7(),
+        blocks: blocks.value.blocks,
+    }))
 }
 
 #[utoipa::path(

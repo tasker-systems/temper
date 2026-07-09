@@ -8,6 +8,33 @@
 use crate::error::{Result, TemperError};
 
 // ---------------------------------------------------------------------------
+// One-shot vs segmented ingest mode (streaming-resumable ingestion, Beat 3)
+// ---------------------------------------------------------------------------
+
+/// Which create path a body of `source_len` bytes takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngestMode {
+    /// At or under the budget: the existing single-block `create_resource`/`/api/ingest`
+    /// path, unchanged.
+    OneShot,
+    /// Over the budget: stream through `segment_reader` + the segmented begin/append/
+    /// finalize endpoints.
+    Segmented,
+}
+
+/// The size-threshold seam between the one-shot and segmented create paths — a body at or
+/// under `budget` bytes is `OneShot`; anything larger is `Segmented`. Pure and side-effect
+/// free so the threshold is unit-testable without a client/runtime; `run_segmented_create`
+/// and its call site (`commands::resource::create`) are the wired consumer.
+pub fn ingest_mode(source_len: usize, budget: usize) -> IngestMode {
+    if source_len <= budget {
+        IngestMode::OneShot
+    } else {
+        IngestMode::Segmented
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Slug / body helpers
 // ---------------------------------------------------------------------------
 
@@ -46,6 +73,279 @@ pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
         content_hash,
         chunks_packed,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Segmented (streaming) create orchestration (Beat 3)
+// ---------------------------------------------------------------------------
+
+/// Raw (unprefixed) lowercase-hex sha256 — the format `kb_ingestion_records.source_hash`
+/// (`VARCHAR(64)`) and the manifest's `source_hash` both expect. Deliberately distinct from
+/// `temper_core::hash::compute_body_hash`, which returns a `"sha256:"`-prefixed 71-char
+/// string sized for a different column; that prefix would overflow this one.
+#[cfg(feature = "embed")]
+fn sha256_hex_raw(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Chunk `text` (already prefix-seeded by the caller) and embed+pack it into the
+/// `chunks_packed` wire format — the per-segment twin of
+/// `temper_ingest::pipeline::prepare_markdown`, operating on chunks the caller already
+/// produced (via `chunk_markdown_with_prefix`) rather than re-chunking, since
+/// `prepare_markdown` only knows the unprefixed `chunk_markdown`.
+#[cfg(feature = "embed")]
+fn embed_and_pack(chunks: &[temper_ingest::chunk::ChunkData]) -> Result<String> {
+    use temper_core::types::ingest::{pack_chunks, PackedChunk};
+
+    if chunks.is_empty() {
+        return Err(TemperError::Extraction(
+            "segment produced no chunks".to_string(),
+        ));
+    }
+    let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+    let embeddings = temper_ingest::embed::embed_texts(&texts)
+        .map_err(|e| TemperError::Extraction(format!("embed segment: {e}")))?;
+    if embeddings.len() != chunks.len() {
+        return Err(TemperError::Extraction(format!(
+            "chunk/embedding count mismatch: {} chunks, {} embeddings",
+            chunks.len(),
+            embeddings.len()
+        )));
+    }
+    let packed: Vec<PackedChunk> = chunks
+        .iter()
+        .zip(embeddings)
+        .map(|(chunk, embedding)| PackedChunk {
+            chunk_index: chunk.chunk_index,
+            header_path: chunk.header_path.clone(),
+            heading_depth: chunk.heading_depth,
+            content: chunk.content.clone(),
+            content_hash: chunk.content_hash.clone(),
+            embedding,
+        })
+        .collect();
+    pack_chunks(&packed).map_err(|e| TemperError::Extraction(format!("pack segment chunks: {e}")))
+}
+
+/// The local, no-network plan for a segmented create: every segment the source splits into,
+/// each one's already-chunked `ChunkData` (needed later for embedding), its local `(seq,
+/// block-merkle)` identity (matching what the server will report back for the same segment,
+/// per `temper_ingest::merkle`), and the resource-level `body_hash` finalize will validate
+/// against. Computing this is cheap (chunking only, no embedding) — it exists so
+/// `run_segmented_create` can diff against a resumed session's landed set *before* doing any
+/// expensive work, and so this planning step is unit-testable without a client or runtime.
+#[cfg(feature = "embed")]
+struct SegmentPlan {
+    segments: Vec<temper_ingest::stream::Segment>,
+    chunked: Vec<Vec<temper_ingest::chunk::ChunkData>>,
+    infos: Vec<temper_core::types::ingest::SegmentInfo>,
+    expected_body_hash: String,
+}
+
+/// Split `content` into segments (`temper_ingest::stream::segment_reader`) and chunk each one
+/// (`temper_ingest::chunk::chunk_markdown_with_prefix`) up front. Pure aside from the
+/// `io::Result` `segment_reader` threads through (there is no actual I/O for an in-memory
+/// `Cursor` source — it never fails in practice, but the reader is generic over any
+/// `BufRead`).
+#[cfg(feature = "embed")]
+fn plan_segments(content: &str, budget: usize) -> Result<SegmentPlan> {
+    use temper_core::types::ingest::SegmentInfo;
+
+    let segments: Vec<temper_ingest::stream::Segment> =
+        temper_ingest::stream::segment_reader(std::io::Cursor::new(content.as_bytes()), budget)
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| TemperError::Extraction(format!("segment source: {e}")))?;
+    if segments.is_empty() {
+        return Err(TemperError::Extraction(
+            "segmented create with an empty body".to_string(),
+        ));
+    }
+
+    let mut infos: Vec<SegmentInfo> = Vec::with_capacity(segments.len());
+    let mut chunked: Vec<Vec<temper_ingest::chunk::ChunkData>> = Vec::with_capacity(segments.len());
+    for seg in &segments {
+        let chunks =
+            temper_ingest::chunk::chunk_markdown_with_prefix(&seg.text, &seg.initial_breadcrumb);
+        let chunk_hashes: Vec<String> = chunks.iter().map(|c| c.content_hash.clone()).collect();
+        infos.push(SegmentInfo {
+            seq: seg.seq,
+            content_hash: temper_ingest::merkle::block_merkle(&chunk_hashes),
+        });
+        chunked.push(chunks);
+    }
+    let expected_body_hash = temper_ingest::merkle::resource_body_hash(
+        &infos
+            .iter()
+            .map(|s| s.content_hash.clone())
+            .collect::<Vec<_>>(),
+    );
+
+    Ok(SegmentPlan {
+        segments,
+        chunked,
+        infos,
+        expected_body_hash,
+    })
+}
+
+/// Parameters for [`run_segmented_create`], bundled per the >5-domain-params rule. Everything
+/// the segmented orchestration needs beyond the CLI's already-built `CreateResource` command:
+/// the client to dispatch through, the vault root for the resume manifest, the resolved
+/// context ref (mirrors `CloudBackend.context_ref`; forwarded verbatim to the translator,
+/// which empties it for a cogmap home exactly like the one-shot path), and the segment
+/// budget.
+#[cfg(feature = "embed")]
+pub struct SegmentedCreateParams<'a> {
+    pub client: &'a temper_client::TemperClient,
+    pub vault_root: &'a std::path::Path,
+    pub cmd: &'a temper_workflow::operations::CreateResource,
+    pub context_ref: &'a str,
+    pub budget: usize,
+}
+
+/// Stream a large body (`cmd.body` over `budget` bytes) through the segmented ingest
+/// endpoints: segment 0 lands via `begin_segmented` (the create path), segments `1..N` via
+/// `append_block`, then `finalize`. Writes the `.temper/` resume manifest after every landed
+/// segment.
+///
+/// Resumes an interrupted attempt for the *same* source: if an incomplete manifest already
+/// matches this source's hash + budget (`ingest_manifest::find_resumable`), its `resource_id`
+/// is reused and only the segments `GET .../blocks` doesn't already report are re-chunked,
+/// re-embedded, and appended — durable segments are neither re-embedded nor re-sent. A body
+/// whose freshly-computed hash doesn't match any local manifest simply begins a fresh session
+/// (there is nothing to "clear": a stale manifest for since-changed content just never matches
+/// and is left alone — see `find_resumable`'s doc comment).
+///
+/// Peak memory holds one segment's text + chunks + vectors at a time, never the whole body:
+/// segments are chunked up front (cheap — no embedding) to compute the local `(seq,
+/// content_hash)` identity used for the resume diff, but embedding/packing only runs for a
+/// segment actually being sent.
+#[cfg(feature = "embed")]
+pub async fn run_segmented_create(
+    params: SegmentedCreateParams<'_>,
+) -> Result<temper_workflow::types::ResourceRow> {
+    use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload, SegmentedBegin};
+
+    let SegmentedCreateParams {
+        client,
+        vault_root,
+        cmd,
+        context_ref,
+        budget,
+    } = params;
+
+    let content = cmd
+        .body
+        .as_ref()
+        .map(|b| b.content.as_str())
+        .unwrap_or_default();
+    let source_hash = sha256_hex_raw(content.as_bytes());
+
+    let SegmentPlan {
+        segments,
+        chunked,
+        infos: local_infos,
+        expected_body_hash,
+    } = plan_segments(content, budget)?;
+
+    let existing =
+        crate::actions::ingest_manifest::find_resumable(vault_root, &source_hash, budget as u32)?;
+
+    let (resource_id, mut manifest, landed) = match existing {
+        Some((resource_id, mut manifest)) => {
+            // Re-verify against the live server rather than trusting the on-disk cache — the
+            // manifest may be stale if a prior attempt crashed between a server-side landing
+            // and the next `store` call.
+            let landed = client
+                .ingest()
+                .list_blocks(resource_id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?
+                .blocks;
+            manifest.blocks = landed.clone();
+            (resource_id, manifest, landed)
+        }
+        None => {
+            // Fresh session: segment 0 always lands via begin_segmented (the create path) —
+            // there is no resource to append a block to before this call returns one.
+            let chunks_packed = embed_and_pack(&chunked[0])?;
+            let segmented = SegmentedBegin {
+                total_blocks_hint: Some(segments.len() as u32),
+                block_budget: budget as u32,
+                source_hash: Some(source_hash.clone()),
+            };
+            let payload = crate::cloud_backend::translators::cmd_to_segmented_begin_payload(
+                cmd,
+                context_ref,
+                segments[0].text.clone(),
+                chunks_packed,
+                segmented,
+            )?;
+            let response = client
+                .ingest()
+                .begin_segmented(&payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let manifest = crate::actions::ingest_manifest::IngestManifest {
+                resource_id: response.resource_id,
+                source_hash: source_hash.clone(),
+                block_budget: budget as u32,
+                correlation_id: response.correlation_id,
+                blocks: response.blocks.clone(),
+                finalized: false,
+            };
+            crate::actions::ingest_manifest::store(
+                &crate::actions::ingest_manifest::manifest_path(vault_root, response.resource_id),
+                &manifest,
+            )?;
+            (response.resource_id, manifest, response.blocks)
+        }
+    };
+
+    let missing_seqs = crate::actions::ingest_manifest::resume_gap(&local_infos, &landed);
+    for seq in missing_seqs {
+        let idx = seq as usize;
+        let chunks_packed = embed_and_pack(&chunked[idx])?;
+        let append_payload = AppendBlockPayload {
+            seq,
+            content: segments[idx].text.clone(),
+            content_hash: sha256_hex_raw(segments[idx].text.as_bytes()),
+            chunks_packed,
+        };
+        let response = client
+            .ingest()
+            .append_block(resource_id, &append_payload)
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
+        manifest.blocks = response.blocks;
+        let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
+        crate::actions::ingest_manifest::store(&path, &manifest)?;
+    }
+
+    client
+        .ingest()
+        .finalize(
+            resource_id,
+            &FinalizePayload {
+                expected_blocks: segments.len() as u32,
+                expected_body_hash,
+            },
+        )
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+    manifest.finalized = true;
+    let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
+    crate::actions::ingest_manifest::store(&path, &manifest)?;
+
+    client
+        .resources()
+        .get(resource_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +582,92 @@ pub fn normalize_body_for_vault(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- ingest_mode (one-shot vs segmented threshold) ---
+
+    #[test]
+    fn ingest_mode_at_or_under_budget_is_one_shot() {
+        assert_eq!(ingest_mode(0, 262_144), IngestMode::OneShot);
+        assert_eq!(ingest_mode(262_144, 262_144), IngestMode::OneShot);
+    }
+
+    #[test]
+    fn ingest_mode_over_budget_is_segmented() {
+        assert_eq!(ingest_mode(262_145, 262_144), IngestMode::Segmented);
+        assert_eq!(ingest_mode(10_000_000, 262_144), IngestMode::Segmented);
+    }
+
+    #[test]
+    fn ingest_mode_respects_a_custom_budget() {
+        assert_eq!(ingest_mode(100, 100), IngestMode::OneShot);
+        assert_eq!(ingest_mode(101, 100), IngestMode::Segmented);
+    }
+
+    // --- plan_segments (local, no-network segmented-create planning) ---
+    //
+    // No ONNX runtime needed — chunking + merkle hashing only, no embedding — so these run
+    // under plain `embed` (unlike the `test-embed`-gated `compute_body_chunks` tests below).
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn plan_segments_splits_a_large_body_and_carries_breadcrumbs() {
+        let content = "# Top\n\n".to_string() + &"filler line\n".repeat(200);
+        let plan = plan_segments(&content, 256).expect("should succeed");
+
+        assert!(plan.segments.len() > 1, "expected a mid-section split");
+        assert_eq!(plan.segments.len(), plan.chunked.len());
+        assert_eq!(plan.segments.len(), plan.infos.len());
+        for (i, seg) in plan.segments.iter().enumerate() {
+            assert_eq!(seg.seq as usize, i, "segments are seq-ordered");
+        }
+        assert_eq!(
+            plan.infos[1].content_hash,
+            temper_ingest::merkle::block_merkle(
+                &plan.chunked[1]
+                    .iter()
+                    .map(|c| c.content_hash.clone())
+                    .collect::<Vec<_>>()
+            ),
+            "each segment's local content_hash is its own block merkle"
+        );
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn plan_segments_small_body_is_a_single_segment() {
+        let plan = plan_segments("# H\n\nshort", 262_144).expect("should succeed");
+        assert_eq!(plan.segments.len(), 1);
+        assert_eq!(plan.infos.len(), 1);
+        assert_eq!(plan.infos[0].seq, 0);
+        // For exactly one segment, the resource body_hash is the double-sha256 over that
+        // segment's own chunk-hash concatenation (see `merkle::resource_body_hash`'s doc).
+        assert_eq!(
+            plan.expected_body_hash,
+            temper_ingest::merkle::resource_body_hash(std::slice::from_ref(
+                &plan.infos[0].content_hash
+            ))
+        );
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn plan_segments_rejects_an_empty_body() {
+        assert!(plan_segments("", 262_144).is_err());
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn plan_segments_is_deterministic() {
+        let content = "# A\n".to_string() + &"body text here\n".repeat(500);
+        let first = plan_segments(&content, 8192).expect("should succeed");
+        let second = plan_segments(&content, 8192).expect("should succeed");
+        assert_eq!(first.infos.len(), second.infos.len());
+        for (a, b) in first.infos.iter().zip(second.infos.iter()) {
+            assert_eq!(a.seq, b.seq);
+            assert_eq!(a.content_hash, b.content_hash);
+        }
+        assert_eq!(first.expected_body_hash, second.expected_body_hash);
+    }
 
     // --- Content hash ---
 

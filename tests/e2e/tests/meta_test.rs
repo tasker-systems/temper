@@ -27,6 +27,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
 
     // Ingest a resource to get a manifest row.
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Meta Test Doc".to_string(),
         origin_uri: "test://e2e/meta-test".to_string(),
@@ -160,6 +161,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
     };
 
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Chunks Preserved".to_string(),
         origin_uri: "test://e2e/meta-chunks".to_string(),
@@ -312,6 +314,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         .expect("context create failed");
 
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Errors Doc".to_string(),
         origin_uri: "test://e2e/meta-errors".to_string(),
@@ -454,6 +457,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
     });
 
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Get Meta Doc".to_string(),
         origin_uri: "test://e2e/meta-get".to_string(),

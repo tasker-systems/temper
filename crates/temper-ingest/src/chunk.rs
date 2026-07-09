@@ -25,7 +25,10 @@ use std::sync::OnceLock;
 static HEADING_RE: OnceLock<Regex> = OnceLock::new();
 static BOLD_LINE_RE: OnceLock<Regex> = OnceLock::new();
 
-fn heading_re() -> &'static Regex {
+/// Matches a markdown ATX heading line (`#`..`######`). `pub(crate)` so
+/// `stream.rs`'s streaming segmenter can detect heading-boundary cut points
+/// with the exact same rule the whole-document chunker uses.
+pub(crate) fn heading_re() -> &'static Regex {
     HEADING_RE.get_or_init(|| Regex::new(r"^(#{1,6})\s+(.+)$").expect("heading regex is valid"))
 }
 
@@ -38,7 +41,9 @@ fn bold_line_re() -> &'static Regex {
     })
 }
 
-fn sha256_hex(s: &str) -> String {
+/// `pub(crate)` so `merkle.rs`'s block/resource merkle helpers reuse the exact same
+/// hex-sha256 primitive as chunk `content_hash` computation.
+pub(crate) fn sha256_hex(s: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(s.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -88,13 +93,17 @@ struct RawSection {
     lines: Vec<String>,
 }
 
-/// Collect lines into heading-delimited sections.
-fn collect_sections(text: &str) -> Vec<RawSection> {
+/// Collect lines into heading-delimited sections, seeding the breadcrumb stack from
+/// `initial_stack` (empty for a plain whole-document scan). Used by
+/// [`chunk_markdown_with_prefix`] — for an empty `initial_stack` this is exactly what the
+/// pre-streaming `collect_sections` did, so `chunk_markdown`'s behavior (which now delegates
+/// to `chunk_markdown_with_prefix(text, &[])`) is unchanged.
+fn collect_sections_with_stack(text: &str, initial_stack: Vec<(usize, String)>) -> Vec<RawSection> {
     let re = heading_re();
     let lines: Vec<&str> = text.split('\n').collect();
 
     let mut sections: Vec<RawSection> = Vec::new();
-    let mut header_stack: Vec<(usize, String)> = Vec::new();
+    let mut header_stack: Vec<(usize, String)> = initial_stack;
     let mut current_lines: Vec<String> = Vec::new();
 
     let flush = |stack: &[(usize, String)], lines: &mut Vec<String>, out: &mut Vec<RawSection>| {
@@ -349,13 +358,41 @@ fn split_at_emphasis_subheadings(lines: &[String]) -> Vec<Vec<String>> {
 /// Split `text` into semantically coherent, token-limited chunks.
 ///
 /// Empty input or input that produces no non-empty chunks returns an empty
-/// `Vec`.
+/// `Vec`. Equivalent to [`chunk_markdown_with_prefix`] with an empty prefix.
 pub fn chunk_markdown(text: &str) -> Vec<ChunkData> {
+    chunk_markdown_with_prefix(text, &[])
+}
+
+/// Split `text` into semantically coherent, token-limited chunks, seeding the heading
+/// breadcrumb stack from `initial_breadcrumb` before scanning `text`'s own headings.
+///
+/// Used by the streaming ingest segmenter (`crate::stream::segment_reader`): a segment that
+/// begins mid-section (no heading of its own at the top) still needs its ancestor
+/// `header_path` — the running heading stack scanned across prior segments is threaded in
+/// here as `initial_breadcrumb`.
+///
+/// Every `initial_breadcrumb` entry is seeded into the internal stack at level 0
+/// (deliberately lower than any real heading, which is level 1-6): the existing
+/// pop-on-same-or-higher-level logic (`while stack.last().level >= new.level`) can then never
+/// pop a prefix entry, so a segment's own headings always nest **under** the full prefix,
+/// regardless of their own level. This is a known, accepted approximation — a segment whose
+/// own top-level heading would, in a whole-document scan, have popped some of the prefix's
+/// ancestors instead keeps the full prefix as its `header_path` ancestry. It only matters for
+/// the size-fallback case where a single oversized section is force-split across a segment
+/// boundary (native heading-aligned cuts carry no prefix mismatch to expose this).
+///
+/// With an empty `initial_breadcrumb` this is byte-identical to [`chunk_markdown`] — the
+/// empty-prefix case is a golden-equivalence invariant (`chunk_markdown` delegates here).
+pub fn chunk_markdown_with_prefix(text: &str, initial_breadcrumb: &[String]) -> Vec<ChunkData> {
     if text.trim().is_empty() {
         return vec![];
     }
 
-    let sections = collect_sections(text);
+    let initial_stack: Vec<(usize, String)> = initial_breadcrumb
+        .iter()
+        .map(|title| (0usize, title.clone()))
+        .collect();
+    let sections = collect_sections_with_stack(text, initial_stack);
     let mut chunks: Vec<ChunkData> = Vec::new();
     let mut chunk_index: u32 = 0;
 
@@ -610,6 +647,24 @@ mod tests {
                 "chunk indices should be sequential"
             );
         }
+    }
+
+    // --- chunk_markdown_with_prefix (streaming segment breadcrumb carry-over) ---
+
+    #[test]
+    fn prefix_breadcrumb_prepends_ancestor_headings() {
+        // A segment that starts under "A > B" but whose text only contains "## C".
+        let out = super::chunk_markdown_with_prefix("## C\n\nbody", &["A".into(), "B".into()]);
+        assert_eq!(out[0].header_path, "A > B > C");
+    }
+
+    #[test]
+    fn empty_prefix_equals_plain_chunk_markdown() {
+        let text = "# H\n\npara one\n\n## H2\n\npara two";
+        assert_eq!(
+            super::chunk_markdown_with_prefix(text, &[]),
+            super::chunk_markdown(text)
+        );
     }
 
     // --- estimate_tokens ---
