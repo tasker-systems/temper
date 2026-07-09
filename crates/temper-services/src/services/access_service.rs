@@ -487,19 +487,22 @@ pub async fn get_own_request(
         return Ok(None);
     };
 
+    // `vw_join_requests` (migration 20260709000003) carries the one shared projection +
+    // team/profile joins; view columns infer nullable, so the non-null columns take `!`
+    // overrides matching the JoinRequest shape.
     let row = sqlx::query_as!(
         JoinRequest,
         r#"
-        SELECT jr.id, jr.team_id, jr.requesting_profile_id,
-               jr.status as "status: JoinRequestStatus",
-               jr.message, jr.source, jr.accepted_terms_version, jr.accepted_terms_at,
-               jr.reviewed_by_profile_id, jr.reviewed_at, jr.decision_note,
-               jr.created, jr.updated
-          FROM kb_join_requests jr
-          JOIN kb_teams t ON t.id = jr.team_id
-         WHERE jr.requesting_profile_id = $1
-           AND t.slug = $2
-         ORDER BY jr.created DESC
+        SELECT id as "id!", team_id as "team_id!",
+               requesting_profile_id as "requesting_profile_id!",
+               status as "status!: JoinRequestStatus",
+               message, source as "source!", accepted_terms_version, accepted_terms_at,
+               reviewed_by_profile_id, reviewed_at, decision_note,
+               created as "created!", updated as "updated!"
+          FROM vw_join_requests
+         WHERE requesting_profile_id = $1
+           AND team_slug = $2
+         ORDER BY created DESC
          LIMIT 1
         "#,
         *profile_id,
@@ -550,21 +553,22 @@ pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWi
         return Ok(vec![]);
     };
 
+    // Same `vw_join_requests` projection as `get_own_request`, plus the view's joined
+    // requester columns (`display_name`/`email`) for the admin queue shape.
     let rows = sqlx::query_as!(
         JoinRequestWithProfile,
         r#"
-        SELECT jr.id, jr.team_id, jr.requesting_profile_id,
-               jr.status as "status: JoinRequestStatus",
-               jr.message, jr.source, jr.accepted_terms_version, jr.accepted_terms_at,
-               jr.reviewed_by_profile_id, jr.reviewed_at, jr.decision_note,
-               jr.created, jr.updated,
-               p.display_name, p.email
-          FROM kb_join_requests jr
-          JOIN kb_teams t ON t.id = jr.team_id
-          JOIN kb_profiles p ON p.id = jr.requesting_profile_id
-         WHERE t.slug = $1
-           AND jr.status = 'pending'
-         ORDER BY jr.created DESC
+        SELECT id as "id!", team_id as "team_id!",
+               requesting_profile_id as "requesting_profile_id!",
+               status as "status!: JoinRequestStatus",
+               message, source as "source!", accepted_terms_version, accepted_terms_at,
+               reviewed_by_profile_id, reviewed_at, decision_note,
+               created as "created!", updated as "updated!",
+               display_name as "display_name!", email
+          FROM vw_join_requests
+         WHERE team_slug = $1
+           AND status = 'pending'
+         ORDER BY created DESC
         "#,
         gating_slug,
     )
