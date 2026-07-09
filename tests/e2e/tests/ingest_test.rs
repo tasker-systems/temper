@@ -26,6 +26,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
     // Ingest a test resource.
     // content_hash must be a 64-char hex string (raw SHA-256, no prefix).
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "E2E Test Document".to_string(),
         origin_uri: "test://e2e/ingest-test".to_string(),

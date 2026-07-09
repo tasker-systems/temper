@@ -58,6 +58,7 @@ async fn ingest_research(app: &common::TestApp, token: &str, title: &str) -> Str
     let chunks = vec![fake_chunk("body content", 0)];
     let chunks_packed = pack_chunks(&chunks).expect("pack_chunks");
     let payload = IngestPayload {
+        segmented: None,
         title: title.to_string(),
         origin_uri: format!("test://hash-invariant-{}", Uuid::new_v4()),
         context_ref: "@me/default".to_string(),

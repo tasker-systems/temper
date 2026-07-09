@@ -292,6 +292,40 @@ mod embed_impl {
                 "CloudBackend::materialize_on_threshold not wired until cutover".to_string(),
             ))
         }
+
+        // Segmented (multi-block) ingest is on the trait (Beat 2) but the CLI's streaming
+        // begin/append/finalize orchestration is Beat 3 — these stubs satisfy the trait until
+        // that cutover wires them.
+        async fn append_block(
+            &self,
+            _resource: temper_core::types::ids::ResourceId,
+            _payload: temper_core::types::ingest::AppendBlockPayload,
+        ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::append_block not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn finalize_ingest(
+            &self,
+            _resource: temper_core::types::ids::ResourceId,
+            _payload: temper_core::types::ingest::FinalizePayload,
+        ) -> Result<CommandOutput<()>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::finalize_ingest not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn list_blocks(
+            &self,
+            _resource: temper_core::types::ids::ResourceId,
+        ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::list_blocks not wired until cutover".to_string(),
+            ))
+        }
     }
 
     #[cfg(test)]
@@ -543,6 +577,37 @@ mod non_embed_impl {
             &self,
             _cmd: MaterializeOnThreshold,
         ) -> Result<CommandOutput<temper_core::types::materialize::MaterializeAck>, TemperError>
+        {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn append_block(
+            &self,
+            _resource: temper_core::types::ids::ResourceId,
+            _payload: temper_core::types::ingest::AppendBlockPayload,
+        ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
+        {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn finalize_ingest(
+            &self,
+            _resource: temper_core::types::ids::ResourceId,
+            _payload: temper_core::types::ingest::FinalizePayload,
+        ) -> Result<CommandOutput<()>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn list_blocks(
+            &self,
+            _resource: temper_core::types::ids::ResourceId,
+        ) -> Result<CommandOutput<temper_core::types::ingest::BlocksResponse>, TemperError>
         {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),

@@ -55,6 +55,94 @@ pub struct IngestPayload {
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     #[serde(default, flatten)]
     pub act: ActInput,
+    /// When set, this create is the **begin** of a segmented (multi-block) ingest: `content`
+    /// carries only segment 0's text, and the ingest handler returns a
+    /// [`SegmentedBeginResponse`] instead of the one-shot `ResourceRow`. `None` (the default) is
+    /// the unchanged one-shot path — every existing small-body caller is unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmented: Option<SegmentedBegin>,
+}
+
+/// Marks an `IngestPayload` as the first request of a segmented (multi-block) ingest session.
+/// Presence (not a bool) tells the ingest handler to take the segmented-begin branch and return a
+/// [`SegmentedBeginResponse`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct SegmentedBegin {
+    /// Best-effort total block count, if the client knows it upfront (e.g. from a
+    /// pre-scan of the source). Purely informational — not validated against the
+    /// actual landed count (that's `FinalizePayload.expected_blocks`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_blocks_hint: Option<u32>,
+    /// The segment budget (bytes of text) this session's boundaries were cut at. Recorded so a
+    /// resume re-derives identical segment boundaries — see the design's determinism note.
+    pub block_budget: u32,
+    /// sha256 of the source bytes, for the resume/re-ingest source-integrity check
+    /// (`kb_ingestion_records.source_hash`). `None` when the source has no stable identity
+    /// (e.g. piped stdin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+}
+
+/// One landed segment, as `begin`/`append`/`list-blocks` report it — the resume unit.
+///
+/// `content_hash` is the **block merkle** (`kb_block_revisions.block_body_hash`, i.e.
+/// `temper_substrate::content::body_hash_from_chunk_hashes` over the block's own chunk hashes) —
+/// NOT the whole-segment-text sha256 the client sends inbound as `AppendBlockPayload.content_hash`.
+/// The two are deliberately distinct hashes over the same segment: the inbound one is the client's
+/// cheap identity check on raw text; this outbound one is the server-computed chunk merkle that
+/// already exists as the block's canonical hash. The client re-derives this same merkle from its
+/// own packed chunk hashes (not the raw text) to diff against on resume — comparing against the
+/// raw-text hash would never match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct SegmentInfo {
+    pub seq: u32,
+    pub content_hash: String,
+}
+
+/// Response to a segmented begin (block 0 landed via the ordinary create path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct SegmentedBeginResponse {
+    pub resource_id: uuid::Uuid,
+    /// Client-side ingest-session id (written into the `.temper/` resume manifest). Not yet
+    /// threaded onto the server's event ledger as a shared `kb_events.correlation_id` — Beat 1
+    /// left per-event correlation at the root-event default; grouping the session's events by a
+    /// single correlation id is deferred to the reaper work (design §12).
+    pub correlation_id: uuid::Uuid,
+    pub blocks: Vec<SegmentInfo>,
+}
+
+/// Append one segment to an in-progress (segmented-begin'd) resource —
+/// `POST /api/resources/{id}/blocks`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct AppendBlockPayload {
+    pub seq: u32,
+    pub content: String,
+    /// sha256 of this segment's raw text — the client's cheap identity/resume check. Distinct
+    /// from the block merkle the server reports back in [`SegmentInfo::content_hash`]; see that
+    /// type's doc.
+    pub content_hash: String,
+    /// Base64-encoded MessagePack of `Vec<PackedChunk>` — this segment's pre-chunked, pre-embedded
+    /// content (same wire shape as `IngestPayload::chunks_packed`).
+    pub chunks_packed: String,
+}
+
+/// Response to append / `GET /api/resources/{id}/blocks`: the currently landed segment set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct BlocksResponse {
+    pub blocks: Vec<SegmentInfo>,
+}
+
+/// Declare a segmented ingest complete — `POST /api/resources/{id}/finalize`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FinalizePayload {
+    pub expected_blocks: u32,
+    pub expected_body_hash: String,
 }
 
 /// A single chunk with its embedding, serialized via MessagePack inside
@@ -217,6 +305,7 @@ mod tests {
             open_meta: Some(serde_json::json!({"tags": ["rust"]})),
             chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
             sources: Vec::new(),
+            segmented: None,
             act: Default::default(),
         };
 
@@ -253,6 +342,7 @@ mod tests {
             open_meta: None,
             chunks_packed: None,
             sources: Vec::new(),
+            segmented: None,
             act: Default::default(),
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -290,6 +380,7 @@ mod tests {
             open_meta: None,
             chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
             sources: Vec::new(),
+            segmented: None,
             act: Default::default(),
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -352,5 +443,148 @@ mod tests {
         assert_eq!(json[0]["chunk_index"], 0);
         assert_eq!(json[0]["embedding"], "[0.1,0.2]");
         assert!(json[0]["embedding"].is_string());
+    }
+
+    // ── Beat 2 Task 2.1: segmented begin/append/finalize wire types ──────────────────────────
+
+    #[test]
+    fn append_payload_round_trips() {
+        let p = super::AppendBlockPayload {
+            seq: 2,
+            content: "x".into(),
+            content_hash: "h".into(),
+            chunks_packed: "b64".into(),
+        };
+        let j = serde_json::to_string(&p).unwrap();
+        let back: super::AppendBlockPayload = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.seq, 2);
+    }
+
+    #[test]
+    fn segment_info_round_trips() {
+        let s = SegmentInfo {
+            seq: 3,
+            content_hash: "merkle-hash".to_owned(),
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        let back: SegmentInfo = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.seq, 3);
+        assert_eq!(back.content_hash, "merkle-hash");
+    }
+
+    #[test]
+    fn blocks_response_round_trips() {
+        let r = BlocksResponse {
+            blocks: vec![
+                SegmentInfo {
+                    seq: 0,
+                    content_hash: "h0".to_owned(),
+                },
+                SegmentInfo {
+                    seq: 1,
+                    content_hash: "h1".to_owned(),
+                },
+            ],
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        let back: BlocksResponse = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.blocks.len(), 2);
+        assert_eq!(back.blocks[1].seq, 1);
+    }
+
+    #[test]
+    fn finalize_payload_round_trips() {
+        let f = FinalizePayload {
+            expected_blocks: 4,
+            expected_body_hash: "sha256:deadbeef".to_owned(),
+        };
+        let j = serde_json::to_string(&f).unwrap();
+        let back: FinalizePayload = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.expected_blocks, 4);
+        assert_eq!(back.expected_body_hash, "sha256:deadbeef");
+    }
+
+    #[test]
+    fn segmented_begin_response_round_trips() {
+        let r = SegmentedBeginResponse {
+            resource_id: uuid::Uuid::now_v7(),
+            correlation_id: uuid::Uuid::now_v7(),
+            blocks: vec![SegmentInfo {
+                seq: 0,
+                content_hash: "h0".to_owned(),
+            }],
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        let back: SegmentedBeginResponse = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.resource_id, r.resource_id);
+        assert_eq!(back.correlation_id, r.correlation_id);
+        assert_eq!(back.blocks.len(), 1);
+    }
+
+    #[test]
+    fn ingest_payload_segmented_field_round_trips_when_present() {
+        let payload = IngestPayload {
+            title: "Big Doc".to_owned(),
+            origin_uri: "kb://ctx/task/big".to_owned(),
+            context_ref: "ctx".to_owned(),
+            home_cogmap_id: None,
+            doc_type_name: "task".to_owned(),
+            goal: None,
+            content_hash: None,
+            content: "segment 0 text".to_owned(),
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: None,
+            sources: Vec::new(),
+            act: Default::default(),
+            segmented: Some(SegmentedBegin {
+                total_blocks_hint: Some(3),
+                block_budget: 262_144,
+                source_hash: Some("sha256:abc".to_owned()),
+            }),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(
+            json.contains("\"segmented\""),
+            "present segmented field must serialize"
+        );
+        let back: IngestPayload = serde_json::from_str(&json).unwrap();
+        let seg = back.segmented.expect("segmented round-trips");
+        assert_eq!(seg.total_blocks_hint, Some(3));
+        assert_eq!(seg.block_budget, 262_144);
+        assert_eq!(seg.source_hash, Some("sha256:abc".to_owned()));
+    }
+
+    #[test]
+    fn ingest_payload_segmented_absent_by_default() {
+        // The one-shot small-body path (every existing caller) must be unaffected: no
+        // `segmented` field on the wire, and it deserializes to `None` when omitted.
+        let json = r#"{"title":"Test","origin_uri":"kb://ctx/task/test","context_ref":"ctx","doc_type_name":"task","content":"Heading"}"#;
+        let payload: IngestPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.segmented.is_none());
+
+        let payload = IngestPayload {
+            title: "Test".to_owned(),
+            origin_uri: "kb://ctx/task/test".to_owned(),
+            context_ref: "ctx".to_owned(),
+            home_cogmap_id: None,
+            doc_type_name: "task".to_owned(),
+            goal: None,
+            content_hash: None,
+            content: "# Test".to_owned(),
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: None,
+            sources: Vec::new(),
+            act: Default::default(),
+            segmented: None,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(
+            !json.contains("segmented"),
+            "absent segmented field should not serialize"
+        );
     }
 }

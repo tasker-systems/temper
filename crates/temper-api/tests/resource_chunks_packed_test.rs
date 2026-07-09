@@ -74,6 +74,7 @@ async fn create_honors_client_chunks_no_server_embed(pool: PgPool) {
     // One chunk with a synthetic, recognizable embedding (all 0.5).
     let chunks = vec![synthetic_chunk(0, "Client-chunked body prose.", "aa", 0.5)];
     let payload = IngestPayload {
+        segmented: None,
         title: "Client Chunked".to_string(),
         origin_uri: format!("test://client-chunked-{}", Uuid::new_v4()),
         context_ref: context_id.to_string(),
@@ -132,6 +133,7 @@ async fn update_honors_client_chunks_no_server_embed(pool: PgPool) {
     // Create with client chunks (embedding 0.5) — no ONNX.
     let create_chunks = vec![synthetic_chunk(0, "Original client body.", "bb", 0.5)];
     let create_payload = IngestPayload {
+        segmented: None,
         title: "Update Target".to_string(),
         origin_uri: format!("test://update-target-{}", Uuid::new_v4()),
         context_ref: context_id.to_string(),
@@ -205,6 +207,7 @@ async fn create_without_chunks_falls_back_to_server_embed(pool: PgPool) {
     let (token, context_id) = auth(&pool).await;
 
     let payload = IngestPayload {
+        segmented: None,
         title: "Server Embedded".to_string(),
         origin_uri: format!("test://server-embedded-{}", Uuid::new_v4()),
         context_ref: context_id.to_string(),

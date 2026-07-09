@@ -157,6 +157,15 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route(
+            "/api/resources/{id}/blocks",
+            get(handlers::segments::list_blocks_handler)
+                .post(handlers::segments::append_block_handler),
+        )
+        .route(
+            "/api/resources/{id}/finalize",
+            post(handlers::segments::finalize_handler),
+        )
+        .route(
             "/api/cognitive-maps",
             post(handlers::cognitive_maps::genesis),
         )

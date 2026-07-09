@@ -110,6 +110,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
     let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Round-Trip Search Concept".to_string(),
         origin_uri: "mcp://test/round-trip-search".to_string(),
@@ -169,6 +170,7 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
     // now auto-fills it to "backlog". Testing an invalid enum value still
     // exercises the validation pipeline and error surfacing.)
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Validation Test Task".to_string(),
         origin_uri: "mcp://test/validation".to_string(),
@@ -242,6 +244,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Content Round-Trip Test".to_string(),
         origin_uri: "mcp://test/content-round-trip".to_string(),
@@ -404,6 +407,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         temper_core::types::ingest::pack_chunks(&original_chunks).expect("pack original");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Reindex Test Resource".to_string(),
         origin_uri: "mcp://test/reindex".to_string(),
@@ -547,6 +551,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let packed = temper_core::types::ingest::pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "MCP Meta Parity".to_string(),
         origin_uri: "mcp://test/meta-parity".to_string(),
@@ -675,6 +680,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Gap6 Merge Task", body)])
         .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Gap6 Merge Task".to_string(),
         origin_uri: "mcp://test/gap6".to_string(),
@@ -779,6 +785,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
         temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Gap5 Validate Task", body)])
             .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Gap5 Validate Task".to_string(),
         origin_uri: "mcp://test/gap5".to_string(),
@@ -881,6 +888,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
     let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Selector Route", body)])
         .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
+        segmented: None,
         goal: None,
         title: "Selector Route Doc".to_string(),
         origin_uri: "mcp://test/selector-route".to_string(),
@@ -1036,6 +1044,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
             .expect("pack chunks");
         let managed = serde_json::json!({"temper-stage": "in-progress"});
         let payload = temper_core::types::ingest::IngestPayload {
+            segmented: None,
             goal: None,
             title: title.to_string(),
             origin_uri: origin_uri.to_string(),

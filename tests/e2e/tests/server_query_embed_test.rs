@@ -30,6 +30,7 @@ async fn ingest_semantic(
 ) {
     let packed = temper_ingest::pipeline::prepare_markdown(content).expect("prepare_markdown");
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: title.to_string(),
         origin_uri: format!("test://sem/{slug}"),

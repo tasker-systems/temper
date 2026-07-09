@@ -18,6 +18,9 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
     CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
+use temper_core::types::ingest::{
+    AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentInfo,
+};
 use temper_core::types::materialize::{
     MaterializeAck, DEFAULT_MATERIALIZE_LENS, DEFAULT_MATERIALIZE_THRESHOLD,
 };
@@ -367,6 +370,75 @@ impl DbBackend {
         } else {
             Err(TemperError::Forbidden)
         }
+    }
+
+    /// The landed (non-folded) segment set for a resource, ordered by `seq`. `content_hash` is
+    /// the per-block merkle (`kb_block_revisions.block_body_hash`, latest revision per block) —
+    /// see [`SegmentInfo`]'s doc for why this is NOT the same hash the client sends inbound on
+    /// append. Shared by `append_block`/`list_blocks` (Backend trait) and the ingest handler's
+    /// segmented-begin branch (reading block 0 back right after `create_resource` lands it),
+    /// so the "currently landed set" projection lives in exactly one place.
+    async fn landed_segments(
+        pool: &PgPool,
+        resource: ResourceId,
+    ) -> Result<Vec<SegmentInfo>, TemperError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT b.seq AS "seq!", r.block_body_hash AS "block_body_hash!"
+              FROM kb_content_blocks b
+              JOIN LATERAL (
+                     SELECT block_body_hash FROM kb_block_revisions
+                      WHERE block_id = b.id ORDER BY created DESC LIMIT 1
+                   ) r ON true
+             WHERE b.resource_id = $1 AND NOT b.is_folded
+             ORDER BY b.seq
+            "#,
+            resource.uuid(),
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(api_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SegmentInfo {
+                seq: r.seq as u32,
+                content_hash: r.block_body_hash,
+            })
+            .collect())
+    }
+
+    /// Record the per-resource source-provenance row for a segmented-begin create (design §4
+    /// point 4: written "at begin"). Deliberately NOT part of the `Backend` trait — a
+    /// backend-specific write (per this module's own doc: "Backend-specific operations ... live
+    /// on the backend's concrete type, not on the shared trait") that only the API ingest
+    /// handler calls, directly on the concrete `DbBackend` it already holds, right after
+    /// `create_resource` lands block 0. `conversion_tool` is fixed to `"passthrough"`: every
+    /// caller of `IngestPayload.segmented` already holds extracted markdown (extract → chunk →
+    /// embed happens client-side before this request); there is no server-side kreuzberg
+    /// conversion on this path.
+    pub async fn record_ingestion_source(
+        &self,
+        resource: ResourceId,
+        source_uri: &str,
+        source_hash: Option<&str>,
+    ) -> Result<(), TemperError> {
+        // Auth before any write (WS2), belt-and-suspenders: the handler only calls this
+        // immediately after its own `create_resource` succeeded for the same caller, so this
+        // trivially passes — but every DbBackend write gates independently, no exceptions.
+        self.check_can_modify_next(resource.uuid()).await?;
+        writes::upsert_ingestion_record(
+            &self.pool,
+            writes::IngestionRecord {
+                resource,
+                source_uri,
+                source_mimetype: None,
+                conversion_tool: "passthrough",
+                conversion_version: "1",
+                source_hash,
+            },
+        )
+        .await
+        .map_err(api_err)
     }
 
     /// Auth-before-writes gate for the invocation envelope: the acting profile (`self.profile_id`)
@@ -2121,6 +2193,85 @@ impl Backend for DbBackend {
             regions: Some(outcome.regions as i64),
             membership_fingerprint: Some(outcome.membership_fingerprint),
         }))
+    }
+
+    async fn append_block(
+        &self,
+        resource: ResourceId,
+        payload: AppendBlockPayload,
+    ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
+        // Auth before any write (WS2): the caller must be able to modify this resource.
+        self.check_can_modify_next(resource.uuid()).await?;
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(Surface::ApiHttp))
+            .await
+            .map_err(api_err)?;
+
+        // Same no-embed chunk path as create/update: the client already extracted, chunked, and
+        // embedded this segment — `seq` is authoritative (`AppendParams.block.seq`).
+        let chunks = unpack_incoming_chunks(&payload.chunks_packed)?;
+        let block =
+            temper_substrate::content::prepare_block_from_chunks(payload.seq as i32, None, chunks);
+
+        writes::append_block(
+            &self.pool,
+            writes::AppendParams {
+                resource,
+                block: &block,
+                // Segment appends carry no block-provenance sources in this beat (the ordinary
+                // create/update path's `sources` covers whole-body distillation attribution;
+                // per-segment attribution is out of scope here).
+                sources: Vec::new(),
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        let blocks = Self::landed_segments(&self.pool, resource).await?;
+        Ok(CommandOutput::new(BlocksResponse { blocks }))
+    }
+
+    async fn finalize_ingest(
+        &self,
+        resource: ResourceId,
+        payload: FinalizePayload,
+    ) -> Result<CommandOutput<()>, TemperError> {
+        // Auth before any write (WS2): the caller must be able to modify this resource.
+        self.check_can_modify_next(resource.uuid()).await?;
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(Surface::ApiHttp))
+            .await
+            .map_err(api_err)?;
+
+        writes::finalize_ingest(
+            &self.pool,
+            writes::FinalizeParams {
+                resource,
+                expected_blocks: payload.expected_blocks,
+                expected_body_hash: payload.expected_body_hash,
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        Ok(CommandOutput::new(()))
+    }
+
+    async fn list_blocks(
+        &self,
+        resource: ResourceId,
+    ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
+        // Gated the same as append/finalize (not a general visibility passthrough): an
+        // in-progress segmented ingest's landed-block set is caller-private until finalized.
+        self.check_can_modify_next(resource.uuid()).await?;
+        let blocks = Self::landed_segments(&self.pool, resource).await?;
+        Ok(CommandOutput::new(BlocksResponse { blocks }))
     }
 }
 

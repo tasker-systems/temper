@@ -21,6 +21,7 @@ async fn ingest_with_chunks(
         embedding: vec![0.1_f32; 768],
     };
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: title.to_string(),
         origin_uri: format!("test://fts/{slug}"),

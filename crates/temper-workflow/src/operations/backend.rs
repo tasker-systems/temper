@@ -15,7 +15,8 @@ use async_trait::async_trait;
 
 use crate::types::resource::ResourceRow;
 use temper_core::error::TemperError;
-use temper_core::types::ids::{EdgeId, PropertyId};
+use temper_core::types::ids::{EdgeId, PropertyId, ResourceId};
+use temper_core::types::ingest::{AppendBlockPayload, BlocksResponse, FinalizePayload};
 use temper_core::types::materialize::MaterializeAck;
 
 use super::commands::{
@@ -168,6 +169,38 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: MaterializeOnThreshold,
     ) -> Result<CommandOutput<MaterializeAck>, TemperError>;
+
+    // ── segmented (multi-block) ingest — streaming/resumable ingestion, Beat 2 ──
+    // Block 0 always lands via `create_resource` (the `IngestPayload.segmented` marker just
+    // changes what the API handler returns, not how the resource is created — see
+    // `temper_core::types::ingest::SegmentedBegin`). These three cover the rest of the segmented
+    // session: appending block `seq >= 1`, declaring the session complete, and reading the
+    // landed set back. All three gate on `can_modify_resource` before touching anything — an
+    // in-progress segmented ingest is caller-private, including the read.
+
+    /// Append one already-chunked segment to a resource whose block 0 already landed.
+    /// Idempotent in the substrate on `(resource, seq, block merkle)` — re-appending an
+    /// already-landed segment is a no-op that still returns the current landed set.
+    async fn append_block(
+        &self,
+        resource: ResourceId,
+        payload: AppendBlockPayload,
+    ) -> Result<CommandOutput<BlocksResponse>, TemperError>;
+
+    /// Declare a segmented ingest complete: validates the landed block count + body merkle
+    /// against the caller's expectation, then fires `resource_finalized`.
+    async fn finalize_ingest(
+        &self,
+        resource: ResourceId,
+        payload: FinalizePayload,
+    ) -> Result<CommandOutput<()>, TemperError>;
+
+    /// The currently landed segment set for a resource — backs the resume/progress read
+    /// `GET /api/resources/{id}/blocks`.
+    async fn list_blocks(
+        &self,
+        resource: ResourceId,
+    ) -> Result<CommandOutput<BlocksResponse>, TemperError>;
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ async fn seed_task(
     managed.insert("temper-effort".to_string(), serde_json::json!("small"));
 
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: title.to_string(),
         origin_uri: format!("kb://{context}/task/{slug}"),

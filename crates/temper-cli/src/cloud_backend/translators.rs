@@ -101,6 +101,7 @@ pub(crate) fn cmd_to_ingest_payload(
     };
 
     Ok(IngestPayload {
+        segmented: None,
         title: cmd.title.clone(),
         origin_uri: String::new(),
         context_ref,

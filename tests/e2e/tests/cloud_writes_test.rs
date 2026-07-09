@@ -251,6 +251,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     let body_text = "# Meta-Only Test\n\nInitial body.\n";
     let body_hash = temper_core::hash::compute_body_hash(body_text);
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Meta-Only Update Test".to_string(),
         origin_uri: "kb://myapp/session/meta-only-update-test".to_string(),
@@ -413,6 +414,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     let initial_body = "# Body+Meta Test\n\nInitial body.\n";
     let initial_hash = temper_core::hash::compute_body_hash(initial_body);
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Body+Meta Update Test".to_string(),
         origin_uri: "kb://myapp/session/body-and-meta-update-test".to_string(),
@@ -585,6 +587,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
     let initial_body = "# Body-Only Test\n\nInitial body.\n";
     let initial_hash = temper_core::hash::compute_body_hash(initial_body);
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Body-Only Update Test".to_string(),
         origin_uri: "kb://myapp/session/body-only-update-test".to_string(),
@@ -740,6 +743,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
     let initial_body = "# Empty Guard Test\n\nInitial body.\n";
     let initial_hash = temper_core::hash::compute_body_hash(initial_body);
     let payload = IngestPayload {
+        segmented: None,
         goal: None,
         title: "Body Empty Guard Test".to_string(),
         origin_uri: "kb://myapp/session/body-empty-guard-test".to_string(),
@@ -1046,6 +1050,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
         let body = format!("# Cloud-Only Resource {i}\n\nContent.\n");
         let hash = temper_core::hash::compute_body_hash(&body);
         let payload = IngestPayload {
+            segmented: None,
             goal: None,
             title: format!("Cloud Only {i}"),
             origin_uri: format!("kb://myapp/session/cloud-only-resource-{i}"),
@@ -1531,6 +1536,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
         .client
         .ingest()
         .create(&IngestPayload {
+            segmented: None,
             goal: None,
             title: "Edges Resolve Test".to_string(),
             origin_uri: "kb://edgesctx/research/edges-resolve-test".to_string(),
@@ -1620,6 +1626,7 @@ async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
         .client
         .ingest()
         .create(&IngestPayload {
+            segmented: None,
             goal: None,
             title: "Decorated Ref Target".to_string(),
             origin_uri: "kb://myapp/research/decorated-ref-target".to_string(),
