@@ -1090,7 +1090,15 @@ pub enum InvocationCmd {
         /// The invocation to close, by ref (the UUID returned by `open`).
         invocation: String,
         /// Terminal disposition: completed | failed | abandoned.
-        #[arg(long, value_enum)]
+        #[arg(
+            long,
+            value_enum,
+            long_help = "Terminal disposition for the invocation.\n\n\
+                         completed  — the run achieved its purpose\n\
+                         failed     — the run errored or produced an unusable result\n\
+                         abandoned  — the run was cancelled, aborted, or superseded\n\n\
+                         There is no `cancelled` value: use `abandoned`."
+        )]
         disposition: DispositionArg,
         /// Opaque, agent-defined terminal outcome as a JSON value; omit for none.
         #[arg(long)]
