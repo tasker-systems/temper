@@ -57,6 +57,28 @@ type exists anywhere in the CLI), item 3 (no `--managed-meta` flag exists;
 at `cli.rs:77-96`, never on `managed_meta`), and item 5's `--sources` claim (it writes block
 provenance only; `derived_from` is an unrelated *open_meta key* on `update`, not an edge).
 
+### Root cause: the skill content lied
+
+The issue was filed by a competent agent with the skill content loaded. It is a user-study
+result, and grounding shows the agent behaved correctly on every count — three of the five
+items are direct consequences of **false statements in
+`crates/temper-cli/skill-content/cognitive-maps.md`**:
+
+| Line | Claim | Reality | Item it caused |
+|------|-------|---------|----------------|
+| `:98` | "**`facet_set` is agent-surface only** (the `facet_set` MCP tool)" | It is `temper resource facet` | 2 |
+| `:100` | "**Materialize** … is likewise agent-surface" | True today; PR (c) makes it false | 2 |
+| `:126` | "cites both in `--sources` (and one `derived_from` edge per source)" | `--sources` writes block provenance, never an edge | 5 |
+
+The agent did not fail to discover `resource facet`. It was told the verb did not exist, and
+reached for MCP as instructed. Likewise it expected `--sources` to yield edges because line
+126's parenthetical says so.
+
+This makes agent-facing description a **first-class deliverable with its own correctness
+bar**, not a doc footnote. It also means the fix must cover every surface an agent reads
+from: the installable CLI skill (`skill-content/`), the MCP tool descriptions, and the
+deployed steward agent (`packages/agent-workflows/steward/`).
+
 Two incidental findings that the design depends on:
 
 - `ManagedMeta` lives in **temper-workflow** (`src/types/managed_meta.rs:30-70`), not
@@ -256,15 +278,50 @@ say is which one an author reaching for "cancelled" should pick. The fix is a `l
 the flag spelling out that `abandoned` covers cancelled and aborted runs. Smallest honest
 change; recorded as a documentation gap rather than bespoke suggestion machinery.
 
-**Discoverability docs.** `crates/temper-cli/skill-content/cognitive-maps.md` documents
-`resource facet` and the new `cogmap materialize` — the omission that produced this issue.
+### Agent-facing description truth
+
+The false claims that produced this issue are corrected across **every surface an agent reads
+from**. This is the deliverable, not an afterthought.
+
+**The installable CLI skill** (`crates/temper-cli/skill-content/`, `include_str!`'d into the
+binary at `commands/skill.rs:16-26`):
+
+- `cognitive-maps.md:96-101` — the authored-4 paragraph. `facet_set` is **`temper resource
+  facet`**, not agent-surface-only. `materialize` becomes `temper cogmap materialize`.
+- `cognitive-maps.md:126` — the parenthetical must stop implying `--sources` creates edges.
+  Post-PR-(c) the honest sentence names `--sources-as-edges` as the flag that does.
+- `cognitive-maps.md:229` — the worked example's "then `cogmap_materialize` (MCP)" comment
+  becomes the CLI verb, so the example is a runnable single-surface script. That was the
+  issue's actual ask.
+- `reference.md` — currently mentions neither `facet` nor `materialize`. Both get listed.
+
+**The MCP tool descriptions** (`crates/temper-mcp/src/tools/`, rmcp doc comments). Only one
+description anywhere names a CLI equivalent (`cognitive_maps.rs:170`). `facet_set` and
+`cogmap_materialize` name theirs, so an agent on the MCP surface learns the CLI verb exists.
+
+**The deployed steward** (`packages/agent-workflows/steward/agent/`): inherits the corrected
+authored-4 statement in `skills/map-stewardship.md`. Note the division of labour — the
+*manual-trio* removal from `instructions.md:51-52` and `map-stewardship.md:105-112` ships in
+**PR (b)**, alongside the auto-stamp that obsoletes it. PR (c) touches only the
+verb-and-surface claims.
+
+### The guard
+
+Prose cannot be type-checked, but the *referents* can. A `temper-cli` unit test introspects
+the clap `Command` tree and asserts that every CLI verb the skill content names actually
+resolves — `resource create`, `resource facet`, `edge assert`, `edge fold`, `cogmap
+materialize`, `invocation open`, `invocation close`. If someone renames or removes a verb, the
+test fails and points at the doc that now lies.
+
+This does not verify prose claims (nothing cheap does). It pins the existence claims the prose
+depends on, which is exactly the class of error that produced this issue.
 
 ### Testing
 
-`temper-cli` unit tests for the new clap wiring and the source-partitioning logic (resource
-refs versus remote URLs); one e2e proving `--sources-as-edges` produces exactly the
-resource-valued edges; `temper-api`'s invocation integration target for the `disposition`
-round-trip.
+`temper-cli` unit tests for the new clap wiring, the source-partitioning logic (resource refs
+versus remote URLs), and the verb-existence guard above; one e2e proving `--sources-as-edges`
+produces exactly the resource-valued edges; `temper-api`'s invocation integration target for
+the `disposition` round-trip.
 
 ## PR sequencing
 
@@ -321,3 +378,8 @@ Restated from the issue, corrected for what grounding revealed:
 - [ ] `--sources-as-edges` asserts `derived_from` edges for resource-valued sources.
       `invocation show` reports a derived `disposition`. `--disposition` help names
       `abandoned` for cancelled runs.
+- [ ] Every agent-facing surface tells the truth: the skill content no longer calls
+      `facet_set` agent-surface-only or implies `--sources` creates edges; MCP descriptions for
+      `facet_set` / `cogmap_materialize` name their CLI equivalents; the steward drops the
+      obsolete manual-trio instruction. A clap-introspection test pins every CLI verb the
+      skill content names.
