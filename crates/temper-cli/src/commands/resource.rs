@@ -107,6 +107,24 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
     }
 }
 
+/// Render a create/update action result with its decorated `ref` injected, the way
+/// `list`/`show`/`search` rows carry one.
+///
+/// `create` and `update` used to serialize their typed result struct directly, so they were
+/// the only resource-returning commands whose output had no `ref` — an agent that had just
+/// made a resource needed a second round-trip to address it. The result is serialized to a
+/// `Value` first (as `list` does), `inject_ref` decorates it, and the whole thing renders as
+/// exactly one document.
+fn render_action_result_with_ref<T: serde::Serialize>(
+    result: &T,
+    fmt: crate::format::OutputFormat,
+) -> Result<String> {
+    let mut value = serde_json::to_value(result)
+        .map_err(|e| TemperError::Api(format!("action result serialize: {e}")))?;
+    inject_ref(&mut value);
+    crate::format::render(&value, fmt)
+}
+
 /// Insert a derived `ref` key into a serialized context row
 /// (`ContextRow` / `ContextRowWithCounts`), computed from `owner_ref` + `slug`.
 /// The `ref` is render-time only — never persisted, never on the wire type.
@@ -498,8 +516,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         edges_asserted,
         edges_failed,
     };
-    let rendered = crate::format::render(&result, format)?;
-    println!("{rendered}");
+    let rendered = render_action_result_with_ref(&result, format)?;
+    crate::output::plain(rendered);
     Ok(())
 }
 
@@ -1546,8 +1564,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         status: "ok",
         resource: output.value,
     };
-    let rendered = crate::format::render(&result, params.format)?;
-    println!("{rendered}");
+    let rendered = render_action_result_with_ref(&result, params.format)?;
+    crate::output::plain(rendered);
 
     Ok(())
 }
@@ -1745,7 +1763,9 @@ mod action_result_tests {
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
     use temper_workflow::types::resource::ResourceRow;
 
-    use super::{CreateActionResult, DeleteActionResult, UpdateActionResult};
+    use super::{
+        render_action_result_with_ref, CreateActionResult, DeleteActionResult, UpdateActionResult,
+    };
 
     /// Build a minimal `ResourceRow` fixture for action result tests.
     pub(super) fn make_resource_row(
@@ -1780,6 +1800,46 @@ mod action_result_tests {
     }
 
     /// Task 9: `CreateActionResult` flattens `ResourceRow` — all wire-type
+    /// `create` is a create-style response: it must carry the same decorated `ref` that
+    /// `list`/`show`/`search` rows carry, so an agent can address the thing it just made
+    /// without a second round-trip. It used to be the only one that didn't.
+    #[test]
+    fn render_create_action_result_carries_ref() {
+        let row = make_resource_row("2026-05-14-test", "task", "Test Task", "temper");
+        let result = CreateActionResult {
+            status: "ok",
+            resource: row,
+            edges_asserted: Vec::new(),
+            edges_failed: Vec::new(),
+        };
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("exactly one json document");
+
+        let r = v["ref"].as_str().expect("create response carries a `ref`");
+        let id = v["id"].as_str().expect("id");
+        assert!(
+            r.starts_with("test-task-") && r.ends_with(id),
+            "ref is the decorated `sluggify(title)-<uuid>` form: {out}"
+        );
+    }
+
+    #[test]
+    fn render_update_action_result_carries_ref() {
+        let row = make_resource_row("2026-05-14-test", "task", "Test Task", "temper");
+        let result = UpdateActionResult {
+            status: "ok",
+            resource: row,
+        };
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("exactly one json document");
+        assert!(
+            v["ref"].as_str().is_some(),
+            "update response carries a `ref`: {out}"
+        );
+    }
+
     /// fields appear at the top level alongside `status`. The old per-doctype
     /// `temper-slug` / `temper-title` keys must not appear.
     #[test]
