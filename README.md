@@ -119,7 +119,7 @@ temper resource create --type session --context @me/myapp --title "Implemented a
 
 > **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable, so `--context myapp` is rejected. Of the commands below, only `temper context create` takes a plain name — it is naming a context, not resolving one.
 >
-> A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every row printed by `list`, `show`, and `search` carries a `ref` field: copy it, paste it.
+> A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every resource-returning command — `create`, `update`, `list`, `show`, `search` — carries a `ref` field: copy it, paste it. A script that just created a resource can address it straight from the response.
 
 ## Everything Resolves to Markdown
 
