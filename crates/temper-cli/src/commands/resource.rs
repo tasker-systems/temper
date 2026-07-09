@@ -887,6 +887,48 @@ pub fn delete(
     Ok(())
 }
 
+/// Fold a resource's metadata, body, and its optional edge/provenance sections into
+/// ONE JSON document.
+///
+/// `show` used to `println!` once per section, so `--edges` emitted two concatenated
+/// JSON documents and `--provenance` a third — a single `json.load()` raised
+/// `Extra data`. Building the composite here and printing once makes a multi-document
+/// JSON response structurally impossible rather than merely test-detectable.
+pub(crate) fn build_show_document(
+    metadata: serde_json::Value,
+    body: &str,
+    edges: Option<EdgesReport>,
+    provenance: Option<Vec<temper_core::types::provenance::BlockProvenanceRow>>,
+) -> Result<serde_json::Value> {
+    let mut doc = metadata;
+    let obj = doc
+        .as_object_mut()
+        .ok_or_else(|| TemperError::Api("resource metadata is not a JSON object".to_string()))?;
+
+    obj.insert(
+        "content".to_string(),
+        serde_json::Value::String(body.to_string()),
+    );
+
+    if let Some(edges) = edges {
+        obj.insert(
+            "edges".to_string(),
+            serde_json::to_value(edges)
+                .map_err(|e| TemperError::Api(format!("edges serialize: {e}")))?,
+        );
+    }
+
+    if let Some(provenance) = provenance {
+        obj.insert(
+            "provenance".to_string(),
+            serde_json::to_value(provenance)
+                .map_err(|e| TemperError::Api(format!("provenance serialize: {e}")))?,
+        );
+    }
+
+    Ok(doc)
+}
+
 /// Show a resource's content.
 ///
 /// Cloud-only and context-free: the ref resolves to a `ResourceId`, the row +
@@ -930,15 +972,39 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     })?;
 
     inject_ref(&mut metadata);
-    let rendered = crate::format::render_resource_show(&metadata, &body, params.format)?;
-    println!("{rendered}");
 
-    if params.edges {
-        show_edges(config, id, params.format)?;
-    }
+    // Fetch every requested section BEFORE rendering: the JSON arm folds them into
+    // one document, so nothing may be printed until all of them are in hand.
+    let edges = if params.edges {
+        Some(fetch_edges(id)?)
+    } else {
+        None
+    };
+    let provenance = if params.provenance {
+        Some(fetch_provenance(id)?)
+    } else {
+        None
+    };
 
-    if params.provenance {
-        show_provenance(config, id, params.format)?;
+    match params.format {
+        crate::format::OutputFormat::Json => {
+            let doc = build_show_document(metadata, &body, edges, provenance)?;
+            let rendered = crate::format::render(&doc, params.format)?;
+            crate::output::plain(rendered);
+        }
+        // Toon is the human TTY surface: keep the frontmatter+body document, then append
+        // each requested section as its own block. The one-document contract is a JSON
+        // (agent-surface) invariant, not a Toon one.
+        crate::format::OutputFormat::Toon => {
+            let rendered = crate::format::render_resource_show(&metadata, &body, params.format)?;
+            crate::output::plain(rendered);
+            if let Some(edges) = edges {
+                crate::output::plain(crate::format::render(&edges, params.format)?);
+            }
+            if let Some(provenance) = provenance {
+                crate::output::plain(crate::format::render(&provenance, params.format)?);
+            }
+        }
     }
 
     Ok(())
@@ -996,15 +1062,11 @@ fn map_projection_error(err: temper_core::projection::ProjectionError) -> Temper
     }
 }
 
-/// Fetch and display edges for a resource via the API.
+/// Fetch a resource's graph edges, grouped by direction.
 ///
 /// Cloud-only and context-free: the id was already resolved from the ref by
-/// `show`; this fetches and renders the edge list by id directly.
-fn show_edges(
-    _config: &Config,
-    id: temper_core::types::ids::ResourceId,
-    fmt: crate::format::OutputFormat,
-) -> Result<()> {
+/// `show`. Returns data — `show` decides how to render it.
+fn fetch_edges(id: temper_core::types::ids::ResourceId) -> Result<EdgesReport> {
     use crate::actions::runtime;
 
     let edges: Vec<temper_workflow::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
@@ -1027,40 +1089,29 @@ fn show_edges(
         .filter(|e| e.direction == "incoming")
         .cloned()
         .collect();
-    let report = EdgesReport { outgoing, incoming };
-    let rendered = crate::format::render(&report, fmt)?;
-    println!("{rendered}");
 
-    Ok(())
+    Ok(EdgesReport { outgoing, incoming })
 }
 
-/// Fetch and display the itemized per-block provenance for a resource via the API.
+/// Fetch the itemized per-block provenance for a resource via the API.
 ///
-/// Cloud-only and context-free: the id was already resolved from the ref by `show`; this
-/// hits `GET /api/resources/{id}/provenance` and renders the rows in `(block, accretion)`
-/// order. An unreadable resource returns an empty list (access-scoped in SQL).
-fn show_provenance(
-    _config: &Config,
+/// Hits `GET /api/resources/{id}/provenance` and returns the rows in
+/// `(block, accretion)` order. An unreadable resource returns an empty list
+/// (access-scoped in SQL).
+fn fetch_provenance(
     id: temper_core::types::ids::ResourceId,
-    fmt: crate::format::OutputFormat,
-) -> Result<()> {
+) -> Result<Vec<temper_core::types::provenance::BlockProvenanceRow>> {
     use crate::actions::runtime;
 
-    let rows: Vec<temper_core::types::provenance::BlockProvenanceRow> =
-        runtime::with_client(|client| {
-            Box::pin(async move {
-                client
-                    .resources()
-                    .provenance(uuid::Uuid::from(id))
-                    .await
-                    .map_err(crate::actions::runtime::client_err_to_temper)
-            })
-        })?;
-
-    let rendered = crate::format::render(&rows, fmt)?;
-    println!("{rendered}");
-
-    Ok(())
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .provenance(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })
 }
 
 /// Parameters for resource update.
@@ -2132,5 +2183,57 @@ mod show_meta_only_tests {
         let value = serde_json::to_value(&response).expect("serialize");
         let unfiltered = apply_top_level_filter(value.clone(), &[], "resource_id").expect("filter");
         assert_eq!(unfiltered, value);
+    }
+}
+
+/// Tests for `build_show_document` — the pure builder that folds `--edges`
+/// and `--provenance` sections into the resource's JSON document so `show`
+/// prints exactly once. See PR #330: `--edges`/`--provenance` used to each
+/// print their own JSON document, so a single `json.load()` raised
+/// `Extra data`.
+#[cfg(test)]
+mod build_show_document_tests {
+    use super::{build_show_document, EdgesReport};
+
+    #[test]
+    fn build_show_document_folds_edges_and_provenance_into_one_object() {
+        let metadata = serde_json::json!({
+            "id": "11111111-1111-1111-1111-111111111111",
+            "title": "A Node",
+        });
+        let edges = EdgesReport {
+            outgoing: vec![],
+            incoming: vec![],
+        };
+
+        let doc = build_show_document(metadata, "# body\n", Some(edges), Some(vec![]))
+            .expect("build show document");
+
+        // One document: content, edges, and provenance all hang off the resource object.
+        assert_eq!(doc["title"], "A Node");
+        assert_eq!(doc["content"], "# body\n");
+        assert!(doc["edges"]["outgoing"].is_array(), "edges folded: {doc}");
+        assert!(doc["edges"]["incoming"].is_array(), "edges folded: {doc}");
+        assert!(doc["provenance"].is_array(), "provenance folded: {doc}");
+
+        // And it round-trips through a single `serde_json::from_str` with no trailing data.
+        let rendered = serde_json::to_string_pretty(&doc).expect("render");
+        let _: serde_json::Value = serde_json::from_str(&rendered).expect("exactly one document");
+    }
+
+    #[test]
+    fn build_show_document_omits_absent_sections() {
+        let metadata = serde_json::json!({ "id": "11111111-1111-1111-1111-111111111111" });
+        let doc = build_show_document(metadata, "b", None, None).expect("build show document");
+
+        assert_eq!(doc["content"], "b");
+        assert!(
+            doc.get("edges").is_none(),
+            "no edges key when not requested: {doc}"
+        );
+        assert!(
+            doc.get("provenance").is_none(),
+            "no provenance key when not requested: {doc}"
+        );
     }
 }
