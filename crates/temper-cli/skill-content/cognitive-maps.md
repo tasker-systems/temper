@@ -142,20 +142,27 @@ When in doubt, prefer leaving the node and lowering confidence over churning a f
 
 ### Provenance stamping
 
-Every node carries the provenance trio in **`managed_meta`** (the typed home), not an
-ad-hoc `open_meta` blob:
+**The server stamps provenance for you.** Every node gets the trio in **`managed_meta`**
+(the typed home), derived from the act envelope you already pass:
 
-- `temper-provenance: "llm-discovered"`
-- `temper-llm-model: "<your model>"`
-- `temper-llm-run: "<the invocation id>"` — joins the node back to the run that authored it.
+- `temper-provenance` — `"llm-discovered"` when the act carries `--model`, `"user-created"`
+  when it doesn't.
+- `temper-llm-model` — the act's `--model`.
+- `temper-llm-run` — the act's `--invocation`, joining the node back to the run that
+  authored it.
+
+Pass `managed_meta` explicitly only to override a derived value; a value you supply always
+wins, and a missing one is filled rather than overwritten. Read it back with
+`temper resource show <ref>` — the full show carries both meta tiers.
 
 ### Two authoring gotchas
 
 - **Use ASCII characters in node titles.** A non-ASCII title char once broke slug
   generation and failed the create (bug B2, fixed in PR #287). The ASCII habit costs
   nothing and stays safe regardless of which build a given map's server is running.
-- **Provenance belongs in `managed_meta`.** `temper-llm-model` once landed in `open_meta`
-  (bug B1, fixed in #287). Stamp the trio into managed_meta and verify on read-back.
+- **Provenance belongs in `managed_meta`, never `open_meta`.** `temper-llm-model` once
+  landed in `open_meta` (bug B1, fixed in #287). You no longer stamp it by hand — but if
+  you do pass it, pass it in `managed_meta`.
 
 ## Who may author — the access reality
 

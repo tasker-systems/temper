@@ -103,17 +103,23 @@ The rule of thumb: **whatever gets a `derived_from` edge goes in `sources`.** If
 
 ## Stamping an authored node — provenance meta + origin_uri
 
-Every authored node carries the same provenance trio in **`managed_meta`** (the typed
-home) — uniformly, on *every* `create_resource`, not just some ticks:
+**Provenance is stamped for you.** Every `create_resource`, on every surface, has its
+provenance trio filled into **`managed_meta`** (the typed home) by the server, derived
+from the act envelope:
 
-- `temper-provenance: "llm-discovered"`
-- `temper-llm-model: "<your model>"` — the model authoring this tick (e.g. `MiniMax-M3`).
-- `temper-llm-run: "<this run's id>"` — the `invocation_id` from `invocation_open` is the
-  stable choice, so the node's frontmatter joins back to the run that authored it.
+- `temper-provenance` — `"llm-discovered"` when the act carries a `model`, `"user-created"`
+  when it doesn't.
+- `temper-llm-model` — the act's `model`, i.e. the model authoring this tick.
+- `temper-llm-run` — the act's `invocation_id` from `invocation_open`, so the node's
+  frontmatter joins back to the run that authored it.
 
-Put provenance in `managed_meta` (typed keys) — **never** in an ad-hoc `open_meta` blob
-(e.g. a hand-rolled `open_meta.facet`). Reserve `temper__facet_set` for a node's
-*semantic* properties (a resolved question, a stance marker), not for provenance.
+So carry `model` and `invocation_id` on the act and the trio follows. Pass `managed_meta`
+explicitly only to override a derived value — an explicit value always wins, and a missing
+one is filled, never overwritten.
+
+Provenance lives in `managed_meta` (typed keys) — **never** in an ad-hoc `open_meta` blob
+(e.g. a hand-rolled `open_meta.facet`). Reserve facet-setting for a node's *semantic*
+properties (a resolved question, a stance marker), not for provenance.
 
 Set the same model on the **act** envelope too — `model` alongside `invocation_id` /
 `confidence` / `reasoning`. The act records who authored each edge/facet; the node's
