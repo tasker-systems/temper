@@ -23,6 +23,7 @@ pub mod event;
 pub mod facet_requests;
 pub mod graph;
 pub mod graph_atlas;
+pub mod graph_context;
 pub mod graph_home;
 pub mod graph_territory;
 pub mod home;

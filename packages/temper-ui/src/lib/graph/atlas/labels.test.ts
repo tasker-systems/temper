@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { labelAnchors, truncateLabel, wrapLabel, intensityOf, fieldStyle, labeledRegionIds } from './labels';
+import {
+	labelAnchors,
+	truncateLabel,
+	wrapLabel,
+	intensityOf,
+	fieldStyle,
+	labeledRegionIds,
+	territoryWeight
+} from './labels';
 
 describe('labelAnchors', () => {
 	const nodes = [
@@ -62,5 +70,24 @@ describe('labeledRegionIds', () => {
 		expect(ids.has('b')).toBe(true);
 		expect(ids.has('c')).toBe(true);
 		expect(ids.has('a')).toBe(false);
+	});
+});
+
+describe('territoryWeight', () => {
+	it('uses a region salience verbatim — regions skip the log ramp', () => {
+		expect(territoryWeight({ salience: 0.5, member_count: 99 })).toBe(0.5);
+	});
+
+	it('log1p-compresses a raw member_count', () => {
+		// member counts are heavy-tailed; the raw ratio pinned ordinary goals to the floor.
+		expect(territoryWeight({ salience: null, member_count: 4 })).toBe(Math.log1p(4));
+	});
+
+	it('maps an empty container to 0 so it still ghost-renders', () => {
+		expect(territoryWeight({ salience: null, member_count: 0 })).toBe(0);
+	});
+
+	it('a null-salience region with members takes the log branch (behaviour change in ad324b09)', () => {
+		expect(territoryWeight({ salience: null, member_count: 7 })).toBe(Math.log1p(7));
 	});
 });

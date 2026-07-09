@@ -13,7 +13,7 @@ import {
 	forceSimulation,
 	type SimulationNodeDatum
 } from 'd3-force';
-import type { AtlasEdge, AtlasNode, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+import type { AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome } from '$lib/types/generated/graph_atlas';
 
 export interface ForceNode extends SimulationNodeDatum {
 	id: string;
@@ -41,10 +41,25 @@ export interface ForceGraph {
 
 const TICKS = 300;
 
+export interface ForceOptions {
+	width: number;
+	height: number;
+	/**
+	 * Which home is the SUBJECT of this view: its nodes hold the core, the other home rings
+	 * them. Beat D's region drill distils ideas FROM sources, so cogmap facets are the core
+	 * (the default). Beat E's context view inverts it: the work is the subject.
+	 *
+	 * This is the composition, not the visual language. Mark SHAPE stays keyed on `home`
+	 * (`marks.ts`) so a circle is always a cogmap node and a rounded-square always a context
+	 * resource, in every view.
+	 */
+	coreHome?: NodeHome;
+}
+
 export function forceNeighborhood(
 	subgraph: AtlasSubgraph,
 	seeds: string[],
-	size: { width: number; height: number }
+	size: ForceOptions
 ): ForceGraph {
 	const seedSet = new Set(seeds);
 	const nodeCount = subgraph.nodes.length;
@@ -75,6 +90,8 @@ export function forceNeighborhood(
 	const minDim = Math.min(size.width, size.height);
 	const rInner = minDim * 0.06;
 	const rOuter = minDim * 0.44;
+	// Which home holds the core. Default 'cogmap' preserves Beat D's region-drill layout.
+	const core = size.coreHome ?? 'cogmap';
 
 	const sim = forceSimulation(nodes)
 		.force(
@@ -89,7 +106,7 @@ export function forceNeighborhood(
 		.force('center', forceCenter(size.width / 2, size.height / 2))
 		.force(
 			'radial',
-			forceRadial<ForceNode>((n) => (n.home === 'context' ? rOuter : rInner), size.width / 2, size.height / 2).strength(0.6)
+			forceRadial<ForceNode>((n) => (n.home === core ? rInner : rOuter), size.width / 2, size.height / 2).strength(0.6)
 		)
 		.force('collide', forceCollide<ForceNode>().radius((n) => 12 + Math.min(10, n.degree)))
 		.stop();

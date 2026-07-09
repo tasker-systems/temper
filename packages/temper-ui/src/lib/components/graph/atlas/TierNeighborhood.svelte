@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+	import type { AtlasSubgraph, NodeHome } from '$lib/types/generated/graph_atlas';
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
 	import { labelAnchors } from '$lib/graph/atlas/labels';
 	import { buildEdgeSelectUrl, buildNodeSelectUrl } from '$lib/graph/atlas/nav';
@@ -16,10 +16,16 @@
 		height: number;
 		/** Doc-types to keep at full opacity; empty = no dimming (Task 8, visual-only). */
 		docTypes?: string[];
+		/**
+		 * Which home holds the radial core. Defaults to `'cogmap'` (Beat D's region drill).
+		 * The context view passes `'context'` to invert the composition — mark shapes are
+		 * unchanged, only which home sits at the core.
+		 */
+		coreHome?: NodeHome;
 	}
-	let { subgraph, seedId, width, height, docTypes = [] }: Props = $props();
+	let { subgraph, seedId, width, height, docTypes = [], coreHome = 'cogmap' }: Props = $props();
 
-	const graph = $derived(forceNeighborhood(subgraph, [seedId], { width, height }));
+	const graph = $derived(forceNeighborhood(subgraph, [seedId], { width, height, coreHome }));
 	const anchors = $derived(labelAnchors(graph.nodes, seedId, 5));
 	let hoveredEdge = $state<number | null>(null);
 

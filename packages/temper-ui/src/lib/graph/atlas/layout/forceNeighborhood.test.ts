@@ -9,7 +9,8 @@ const node = (id: string, degree = 1): AtlasNode => ({
 	home: 'cogmap',
 	degree,
 	salience: null,
-	excerpt: null
+	excerpt: null,
+	stage: null
 });
 const edge = (source: string, target: string): AtlasEdge => ({
 	id: `${source}-${target}`,

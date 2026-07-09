@@ -5,7 +5,7 @@
 	import TrailRail from '$lib/components/graph/atlas/TrailRail.svelte';
 	import HomeA11yList from '$lib/components/graph/atlas/HomeA11yList.svelte';
 	import CompositionA11yList from '$lib/components/graph/atlas/CompositionA11yList.svelte';
-	import { selectedElement, type SelectedElement } from '$lib/graph/atlas/nav';
+	import { focusToken, selectedElement, type SelectedElement } from '$lib/graph/atlas/nav';
 	import type { AtlasViewData } from '$lib/graph/atlas/viewData';
 	import { navigating, page } from '$app/stores';
 
@@ -22,8 +22,10 @@
 
 	// M6: keying AtlasCanvas on the scoped view remounts it on re-scope, resetting the camera.
 	// Selection (`?sel`) is deliberately excluded — selecting an edge must not remount the canvas.
+	// The context door contributes its slug so switching between Home / two contexts / a cogmap
+	// (all cogmapId-null at Tier 0) still remounts and resets the camera.
 	const viewKey = $derived(
-		`${data.cogmapId ?? 'home'}|${data.focus.kind}:${data.focus.kind === 'none' ? '' : data.focus.id}`
+		`${data.cogmapId ?? (data.contextSlug ? `ctx:${data.contextSlug}` : 'home')}|${data.focus.kind === 'none' ? 'none:' : focusToken(data.focus)}`
 	);
 	const selection = $derived(selectionOverride ?? selectedElement(data.focus, $page.url));
 	const subgraph = $derived(data.neighborhood ?? null);
@@ -38,8 +40,12 @@
 		(subgraph !== null && subgraph.nodes.length > 0) ||
 			(selection.kind === 'node' && data.resourceRow !== null)
 	);
+	// The focused leaf's title, for the breadcrumb. A node OR a Beat-E container both carry an
+	// `id` that appears as a node in the loaded subgraph (the container is the drill seed), so
+	// both resolve their crumb label the same way. A bucket carries no id — crumbModel labels it
+	// from `(groupKey, value)` directly, so it is excluded here.
 	const seedTitle = $derived(
-		data.focus.kind === 'node' && subgraph
+		(data.focus.kind === 'node' || data.focus.kind === 'container') && subgraph
 			? (subgraph.nodes.find((n) => n.id === (data.focus as { id: string }).id)?.title ?? null)
 			: null
 	);
@@ -56,6 +62,7 @@
 	<div class="top-bar">
 		<AtlasCrumb
 			cogmapName={data.cogmapName}
+			contextSlug={data.contextSlug}
 			focusPath={data.focusPath}
 			crumbTerritory={data.crumbTerritory}
 			{seedTitle}
@@ -77,6 +84,8 @@
 		{#key viewKey}
 			<AtlasCanvas
 				cogmapId={data.cogmapId}
+				contextSlug={data.contextSlug}
+				panorama={data.panorama}
 				tier={data.tier}
 				focus={data.focus}
 				territories={data.territories}

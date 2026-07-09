@@ -3,7 +3,7 @@
 	import { page } from '$app/stores';
 	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
 	import { forceTerritories } from '$lib/graph/atlas/layout/forceTerritories';
-	import { intensityOf, labeledRegionIds } from '$lib/graph/atlas/labels';
+	import { intensityOf, labeledRegionIds, territoryWeight } from '$lib/graph/atlas/labels';
 	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
 	import { bridgeGeometry } from '$lib/graph/atlas/layout/bridges';
 	import {
@@ -31,13 +31,28 @@
 	const terrBox = $derived(hasTerr && hasCogmaps ? { width, height: height * 0.55 } : { width, height });
 	const cogmapBox = $derived(hasTerr && hasCogmaps ? { width, height: height * 0.45 } : { width, height });
 	const cogmapOffsetY = $derived(hasTerr && hasCogmaps ? height * 0.55 : 0);
-	// Force-separated layout + salience field-effect: salience → size + glow/opacity so
-	// the panorama reads as a field; labels gated to the top-K salient regions.
+	// Force-separated layout + field-effect: weight → size + glow/opacity so the panorama
+	// reads as a field; labels gated to the top-K weightiest territories.
+	//
+	// Weight is kind-agnostic: regions carry a normalized `salience`, contexts/cogmaps carry
+	// a raw `member_count`. Gating the field on `kind === 'region'` left every context
+	// territory unlabelled, unglowing, and flat — the panorama only ever worked for regions.
+	//
+	// Counts get a `log1p` ramp before `intensityOf`'s expansive `^1.4`. Member counts are
+	// heavy-tailed (one goal at 108, the median near 3), so feeding the raw ratio to `^1.4`
+	// drives every ordinary goal to the opacity floor and the field reads as dead grey.
+	// `log1p` compresses the head so small territories stay legible; 0 still maps to 0, so
+	// empty containers keep ghost-rendering. Regions are unaffected — `salience` is already
+	// normalized and skips this branch.
 	const packed = $derived(forceTerritories(overview.territories, terrBox));
 	const LABEL_MAX = 10;
-	const regions = $derived(packed.filter((t) => t.kind === 'region'));
-	const maxSalience = $derived(Math.max(0.0001, ...regions.map((t) => t.salience ?? 0)));
-	const labeledIds = $derived(labeledRegionIds(regions, LABEL_MAX));
+	const maxWeight = $derived(Math.max(0.0001, ...packed.map(territoryWeight)));
+	const labeledIds = $derived(
+		labeledRegionIds(
+			packed.map((t) => ({ id: t.id, salience: territoryWeight(t) })),
+			LABEL_MAX
+		)
+	);
 	const coherenceById = $derived(new Map(overview.territories.map((t) => [t.id, t.coherence])));
 	const cogmaps = $derived(packCogmapTerritories(overview.orphan_nodes, cogmapBox));
 	const territoryPos = $derived(new Map(packed.map((t) => [t.id, { x: t.x, y: t.y }])));
@@ -89,7 +104,7 @@
 			selected={unionSel.includes(t.id)}
 			ghost={isEmptyTerritory(t)}
 			showLabel={labeledIds.has(t.id)}
-			intensity={intensityOf(t.salience, maxSalience)}
+			intensity={intensityOf(territoryWeight(t), maxWeight)}
 			salience={t.salience}
 			coherence={coherenceById.get(t.id) ?? null}
 		/>

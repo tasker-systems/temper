@@ -43,8 +43,14 @@ describe('contextHref', () => {
 });
 
 describe('contextGraphHref', () => {
-	it('appends /graph to the context path', () => {
-		expect(contextGraphHref('+acme-team', 'ops')).toBe('/vault/+acme-team/ops/graph');
+	it('points at the Atlas context door', () => {
+		expect(contextGraphHref('@me', 'temper')).toBe('/graph/@me?context=temper');
+	});
+
+	it('keeps the owner sigil but encodes the slug scope', () => {
+		expect(contextGraphHref('+acme-team', 'ops team')).toBe(
+			'/graph/+acme-team?context=ops%20team'
+		);
 	});
 });
 

@@ -1,5 +1,6 @@
 pub mod access_service;
 pub mod cogmap_service;
+pub mod context_graph_service;
 pub mod context_service;
 pub mod edge_service;
 pub mod embed_service;

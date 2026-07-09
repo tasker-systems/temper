@@ -7,16 +7,19 @@
 
 	interface Props {
 		cogmapName: string | null;
+		/** Beat E — the `?context` slug; labels the context crumb segment. */
+		contextSlug: string | null;
 		focusPath: Focus[];
 		crumbTerritory: { id: string; label: string | null } | null;
 		seedTitle: string | null;
 		cogmapId: string | null;
 		scopeFilter: string | null;
 	}
-	let { cogmapName, focusPath, crumbTerritory, seedTitle, cogmapId, scopeFilter }: Props = $props();
+	let { cogmapName, contextSlug, focusPath, crumbTerritory, seedTitle, cogmapId, scopeFilter }: Props =
+		$props();
 
 	const segments = $derived(
-		crumbModel({ cogmapName, focusPath, crumbTerritory, seedTitle, scopeFilter })
+		crumbModel({ cogmapName, contextSlug, focusPath, crumbTerritory, seedTitle, scopeFilter })
 	);
 	const canAscend = $derived(focusPath.length > 0);
 

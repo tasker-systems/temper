@@ -92,7 +92,6 @@ pub fn create_app(state: AppState) -> Router {
             post(handlers::edges::fold),
         )
         .route("/api/facets", post(handlers::facets::set_facet))
-        .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
             "/api/cogmaps/{id}/graph/slice",
             post(handlers::graph::cogmap_neighborhood_slice),
@@ -100,6 +99,14 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/graph/regions/composition",
             get(handlers::graph::region_composition),
+        )
+        .route(
+            "/api/graph/contexts/panorama",
+            get(handlers::graph::context_panorama),
+        )
+        .route(
+            "/api/graph/contexts/composition",
+            get(handlers::graph::context_composition),
         )
         .route("/api/graph/home", get(handlers::graph::atlas_home))
         .route(

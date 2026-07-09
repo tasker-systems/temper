@@ -995,10 +995,9 @@ pub struct Neighbor {
 /// endpoint), with folded edges EXCLUDED (`NOT is_folded`, matching production's gate).
 ///
 /// The production counterpart is a DIRECT symmetric edge read over `public.kb_resource_edges` (same
-/// table + `NOT is_folded` gate + `edge_kind`/`polarity`/`label` projection) — NOT
-/// `graph_service::aggregator_subgraph`, which is subgraph-over-a-node-set (it returns the edges among a
-/// passed node set) and would be circular as a 1-hop neighbor oracle. The parity test writes that
-/// production query directly.
+/// table + `NOT is_folded` gate + `edge_kind`/`polarity`/`label` projection) — NOT a
+/// subgraph-over-a-node-set read (one that returns the edges among a passed node set), which would be
+/// circular as a 1-hop neighbor oracle. The parity test writes that production query directly.
 ///
 /// 1-hop ONLY (the §9 neighbors floor) — there is deliberately NO `depth`/multi-hop traversal param:
 /// the tested floor and the production neighbor read are both 1-hop; multi-hop is a kernel concern

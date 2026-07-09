@@ -1,14 +1,17 @@
-import type { Focus } from './nav';
+import { focusToken, type Focus } from './nav';
 
 export interface CrumbSegment {
 	label: string;
-	kind: 'home' | 'cogmap' | 'territory' | 'node' | 'scope';
-	/** The `?focus=` value this segment navigates to; null for home/scope segments. */
+	kind: 'home' | 'cogmap' | 'context' | 'territory' | 'node' | 'container' | 'bucket' | 'scope';
+	/** The `?focus=` value this segment navigates to; null for home/scope/context segments. */
 	focusPath: string | null;
 }
 
 export interface CrumbInput {
 	cogmapName: string | null;
+	/** Beat E — the `?context` scope slug, labelling the context root segment. Null off the
+	 *  context door. Mutually exclusive with a cogmap in practice (distinct doors). */
+	contextSlug: string | null;
 	focusPath: Focus[];
 	crumbTerritory: { id: string; label: string | null } | null;
 	seedTitle: string | null;
@@ -17,12 +20,14 @@ export interface CrumbInput {
 	scopeFilter: string | null;
 }
 
-/** Focus entries that actually appear in a drill path always carry an id;
- *  `{ kind: 'none' }` never reaches here (guarded below), but the union includes
- *  it so we narrow explicitly to keep this typesafe. */
+/** Focus entries that actually appear in a drill path; `{ kind: 'none' }` never reaches
+ *  here (guarded below), but the union includes it so we narrow explicitly to stay
+ *  typesafe. Note a `bucket` focus carries no `id` — it is addressed by
+ *  `(groupKey, value)` — which is why the token comes from `focusToken`, not from
+ *  interpolating `f.id`. */
 type DrillFocus = Exclude<Focus, { kind: 'none' }>;
 
-const encode = (path: DrillFocus[]): string => path.map((f) => `${f.kind}:${f.id}`).join(',');
+const encode = (path: DrillFocus[]): string => path.map(focusToken).join(',');
 
 /** Derive the ordered breadcrumb segments from URL/loaded state. Pure. */
 export function crumbModel(input: CrumbInput): CrumbSegment[] {
@@ -30,6 +35,8 @@ export function crumbModel(input: CrumbInput): CrumbSegment[] {
 
 	if (input.cogmapName) {
 		segs.push({ label: input.cogmapName, kind: 'cogmap', focusPath: null });
+	} else if (input.contextSlug) {
+		segs.push({ label: input.contextSlug, kind: 'context', focusPath: null });
 	} else if (input.scopeFilter) {
 		segs.push({ label: input.scopeFilter, kind: 'scope', focusPath: null });
 	}
@@ -42,6 +49,12 @@ export function crumbModel(input: CrumbInput): CrumbSegment[] {
 		if (f.kind === 'territory') {
 			const label = input.crumbTerritory?.id === f.id ? input.crumbTerritory.label : null;
 			segs.push({ label: label ?? 'Region', kind: 'territory', focusPath: encode(walked) });
+		} else if (f.kind === 'container') {
+			// A goal container's leaf is its title (resolved from the drill subgraph seed).
+			segs.push({ label: input.seedTitle ?? 'Container', kind: 'container', focusPath: encode(walked) });
+		} else if (f.kind === 'bucket') {
+			// A residual bucket carries no id/title — its label comes from the group value.
+			segs.push({ label: `Unfiled · ${f.value}`, kind: 'bucket', focusPath: encode(walked) });
 		} else {
 			segs.push({ label: input.seedTitle ?? 'Node', kind: 'node', focusPath: encode(walked) });
 		}
