@@ -14,7 +14,7 @@ use temper_workflow::types::managed_meta::{
     MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
 };
 use temper_workflow::types::resource::{
-    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
+    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceDetail, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
 };
 
@@ -56,8 +56,11 @@ impl<'a> ResourceClient<'a> {
             .await
     }
 
-    /// Get a single resource by ID.
-    pub async fn get(&self, id: Uuid) -> Result<ResourceRow> {
+    /// Get a single resource by ID, with both metadata tiers.
+    ///
+    /// Returns `ResourceDetail` (a `ResourceRow` flattened, plus `managed_meta` and
+    /// `open_meta`). `list` still yields lean `ResourceRow`s.
+    pub async fn get(&self, id: Uuid) -> Result<ResourceDetail> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}");
         let req = self.http.get(&path);

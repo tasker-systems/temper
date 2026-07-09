@@ -108,7 +108,8 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
         .resources()
         .get(*params.resource_id.as_uuid())
         .await
-        .map_err(client_err_to_temper)?;
+        .map_err(client_err_to_temper)?
+        .row;
 
     let content = params
         .client

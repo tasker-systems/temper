@@ -38,7 +38,7 @@ use temper_workflow::operations::{
     RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
     StewardDispatchTick, Surface, UpdateResource,
 };
-use temper_workflow::types::resource::ResourceRow;
+use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
@@ -1244,17 +1244,22 @@ impl Backend for DbBackend {
     async fn show_resource(
         &self,
         cmd: ShowResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+    ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
         // The inbound id IS the substrate resource id — synthesis preserves resource ids verbatim, so
         // there is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
         let new_id = uuid::Uuid::from(cmd.resource);
-        // `native_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
-        // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
-        // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
-        // collapse masked real faults as 404.
-        let row =
-            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
-        Ok(CommandOutput::new(row))
+        // `show_detail_select` composes `native_resource_row` (which gates visibility per WS2 and maps
+        // the typed `ReadbackError` via `map_readback_err`: not-visible → NotFound (404, the leak-safe
+        // deny — never 403, no existence-leak oracle), a genuine fault → Api (500)) with the meta
+        // readback, so the full show carries both metadata tiers.
+        let detail = crate::backend::substrate_read::show_detail_select(
+            &self.pool,
+            self.profile_id,
+            ResourceId::from(new_id),
+        )
+        .await
+        .map_err(TemperError::from)?;
+        Ok(CommandOutput::new(detail))
     }
 
     async fn update_resource(

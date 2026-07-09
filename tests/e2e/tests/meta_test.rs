@@ -105,7 +105,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         .expect("resource get after meta update failed");
 
     assert_eq!(
-        fetched.title, "Meta Test Doc",
+        fetched.row.title, "Meta Test Doc",
         "the meta path is Property-only and must not change identity"
     );
 }

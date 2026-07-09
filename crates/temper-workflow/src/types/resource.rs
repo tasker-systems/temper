@@ -67,6 +67,37 @@ impl ResourceRow {
     }
 }
 
+/// The single-resource read projection: a [`ResourceRow`] plus both metadata tiers.
+///
+/// `show` used to return a bare `ResourceRow`, which carries only the flat managed
+/// projections (`stage`/`seq`/`mode`/`effort`) — so the "full" view silently omitted
+/// both `managed_meta` and `open_meta`, and a script reading `open_meta` from it got
+/// `None`. `list` keeps returning `ResourceRow`, so a 200-row listing pays nothing for
+/// the tiers.
+///
+/// The two meta fields carry serde attributes identical to
+/// [`super::managed_meta::ResourceMetaResponse`]'s, so the cheap `--meta-only`
+/// projection is a literal strict subset of this shape.
+///
+/// No `ts_rs::TS` derive: ts-rs cannot codegen a `#[serde(flatten)]` field (see the
+/// `act` field on `ResourceUpdateRequest`, `ts(skip)`-ped for the same reason). The
+/// SvelteKit UI keeps typing `GET /api/resources/{id}` as `ResourceRow` — this shape is
+/// a structural superset of it, so the extra keys are simply ignored there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ResourceDetail {
+    #[serde(flatten)]
+    pub row: ResourceRow,
+    /// Typed managed (`temper-*`) frontmatter. `None` only if the manifest row predates
+    /// meta population.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<ManagedMeta>,
+    /// Open (user-defined) frontmatter — the free-form tier, intentionally untyped.
+    /// `None` only if the manifest row predates meta population.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<serde_json::Value>,
+}
+
 /// Sort field for resource listing.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
@@ -299,6 +330,70 @@ pub struct ContentResponse {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct DeleteResponse {
     pub deleted: bool,
+}
+
+#[cfg(test)]
+mod resource_detail_tests {
+    use super::*;
+
+    fn sample_resource_row() -> ResourceRow {
+        ResourceRow {
+            id: ResourceId::from(Uuid::nil()),
+            kb_context_id: None,
+            origin_uri: String::new(),
+            title: "A Node".to_string(),
+            originator_profile_id: ProfileId::from(Uuid::nil()),
+            owner_profile_id: ProfileId::from(Uuid::nil()),
+            is_active: true,
+            created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            context_name: None,
+            doc_type_name: "concept".to_string(),
+            owner_handle: "someone".to_string(),
+            context_slug: None,
+            context_owner_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            stage: None,
+            seq: None,
+            mode: None,
+            effort: None,
+            body_hash: None,
+        }
+    }
+
+    #[test]
+    fn resource_detail_flattens_row_and_carries_both_meta_tiers() {
+        let detail = ResourceDetail {
+            row: sample_resource_row(),
+            managed_meta: Some(ManagedMeta {
+                mode: Some("build".to_string()),
+                ..ManagedMeta::default()
+            }),
+            open_meta: Some(serde_json::json!({ "custom": "value" })),
+        };
+
+        let v = serde_json::to_value(&detail).expect("serialize");
+
+        // ResourceRow's fields are flattened to the top level, not nested under `row`.
+        assert!(v.get("row").is_none(), "row must be flattened: {v}");
+        assert!(v.get("id").is_some(), "flattened id: {v}");
+        assert_eq!(v["title"], "A Node");
+        assert_eq!(v["managed_meta"]["temper-mode"], "build");
+        assert_eq!(v["open_meta"]["custom"], "value");
+    }
+
+    #[test]
+    fn resource_detail_omits_absent_meta_tiers() {
+        let detail = ResourceDetail {
+            row: sample_resource_row(),
+            managed_meta: None,
+            open_meta: None,
+        };
+        let v = serde_json::to_value(&detail).expect("serialize");
+        assert!(v.get("managed_meta").is_none(), "{v}");
+        assert!(v.get("open_meta").is_none(), "{v}");
+    }
 }
 
 #[cfg(test)]

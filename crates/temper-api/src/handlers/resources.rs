@@ -22,7 +22,7 @@ use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
-use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
+use temper_workflow::types::resource::{ContentResponse, DeleteResponse, ResourceDetail};
 
 /// Combined response for `GET /api/resources`.
 ///
@@ -86,7 +86,7 @@ pub async fn list(
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Resource metadata", body = ResourceRow),
+        (status = 200, description = "Resource plus both metadata tiers", body = ResourceDetail),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
     )
@@ -95,7 +95,7 @@ pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
-) -> ApiResult<Json<ResourceRow>> {
+) -> ApiResult<Json<ResourceDetail>> {
     use temper_core::types::ids::ResourceId;
     use temper_workflow::operations::{ShowResource, Surface};
 

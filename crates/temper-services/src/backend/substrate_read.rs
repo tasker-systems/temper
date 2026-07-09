@@ -36,7 +36,7 @@ use temper_workflow::types::managed_meta::{
     ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
 };
 use temper_workflow::types::resource::{
-    ContentResponse, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
+    ContentResponse, ResourceDetail, ResourceFacets, ResourceRow, ResourceSortField, SortOrder,
 };
 
 fn api_err(e: impl std::fmt::Display) -> ApiError {
@@ -225,6 +225,33 @@ pub async fn show_select(
     native_resource_row(pool, profile_id, id)
         .await
         .map_err(ApiError::from)
+}
+
+/// `show_detail` — one resource with both metadata tiers.
+///
+/// Composes the two existing readbacks rather than introducing a joined query: that keeps
+/// this free of a new `sqlx::query!` macro (and therefore of the `.sqlx` cache regeneration
+/// ritual). Two round-trips for a single resource is not an N+1.
+///
+/// Visibility is gated by `native_resource_row` (WS2); `get_meta_select` re-gates through
+/// `readback::meta`, so an unreadable resource 404s before either tier is assembled.
+///
+/// This is the composition `temper-mcp`'s `get_resource` performed inline.
+pub async fn show_detail_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+) -> ApiResult<ResourceDetail> {
+    let row = native_resource_row(pool, profile_id, id)
+        .await
+        .map_err(ApiError::from)?;
+    let meta = get_meta_select(pool, profile_id, id).await?;
+
+    Ok(ResourceDetail {
+        row,
+        managed_meta: meta.managed_meta,
+        open_meta: meta.open_meta,
+    })
 }
 
 /// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`

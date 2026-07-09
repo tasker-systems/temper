@@ -12,8 +12,8 @@ use temper_core::types::context::{
 use temper_services::error::{ErrorBody, ErrorDetail};
 use temper_workflow::types::managed_meta::ResourceMetaListResponse;
 use temper_workflow::types::resource::{
-    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets, ResourceListResponse,
-    ResourceRow, ResourceUpdateRequest,
+    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceDetail, ResourceFacets,
+    ResourceListResponse, ResourceRow, ResourceUpdateRequest,
 };
 
 #[derive(OpenApi)]
@@ -76,6 +76,7 @@ use temper_workflow::types::resource::{
     components(schemas(
         HealthResponse,
         ResourceRow,
+        ResourceDetail,
         ResourceListResponse,
         ResourceMetaListResponse,
         ListResourcesResponse,

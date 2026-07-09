@@ -65,7 +65,7 @@ mod embed_impl {
         StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
-    use temper_workflow::types::resource::ResourceRow;
+    use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
     use super::super::translators::{
         cmd_to_ingest_payload, cmd_to_resource_update_request, wire_resource_to_resource_row,
@@ -145,7 +145,7 @@ mod embed_impl {
         async fn show_resource(
             &self,
             _cmd: ShowResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
             Err(TemperError::Project(
                 "CloudBackend::show_resource not implemented — reads stay surface-direct"
                     .to_string(),
@@ -472,7 +472,7 @@ mod non_embed_impl {
         RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
         StewardDispatchTick, UpdateResource,
     };
-    use temper_workflow::types::resource::ResourceRow;
+    use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -513,7 +513,7 @@ mod non_embed_impl {
         async fn show_resource(
             &self,
             _cmd: ShowResource,
-        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        ) -> Result<CommandOutput<ResourceDetail>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

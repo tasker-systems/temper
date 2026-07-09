@@ -50,7 +50,8 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
         .resources()
         .get(created.id.into())
         .await
-        .expect("resource get failed");
+        .expect("resource get failed")
+        .row;
 
     assert_eq!(fetched.id, created.id);
     assert_eq!(fetched.title, created.title);
@@ -111,7 +112,8 @@ async fn resource_update(pool: sqlx::PgPool) {
         .resources()
         .get(created.id.into())
         .await
-        .expect("resource get after update failed");
+        .expect("resource get after update failed")
+        .row;
 
     assert_eq!(fetched.title, "Updated Title");
 }
@@ -213,13 +215,15 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
         .resources()
         .get(created.id.into())
         .await
-        .expect("first get failed");
+        .expect("first get failed")
+        .row;
     let second = app
         .client
         .resources()
         .get(created.id.into())
         .await
-        .expect("second get failed");
+        .expect("second get failed")
+        .row;
 
     assert_eq!(
         first.created, second.created,
@@ -247,7 +251,8 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
         .resources()
         .get(created.id.into())
         .await
-        .expect("get after update failed");
+        .expect("get after update failed")
+        .row;
     assert_eq!(
         after.created, first.created,
         "created must not change on update"

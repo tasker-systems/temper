@@ -842,6 +842,7 @@ pub fn delete(
 
     // Context-free read: fetch the row by id to learn its context (for the
     // write backend), doctype + slug (for projection removal + result shape).
+    // Only the row is needed here — `get` returns both meta tiers, which delete ignores.
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
@@ -850,7 +851,8 @@ pub fn delete(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })?
+    .row;
 
     let cmd = DeleteResource {
         resource: id,
@@ -945,7 +947,9 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     let config_clone = config.clone();
     let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            let row = client
+            // `get` returns a `ResourceDetail`: the row flattened, plus both meta tiers.
+            // The tiers are what make the full `show` a superset of `--meta-only`.
+            let detail = client
                 .resources()
                 .get(uuid::Uuid::from(id))
                 .await
@@ -956,16 +960,17 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-            // Per-resource projection refresh — best-effort.
+            // Per-resource projection refresh — best-effort. The projection writer takes the
+            // row; the meta tiers reach the file via `resp`'s managed/open fields.
             if let Err(e) = crate::projection::write_resource_file_from_parts(
                 &config_clone.vault_root,
-                &row,
+                &detail.row,
                 &resp,
             ) {
                 crate::output::warning(format!("could not refresh projection file: {e}"));
             }
 
-            let metadata = serde_json::to_value(&row)
+            let metadata = serde_json::to_value(&detail)
                 .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
             Ok((metadata, resp.markdown))
         })
@@ -1318,6 +1323,7 @@ fn resolve_update_target(
     temper_workflow::types::resource::ResourceRow,
 )> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
+    // Update needs only the row (doctype validation); `get` also carries both meta tiers.
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
@@ -1326,7 +1332,8 @@ fn resolve_update_target(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })?
+    .row;
     let _ = temper_workflow::frontmatter::DocType::from_str(&row.doc_type_name)?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
