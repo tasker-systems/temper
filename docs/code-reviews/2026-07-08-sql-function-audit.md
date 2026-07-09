@@ -176,6 +176,8 @@ One confirmed finding in 129 functions: graph_subgraph_nodes' ungated edge_count
 
 **Verification note:** Confirmed dead: no reference in crates/packages/tests, no SQL-to-SQL caller in functions-def.sql; only occurrences are its own CREATE (this migration) plus design docs (specs/plans). Its helper team_child_zones is likewise uncalled outside its own migration+docs. Real dead code in the access core.
 
+**Resolution (2026-07-08, chunk 9 — deferred to Atlas Beat E):** Deadness re-confirmed (zero Rust/TS/test callers; `team_descendants`' only SQL callers are the other two dead functions). The trio was born in the Atlas R1 migration (`20260703000002_team_graph_scope_reads.sql`) for descendant-zone enumeration, but the shipped Atlas Home evolved past that design (`graph_home_contexts`/`graph_home_cogmaps`; team scoping flows through `resources_in_team_scope`, which is alive with seven atlas SQL callers). The Beat 2a spec still names a `TeamZoneMark`, unimplemented in temper-ui — so a future beat may yet consume zone enumeration. Decision: retain the trio for now; the Graph Atlas goal carries a Beat E review item to either wire them (fixing `team_descendants`' missing is_active gating first — revive-as-is is prohibited) or drop all three.
+
 ### `vis_team` — SQLA-2 (low) · `team-visibility-definition-drift`
 
 **Unit:** access-rbac · **File:** `migrations/20260701000003_access_grants_store_migration.sql` (span 141-153) · **Effort:** M
@@ -185,6 +187,8 @@ One confirmed finding in 129 functions: graph_subgraph_nodes' ungated edge_count
 **Suggested fix:** If cogmaps should inherit container-granted team resources, add the D3a container-grant branch to vis_team to match resources_in_team_scope; otherwise document the deliberate narrowing.
 
 **Verification note:** Confirmed: vis_team has only two ancestor-expanded branches (team-anchored resource read-grants; resources homed in contexts SHARED to the team). It omits the D3a explicit container read-grant branch that BOTH resources_visible_to and resources_in_team_scope honor for teams (and also omits their cogmap-join and team-owned-context branches). So a resource made team-readable via a container read-grant is invisible to a cogmap bound to that team. Genuine definitional drift, but it UNDER-shows (no leak) and the shared-reach narrowing may be intentional — verify intent before changing. Low.
+
+**Resolution (2026-07-08, chunk 7 — deliberate, documented, no code change):** The narrowing is the locked Q-B leak-safety decision of the generalized access-capability arc, not drift. vis_team feeds `resources_accessible_to_cogmap` — the Cogmap principal axis, which is deliberately INTERSECTION/least-privilege (vs the Profile axis's UNION-up). Q-B (design doc `docs/superpowers/specs/2026-06-30-generalized-access-capability-model-design.md` §3.7/§4 step 4) states that explicit grants are Profile-axis only: profile-principal grants and context/cogmap **subjects** (the D3a container grants) never enter the producer intersection. The D5 migration (`20260701000003_access_grants_store_migration.sql`, comment at the vis_team re-emit) marks this filter load-bearing. The comparison baseline was the wrong axis: resources_in_team_scope is a Profile-axis read (atlas team-scope filtering), so it SHOULD honor D3a; vis_team should not. No alignment migration will be shipped.
 
 ### `team_descendants` — SQLA-3 (low) · `soft-delete-team-asymmetry`
 
@@ -264,6 +268,8 @@ endpoint_readable_by_profile runs the full resources_visible_to subselect per su
 
 vis_team (the cogmap axis's notion of team visibility) omits the D3a explicit container read-grant branch that both resources_visible_to and resources_in_team_scope honor, so a resource made team-readable via container grant is invisible to a cogmap bound to that team. Under-show only — no breach — and the narrowing may be intentional, so this PR starts with an intent decision against the D1-D5 access-arc design, then either adds the container-grant branch to match resources_in_team_scope or documents the deliberate narrowing in the function comment and access docs.
 
+**Disposition:** Resolved decision-first as DELIBERATE (locked Q-B leak-safety: explicit container grants are Profile-axis only and never enter the cogmap producer intersection). Documented in the finding's resolution note above; no migration. See D5 migration comments + design doc §3.7.
+
 **PR scope:** If aligning: one additive CREATE OR REPLACE migration adding the container-grant branch, plus a test-db case (container read-grant to team → resource visible via team-bound cogmap scope). If documenting: comment-bearing CREATE OR REPLACE (or docs-only if no SQL change). Either way single-function scope; check the closed generalized-access-capability arc notes for original intent before choosing. Sqlx ritual if replaced.
 
 ### 8. Graph hardening pair: clamp graph_traverse depth + fix orphan-nodes degree predicate
@@ -281,6 +287,8 @@ Two low-severity consistency-with-siblings fixes in graph-atlas, bundled as one 
 team_viewable_by and helper team_child_zones have zero callers in crates/packages/tests or SQL — confirmed dead — and team_viewable_by embeds team_descendants' missing is_active gating, so reviving it as-is would ship a soft-delete leak (deleted sub-team members conferring view/enter on the parent). Per the no-premature-backward-compat convention, DROP all three in one migration; if a team-graph read surface is genuinely planned, instead fix team_descendants to mirror team_ancestors' is_active gates (root + every hop) and wire the surface — but decide, don't leave armed dead code in the access core.
 
 **PR scope:** One additive migration with DROP FUNCTION IF EXISTS for the trio (drop is additive-safe here: zero callers verified; re-grep crates/, packages/, tests/, and functions-def.sql for references immediately before shipping). If the wire-in path is chosen instead, that becomes a feature PR with the is_active fix included — do not ship the fix without a caller. No .sqlx impact for the drop path.
+
+**Disposition:** Deferred — drop-or-wire moved to the Graph Atlas goal as a Beat E review item (the trio originated in Atlas R1 and a future zone-rendering beat may consume it; see the team_viewable_by resolution note above). No migration this chunk; the is_active caveat travels with the review item.
 
 ## Clean functions by unit
 
