@@ -108,6 +108,16 @@ async fn the_whole_authoring_pass_runs_through_the_cli_alone(pool: sqlx::PgPool)
     .await;
     let a_id = id_of(&node_a);
 
+    // `create` carries the decorated `ref` too — it was once the only resource-returning
+    // command whose output had none, so an agent had to round-trip to address what it made.
+    let a_ref = node_a["ref"]
+        .as_str()
+        .unwrap_or_else(|| panic!("create response carries a `ref`: {node_a}"));
+    assert!(
+        a_ref.ends_with(&a_id),
+        "ref is the decorated `sluggify(title)-<uuid>` form: {node_a}"
+    );
+
     // 3. Create a second node that CITES the first, and let `--sources-as-edges` assert the
     //    `derived_from` edge for us — the boilerplate the issue complained about.
     //
