@@ -1447,7 +1447,11 @@ The load-bearing assertion: **a segmented, server-chunked ingest of document D p
 **Interfaces:**
 - Consumes: everything above, through the real Axum server + Postgres harness in `tests/e2e/tests/common/`
 
-**Fixture warning:** the corpus must use **short sections**. A single heading whose section is long enough to split across chunks triggers the known body-readback heading-duplication bug, and the equivalence assertion will fail for a reason unrelated to this work. Keep every section under one chunk.
+**Fixture constraint, precisely scoped.** `reconstruct_body` (`crates/temper-substrate/src/content.rs:328`) re-emits a heading line for every chunk with `heading_depth > 0`, so a section split across chunks gets its heading repeated. This is a known, separately-tracked bug whose correct fix needs new persisted chunk metadata (a section-start marker) and therefore a migration — out of scope here.
+
+It does **not** affect the equivalence assertion: a segmented ingest and a one-shot create of the same document produce identical chunk boundaries by design, so both reconstruct with identical duplication and still compare equal. That test may use any fixture.
+
+It **does** affect `an_interrupted_segmented_ingest_resumes_from_the_server_alone`, whose final line compares reconstructed body text against the **original source** (`corpus().concat()`). Keep every section in the corpus short enough to fit one chunk, so no heading is repeated. If that assertion fails on a duplicated heading, the fixture grew a long section — the chunker is not at fault.
 
 - [ ] **Step 1: Write the failing test**
 
