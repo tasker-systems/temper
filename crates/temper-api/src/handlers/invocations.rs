@@ -60,6 +60,7 @@ pub async fn open(
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.open_invocation(cmd).await.map_err(ApiError::from)?;
     Ok(Json(InvocationAck {
+        id: out.value,
         invocation_id: out.value,
     }))
 }

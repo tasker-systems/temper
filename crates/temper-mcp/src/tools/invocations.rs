@@ -82,6 +82,7 @@ pub async fn invocation_open(
         .map_err(|e| map_err(e, "invocation_open"))?;
 
     let ack = InvocationAck {
+        id: out.value,
         invocation_id: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(

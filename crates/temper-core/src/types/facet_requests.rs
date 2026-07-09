@@ -35,9 +35,12 @@ pub struct FacetSetRequest {
 }
 
 /// Acknowledgement returned by the facet write endpoint.
+///
+/// `id` duplicates `property_id` — see `InvocationAck::id`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct FacetAck {
+    pub id: Uuid,
     pub property_id: Uuid,
 }
 
@@ -103,10 +106,23 @@ mod tests {
     #[test]
     fn facet_ack_round_trips() {
         let ack = FacetAck {
+            id: Uuid::nil(),
             property_id: Uuid::nil(),
         };
         let v = serde_json::to_value(&ack).unwrap();
         let back: FacetAck = serde_json::from_value(v).unwrap();
         assert_eq!(back.property_id, ack.property_id);
+    }
+
+    #[test]
+    fn facet_ack_carries_both_id_and_property_id() {
+        let pid = uuid::Uuid::nil();
+        let ack = FacetAck {
+            id: pid,
+            property_id: pid,
+        };
+        let v = serde_json::to_value(&ack).expect("serialize");
+        assert_eq!(v["id"], v["property_id"], "id must alias property_id");
+        assert!(v.get("id").is_some(), "generic `id` key present: {v}");
     }
 }
