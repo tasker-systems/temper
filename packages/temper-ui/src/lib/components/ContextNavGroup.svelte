@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { contextHref, contextGraphHref } from '$lib/vault-url';
+	import {
+		contextHref,
+		contextGraphHref,
+		isContextLocation,
+		isContextGraphLocation
+	} from '$lib/vault-url';
 	import type { ContextRowWithCounts } from '$lib/types';
 
 	interface Props {
@@ -11,11 +16,11 @@
 	let { label, contexts }: Props = $props();
 
 	function isActive(ctx: ContextRowWithCounts): boolean {
-		return $page.params.owner === ctx.owner_ref && $page.params.context === ctx.slug;
+		return isContextLocation($page.params, $page.url, ctx.owner_ref, ctx.slug);
 	}
 
 	function isGraphActive(ctx: ContextRowWithCounts): boolean {
-		return isActive(ctx) && $page.url.pathname.endsWith('/graph');
+		return isContextGraphLocation($page.params, $page.url, ctx.owner_ref, ctx.slug);
 	}
 </script>
 
