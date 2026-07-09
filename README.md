@@ -104,12 +104,6 @@ temper auth login
 # Create a context for your project on the server
 temper context create myapp
 
-# Subscribe locally so `temper pull` materializes it
-temper context subscribe myapp
-
-# Materialize a local projection of the context
-temper pull @me/myapp
-
 # Add a document — temper extracts markdown and ingests it via the cloud pipeline
 temper resource create --from ~/projects/myapp/docs/design.md --context @me/myapp
 
@@ -123,18 +117,17 @@ temper skill install
 temper resource create --type session --context @me/myapp --title "Implemented auth flow, chose JWT rotation"
 ```
 
-> **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable: `--context myapp` and `temper pull myapp` are both rejected. The two exceptions are `temper context create` and `temper context subscribe`, which take a plain name because they are naming a context rather than resolving one.
+> **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable, so `--context myapp` is rejected. The one exception is `temper context create`, which takes a plain name because it is naming a context rather than resolving one.
 >
 > A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every row printed by `list`, `show`, and `search` carries a `ref` field: copy it, paste it.
 
 ## The Vault
 
-The vault is a directory of markdown files with YAML frontmatter — a **read-only projection** of cloud state, materialized on demand by `temper pull`. Writes route through the API, never through the files. Deleting a projected file is a local cache miss, not a deletion; `temper resource delete <ref>` is the real thing.
+Everything resolves to markdown. A resource *is* a markdown body with YAML frontmatter, and that is the form you read it in — through `temper resource show`, the MCP tools, or the web UI. The cloud is the source of truth, and every write routes through the API.
 
-Markdown-on-disk is deliberate:
+Markdown is deliberate:
 
-- **Human-readable.** Browse the projection in any editor, in Obsidian, or on GitHub. No proprietary formats.
-- **Inspectable.** Diffs are readable, so you can see what a pull changed.
+- **Human-readable.** No proprietary formats. A resource reads the same in a terminal, in an editor, and in Obsidian.
 - **AI-native.** Language models understand markdown and YAML frontmatter natively. No parsing overhead.
 - **Portable.** The knowledge base is the unit of value, not the tool.
 
@@ -146,11 +139,10 @@ Every command accepts the global flags `--format json|toon`, `--color auto|alway
 
 | Command | Description |
 |---------|-------------|
-| `temper init` | Initialize config and a local projection directory |
-| `temper check` | Check projection integrity and tool health |
+| `temper init` | Initialize your config and default context |
+| `temper check` | Check cloud configuration and tool health |
 | `temper status` | Overview of your contexts and recent work |
 | `temper warmup [--context <ctx-ref>]` | Context primer for new sessions |
-| `temper pull <ctx-ref>` | Materialize a context's projection from the cloud |
 
 ### Search
 
@@ -215,8 +207,6 @@ Every authored act carries the envelope flags `--invocation`, `--confidence`, `-
 | Command | Description |
 |---------|-------------|
 | `temper context create <n>` | Create a context on the server |
-| `temper context subscribe <n>` | Subscribe locally so `temper pull` materializes it |
-| `temper context unsubscribe <n>` | Unsubscribe locally |
 | `temper context list` | List contexts visible to you on the server |
 | `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (admin-only; `@me` shorthand not accepted here) |
 | `temper skill generate` | Preview generated Claude Code skill |
@@ -232,7 +222,6 @@ Every authored act carries the envelope flags `--invocation`, `--confidence`, `-
 | `temper auth request-access` | Request access on an invite-only instance |
 | `temper invitations` | List pending team invitations addressed to you |
 | `temper team join <token>` | Accept a team invitation |
-| `temper pull <ctx-ref>` | Materialize a local projection of a context |
 | `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
 
 `temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? `temper init` takes `--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience`, and `--idp` — see [docs/guides/self-hosting.md](docs/guides/self-hosting.md).
@@ -274,11 +263,11 @@ This runs `temper warmup` on every new session, injecting active tasks, recent s
 
 ## Temper Cloud
 
-The cloud is the source of truth. Resources are created and updated via the API; the local vault is a projection cache materialized on demand via `temper pull <context>`. All content is stored as markdown with YAML frontmatter and remains human-readable — browse it in any editor, Obsidian, or on GitHub.
+The cloud is the source of truth. Resources are created and updated via the API. All content is stored as markdown with YAML frontmatter and remains human-readable — read it from the CLI, an agent over MCP, or the web UI.
 
 What cloud adds:
 
-- **Cross-machine access** — pull any context to any device with `temper pull`
+- **Cross-machine access** — the same knowledge base from any device, no sync to manage
 - **Semantic search** powered by pgvector embeddings
 - **MCP server** for direct agent integration
 - **Team contexts** with granular access control
