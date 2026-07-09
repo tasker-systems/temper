@@ -1417,6 +1417,14 @@ git commit -m "feat(atlas): residual tray — a doorway, not a landmark"
 > sibling of the `<svg>` in `AtlasCanvas.svelte` (which this task already modifies), remove the
 > `foreignObject` wrapper from `TierPanorama.svelte`, and pass `residual` down from the loader.
 
+> **Carried over from Task 5 — a bucket drill must echo the panorama's walk depth.**
+> `/api/graph/contexts/composition` takes `container_depth` (default 2) *separately* from the
+> drill's own `depth` (default 1). It bounds the container walk that decides which resources
+> count as already-contained, and therefore which land in the tray. `contextCompositionPath`
+> must forward whatever `depth` the panorama read used as `container_depth` on a **bucket**
+> target; a `container` target ignores it. Drop it and a bucket drill silently resolves a
+> different set than the tray displayed (see `residual_counts_and_members_agree_at_every_depth`).
+
 **Interfaces:**
 - Consumes: Task 5's endpoints, Task 6's nav.
 - Produces: `contextPanoramaPath(ref, groupBy?)`, `contextCompositionPath(ref, target, depth?)`, `readContextPanorama(token, ref, groupBy?)`, `readContextComposition(token, ref, target, depth?)`. `AtlasViewData` gains `contextSlug: string | null` and `panorama: ContextPanorama | null`.
