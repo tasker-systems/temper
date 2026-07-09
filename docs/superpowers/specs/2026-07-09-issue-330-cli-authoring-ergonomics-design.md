@@ -247,20 +247,30 @@ It emits the existing `MaterializeAck` — an acknowledgment of counts, not a cr
 `id` convention does not apply.
 
 **`--sources-as-edges` on `resource create`.** After the create succeeds, the CLI asserts one
-`derived_from` edge from the new resource to each **resource-valued** source, skipping remote
-URLs (which have no target). `EdgeType::DerivedFrom` already exists
-(`temper-workflow/src/types/graph.rs:37`, mapping to `(EdgeKind::LeadsTo, Polarity::Inverse,
-"derived_from")`).
+`derived_from` edge from the new resource to each **resource-valued** source.
+`EdgeType::DerivedFrom` already exists (`temper-workflow/src/types/graph.rs:37`, mapping to
+`(EdgeKind::LeadsTo, Polarity::Inverse, "derived_from")`).
+
+`ProvenanceSource` has **three** variants — `Event(Uuid)`, `Resource(Uuid)`, `Remote(String)`
+(`temper-core/src/types/provenance.rs:35`). Only `Resource` has a node to point an edge at;
+`Remote` (an external URL) and `Event` (a `kb_events` id) are recorded as block provenance and
+silently skipped, since citing a URL alongside two resources is normal.
 
 This is **not atomic.** The new resource's id is the edge source, so the asserts necessarily
 follow the create. If the third of five edges fails, the resource exists with two edges. That
-is accepted rather than pushed server-side, for two reasons: `relationship_assert` is
-idempotent, so re-running the same command converges rather than duplicating; and a
-server-side flag would make `CreateResource` mutate graph shape as a side effect of a create,
-exactly the hidden coupling the command layer exists to prevent.
+is accepted rather than pushed server-side because a server-side flag would make
+`CreateResource` mutate graph shape as a side effect of a create — exactly the hidden coupling
+the command layer exists to prevent.
 
-The create response gains an `edges_asserted` array so the outcome is visible. A partial
-failure errors with the created resource's ref named, so the author can resume.
+A partial failure **warns and exits zero**; it does not error. `resource create` is *not*
+idempotent (content dedup was retired in #219), so a nonzero exit would invite the author to
+re-run the create and produce a **duplicate node**. `relationship_assert` *is* idempotent
+(`canonical_functions.sql:813-816`), so the cheap, safe retry is `edge assert` — never the
+create. This follows the existing best-effort post-create tail, `link_session_to_task`
+(`resource.rs:390-399`).
+
+The create response gains `edges_asserted` and `edges_failed` arrays so a partial outcome is
+machine-visible rather than silent.
 
 **Derived `disposition` on `invocation show`.** `InvocationView` gains
 `disposition: Option<Disposition>`, computed where `InvocationShowRow`
