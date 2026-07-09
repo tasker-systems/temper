@@ -57,6 +57,18 @@ export function fieldStyle(intensity: number, ghost: boolean) {
 	};
 }
 
+/**
+ * Kind-agnostic Tier-0 territory weight: regions carry a normalized `salience` (used
+ * verbatim), while contexts/cogmaps carry a raw `member_count` fed through a `log1p`
+ * ramp. Member counts are heavy-tailed (one goal at 108, the median near 3), so the raw
+ * ratio drives every ordinary goal to the opacity floor; `log1p` compresses the head so
+ * small territories stay legible. 0 still maps to 0, so empty containers ghost-render.
+ * A null-salience territory with members takes the log branch (the `ad324b09` change).
+ */
+export function territoryWeight(t: { salience: number | null; member_count: number }): number {
+	return t.salience ?? Math.log1p(Math.max(0, t.member_count));
+}
+
 /** The top-K regions by salience — the ones that draw an in-panorama label. */
 export function labeledRegionIds(
 	regions: { id: string; salience: number | null }[],

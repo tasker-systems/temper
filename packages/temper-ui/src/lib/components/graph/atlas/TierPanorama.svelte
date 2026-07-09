@@ -2,8 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import type { TerritoryOverview } from '$lib/types/generated/graph_territory';
+	import type { ResidualGroups } from '$lib/types/generated/graph_context';
 	import { forceTerritories } from '$lib/graph/atlas/layout/forceTerritories';
-	import { intensityOf, labeledRegionIds } from '$lib/graph/atlas/labels';
+	import { intensityOf, labeledRegionIds, territoryWeight } from '$lib/graph/atlas/labels';
 	import { packCogmapTerritories } from '$lib/graph/atlas/layout/cogmapTerritories';
 	import { bridgeGeometry } from '$lib/graph/atlas/layout/bridges';
 	import {
@@ -16,6 +17,7 @@
 	import TerritoryCircle from './marks/TerritoryCircle.svelte';
 	import OrphanNodeMark from './marks/OrphanNodeMark.svelte';
 	import BridgeRibbon from './marks/BridgeRibbon.svelte';
+	import ResidualTray from './ResidualTray.svelte';
 
 	interface Props {
 		overview: TerritoryOverview;
@@ -23,8 +25,16 @@
 		height: number;
 		/** Doc-types to keep at full opacity; empty = no dimming (Task 8, visual-only). */
 		docTypes?: string[];
+		/**
+		 * Beat E context door: the residue that reaches no container, rendered as a tray
+		 * doorway. Absent for region/cogmap panoramas, so the tray never renders there.
+		 */
+		residual?: ResidualGroups | null;
 	}
-	let { overview, width, height, docTypes = [] }: Props = $props();
+	let { overview, width, height, docTypes = [], residual = null }: Props = $props();
+
+	/** Height reserved along the bottom for the residual-tray doorway. */
+	const TRAY_H = 84;
 
 	const hasTerr = $derived(overview.territories.length > 0);
 	const hasCogmaps = $derived(overview.orphan_nodes.length > 0);
@@ -46,8 +56,6 @@
 	// normalized and skips this branch.
 	const packed = $derived(forceTerritories(overview.territories, terrBox));
 	const LABEL_MAX = 10;
-	const territoryWeight = (t: { salience: number | null; member_count: number }) =>
-		t.salience ?? Math.log1p(Math.max(0, t.member_count));
 	const maxWeight = $derived(Math.max(0.0001, ...packed.map(territoryWeight)));
 	const labeledIds = $derived(
 		labeledRegionIds(
@@ -166,5 +174,19 @@
 				Explore {unionSel.length} {unionSel.length === 1 ? 'region' : 'regions'} →
 			</text>
 		</g>
+	{/if}
+
+	<!--
+		The residual tray is page chrome — an HTML doorway, not a field landmark. It is
+		mounted via a foreignObject here because TierPanorama is instantiated inside
+		AtlasCanvas's camera-transformed <g>, so it is the only render hook available in
+		this task's scope. See the component comment and the Task 8 report: the tray
+		presently pans/scales with the d3 camera; lifting it to a true HTML sibling of the
+		<svg> (so it stays fixed) is a one-line move in AtlasCanvas, out of Task 8's files.
+	-->
+	{#if residual && residual.buckets.length > 0}
+		<foreignObject x="0" y={height - TRAY_H} width={width} height={TRAY_H}>
+			<ResidualTray buckets={residual.buckets} groupKey={residual.group_key} {width} />
+		</foreignObject>
 	{/if}
 </g>
