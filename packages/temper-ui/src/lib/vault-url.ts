@@ -24,6 +24,39 @@ export function contextGraphHref(ownerRef: string, slug: string): string {
 	return `/graph/${ownerRef}?context=${encodeURIComponent(slug)}`;
 }
 
+/** SvelteKit's `page.params` for the routes that can address a context. */
+export interface ContextLocationParams {
+	owner?: string;
+	context?: string;
+}
+
+/**
+ * Inverse of the two builders above: does `url` address `ownerRef`'s `slug`
+ * context? `contextHref` carries the context as the `[context]` path segment;
+ * `contextGraphHref` carries it as the `?context=` scope. Callers pass
+ * `page.params` alongside `page.url` so the sigil'd `[owner]` segment is matched
+ * by the router rather than re-parsed here.
+ */
+export function isContextLocation(
+	params: ContextLocationParams,
+	url: URL,
+	ownerRef: string,
+	slug: string
+): boolean {
+	if (params.owner !== ownerRef) return false;
+	return (params.context ?? url.searchParams.get('context')) === slug;
+}
+
+/** True only on the Atlas door for `ownerRef`'s `slug` context. */
+export function isContextGraphLocation(
+	params: ContextLocationParams,
+	url: URL,
+	ownerRef: string,
+	slug: string
+): boolean {
+	return isContextLocation(params, url, ownerRef, slug) && url.pathname.startsWith('/graph/');
+}
+
 /**
  * Full-resource path for a context-homed resource. Returns `null` for a
  * cogmap-homed resource (its `context_*` fields are null) so callers can gate

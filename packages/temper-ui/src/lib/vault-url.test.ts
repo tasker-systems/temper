@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { contextHref, contextGraphHref, resourceHref, searchHref } from './vault-url';
+import {
+	contextHref,
+	contextGraphHref,
+	isContextGraphLocation,
+	isContextLocation,
+	resourceHref,
+	searchHref
+} from './vault-url';
 import type { ResourceRow } from './types/generated/resource';
 
 const ID = '019f420c-cf01-7bc1-87c9-09684b0fa69e';
@@ -83,5 +90,82 @@ describe('resourceHref', () => {
 describe('searchHref', () => {
 	it('encodes the query', () => {
 		expect(searchHref('auth flow')).toBe('/vault/search?q=auth%20flow');
+	});
+});
+
+const at = (href: string) => new URL(href, 'https://temperkb.io');
+
+describe('isContextLocation', () => {
+	it('matches the vault route, where the context is a path param', () => {
+		expect(
+			isContextLocation(
+				{ owner: '@me', context: 'temper' },
+				at('/vault/@me/temper'),
+				'@me',
+				'temper'
+			)
+		).toBe(true);
+	});
+
+	it('matches the Atlas door, where the context is the ?context= scope', () => {
+		expect(isContextLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper')).toBe(
+			true
+		);
+	});
+
+	it('does not match a different owner or a different context', () => {
+		const door = at('/graph/@me?context=temper');
+		expect(isContextLocation({ owner: '@me' }, door, '+acme-team', 'temper')).toBe(false);
+		expect(isContextLocation({ owner: '@me' }, door, '@me', 'writing')).toBe(false);
+	});
+
+	it('does not match a route that addresses no context', () => {
+		expect(isContextLocation({}, at('/vault/search?q=temper'), '@me', 'temper')).toBe(false);
+		expect(isContextLocation({ owner: '@me' }, at('/graph/@me'), '@me', 'temper')).toBe(false);
+	});
+
+	it('prefers the path param when a route somehow carries both', () => {
+		expect(
+			isContextLocation(
+				{ owner: '@me', context: 'temper' },
+				at('/vault/@me/temper?context=writing'),
+				'@me',
+				'writing'
+			)
+		).toBe(false);
+	});
+
+	it('round-trips both builders, so the inverse cannot drift from them', () => {
+		expect(
+			isContextLocation({ owner: '@me', context: 'ops team' }, at(contextHref('@me', 'ops team')), '@me', 'ops team')
+		).toBe(true);
+		expect(
+			isContextLocation({ owner: '@me' }, at(contextGraphHref('@me', 'ops team')), '@me', 'ops team')
+		).toBe(true);
+	});
+});
+
+describe('isContextGraphLocation', () => {
+	it('is true on the Atlas door for that context', () => {
+		expect(
+			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper')
+		).toBe(true);
+	});
+
+	it('is false on the context vault page, which links to the door rather than being it', () => {
+		expect(
+			isContextGraphLocation(
+				{ owner: '@me', context: 'temper' },
+				at('/vault/@me/temper'),
+				'@me',
+				'temper'
+			)
+		).toBe(false);
+	});
+
+	it('is false on the door for some other context', () => {
+		expect(
+			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=writing'), '@me', 'temper')
+		).toBe(false);
 	});
 });
