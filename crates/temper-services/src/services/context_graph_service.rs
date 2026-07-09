@@ -129,7 +129,7 @@ async fn available_group_keys(
 /// "already contained" (and are therefore excluded from the bucket).
 ///
 /// A params struct because this carries six domain values — over the five-parameter
-/// threshold — and mirrors the `AggregatorSubgraphParams` pattern already in this module.
+/// threshold that warrants grouping them into a named type.
 #[derive(Debug, Clone)]
 pub struct ResidualMemberQuery<'a> {
     pub profile_id: ProfileId,

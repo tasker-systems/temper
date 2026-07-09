@@ -43,7 +43,6 @@ use temper_workflow::types::resource::{
         crate::handlers::edges::reweight,
         crate::handlers::edges::fold,
         crate::handlers::facets::set_facet,
-        crate::handlers::graph::get_subgraph,
         crate::handlers::graph::context_panorama,
         crate::handlers::graph::context_composition,
         crate::handlers::cognitive_maps::genesis,
@@ -101,9 +100,6 @@ use temper_workflow::types::resource::{
         ErrorBody,
         ErrorDetail,
         temper_workflow::types::graph::GraphEdgeRow,
-        temper_workflow::types::graph::GraphNode,
-        temper_workflow::types::graph::GraphEdge,
-        temper_workflow::types::graph::SubgraphResponse,
         temper_core::types::graph_context::ContextPanorama,
         temper_core::types::graph_context::ResidualGroups,
         temper_core::types::graph_context::ResidualBucket,
@@ -241,7 +237,6 @@ mod tests {
         assert!(json.contains("/api/resources/{id}/edges"));
         assert!(json.contains("/api/relationships"));
         assert!(json.contains("/api/facets"));
-        assert!(json.contains("/api/graph/subgraph"));
         assert!(json.contains("/api/graph/contexts/panorama"));
         assert!(json.contains("/api/graph/contexts/composition"));
         assert!(json.contains("/api/cognitive-maps/{id}/shape"));
