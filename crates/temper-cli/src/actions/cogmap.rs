@@ -74,6 +74,21 @@ pub async fn analytics_api(
         .map_err(crate::commands::client_err)
 }
 
+/// Call the materialize API for the given cogmap (resolved to a UUID) — recompute regions when
+/// the event delta clears the threshold. A no-op below threshold (`materialized: false`), not
+/// an error.
+pub async fn materialize_api(
+    client: &temper_client::TemperClient,
+    cogmap_id: uuid::Uuid,
+    threshold: Option<i64>,
+) -> Result<temper_core::types::materialize::MaterializeAck> {
+    client
+        .cognitive_maps()
+        .materialize(cogmap_id, threshold)
+        .await
+        .map_err(crate::commands::client_err)
+}
+
 /// Strip an optional leading `+` sigil from a team ref, yielding the bare team token.
 ///
 /// Teams are addressed by their global-unique slug (`team_service` strips the same `+`

@@ -790,6 +790,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 commands::cogmap::region_metrics(&cogmap, lens.as_deref(), output_format)
             }
             CogmapCmd::Analytics { cogmap } => commands::cogmap::analytics(&cogmap, output_format),
+            CogmapCmd::Materialize { cogmap, threshold } => {
+                commands::cogmap::materialize(&cogmap, threshold, output_format)
+            }
             CogmapCmd::Bind { r#ref, team } => commands::cogmap::bind(&r#ref, &team, output_format),
             CogmapCmd::Unbind { r#ref, team } => {
                 commands::cogmap::unbind(&r#ref, &team, output_format)

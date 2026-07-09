@@ -978,6 +978,17 @@ pub enum CogmapCmd {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
     },
+    /// Re-materialize a cognitive map's regions when its event delta clears the threshold.
+    ///
+    /// Regions only exist *after* a materialize. A map below the threshold is a no-op
+    /// (`materialized: false`), not an error.
+    Materialize {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Minimum unmaterialized-event count required to trigger. Server default when omitted.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
     /// Bind a cognitive map to a team. Requires system-admin, OR that you manage the team
     /// (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to
     /// the team's shared resources.
@@ -1389,6 +1400,43 @@ mod meta_only_flag_tests {
                 assert_eq!(from_profile, None);
             }
             _ => panic!("expected Cogmap::Revoke"),
+        }
+    }
+
+    #[test]
+    fn cogmap_materialize_parses() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "temper",
+            "cogmap",
+            "materialize",
+            "my-map-00000000-0000-0000-0000-000000000001",
+            "--threshold",
+            "25",
+        ])
+        .expect("cogmap materialize should parse");
+
+        match cli.command {
+            Commands::Cogmap {
+                cmd: CogmapCmd::Materialize { cogmap, threshold },
+            } => {
+                assert_eq!(cogmap, "my-map-00000000-0000-0000-0000-000000000001");
+                assert_eq!(threshold, Some(25));
+            }
+            _ => panic!("expected cogmap materialize"),
+        }
+    }
+
+    #[test]
+    fn cogmap_materialize_threshold_is_optional() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["temper", "cogmap", "materialize", "some-ref"])
+            .expect("threshold is optional");
+        match cli.command {
+            Commands::Cogmap {
+                cmd: CogmapCmd::Materialize { threshold, .. },
+            } => assert_eq!(threshold, None),
+            _ => panic!("expected cogmap materialize"),
         }
     }
 
