@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_saml_seen_groups (idp_key, group_value)\n               SELECT $1, g FROM UNNEST($2::text[]) AS g\n               ON CONFLICT (idp_key, group_value) DO UPDATE SET last_seen = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8db347ce53bc0f836f2ba753be5c4157c388c417fa23880b5ea2568a1746beeb"
+}

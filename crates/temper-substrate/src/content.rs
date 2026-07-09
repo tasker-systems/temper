@@ -68,7 +68,18 @@ pub struct PreparedBlock {
 /// heading_depth)` straight from the production chunker — the heading fields are carried through so the
 /// body read path (`reconstruct_body`) can restore `##`-style markers (`heading_depth == 0` ⇒ preamble).
 fn plan_chunks(prose: &str) -> Vec<(i32, String, String, String, u8)> {
-    temper_ingest::chunk::chunk_markdown(prose)
+    plan_chunks_with_prefix(prose, &[])
+}
+
+/// [`plan_chunks`], seeding the chunker's heading-breadcrumb stack from `breadcrumb` so a segment
+/// that begins mid-section still carries its ancestor `header_path`. With an empty `breadcrumb`
+/// this is byte-identical to whole-document chunking — the equivalence the streaming segment
+/// boundary rests on.
+fn plan_chunks_with_prefix(
+    prose: &str,
+    breadcrumb: &[String],
+) -> Vec<(i32, String, String, String, u8)> {
+    temper_ingest::chunk::chunk_markdown_with_prefix(prose, breadcrumb)
         .into_iter()
         .map(|c| {
             (
@@ -80,6 +91,25 @@ fn plan_chunks(prose: &str) -> Vec<(i32, String, String, String, u8)> {
             )
         })
         .collect()
+}
+
+/// The one heading rule, shared by every block builder. The two columns answer different
+/// questions and are mapped independently:
+///
+/// - `header_path` — "what section am I under?" Persisted whenever the chunker knows, which
+///   includes a chunk that begins mid-section and inherits its ancestors from a seeded breadcrumb
+///   (see [`prepare_block_with_prefix`]). This is what search renders as a breadcrumb.
+/// - `heading_depth` — "do I *begin* a section?" Persisted only for a chunk that carries its own
+///   heading. `reconstruct_body` re-emits a heading line exactly when this is non-zero, and
+///   `readback::body` COALESCEs NULL to 0, so a continuation chunk correctly renders as bare prose.
+///
+/// Collapsing the two (the pre-streaming rule: `depth == 0 ⇒ both NULL`) was invisible while every
+/// chunk with depth 0 also had an empty path. A segment cut mid-section produces depth 0 *with* an
+/// ancestor path, and the old rule silently discarded that breadcrumb.
+fn map_heading(header_path: String, heading_depth: u8) -> (Option<String>, Option<i16>) {
+    let path = (!header_path.is_empty()).then_some(header_path);
+    let depth = (heading_depth > 0).then_some(heading_depth as i16);
+    (path, depth)
 }
 
 /// A caller-supplied, already-embedded chunk — the no-embed input to [`prepare_block_from_chunks`].
@@ -112,12 +142,7 @@ pub fn prepare_block_from_chunks(
     let chunks = chunks
         .into_iter()
         .map(|c| {
-            // Same heading rule as prepare_block: depth 0 / empty breadcrumb ⇒ unheaded preamble (NULL).
-            let (header_path, heading_depth) = if c.heading_depth == 0 || c.header_path.is_empty() {
-                (None, None)
-            } else {
-                (Some(c.header_path), Some(c.heading_depth))
-            };
+            let (header_path, heading_depth) = map_heading(c.header_path, c.heading_depth as u8);
             PreparedChunk {
                 chunk_id: ChunkId::from(Uuid::now_v7()),
                 chunk_index: c.chunk_index,
@@ -140,7 +165,20 @@ pub fn prepare_block_from_chunks(
 
 /// Prepare one block: chunk its prose, then embed every chunk in a single batched ONNX call.
 pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<PreparedBlock> {
-    let planned = plan_chunks(prose);
+    prepare_block_with_prefix(seq, role, prose, &[])
+}
+
+/// [`prepare_block`], seeding the chunker's heading breadcrumb from `breadcrumb` so a segment that
+/// begins mid-section still carries its ancestor `header_path`. With an empty `breadcrumb` this is
+/// byte-identical to [`prepare_block`]. Used by the segmented-ingest append path when the caller
+/// supplied no pre-chunked content and the server must chunk the segment itself.
+pub fn prepare_block_with_prefix(
+    seq: i32,
+    role: Option<&str>,
+    prose: &str,
+    breadcrumb: &[String],
+) -> Result<PreparedBlock> {
+    let planned = plan_chunks_with_prefix(prose, breadcrumb);
     let texts: Vec<&str> = planned
         .iter()
         .map(|(_, _, content, _, _)| content.as_str())
@@ -157,13 +195,7 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         .map(
             |((chunk_index, content_hash, content, header_path, heading_depth), embedding)| {
                 // Carry the chunker's heading metadata so `reconstruct_body` can re-emit markers.
-                // depth 0 / empty breadcrumb ⇒ unheaded preamble: keep NULL (matches reconstruct_body's
-                // `heading_depth == 0 ⇒ content as-is` arm). A real heading ⇒ persist depth + breadcrumb.
-                let (header_path, heading_depth) = if heading_depth == 0 || header_path.is_empty() {
-                    (None, None)
-                } else {
-                    (Some(header_path), Some(heading_depth as i16))
-                };
+                let (header_path, heading_depth) = map_heading(header_path, heading_depth);
                 PreparedChunk {
                     chunk_id: ChunkId::from(Uuid::now_v7()),
                     chunk_index,
@@ -193,17 +225,25 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
 /// backfill fills `kb_chunks.embedding` from the same chunk text. ONNX-free, so it never pays model
 /// load on the request path.
 pub fn prepare_block_deferred(seq: i32, role: Option<&str>, prose: &str) -> PreparedBlock {
-    let chunks = plan_chunks(prose)
+    prepare_block_deferred_with_prefix(seq, role, prose, &[])
+}
+
+/// [`prepare_block_deferred`] with a seeded heading breadcrumb — the ONNX-free twin of
+/// [`prepare_block_with_prefix`]. Chunks land with a NULL vector, backfilled off-request by the
+/// embed drain (issue #299).
+pub fn prepare_block_deferred_with_prefix(
+    seq: i32,
+    role: Option<&str>,
+    prose: &str,
+    breadcrumb: &[String],
+) -> PreparedBlock {
+    let chunks = plan_chunks_with_prefix(prose, breadcrumb)
         .into_iter()
         .map(
             |(chunk_index, content_hash, content, header_path, heading_depth)| {
                 // Identical heading mapping to `prepare_block`: depth 0 / empty breadcrumb ⇒ unheaded
                 // preamble (NULL columns); a real heading ⇒ persist depth + breadcrumb.
-                let (header_path, heading_depth) = if heading_depth == 0 || header_path.is_empty() {
-                    (None, None)
-                } else {
-                    (Some(header_path), Some(heading_depth as i16))
-                };
+                let (header_path, heading_depth) = map_heading(header_path, heading_depth);
                 PreparedChunk {
                     chunk_id: ChunkId::from(Uuid::now_v7()),
                     chunk_index,
@@ -492,6 +532,87 @@ mod tests {
     #[test]
     fn prepare_block_deferred_empty_prose_yields_no_chunks() {
         assert!(prepare_block_deferred(0, None, "").chunks.is_empty());
+    }
+
+    // The no-regression guard for the breadcrumb-carrying variants: every existing single-block
+    // caller passes no breadcrumb, and must be bit-for-bit unaffected by the new parameter.
+    #[test]
+    fn prefix_variants_with_empty_breadcrumb_match_the_originals() {
+        let prose = "# Title\n\nalpha\n\n## Section\n\nbeta\n";
+        let plain = prepare_block_deferred(0, None, prose);
+        let prefixed = prepare_block_deferred_with_prefix(0, None, prose, &[]);
+
+        assert_eq!(plain.chunks.len(), prefixed.chunks.len());
+        for (a, b) in plain.chunks.iter().zip(prefixed.chunks.iter()) {
+            assert_eq!(a.chunk_index, b.chunk_index);
+            assert_eq!(a.content_hash, b.content_hash);
+            assert_eq!(a.content, b.content);
+            assert_eq!(a.header_path, b.header_path);
+            assert_eq!(a.heading_depth, b.heading_depth);
+        }
+    }
+
+    // A segment cut mid-section carries no heading of its own; without the seeded breadcrumb its
+    // chunks would land with a NULL header_path, breaking search breadcrumbs across block
+    // boundaries. This is the property the streaming segment boundary rests on.
+    #[test]
+    fn prefix_seeds_ancestor_breadcrumb_for_a_mid_section_segment() {
+        let block = prepare_block_deferred_with_prefix(
+            1,
+            None,
+            "beta continues here\n",
+            &["Title".to_owned(), "Section".to_owned()],
+        );
+
+        assert_eq!(block.chunks.len(), 1);
+        assert_eq!(
+            block.chunks[0].header_path.as_deref(),
+            Some("Title > Section"),
+            "a mid-section segment must inherit its ancestor path"
+        );
+        assert_eq!(
+            block.chunks[0].heading_depth,
+            Some(2),
+            "it inherits its innermost ancestor's depth — the same value a whole-document scan \
+             gives the continuation chunk of an oversized section"
+        );
+    }
+
+    // A true preamble — no heading of its own and no ancestors — still maps to NULL/NULL, so the
+    // rule change is confined to the case that could not previously arise.
+    #[test]
+    fn unheaded_preamble_still_maps_to_null_columns() {
+        let block = prepare_block_deferred_with_prefix(0, None, "just prose\n", &[]);
+        assert_eq!(block.chunks[0].header_path, None);
+        assert_eq!(block.chunks[0].heading_depth, None);
+    }
+
+    // Splitting a document at a heading and prefixing the tail must reproduce the same chunk
+    // content hashes as chunking the whole document in one pass — the equivalence that lets a
+    // segmented ingest and a one-shot create agree on body_hash.
+    #[test]
+    fn prefix_variant_merkle_matches_whole_document_chunking() {
+        let whole = "# Title\n\nalpha\n\n## Section\n\nbeta\n";
+        let head = "# Title\n\nalpha\n";
+        let tail = "## Section\n\nbeta\n";
+
+        let one_pass = prepare_block_deferred(0, None, whole);
+        let b0 = prepare_block_deferred_with_prefix(0, None, head, &[]);
+        let b1 = prepare_block_deferred_with_prefix(1, None, tail, &["Title".to_owned()]);
+
+        let one_pass_hashes: Vec<&str> = one_pass
+            .chunks
+            .iter()
+            .map(|c| c.content_hash.as_str())
+            .collect();
+        let split_hashes: Vec<&str> = b0
+            .chunks
+            .iter()
+            .chain(b1.chunks.iter())
+            .map(|c| c.content_hash.as_str())
+            .collect();
+
+        assert_eq!(one_pass_hashes, split_hashes);
     }
 
     // prepare_block_from_chunks carries the supplied embedding verbatim and maps headings like

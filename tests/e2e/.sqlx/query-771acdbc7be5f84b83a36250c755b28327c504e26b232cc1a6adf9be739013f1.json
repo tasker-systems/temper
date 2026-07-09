@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT new_resources AS \"new_resources!: i64\",\n               new_events    AS \"new_events!: i64\"\n          FROM steward_ingest_delta($1, $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "new_resources!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "new_events!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "771acdbc7be5f84b83a36250c755b28327c504e26b232cc1a6adf9be739013f1"
+}

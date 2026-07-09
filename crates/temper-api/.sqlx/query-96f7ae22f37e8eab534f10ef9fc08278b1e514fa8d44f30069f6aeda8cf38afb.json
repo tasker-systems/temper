@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)\n        VALUES ($1, 'kb_profiles', $2, 'default', 'default')\n        ON CONFLICT (owner_table, owner_id, slug) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "96f7ae22f37e8eab534f10ef9fc08278b1e514fa8d44f30069f6aeda8cf38afb"
+}

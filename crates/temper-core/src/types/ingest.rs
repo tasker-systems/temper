@@ -112,6 +112,9 @@ pub struct SegmentedBeginResponse {
     /// single correlation id is deferred to the reaper work (design §12).
     pub correlation_id: uuid::Uuid,
     pub blocks: Vec<SegmentInfo>,
+    /// The live `body_hash` after block 0 — see [`BlocksResponse::body_hash`]. Present here too so a
+    /// session that appends nothing still has a value to echo at finalize.
+    pub body_hash: String,
 }
 
 /// Append one segment to an in-progress (segmented-begin'd) resource —
@@ -127,7 +130,13 @@ pub struct AppendBlockPayload {
     pub content_hash: String,
     /// Base64-encoded MessagePack of `Vec<PackedChunk>` — this segment's pre-chunked, pre-embedded
     /// content (same wire shape as `IngestPayload::chunks_packed`).
-    pub chunks_packed: String,
+    ///
+    /// `None` when the caller has no chunker or embedder (the MCP surface, and any programmatic
+    /// client that is not the CLI): the server then chunks [`Self::content`] itself, seeding the
+    /// heading breadcrumb from the prior block so `header_path` stays continuous across the block
+    /// boundary. Mirrors `IngestPayload::chunks_packed`'s optionality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_packed: Option<String>,
 }
 
 /// Response to append / `GET /api/resources/{id}/blocks`: the currently landed segment set.
@@ -135,6 +144,15 @@ pub struct AppendBlockPayload {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct BlocksResponse {
     pub blocks: Vec<SegmentInfo>,
+    /// The resource's live `kb_resources.body_hash` after the landed set — the value a caller
+    /// echoes back as [`FinalizePayload::expected_body_hash`].
+    ///
+    /// A caller that does not chunk locally (the MCP surface) cannot derive this merkle itself, so
+    /// the server hands it over. Finalize's comparison then asserts "nothing changed between my
+    /// last append and now" — a real consistency check against a dropped or concurrent write —
+    /// rather than an assertion such a caller would have to be exempted from. Opaque: echo it back
+    /// verbatim, never parse it.
+    pub body_hash: String,
 }
 
 /// Declare a segmented ingest complete — `POST /api/resources/{id}/finalize`.
@@ -453,11 +471,22 @@ mod tests {
             seq: 2,
             content: "x".into(),
             content_hash: "h".into(),
-            chunks_packed: "b64".into(),
+            chunks_packed: Some("b64".into()),
         };
         let j = serde_json::to_string(&p).unwrap();
         let back: super::AppendBlockPayload = serde_json::from_str(&j).unwrap();
         assert_eq!(back.seq, 2);
+        assert_eq!(back.chunks_packed.as_deref(), Some("b64"));
+    }
+
+    // The MCP shape: a caller with no chunker omits the field entirely, and it must neither be
+    // required on the way in nor emitted on the way out.
+    #[test]
+    fn append_payload_round_trips_without_packed_chunks() {
+        let json = r#"{"seq":2,"content":"x","content_hash":"h"}"#;
+        let p: super::AppendBlockPayload = serde_json::from_str(json).unwrap();
+        assert!(p.chunks_packed.is_none());
+        assert!(!serde_json::to_string(&p).unwrap().contains("chunks_packed"));
     }
 
     #[test]
@@ -485,11 +514,16 @@ mod tests {
                     content_hash: "h1".to_owned(),
                 },
             ],
+            body_hash: "sha256:deadbeef".to_owned(),
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: BlocksResponse = serde_json::from_str(&j).unwrap();
         assert_eq!(back.blocks.len(), 2);
         assert_eq!(back.blocks[1].seq, 1);
+        assert_eq!(
+            back.body_hash, "sha256:deadbeef",
+            "the echo-back value must survive the wire"
+        );
     }
 
     #[test]
@@ -513,12 +547,17 @@ mod tests {
                 seq: 0,
                 content_hash: "h0".to_owned(),
             }],
+            body_hash: "sha256:beef".to_owned(),
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: SegmentedBeginResponse = serde_json::from_str(&j).unwrap();
         assert_eq!(back.resource_id, r.resource_id);
         assert_eq!(back.correlation_id, r.correlation_id);
         assert_eq!(back.blocks.len(), 1);
+        assert_eq!(
+            back.body_hash, "sha256:beef",
+            "begin hands the caller its first echo-back value"
+        );
     }
 
     #[test]

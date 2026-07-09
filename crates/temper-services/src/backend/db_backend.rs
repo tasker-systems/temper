@@ -19,7 +19,8 @@ use temper_core::types::ids::{
     CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
 use temper_core::types::ingest::{
-    AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentInfo,
+    AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentInfo, SegmentedBegin,
+    SegmentedBeginResponse,
 };
 use temper_core::types::materialize::{
     MaterializeAck, DEFAULT_MATERIALIZE_LENS, DEFAULT_MATERIALIZE_THRESHOLD,
@@ -136,6 +137,31 @@ fn packed_to_incoming(
         header_path: c.header_path.clone(),
         heading_depth: c.heading_depth as i16,
     }
+}
+
+/// Everything an append must satisfy before any write.
+///
+/// The declared segment-text hash must match the segment text — the one integrity check a caller
+/// that does not chunk locally can honor, so it is the check every caller honors. The CLI already
+/// sends exactly these two fields and, before this, had them read by nothing.
+///
+/// And a server-chunked append needs prose to chunk: empty content would otherwise reach
+/// `block_append`, which raises a raw `empty chunk set` database exception rather than anything a
+/// caller can act on.
+fn validate_append(payload: &AppendBlockPayload) -> Result<(), TemperError> {
+    let actual = temper_core::hash::sha256_hex(payload.content.as_bytes());
+    if actual != payload.content_hash {
+        return Err(TemperError::BadRequest(format!(
+            "content_hash mismatch for seq {}: declared {}, computed {}",
+            payload.seq, payload.content_hash, actual
+        )));
+    }
+    if payload.chunks_packed.is_none() && payload.content.is_empty() {
+        return Err(TemperError::BadRequest(
+            "append with no chunks_packed requires non-empty content".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Unpack a caller-supplied `chunks_packed` blob into substrate-native `IncomingChunk`s, ordered by
@@ -372,16 +398,21 @@ impl DbBackend {
         }
     }
 
-    /// The landed (non-folded) segment set for a resource, ordered by `seq`. `content_hash` is
-    /// the per-block merkle (`kb_block_revisions.block_body_hash`, latest revision per block) —
-    /// see [`SegmentInfo`]'s doc for why this is NOT the same hash the client sends inbound on
-    /// append. Shared by `append_block`/`list_blocks` (Backend trait) and the ingest handler's
+    /// The landed (non-folded) segment set for a resource, ordered by `seq`, plus the resource's
+    /// live `body_hash` — the whole [`BlocksResponse`] every segmented read returns.
+    ///
+    /// `SegmentInfo.content_hash` is the per-block merkle (`kb_block_revisions.block_body_hash`,
+    /// latest revision per block) — see [`SegmentInfo`]'s doc for why this is NOT the same hash the
+    /// client sends inbound on append. `body_hash` is the resource-level merkle a caller echoes back
+    /// at finalize.
+    ///
+    /// Shared by `append_block`/`list_blocks` (Backend trait) and the ingest handler's
     /// segmented-begin branch (reading block 0 back right after `create_resource` lands it),
     /// so the "currently landed set" projection lives in exactly one place.
-    async fn landed_segments(
+    async fn landed_blocks(
         pool: &PgPool,
         resource: ResourceId,
-    ) -> Result<Vec<SegmentInfo>, TemperError> {
+    ) -> Result<BlocksResponse, TemperError> {
         let rows = sqlx::query!(
             r#"
             SELECT b.seq AS "seq!", r.block_body_hash AS "block_body_hash!"
@@ -398,25 +429,42 @@ impl DbBackend {
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
-        Ok(rows
-            .into_iter()
-            .map(|r| SegmentInfo {
-                seq: r.seq as u32,
-                content_hash: r.block_body_hash,
-            })
-            .collect())
+
+        // `kb_resources.body_hash` is nullable: a metadata-only resource has no body and therefore
+        // no merkle. Such a resource has no landed blocks either, so it reports an empty hash
+        // alongside an empty set. Finalizing it would fail in `resource_finalize` (NULL IS DISTINCT
+        // FROM ''), which is the correct outcome — there is nothing to finalize.
+        let body_hash = sqlx::query_scalar!(
+            "SELECT body_hash FROM kb_resources WHERE id = $1",
+            resource.uuid(),
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(api_err)?
+        .unwrap_or_default();
+
+        Ok(BlocksResponse {
+            blocks: rows
+                .into_iter()
+                .map(|r| SegmentInfo {
+                    seq: r.seq as u32,
+                    content_hash: r.block_body_hash,
+                })
+                .collect(),
+            body_hash,
+        })
     }
 
     /// Record the per-resource source-provenance row for a segmented-begin create (design §4
-    /// point 4: written "at begin"). Deliberately NOT part of the `Backend` trait — a
-    /// backend-specific write (per this module's own doc: "Backend-specific operations ... live
-    /// on the backend's concrete type, not on the shared trait") that only the API ingest
-    /// handler calls, directly on the concrete `DbBackend` it already holds, right after
-    /// `create_resource` lands block 0. `conversion_tool` is fixed to `"passthrough"`: every
-    /// caller of `IngestPayload.segmented` already holds extracted markdown (extract → chunk →
-    /// embed happens client-side before this request); there is no server-side kreuzberg
-    /// conversion on this path.
-    pub async fn record_ingestion_source(
+    /// point 4: written "at begin"). Private, and called from exactly one place —
+    /// [`Backend::begin_segmented_ingest`], which composes it with the create and the landed-set
+    /// read so no surface has to. It was briefly `pub` because the HTTP handler did that composition
+    /// itself; MCP needing the same three steps is what made the seam obvious.
+    ///
+    /// `conversion_tool` is fixed to `"passthrough"`: every segmented caller already holds extracted
+    /// markdown (the CLI extracts and chunks client-side; MCP sends prose it composed), so there is
+    /// no server-side kreuzberg conversion on this path.
+    async fn record_ingestion_source(
         &self,
         resource: ResourceId,
         source_uri: &str,
@@ -2195,25 +2243,92 @@ impl Backend for DbBackend {
         }))
     }
 
+    async fn begin_segmented_ingest(
+        &self,
+        cmd: CreateResource,
+        seg: SegmentedBegin,
+    ) -> Result<CommandOutput<SegmentedBeginResponse>, TemperError> {
+        // `origin_uri` feeds the ingestion record below, so take it before `cmd` moves into create.
+        let origin_uri = cmd.origin_uri.clone().unwrap_or_default();
+
+        // Block 0 lands via the ordinary create path — segmented ingest changes how the *rest* of
+        // the body arrives, not how a resource is created. Auth, home resolution, and doc-type
+        // defaults all come along with it.
+        let out = self.create_resource(cmd).await?;
+        let resource_id = out.value.id;
+
+        // The per-resource source-provenance row, written at begin (design §4 point 4).
+        self.record_ingestion_source(resource_id, &origin_uri, seg.source_hash.as_deref())
+            .await?;
+
+        let landed = Self::landed_blocks(&self.pool, resource_id).await?;
+        Ok(CommandOutput::new(SegmentedBeginResponse {
+            resource_id: resource_id.uuid(),
+            // Client-side ingest-session id — see `SegmentedBeginResponse::correlation_id`'s doc
+            // for why this is not yet threaded onto the server's event ledger.
+            correlation_id: uuid::Uuid::now_v7(),
+            blocks: landed.blocks,
+            body_hash: landed.body_hash,
+        }))
+    }
+
     async fn append_block(
         &self,
         resource: ResourceId,
         payload: AppendBlockPayload,
+        origin: Surface,
     ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(resource.uuid()).await?;
+        // Then the payload's own integrity, before anything is prepared or written.
+        validate_append(&payload)?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(Surface::ApiHttp))
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(origin))
             .await
             .map_err(api_err)?;
 
-        // Same no-embed chunk path as create/update: the client already extracted, chunked, and
-        // embedded this segment — `seq` is authoritative (`AppendParams.block.seq`).
-        let chunks = unpack_incoming_chunks(&payload.chunks_packed)?;
-        let block =
-            temper_substrate::content::prepare_block_from_chunks(payload.seq as i32, None, chunks);
+        // Bring-your-own chunks (the CLI) ride through verbatim — ONNX-free, `seq` authoritative
+        // (`AppendParams.block.seq`), same no-embed path as create/update. Absent chunks (MCP, and
+        // any programmatic client without an embedder) are chunked server-side, seeding the heading
+        // breadcrumb from the prior block so `header_path` is continuous across the boundary.
+        let block = match payload.chunks_packed.as_deref() {
+            Some(packed) => {
+                let chunks = unpack_incoming_chunks(packed)?;
+                temper_substrate::content::prepare_block_from_chunks(
+                    payload.seq as i32,
+                    None,
+                    chunks,
+                )
+            }
+            None => {
+                let breadcrumb =
+                    temper_substrate::readback::trailing_breadcrumb(&self.pool, resource)
+                        .await
+                        .map_err(api_err)?;
+                // The create path's predicate (`chunks.is_none() && !body.is_empty() &&
+                // async_embed_enabled()`), reduced to its residual: this arm IS the chunks-absent
+                // case, and `validate_append` already guaranteed non-empty content.
+                let defer = crate::services::embed_service::async_embed_enabled();
+                if defer {
+                    temper_substrate::content::prepare_block_deferred_with_prefix(
+                        payload.seq as i32,
+                        None,
+                        &payload.content,
+                        &breadcrumb,
+                    )
+                } else {
+                    temper_substrate::content::prepare_block_with_prefix(
+                        payload.seq as i32,
+                        None,
+                        &payload.content,
+                        &breadcrumb,
+                    )
+                    .map_err(api_err)?
+                }
+            }
+        };
 
         writes::append_block(
             &self.pool,
@@ -2230,21 +2345,22 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let blocks = Self::landed_segments(&self.pool, resource).await?;
-        Ok(CommandOutput::new(BlocksResponse { blocks }))
+        let landed = Self::landed_blocks(&self.pool, resource).await?;
+        Ok(CommandOutput::new(landed))
     }
 
     async fn finalize_ingest(
         &self,
         resource: ResourceId,
         payload: FinalizePayload,
+        origin: Surface,
     ) -> Result<CommandOutput<()>, TemperError> {
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(resource.uuid()).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(Surface::ApiHttp))
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(origin))
             .await
             .map_err(api_err)?;
 
@@ -2270,8 +2386,8 @@ impl Backend for DbBackend {
         // Gated the same as append/finalize (not a general visibility passthrough): an
         // in-progress segmented ingest's landed-block set is caller-private until finalized.
         self.check_can_modify_next(resource.uuid()).await?;
-        let blocks = Self::landed_segments(&self.pool, resource).await?;
-        Ok(CommandOutput::new(BlocksResponse { blocks }))
+        let landed = Self::landed_blocks(&self.pool, resource).await?;
+        Ok(CommandOutput::new(landed))
     }
 }
 

@@ -63,6 +63,7 @@ async fn begin_segmented_posts_to_ingest_and_parses_response() {
             seq: 0,
             content_hash: "h0".to_string(),
         }],
+        body_hash: "sha256:live".to_string(),
     };
 
     Mock::given(method("POST"))
@@ -99,6 +100,7 @@ async fn append_block_posts_to_resources_blocks_path() {
                 content_hash: "h1".to_string(),
             },
         ],
+        body_hash: "sha256:live".to_string(),
     };
 
     Mock::given(method("POST"))
@@ -112,8 +114,8 @@ async fn append_block_posts_to_resources_blocks_path() {
     let payload = AppendBlockPayload {
         seq: 1,
         content: "second segment".to_string(),
-        content_hash: "text-hash".to_string(),
-        chunks_packed: "b64chunks".to_string(),
+        content_hash: temper_core::hash::sha256_hex(b"second segment"),
+        chunks_packed: Some("b64chunks".to_string()),
     };
     let got = client
         .ingest()
@@ -122,6 +124,10 @@ async fn append_block_posts_to_resources_blocks_path() {
         .expect("append_block should succeed");
     assert_eq!(got.blocks.len(), 2);
     assert_eq!(got.blocks[1].seq, 1);
+    assert_eq!(
+        got.body_hash, "sha256:live",
+        "the echo-back body_hash must be parsed off the append response"
+    );
 }
 
 #[tokio::test]
@@ -159,6 +165,7 @@ async fn list_blocks_gets_resources_blocks_path() {
             seq: 0,
             content_hash: "h0".to_string(),
         }],
+        body_hash: "sha256:live".to_string(),
     };
 
     Mock::given(method("GET"))

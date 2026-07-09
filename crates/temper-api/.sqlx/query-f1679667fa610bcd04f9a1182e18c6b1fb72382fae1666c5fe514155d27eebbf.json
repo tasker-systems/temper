@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT source_id FROM kb_edges WHERE id = $1 AND source_table = 'kb_resources'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f1679667fa610bcd04f9a1182e18c6b1fb72382fae1666c5fe514155d27eebbf"
+}

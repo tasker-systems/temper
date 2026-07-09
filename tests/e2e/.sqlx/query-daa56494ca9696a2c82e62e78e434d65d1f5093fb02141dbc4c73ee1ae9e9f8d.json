@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution FROM kb_cogmap_lenses WHERE name=$2 AND (cogmap_id=$1 OR cogmap_id IS NULL) ORDER BY cogmap_id NULLS LAST LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "w_express",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "w_contains",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "w_leads_to",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "w_near",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "w_prop",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "s_telos",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "s_ref",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "s_central",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 9,
+        "name": "resolution",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "daa56494ca9696a2c82e62e78e434d65d1f5093fb02141dbc4c73ee1ae9e9f8d"
+}
