@@ -226,9 +226,13 @@ pub async fn list_invitations(
 }
 
 /// List a caller's own pending, non-expired invitations. Resolution matches
-/// `invited_email` (case-insensitively) against the caller's `kb_profile_auth_links`
-/// emails, guarded so an email that maps to more than one profile is discounted
-/// (Option B — never leaks another profile's invite; falls back to token hand-off).
+/// `invited_email` (case-insensitively) against the caller's VERIFIED
+/// `kb_profile_auth_links` emails (Option A — an unverified link email is an
+/// attacker-controllable claim and must not resolve someone else's invite),
+/// still guarded so an email whose verified holders span more than one profile
+/// is discounted (never leaks another profile's invite; falls back to token
+/// hand-off). Restricting the ambiguity count to verified links also means an
+/// unverified squatter row cannot suppress the legitimate holder's invites.
 /// Auth: any authenticated caller (their own invitations only).
 pub async fn list_for_profile(
     pool: &PgPool,
@@ -251,9 +255,11 @@ pub async fn list_for_profile(
                    FROM kb_profile_auth_links al
                   WHERE al.profile_id = $1
                     AND al.email IS NOT NULL
+                    AND al.email_verified
                     AND (SELECT COUNT(DISTINCT al2.profile_id)
                            FROM kb_profile_auth_links al2
-                          WHERE lower(al2.email) = lower(al.email)) = 1
+                          WHERE lower(al2.email) = lower(al.email)
+                            AND al2.email_verified) = 1
                )
          ORDER BY i.created DESC
         "#,
@@ -314,21 +320,34 @@ mod tests {
         (team, owner)
     }
 
-    /// Attach an auth-link email to a profile — the resolver matches on these.
+    /// Attach an auth-link email to a profile — the resolver matches on these
+    /// (verified links only, so the standard fixture inserts verified).
     async fn add_auth_email(
         pool: &PgPool,
         profile: ProfileId,
         provider_uid: &str,
         email: Option<&str>,
     ) {
+        add_auth_email_with_verified(pool, profile, provider_uid, email, true).await;
+    }
+
+    /// [`add_auth_email`] with explicit verification — for the unverified-link cases.
+    async fn add_auth_email_with_verified(
+        pool: &PgPool,
+        profile: ProfileId,
+        provider_uid: &str,
+        email: Option<&str>,
+        verified: bool,
+    ) {
         sqlx::query(
             "INSERT INTO kb_profile_auth_links \
-               (id, profile_id, auth_provider, auth_provider_user_id, email, is_default) \
-             VALUES (gen_random_uuid(), $1, 'test', $2, $3, true)",
+               (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default) \
+             VALUES (gen_random_uuid(), $1, 'test', $2, $3, $4, true)",
         )
         .bind(*profile)
         .bind(provider_uid)
         .bind(email)
+        .bind(verified)
         .execute(pool)
         .await
         .unwrap();
@@ -430,6 +449,49 @@ mod tests {
 
         let got = list_for_profile(&pool, invitee).await.unwrap();
         assert!(got.is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_unverified_email_never_matches(pool: PgPool) {
+        // The caller's link holds the invited email but UNVERIFIED — an
+        // unverified email is an attacker-controllable claim, so it must not
+        // resolve the invite (Option A).
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email_with_verified(&pool, invitee, "invitee-uid", Some("invitee@x.com"), false)
+            .await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+        seed_invite(&pool, team, "invitee@x.com", inviter, "pending", 7).await;
+
+        let got = list_for_profile(&pool, invitee).await.unwrap();
+        assert!(got.is_empty(), "unverified email must not resolve");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_unverified_squatter_does_not_suppress(pool: PgPool) {
+        // Another profile holds the same email UNVERIFIED — the ambiguity
+        // guard counts verified holders only, so the legitimate (verified)
+        // holder still resolves; the squatter cannot deny service.
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("shared@x.com")).await;
+        let squatter = mk_profile(&pool, "squatter").await;
+        add_auth_email_with_verified(&pool, squatter, "squatter-uid", Some("shared@x.com"), false)
+            .await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+        seed_invite(&pool, team, "shared@x.com", inviter, "pending", 7).await;
+
+        let got = list_for_profile(&pool, invitee).await.unwrap();
+        assert_eq!(got.len(), 1, "verified holder resolves despite squatter");
+        let denied = list_for_profile(&pool, squatter).await.unwrap();
+        assert!(
+            denied.is_empty(),
+            "squatter's unverified link matches nothing"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

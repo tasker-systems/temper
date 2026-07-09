@@ -23,4 +23,10 @@ export type Profile = { id: string, display_name: string, slug: string, email: s
  * with an email matching an existing link, it auto-links to the same profile.
  * One link is marked `is_default` as the primary identity.
  */
-export type ProfileAuthLink = { id: string, profile_id: string, auth_provider: string, auth_provider_user_id: string, email: string | null, is_default: boolean, linked_at: string, };
+export type ProfileAuthLink = { id: string, profile_id: string, auth_provider: string, auth_provider_user_id: string, email: string | null, 
+/**
+ * Whether the identity provider has verified `email` (persisted from the
+ * `email_verified` claim at provisioning; refreshed on verified sign-ins).
+ * Email-based matching (reconciliation, invitation resolution) requires it.
+ */
+email_verified: boolean, is_default: boolean, linked_at: string, };

@@ -92,7 +92,11 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
 /// Human path: link lookup → email reconcile → new profile.
 async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
     // 1 & 2: direct lookup by provider + external user id; load linked profile.
+    // A verified sign-in refreshes the link's stored email + verification flag
+    // (the self-heal path for rows that predate the email_verified column, and
+    // for accounts verified at the provider after first sign-in).
     if let Some(link) = lookup_link_by_provider(pool, claims).await? {
+        refresh_link_verification(pool, &link, claims).await?;
         return get_by_id(pool, ProfileId::from(link.profile_id)).await;
     }
 
@@ -131,7 +135,8 @@ async fn lookup_link_by_provider(
     let link = sqlx::query_as!(
         ProfileAuthLink,
         r#"
-        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,
+               is_default, linked_at
           FROM kb_profile_auth_links
          WHERE auth_provider = $1
            AND auth_provider_user_id = $2
@@ -145,10 +150,41 @@ async fn lookup_link_by_provider(
     Ok(link)
 }
 
-/// Phase 3 & 4: email reconciliation. Only verified emails reconcile; when an
-/// existing link shares the email, a new auth link for this provider is created
-/// pointing at that profile and the profile is returned. Returns `None` when the
-/// email is unverified or no existing link matches (caller falls through to
+/// Refresh a link's stored email + verification on a verified sign-in: when the
+/// incoming claims carry `email_verified: true` and the stored row disagrees
+/// (unverified, or a different email), persist the provider's current truth.
+/// No-op for unverified/missing claims — the flag never flips false→true here
+/// without the provider's say-so, and never true→false at all (a later
+/// unverified token doesn't un-verify an email the provider once verified).
+async fn refresh_link_verification(
+    pool: &PgPool,
+    link: &ProfileAuthLink,
+    claims: &AuthClaims,
+) -> ApiResult<()> {
+    if claims.email_verified != Some(true) {
+        return Ok(());
+    }
+    let email_changed = link.email.as_deref() != Some(claims.email.as_str());
+    if link.email_verified && !email_changed {
+        return Ok(());
+    }
+    sqlx::query!(
+        "UPDATE kb_profile_auth_links SET email = $2, email_verified = true WHERE id = $1",
+        link.id,
+        &claims.email as &str,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Phase 3 & 4: email reconciliation. Requires verification on BOTH sides: the
+/// incoming claims must carry `email_verified: true`, and the matched stored link
+/// must itself be verified — an unverified stored email is an attacker-controllable
+/// claim (a pre-created account holding someone else's address must not capture
+/// that person's first verified sign-in). When a verified existing link shares the
+/// email, a new auth link for this provider is created pointing at that profile
+/// and the profile is returned. Returns `None` otherwise (caller falls through to
 /// new-profile creation).
 async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Option<Profile>> {
     if claims.email_verified != Some(true) {
@@ -163,9 +199,11 @@ async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Opt
     let reconciled_link = sqlx::query_as!(
         ProfileAuthLink,
         r#"
-            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,
+                   is_default, linked_at
               FROM kb_profile_auth_links
              WHERE email = $1
+               AND email_verified
              LIMIT 1
             "#,
         &claims.email,
@@ -195,14 +233,15 @@ async fn create_link_for_existing_profile(
     sqlx::query!(
         r#"
                 INSERT INTO kb_profile_auth_links
-                    (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
-                VALUES ($1, $2, $3, $4, $5, false, now())
+                    (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at)
+                VALUES ($1, $2, $3, $4, $5, $6, false, now())
                 "#,
         new_link_id,
         profile_id,
         &claims.provider,
         &claims.external_user_id,
         &claims.email as &str,
+        claims.email_verified == Some(true),
     )
     .execute(pool)
     .await?;
@@ -239,14 +278,15 @@ async fn create_new_profile_and_link(
     sqlx::query!(
         r#"
         INSERT INTO kb_profile_auth_links
-            (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
-        VALUES ($1, $2, $3, $4, $5, true, now())
+            (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at)
+        VALUES ($1, $2, $3, $4, $5, $6, true, now())
         "#,
         auth_link_id,
         profile_id,
         &claims.provider,
         &claims.external_user_id,
         &claims.email as &str,
+        claims.email_verified == Some(true),
     )
     .execute(pool)
     .await?;
@@ -280,8 +320,8 @@ async fn create_agent_profile_and_link(
     sqlx::query!(
         r#"
         INSERT INTO kb_profile_auth_links
-            (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
-        VALUES ($1, $2, $3, $4, NULL, true, now())
+            (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at)
+        VALUES ($1, $2, $3, $4, NULL, false, true, now())
         "#,
         auth_link_id,
         profile_id,
@@ -407,7 +447,8 @@ pub async fn list_auth_links(
     let links = sqlx::query_as!(
         ProfileAuthLink,
         r#"
-        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,
+               is_default, linked_at
           FROM kb_profile_auth_links
          WHERE profile_id = $1
          ORDER BY linked_at ASC
@@ -567,6 +608,78 @@ mod tests {
             profile_a.id, profile_b.id,
             "None email_verified should create separate profile"
         );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unverified_stored_link_does_not_capture_verified_signin(pool: PgPool) {
+        // Profile A signed up with an UNVERIFIED email — its stored link is
+        // unverified. A later VERIFIED sign-in with the same email (e.g. the
+        // address's real owner) must NOT reconcile onto A's profile: an
+        // unverified stored email is an attacker-controllable claim.
+        let claims_a = AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "provider_a".to_string(),
+            external_user_id: "user-stored-unverified-a".to_string(),
+            email: "stored-unverified@example.com".to_string(),
+            email_verified: Some(false),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+
+        let claims_b = AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "provider_b".to_string(),
+            external_user_id: "user-stored-unverified-b".to_string(),
+            email: "stored-unverified@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+
+        assert_ne!(
+            profile_a.id, profile_b.id,
+            "a verified sign-in must not attach to a profile whose stored email is unverified"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn verified_signin_refreshes_stored_link(pool: PgPool) {
+        // First sign-in unverified → link stored unverified. Second sign-in on
+        // the SAME provider identity, now verified → the stored flag self-heals.
+        let mut claims = AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "provider_a".to_string(),
+            external_user_id: "user-refresh".to_string(),
+            email: "refresh@example.com".to_string(),
+            email_verified: Some(false),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile = resolve_from_claims(&pool, &claims).await.unwrap();
+
+        let stored: bool = sqlx::query_scalar(
+            "SELECT email_verified FROM kb_profile_auth_links \
+             WHERE auth_provider = 'provider_a' AND auth_provider_user_id = 'user-refresh'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!stored, "first (unverified) sign-in stores unverified");
+
+        claims.email_verified = Some(true);
+        let same = resolve_from_claims(&pool, &claims).await.unwrap();
+        assert_eq!(profile.id, same.id);
+
+        let stored: bool = sqlx::query_scalar(
+            "SELECT email_verified FROM kb_profile_auth_links \
+             WHERE auth_provider = 'provider_a' AND auth_provider_user_id = 'user-refresh'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(stored, "verified sign-in refreshes the stored flag");
     }
 
     fn machine_claims(client_id: &str) -> AuthClaims {
