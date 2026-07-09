@@ -10,27 +10,75 @@
 use temper_core::error::TemperError;
 use temper_core::types::ids::ResourceId;
 use temper_core::types::provenance::ProvenanceSource;
+use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 /// Slugify a title for a resource's stored slug and the decoration half of a
-/// ref / filename. Lowercase; every run of non-ASCII-alphanumeric chars (incl.
-/// non-ASCII letters like `é`, `ē`) collapses to a single `-`; leading/trailing
-/// `-` trimmed. The output is always [`validate_slug`](super::actions::validate_slug)-conformant
-/// (ASCII lowercase alphanumerics separated by single hyphens) — this is what
-/// lets a title-derived slug pass create-time validation. Non-ASCII letters are
-/// *stripped*, not transliterated: a title with no ASCII alphanumerics (e.g.
-/// wholly non-Latin) slugs to the empty string, which `validate_slug` then
-/// rejects with a clear error rather than a silent bad slug.
+/// ref / filename. The output is always
+/// [`validate_slug`](super::actions::validate_slug)-conformant (ASCII lowercase
+/// alphanumerics separated by single hyphens) — this is what lets a
+/// title-derived slug pass create-time validation, and it holds **by
+/// construction** because the keep-test below is ASCII-restricted.
+///
+/// Non-ASCII characters are **transliterated to ASCII**, not passed through and
+/// not silently dropped (issue #320). The title is first Unicode-normalized
+/// with NFKD (compatibility decomposition), which turns superscript/subscript
+/// digits into plain digits (`⁷` → `7`), splits accented letters into base +
+/// combining mark, and expands vulgar fractions (`½` → `1⁄2`). Combining marks
+/// are then dropped (`é` → `e`), a small set of common non-decomposable symbols
+/// is mapped to sensible ASCII (`§` → `sec`, `°` → `deg`, dashes/bullets → `-`,
+/// curly quotes → `'`/`"`), and any other non-ASCII char collapses to a
+/// separator. Finally the string is lowercased and every run of
+/// non-ASCII-alphanumeric chars collapses to a single `-` with leading/trailing
+/// `-` trimmed.
+///
+/// A title with no ASCII alphanumerics after transliteration (e.g. wholly
+/// non-Latin script) slugs to the empty string, which `validate_slug` then
+/// rejects with a clear error rather than producing a silent bad slug.
 pub fn sluggify(title: &str) -> String {
-    title
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
+    // Step 1 — NFKD-normalize and fold to ASCII: drop combining marks, keep
+    // ASCII verbatim, map the common non-decomposable symbols, and collapse any
+    // other non-ASCII char to a separator. `folded` is pure ASCII by construction.
+    let mut folded = String::with_capacity(title.len());
+    for c in title.nfkd() {
+        if is_combining_mark(c) {
+            continue;
+        }
+        if c.is_ascii() {
+            folded.push(c);
+        } else {
+            folded.push_str(fold_non_ascii_symbol(c));
+        }
+    }
+    // Step 2 — lowercase, split on every run of non-ASCII-alphanumeric chars,
+    // and rejoin with single `-` (drops empty leading/trailing/interior runs).
+    folded
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|seg| !seg.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+/// Map a non-ASCII char that NFKD left undecomposed to sensible ASCII, mirroring
+/// the client-side reference fold in issue #320. `§`/`°` become words (padded so
+/// they never fuse with an adjacent digit); dashes/bullets and typographic
+/// quotes/ellipsis map to their ASCII forms. Any char not listed collapses to a
+/// space — a slug separator — so non-Latin scripts degrade to hyphens rather
+/// than surviving as slug-invalid bytes.
+fn fold_non_ascii_symbol(c: char) -> &'static str {
+    match c {
+        // en/em/figure/horizontal dash, bullet, middle dot, fraction slash
+        '\u{2013}' | '\u{2014}' | '\u{2012}' | '\u{2015}' | '\u{2022}' | '\u{00B7}'
+        | '\u{2044}' => "-",
+        '\u{2018}' | '\u{2019}' | '\u{201A}' => "'", // single curly quotes
+        '\u{201C}' | '\u{201D}' | '\u{201E}' => "\"", // double curly quotes
+        '\u{2026}' => "...",                         // horizontal ellipsis
+        '\u{00A7}' => " sec ",                       // section sign
+        '\u{00B0}' => " deg ",                       // degree sign
+        _ => " ",
+    }
 }
 
 /// The decorated, self-resolving form printed for every resource:
@@ -100,27 +148,81 @@ mod tests {
 
     #[test]
     fn sluggify_output_is_validate_slug_conformant() {
-        // Regression (bug B2, 2026-07-06): a non-ASCII title char used to slug
-        // to a non-ASCII slug that validate_slug rejected on create. Non-ASCII
-        // letters are now stripped, and the result is a valid slug.
+        // Regression guard (bugs B2 2026-07-06 + #320): the generator's output is
+        // checked by the *same* `validate_slug` the request path uses, so the two
+        // can never diverge again. Non-ASCII is NFKD-transliterated to ASCII —
+        // superscript digits and accented letters survive as their ASCII
+        // equivalents rather than being dropped or passed through.
         use crate::operations::actions::validate_slug;
         for title in [
-            "Three distinct map telē", // trailing non-ASCII → stripped
-            "Café déjà",               // interior non-ASCII → stripped, runs collapsed
-            "Hello, World!",           // punctuation run → single hyphen
-            "  Trim --Me-- ",          // leading/trailing separators trimmed
+            "Three distinct map telē",            // accented letter → base letter
+            "Café déjà",                          // interior accents transliterated
+            "Some Kind of Terms⁷ (part 3 of 12)", // superscript footnote → plain digit
+            "Notice Period⁶",                     // trailing superscript digit
+            "§5 Payment Terms",                   // section sign → word
+            "Ambient 20° Room",                   // degree sign → word
+            "One ½ portion",                      // vulgar fraction expanded
+            "“Smart” quotes — and dashes",        // typographic punctuation
+            "Ολοκλήρωμα",                         // wholly non-Latin → empty (rejected)
+            "Hello, World!",                      // punctuation run → single hyphen
+            "  Trim --Me-- ",                     // leading/trailing separators trimmed
         ] {
             let slug = sluggify(title);
-            assert!(
-                validate_slug(&slug).is_ok(),
-                "sluggify({title:?}) = {slug:?} must be validate_slug-conformant"
-            );
+            if slug.is_empty() {
+                // Empty is the documented "no ASCII alphanumerics" outcome, which
+                // validate_slug rejects with a clear error (never a silent bad slug).
+                assert!(validate_slug(&slug).is_err());
+            } else {
+                assert!(
+                    validate_slug(&slug).is_ok(),
+                    "sluggify({title:?}) = {slug:?} must be validate_slug-conformant"
+                );
+            }
         }
+        // Transliteration preserves information rather than dropping it.
         assert_eq!(
             sluggify("Three distinct map telē"),
-            "three-distinct-map-tel"
+            "three-distinct-map-tele"
         );
-        assert_eq!(sluggify("Café déjà"), "caf-d-j");
+        assert_eq!(sluggify("Café déjà"), "cafe-deja");
+        assert_eq!(
+            sluggify("Some Kind of Terms⁷ (part 3 of 12)"),
+            "some-kind-of-terms7-part-3-of-12"
+        );
+        assert_eq!(sluggify("Notice Period⁶"), "notice-period6");
+        assert_eq!(sluggify("§5 Payment Terms"), "sec-5-payment-terms");
+        assert_eq!(sluggify("Ambient 20° Room"), "ambient-20-deg-room");
+        assert_eq!(sluggify("One ½ portion"), "one-1-2-portion");
+        // Wholly non-Latin script has no ASCII alphanumerics to transliterate.
+        assert_eq!(sluggify("Ολοκλήρωμα"), "");
+    }
+
+    #[test]
+    fn sluggify_never_emits_an_invalid_slug() {
+        // Property (#320): for ANY title, the derived slug is either empty (no
+        // ASCII alphanumerics) or validate_slug-conformant — the generator can
+        // never emit a slug the validator refuses. Sweep a wide codepoint range,
+        // including the compatibility/symbol blocks that motivated the bug.
+        use crate::operations::actions::validate_slug;
+        let mut checked = 0usize;
+        for cp in (0x20u32..0x2200)
+            .chain(0x2C00..0x2E00)
+            .chain(0x1F600..0x1F680)
+        {
+            let Some(ch) = char::from_u32(cp) else {
+                continue;
+            };
+            // Embed the sweep char among ASCII so most cases exercise the
+            // "interior non-ASCII" collapse rather than the all-empty edge.
+            let title = format!("a{ch}b");
+            let slug = sluggify(&title);
+            assert!(
+                slug.is_empty() || validate_slug(&slug).is_ok(),
+                "sluggify({title:?}) = {slug:?} (cp U+{cp:04X}) is neither empty nor valid"
+            );
+            checked += 1;
+        }
+        assert!(checked > 8000, "sweep should cover thousands of codepoints");
     }
 
     #[test]
