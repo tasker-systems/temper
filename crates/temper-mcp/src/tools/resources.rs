@@ -421,13 +421,18 @@ fn provenance_body(
 
 // ── Tool handlers ──────────────────────────────────────────────────
 
-pub async fn create_resource(
+/// Build the shared `CreateResource` command from an MCP create input: validate the owner format,
+/// resolve the home anchor (running the cogmap producer gate before any write), derive the slug from
+/// the title, default `origin_uri`, assemble the act context, and resolve the optional goal ref.
+///
+/// Shared by [`create_resource`] and `tools::ingest::ingest_begin` so the two cannot drift — a
+/// segmented begin creates a resource by exactly the same rules as a one-shot create.
+pub(crate) async fn build_create_command(
     svc: &TemperMcpService,
+    profile_id: ProfileId,
     input: CreateResourceInput,
-) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
+) -> Result<CreateResource, rmcp::ErrorData> {
     let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
 
     // Validate owner format if provided (stub for R11)
     if let Some(ref owner) = input.owner {
@@ -548,6 +553,19 @@ pub async fn create_resource(
         act,
         origin: Surface::Mcp,
     };
+
+    Ok(cmd)
+}
+
+pub async fn create_resource(
+    svc: &TemperMcpService,
+    input: CreateResourceInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+    let profile_id = ProfileId::from(profile.id);
+
+    let cmd = build_create_command(svc, profile_id, input).await?;
 
     let backend = DbBackend::new(pool.clone(), profile_id);
     let out = backend.create_resource(cmd).await.map_err(|e| match e {
