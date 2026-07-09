@@ -324,7 +324,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     values,
                     weight,
                     act,
-                } => temper_cli::commands::facet::run(r#ref, values, weight, act),
+                } => temper_cli::commands::facet::run(r#ref, values, weight, act, output_format),
             }
         }
         Commands::Context { action } => match action {
@@ -773,7 +773,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 output_format,
             )
         }
-        Commands::Edge { action } => temper_cli::commands::edge::run(action),
+        Commands::Edge { action } => temper_cli::commands::edge::run(action, output_format),
         Commands::Cogmap { cmd } => match cmd {
             CogmapCmd::Reconcile {
                 r#ref,
