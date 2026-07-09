@@ -5057,7 +5057,7 @@ dependencies = [
 
 [[package]]
 name = "temper-cli"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "anstream 0.6.21",
  "anstyle",
