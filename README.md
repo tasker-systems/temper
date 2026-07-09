@@ -117,7 +117,7 @@ temper skill install
 temper resource create --type session --context @me/myapp --title "Implemented auth flow, chose JWT rotation"
 ```
 
-> **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable, so `--context myapp` is rejected. The one exception is `temper context create`, which takes a plain name because it is naming a context rather than resolving one.
+> **Addressing.** A **context** is addressed by ref — `@me/<slug>` for your own, `+<team>/<slug>` for a team's, or a bare UUID. Bare names are not addressable, so `--context myapp` is rejected. Of the commands below, only `temper context create` takes a plain name — it is naming a context, not resolving one.
 >
 > A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every row printed by `list`, `show`, and `search` carries a `ref` field: copy it, paste it.
 
@@ -158,9 +158,9 @@ Every command accepts the global flags `--format json|toon` and `--color auto|al
 
 | Command | Description |
 |---------|-------------|
-| `temper resource create --type <t> --title <t>` | Create a resource (goal, task, session, research, decision, concept) |
+| `temper resource create --type <type> --title <title>` | Create a resource (goal, task, session, research, decision, concept) |
 | `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
-| `temper resource list --type <t>` | List resources of a type |
+| `temper resource list --type <type>` | List resources of a type |
 | `temper resource show <ref>` | Show a resource by ref |
 | `temper resource show <ref> --meta-only` | Frontmatter only — a cheap orientation read, no body |
 | `temper resource show <ref> --edges` | Show a resource plus its graph edges |
@@ -169,8 +169,8 @@ Every command accepts the global flags `--format json|toon` and `--color auto|al
 
 | Command | Description |
 |---------|-------------|
-| `temper resource create --type task --title <t> --context <ctx-ref>` | Create a task |
-| `temper resource create --type goal --title <t> --context <ctx-ref>` | Create a goal |
+| `temper resource create --type task --title <title> --context <ctx-ref>` | Create a task |
+| `temper resource create --type goal --title <title> --context <ctx-ref>` | Create a goal |
 | `temper resource list --type task [--context <ctx-ref>]` | List tasks (or any doc type) |
 | `temper resource update <ref> --stage done` | Mark a task done |
 
@@ -209,7 +209,7 @@ Every authored act carries the envelope flags `--invocation`, `--confidence`, `-
 
 | Command | Description |
 |---------|-------------|
-| `temper context create <n>` | Create a context on the server |
+| `temper context create <name>` | Create a context on the server |
 | `temper context list` | List contexts visible to you on the server |
 | `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (admin-only; `@me` shorthand not accepted here) |
 | `temper skill generate` | Preview generated Claude Code skill |
