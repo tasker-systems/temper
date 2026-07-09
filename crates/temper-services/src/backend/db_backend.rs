@@ -1123,13 +1123,22 @@ impl Backend for DbBackend {
                 None => None,
             };
 
+        // Fill the managed-tier provenance trio from the act envelope before validation.
+        // Must precede `validate_managed_meta_pipeline`, which serializes the managed_meta.
+        // Fill-missing: an explicit caller value (e.g. an MCP agent passing managed_meta)
+        // always wins. Safe against the pipeline — base.schema.json declares all three keys,
+        // every doc-type schema is `additionalProperties: true`, and neither strip list
+        // (IDENTITY_FIELDS / TIER1_SYSTEM_FIELDS) contains them.
+        let mut managed_meta = cmd.managed_meta.clone();
+        temper_workflow::operations::stamp_provenance(&mut managed_meta, &cmd.act);
+
         // Create-time guards (WS6 collapse Task F): the shared strip → defaults → identity-keys →
         // validate pipeline (see `validate_managed_meta_pipeline`), the same one the legacy
         // `ingest_service::ingest` ran. A fresh canonical id + `now()` seed the validation document
         // (not persisted — the substrate mints the real id in `writes::create_resource`). An empty
         // slug removes `temper-slug` (mirrors ingest's `injected_slug`).
         let managed = validate_managed_meta_pipeline(ManagedValidationParams {
-            raw_managed: serde_json::to_value(&cmd.managed_meta)
+            raw_managed: serde_json::to_value(&managed_meta)
                 .map_err(|e| TemperError::Api(e.to_string()))?,
             doc_type: &cmd.doctype,
             title: &cmd.title,
