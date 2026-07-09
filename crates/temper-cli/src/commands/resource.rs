@@ -64,7 +64,14 @@ pub(crate) fn inject_ref(row: &mut serde_json::Value) {
         .or_else(|| row.get("resource_id"))
         .and_then(|v| v.as_str());
     let Some(id) = id else { return };
-    let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    // A row carrying no `title` — the `--meta-only` projection is the one that doesn't —
+    // cannot form the decorated half of a ref. This used to default the title to `""` and
+    // emit `-<uuid>`: a malformed ref that resolved only by accident (resolution is
+    // trailing-UUID-only) and that made the meta projection disagree with the full `show`
+    // on the value of `ref`. Emit nothing instead; a bare UUID is itself a valid ref.
+    let Some(title) = row.get("title").and_then(|v| v.as_str()) else {
+        return;
+    };
     if let Ok(uuid) = uuid::Uuid::parse_str(id) {
         let decorated = temper_workflow::operations::decorated_ref(
             title,
@@ -1045,9 +1052,10 @@ fn show_meta_only(
 
     let mut value = serde_json::to_value(&meta)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    // Inject `ref` before the `--fields` filter (parity with `list`): the
-    // anchor `id` is always preserved, and `ref` is kept only when
-    // requested — so `--fields` controls its visibility consistently.
+    // Inject `ref` before the `--fields` filter (parity with `list`): the anchor `id` is
+    // always preserved. The meta projection carries no `title`, so `inject_ref` is a no-op
+    // here — the row's `id` is itself a valid ref. Kept for shape parity with `list`, whose
+    // rows do carry a title.
     inject_ref(&mut value);
     let filtered = temper_core::projection::apply_top_level_filter(value, &fields_inner, "id")
         .map_err(map_projection_error)?;
@@ -2137,6 +2145,22 @@ mod inject_ref_tests {
         assert_eq!(
             row.get("ref").and_then(|v| v.as_str()),
             Some("my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2")
+        );
+    }
+
+    /// A titleless row (the `--meta-only` projection) gets no `ref` rather than a
+    /// fabricated `-<uuid>` one. Surfaced by the #330 differential e2e: the malformed ref
+    /// made `--meta-only` disagree with the full `show` on the same key.
+    #[test]
+    fn inject_ref_skips_rows_without_a_title() {
+        let mut row = serde_json::json!({
+            "id": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "managed_meta": {},
+        });
+        super::inject_ref(&mut row);
+        assert!(
+            row.get("ref").is_none(),
+            "no title means no decorated ref: {row}"
         );
     }
 }
