@@ -191,16 +191,19 @@ A cognitive map is a telos-seeded region of the substrate. Nodes are *distilled*
 
 | Command | Description |
 |---------|-------------|
+| `temper invocation open --cogmap <ref> --trigger-kind manual` | Open an envelope; the server mints the id |
+| `temper resource create --cogmap <ref> --sources <refs> [--sources-as-edges]` | Author a node into a map, citing its sources |
+| `temper resource facet <ref> --values '<json>'` | Set a typed facet on a resource |
+| `temper invocation close <ref> --disposition completed` | Close an envelope (`completed`, `failed`, or `abandoned`) |
+| `temper cogmap materialize <ref> [--threshold <n>]` | Recompute the map's regions |
 | `temper cogmap shape <ref>` | Read a map's materialized regions |
 | `temper cogmap analytics <ref>` | Map-level analytics (telos, staleness, regulation) |
 | `temper cogmap region-metrics <ref>` | Per-region analytics metrics |
-| `temper invocation open --cogmap <ref> --trigger-kind manual` | Open an envelope; the server mints the id |
-| `temper invocation close <ref> --disposition completed` | Close an envelope with a terminal disposition |
 | `temper invocation show <ref>` | Read one envelope plus its acts |
-| `temper resource create --cogmap <ref> --sources <refs> …` | Author a node into a map, citing its sources |
-| `temper resource facet <ref> --values '<json>'` | Set a typed facet on a resource |
 
-Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. See [cognitive maps](https://temperkb.io/cognitive-maps).
+The table reads in authoring order: open an envelope, create nodes and facet them, close, materialize, then read. **Regions only exist after a materialize** — an authoring pass that creates nodes but never materializes leaves the read tier unchanged.
+
+Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. `--sources` records block-provenance on the body; adding `--sources-as-edges` also asserts a `derived_from` edge to each resource-valued source. See [cognitive maps](https://temperkb.io/cognitive-maps).
 
 ### Contexts and Skills
 
