@@ -41,7 +41,7 @@ In the personal-knowledge projection, goals hold the vision, tasks carry the wor
   <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from goals through tasks down to sessions" width="700" />
 </p>
 
-This isn't a ticketing system competing with Linear. It's a structured vault of markdown files where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
+This isn't a ticketing system competing with Linear. It's a structured knowledge base where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
 
 ## Session continuity
 
@@ -50,7 +50,7 @@ Every new session starts with `temper warmup`, which injects active tasks, recen
 At the end of each session, a session note (`temper resource create --type session`) captures what happened — decisions made, tasks updated, next steps identified — written straight through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
-  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the vault" width="700" />
+  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the knowledge base" width="700" />
 </p>
 
 ## Goals and tasks
@@ -63,13 +63,13 @@ Temper gives you two building blocks:
 
 ## For humans and agents
 
-Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach the vault three ways:
+Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach your knowledge base three ways:
 
 - **CLI** — `temper warmup`, `temper search`, `temper resource create`. Claude Code hooks call `temper warmup` automatically at session start.
-- **MCP Server** — vault operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
-- **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your vault's structure and workflow conventions.
+- **MCP Server** — knowledge-base operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
+- **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your knowledge base's structure and workflow conventions.
 
-If it can read files, it can use temper.
+If it can read markdown, it can use temper.
 
 ## Install
 
@@ -121,19 +121,19 @@ temper resource create --type session --context @me/myapp --title "Implemented a
 >
 > A **resource** is addressed by ref too — a UUID or the decorated `slug-<uuid>` form. Every row printed by `list`, `show`, and `search` carries a `ref` field: copy it, paste it.
 
-## The Vault
+## Everything Resolves to Markdown
 
-Everything resolves to markdown. A resource *is* a markdown body with YAML frontmatter, and that is the form you read it in — through `temper resource show`, the MCP tools, or the web UI. The cloud is the source of truth, and every write routes through the API.
+A resource *is* a markdown body with YAML frontmatter, and that is the form you read it in — through `temper resource show`, an agent over MCP, or the web UI. The cloud is the source of truth, and every write routes through the API.
 
 Markdown is deliberate:
 
-- **Human-readable.** No proprietary formats. A resource reads the same in a terminal, in an editor, and in Obsidian.
+- **Human-readable.** No proprietary formats. A resource reads the same in a terminal, in the web UI, and in an agent's context window.
 - **AI-native.** Language models understand markdown and YAML frontmatter natively. No parsing overhead.
 - **Portable.** The knowledge base is the unit of value, not the tool.
 
 ## Commands
 
-Every command accepts the global flags `--format json|toon`, `--color auto|always|never`, and `--vault <path>`. Output defaults to TOON on a TTY and **JSON otherwise** — so an agent piping `temper` gets machine-readable output with no flag at all. Precedence runs flag → env (`TEMPER_FORMAT` / `TEMPER_COLOR`) → the `[cli]` section of your config → the TTY-aware default. Edit those defaults with `temper config edit`.
+Every command accepts the global flags `--format json|toon` and `--color auto|always|never`. Output defaults to TOON on a TTY and **JSON otherwise** — so an agent piping `temper` gets machine-readable output with no flag at all. Precedence runs flag → env (`TEMPER_FORMAT` / `TEMPER_COLOR`) → the `[cli]` section of your config → the TTY-aware default. Edit those defaults with `temper config edit`.
 
 ### Core
 
@@ -236,7 +236,7 @@ temper search "design patterns" --limit 5
 
 ## Claude Code Integration
 
-Temper generates a Claude Code skill file tailored to your vault:
+Temper generates a Claude Code skill file tailored to your knowledge base:
 
 ```bash
 temper skill install
@@ -275,7 +275,7 @@ What cloud adds:
 
 ### MCP Server
 
-The remote MCP server exposes vault operations as structured tools over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Agents authenticate via Auth0 using the standard OAuth 2.1 + PKCE flow — the server advertises Auth0's endpoints through RFC 8414 / RFC 9728 discovery so MCP clients handle the flow automatically.
+The remote MCP server exposes knowledge-base operations as structured tools over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Agents authenticate via Auth0 using the standard OAuth 2.1 + PKCE flow — the server advertises Auth0's endpoints through RFC 8414 / RFC 9728 discovery so MCP clients handle the flow automatically.
 
 **Available tools:**
 
