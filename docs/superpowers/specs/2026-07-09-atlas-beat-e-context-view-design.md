@@ -56,8 +56,24 @@ Three findings that reshaped the design:
 1. **`goal --parent_of--> task` (189 edges) is the containment spine**, not `advances` (16). (This
    asymmetry was itself a bug — historical tasks carried `parent_of` while `--goal` filtered
    `advances`. Filed as `019f468b`, fixed by a sibling session in `586717c2` /
-   `migrations/20260709000005_backfill_goal_parent_of_to_advances.sql`. Beat E is unaffected: the
-   context view reads both labels alike.)
+   `migrations/20260709000005_backfill_goal_parent_of_to_advances.sql`.)
+
+   > **The counts above are pre-backfill** (verified against prod 2026-07-09: 369 live `parent_of`
+   > goal↔task, 11 `advances` — the migration is merged but not yet applied). The backfill *folds*
+   > each `parent_of` goal→task edge and asserts `advances` **task→goal** in its place: reversed
+   > direction, different `edge_kind`. Container member counts are **invariant** under that
+   > conversion — but only because the container walk is undirected
+   > (`source_id = node OR target_id = node`) and filters on **no label and no direction**. That is
+   > therefore a load-bearing invariant of `graph_context_containers`, not an implementation detail:
+   > a walk that special-cased `parent_of` would silently empty every territory the day the
+   > migration lands, and one that special-cased `advances` would have shown 28 empty territories
+   > the day before it. Enforce with a test that asserts identical member counts across both
+   > representations.
+   >
+   > The backfill homes the new edge on the **task's** anchor, preferring `kb_cogmaps` over
+   > `kb_contexts`, so a cogmap-homed task would move its membership edge behind
+   > `anchor_readable_by_profile(cogmap)`. Verified benign today — all 369 home on `kb_contexts` —
+   > but the context view must not assume it.
 2. **`derived_from` is 100% cross-home** — the cogmap's distillations pointing at context
    resources. This *is* the circle↔square intersection the view must draw.
 3. **Aggregators are not interchangeable.** Treating `goal|concept|decision` as containers (the
@@ -316,10 +332,17 @@ Typed structs, never `serde_json::json!()`.
 ### 4.3 Endpoints
 
 ```
-GET /api/graph/contexts/{id}/panorama?group_by=doc_type      → ContextPanorama
-GET /api/graph/contexts/{id}/composition?container=<uuid>&depth=1        → AtlasSubgraph
-GET /api/graph/contexts/{id}/composition?group=doc_type:session&depth=1  → AtlasSubgraph
+GET /api/graph/contexts/panorama?context_ref=@me/temper&group_by=doc_type       → ContextPanorama
+GET /api/graph/contexts/composition?context_ref=…&container=<uuid>&depth=1      → AtlasSubgraph
+GET /api/graph/contexts/composition?context_ref=…&group=doc_type:session&depth=1 → AtlasSubgraph
 ```
+
+The context arrives as a **query param, not a path segment**: a decorated ref is `owner/slug` and
+contains a slash. This mirrors the existing `GET /api/graph/subgraph?context_ref=…`, and reuses
+`parse_context_ref` (`temper-core/src/context_ref.rs:87`) → `resolve_context_ref`
+(`temper-services/src/services/context_service.rs:101`), which already carries the right error
+taxonomy: id/handle miss → `NotFound`, team non-membership → `Forbidden` **without leaking the
+context's existence**.
 
 Thin handlers: middleware → typed extractor → service → response. Auth before any read; every query
 scopes through `resources_visible_to`.
@@ -328,7 +351,7 @@ scopes through `resources_visible_to`.
 
 | file | change |
 |---|---|
-| `nav.ts` | `?context=<slug>` scope param; `Focus` gains `{kind:'bucket'; groupKey; value}`; `deriveTier` maps container→1, bucket→1; `buildContextUrl`, `buildDrillBucketUrl` |
+| `nav.ts` | `?context=<slug>` scope param; `Focus` gains `{kind:'container'; id}` and `{kind:'bucket'; groupKey; value}`; `deriveTier` maps both to 1; `buildContextUrl`, `buildDrillContainerUrl`, `buildDrillBucketUrl`. A container id is a *resource* uuid, so it does **not** reuse the `territory:` token — territory ids are ephemeral region ids and `territoryIds()` splits them on `~` |
 | `AtlasCanvas.svelte` | first branch becomes `!cogmapId && !contextSlug && home` — otherwise a context door falls into `TierHome` |
 | `TierPanorama.svelte` | render the residual tray (new); containers already work post-`ad324b09` |
 | `TierNeighborhood.svelte` | pass `coreHome` through to `forceNeighborhood` |
