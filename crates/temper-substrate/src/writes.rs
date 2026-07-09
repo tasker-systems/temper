@@ -19,7 +19,8 @@ use crate::content::{
 };
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, ProfileId, PropertyId,
+    ResourceId,
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation};
 use crate::text::slugify;
@@ -1019,6 +1020,119 @@ pub async fn close_invocation_in_tx(
             emitter,
         },
     )
+    .await?;
+    Ok(())
+}
+
+// ── streaming/segmented ingest (Beat 1) ──────────────────────────────────────
+
+/// Append one already-prepared block at `p.block.seq` to an existing resource — the
+/// segmented-ingest write.
+#[derive(Debug)]
+pub struct AppendParams<'a> {
+    pub resource: ResourceId,
+    /// `seq` is authoritative (`block.seq`).
+    pub block: &'a PreparedBlock,
+    /// Sources this segment's content was incorporated from — recorded into
+    /// `kb_block_provenance` by the projector. Empty for an ordinary append with no attribution.
+    pub sources: Vec<Incorporation>,
+    pub emitter: EntityId,
+}
+
+/// [`append_block`] under the default (un-attributed) context.
+pub async fn append_block(pool: &PgPool, p: AppendParams<'_>) -> Result<BlockId> {
+    append_block_with(pool, p, EventContext::default()).await
+}
+
+/// Append one already-prepared block at `p.block.seq` to an existing resource under an explicit
+/// [`EventContext`] — the segmented-ingest write. Idempotent in SQL on (resource, seq, block
+/// merkle): a re-append of the same segment is a no-op returning the existing block id.
+pub async fn append_block_with(
+    pool: &PgPool,
+    p: AppendParams<'_>,
+    ctx: EventContext,
+) -> Result<BlockId> {
+    // Carry resource-level sources onto the block manifest → kb_block_provenance.
+    let mut block = p.block.clone();
+    block.incorporated = p.sources;
+    let mut tx = begin_scoped(pool).await?;
+    let id = fire_with(
+        &mut tx,
+        SeedAction::BlockAppend {
+            resource: p.resource,
+            block: &block,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .block()?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Parameters for [`finalize_ingest`].
+#[derive(Debug)]
+pub struct FinalizeParams {
+    pub resource: ResourceId,
+    pub expected_blocks: u32,
+    pub expected_body_hash: String,
+    pub emitter: EntityId,
+}
+
+/// Declare a segmented ingest complete: validate the landed block set + body_hash
+/// against the caller's expectation and record a `resource_finalized` event.
+/// Projection-less (the ledger row is the whole effect) — calls `resource_finalize`
+/// directly rather than through the `fire`/`SeedAction` surface, since there is no
+/// projection half to keep in step with a typed `Fired` variant.
+pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId> {
+    let payload = payloads::ResourceFinalized {
+        resource_id: p.resource,
+        expected_blocks: p.expected_blocks,
+        expected_body_hash: p.expected_body_hash,
+    };
+    let ev = sqlx::query_scalar!(
+        "SELECT resource_finalize($1,$2,$3,$4)",
+        serde_json::to_value(&payload)?,
+        p.emitter.uuid(),
+        serde_json::json!({}),
+        Option::<Uuid>::None,
+    )
+    .fetch_one(pool)
+    .await?
+    .context("resource_finalize returned null")?;
+    Ok(EventId::from(ev))
+}
+
+/// Per-resource source-provenance record for [`upsert_ingestion_record`].
+#[derive(Debug)]
+pub struct IngestionRecord<'a> {
+    pub resource: ResourceId,
+    pub source_uri: &'a str,
+    pub source_mimetype: Option<&'a str>,
+    /// `"passthrough"` for raw markdown, `"kreuzberg"` for extraction.
+    pub conversion_tool: &'a str,
+    pub conversion_version: &'a str,
+    /// sha256 of the source bytes, for resume integrity.
+    pub source_hash: Option<&'a str>,
+}
+
+/// Upsert the per-resource source-provenance row (`kb_ingestion_records`, PK
+/// resource_id) — its designed "ingestion idempotency" role, finally written. Holds
+/// the source uri + hash the resume path checks the client's source against.
+pub async fn upsert_ingestion_record(pool: &PgPool, r: IngestionRecord<'_>) -> Result<()> {
+    sqlx::query!(
+        "INSERT INTO kb_ingestion_records \
+           (resource_id, source_uri, source_mimetype, conversion_tool, conversion_version, fetched_at, converted_at, source_hash) \
+         VALUES ($1,$2,$3,$4,$5, now(), now(), $6) \
+         ON CONFLICT (resource_id) DO UPDATE SET \
+           source_uri = EXCLUDED.source_uri, source_mimetype = EXCLUDED.source_mimetype, \
+           conversion_tool = EXCLUDED.conversion_tool, conversion_version = EXCLUDED.conversion_version, \
+           converted_at = now(), source_hash = EXCLUDED.source_hash",
+        r.resource.uuid(), r.source_uri, r.source_mimetype, r.conversion_tool,
+        r.conversion_version, r.source_hash,
+    )
+    .execute(pool)
     .await?;
     Ok(())
 }

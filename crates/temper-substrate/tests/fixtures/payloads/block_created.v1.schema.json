@@ -1,34 +1,165 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "BlockCreated",
+  "description": "Payload for the (now fired) `block_created` event — one appended segment.\nThe projector (`block_append` → `_project_blocks`) reads `resource_id` + the\nsingle-block manifest; the content sidecar carries the chunk prose/embeddings.",
   "type": "object",
   "properties": {
-    "block_id": {
-      "$ref": "#/$defs/BlockId"
-    },
     "resource_id": {
       "$ref": "#/$defs/ResourceId"
     },
-    "seq": {
-      "type": "integer",
-      "format": "int32"
+    "block": {
+      "$ref": "#/$defs/BlockManifest"
     }
   },
   "required": [
-    "block_id",
     "resource_id",
-    "seq"
+    "block"
   ],
   "$defs": {
+    "ResourceId": {
+      "description": "A `kb_resources.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "BlockManifest": {
+      "description": "One block's manifest. `block_body_hash` deliberately absent — it is sha256(ordered chunk hashes),\nderived in the projector (the derived-state rule applied to the spec's own §3 sketch).",
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "$ref": "#/$defs/BlockId"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChunkManifest"
+          }
+        },
+        "incorporated": {
+          "description": "The ordered sources this block's content was incorporated from — recorded into\n`kb_block_provenance` by the projector. Empty (and skipped on the wire) for the\nscenario/charter paths; set by the resource create/update write path from the caller's sources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Incorporation"
+          }
+        }
+      },
+      "required": [
+        "block_id",
+        "seq",
+        "chunks"
+      ]
+    },
     "BlockId": {
       "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     },
-    "ResourceId": {
-      "description": "A `kb_resources.id` value.",
+    "ChunkManifest": {
+      "description": "Content-addressed chunk reference: structure + hash, NEVER prose (CAS rule, spec §0.1).",
+      "type": "object",
+      "properties": {
+        "chunk_id": {
+          "$ref": "#/$defs/ChunkId"
+        },
+        "chunk_index": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "content_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "chunk_index",
+        "content_hash"
+      ]
+    },
+    "ChunkId": {
+      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
       "type": "string",
       "format": "uuid"
+    },
+    "Incorporation": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "source",
+        "seq"
+      ]
+    },
+    "ProvenanceSource": {
+      "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "event"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resource"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "An external URL (e.g. a Linear issue, a GitHub PR, a doc). The value is the URL as supplied;\nthe projector normalizes + resolves it to a `kb_remote_sources.id` via `_upsert_remote_source`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "remote"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
+      ]
     }
   }
 }

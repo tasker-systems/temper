@@ -464,12 +464,23 @@ pub struct Incorporation {
     pub seq: i32,
 }
 
+/// Payload for the (now fired) `block_created` event — one appended segment.
+/// The projector (`block_append` → `_project_blocks`) reads `resource_id` + the
+/// single-block manifest; the content sidecar carries the chunk prose/embeddings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BlockCreated {
-    pub block_id: BlockId,
     pub resource_id: ResourceId,
-    pub seq: i32,
+    pub block: BlockManifest,
+}
+
+/// Payload for `resource_finalized` — a segmented ingest declared complete.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceFinalized {
+    pub resource_id: ResourceId,
+    pub expected_blocks: u32,
+    pub expected_body_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
