@@ -70,6 +70,118 @@ fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
     pack_chunks(&[chunk]).expect("pack chunk")
 }
 
+/// Seed a profile + context + a segmented resource whose block 0 has landed, returning the
+/// backend bound to the owning profile and the created resource.
+async fn seed_segmented_resource(
+    pool: &PgPool,
+    email: &str,
+    slug: &str,
+) -> (DbBackend, temper_workflow::types::resource::ResourceRow) {
+    let (profile, context) = seed_profile_with_context(pool, email).await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let created = backend
+        .create_resource(CreateResource {
+            slug: slug.to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: slug.to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            goal: None,
+            origin_uri: Some(format!("test://{slug}")),
+            chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("create block 0")
+        .value;
+    (backend, created)
+}
+
+// The declared segment-text hash is the one integrity check a caller that does not chunk locally
+// can honor, so every caller honors it: a mismatch is rejected before anything lands.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn append_rejects_a_content_hash_that_does_not_match_content(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "hash-mismatch@example.com", "zz-hash-mismatch").await;
+
+    let err = backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: "second segment".to_string(),
+                content_hash: "deadbeef".to_string(), // not sha256("second segment")
+                chunks_packed: one_chunk_packed("second segment", "bb"),
+            },
+        )
+        .await
+        .expect_err("a mismatched content_hash must be rejected");
+
+    assert!(
+        matches!(err, TemperError::BadRequest(ref m) if m.contains("content_hash")),
+        "expected BadRequest naming content_hash, got {err:?}"
+    );
+
+    let blocks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded",
+    )
+    .bind(created.id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(blocks, 1, "a rejected append must land nothing");
+}
+
+// `body_hash` is what a non-chunking caller echoes back at finalize, so append must report the
+// same value finalize will compare against.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn append_returns_the_live_body_hash(pool: PgPool) {
+    let (backend, created) =
+        seed_segmented_resource(&pool, "body-hash@example.com", "zz-body-hash").await;
+
+    let text = "second segment";
+    let out = backend
+        .append_block(
+            created.id,
+            AppendBlockPayload {
+                seq: 1,
+                content: text.to_string(),
+                content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
+                chunks_packed: one_chunk_packed(text, "bb"),
+            },
+        )
+        .await
+        .expect("append with a correct hash succeeds")
+        .value;
+
+    let stored: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+        .bind(created.id.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        out.body_hash, stored,
+        "BlocksResponse.body_hash must be the value finalize will compare against"
+    );
+
+    // And it round-trips: echoing it back finalizes cleanly.
+    backend
+        .finalize_ingest(
+            created.id,
+            FinalizePayload {
+                expected_blocks: 2,
+                expected_body_hash: out.body_hash,
+            },
+        )
+        .await
+        .expect("the echoed body_hash finalizes");
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
     let (profile, context) = seed_profile_with_context(&pool, "segmented@example.com").await;
@@ -104,9 +216,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
-                // Unused server-side in Beat 2 (the server keys off `chunks_packed`'s own merkle,
-                // not this client text-identity hash) — any value is accepted.
-                content_hash: "unused-client-text-hash".to_string(),
+                content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: one_chunk_packed("second segment", "bb"),
             },
         )
@@ -128,7 +238,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
-                content_hash: "unused-client-text-hash".to_string(),
+                content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: one_chunk_packed("second segment", "bb"),
             },
         )
@@ -219,7 +329,7 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
-                content_hash: "unused-client-text-hash".to_string(),
+                content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: one_chunk_packed("second segment", "dd"),
             },
         )

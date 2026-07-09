@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ensure_auto_join_memberships($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ensure_auto_join_memberships",
+        "type_info": "Void"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "31da9ec3f0f22359684d89ff76d3c0c1d4f651a82c7d8e05a4250dafe27548e2"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES ($1, $2, 1) ON CONFLICT (name) DO UPDATE SET payload_schema = EXCLUDED.payload_schema, schema_version = EXCLUDED.schema_version",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "52f700e4fbce6c72baa9b29f93890e1c876410df3606c360f82ad03ceb4b990a"
+}

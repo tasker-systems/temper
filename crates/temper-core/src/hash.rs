@@ -20,6 +20,19 @@ pub fn compute_body_hash(body: &str) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
+/// Bare lowercase-hex SHA-256 of raw bytes — **no `sha256:` prefix**, unlike [`compute_body_hash`].
+///
+/// This is the segment-text identity hash the ingest wire carries in
+/// `AppendBlockPayload.content_hash`, and the Rust twin of Postgres's
+/// `encode(sha256(convert_to(s, 'UTF8')), 'hex')`. The append path recomputes it over the received
+/// segment text and rejects a mismatch, which is the one transit-integrity check available to a
+/// caller that cannot chunk or embed locally.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
 // ---------------------------------------------------------------------------
 // JSON canonicalization and hashing
 // ---------------------------------------------------------------------------

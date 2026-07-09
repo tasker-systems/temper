@@ -1,0 +1,106 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.id, i.team_id, t.slug AS team_slug, t.name AS team_name,\n               i.invited_email, i.invited_by_profile_id,\n               i.role AS \"role: TeamRole\", i.token,\n               i.status AS \"status: InvitationStatus\", i.expires_at, i.created\n          FROM kb_team_invitations i\n          JOIN kb_teams t ON t.id = i.team_id\n         WHERE i.status = 'pending'\n           AND i.expires_at > now()\n           AND t.is_active\n           AND lower(i.invited_email) IN (\n                 SELECT lower(al.email)\n                   FROM kb_profile_auth_links al\n                  WHERE al.profile_id = $1\n                    AND al.email IS NOT NULL\n                    AND al.email_verified\n                    AND (SELECT COUNT(DISTINCT al2.profile_id)\n                           FROM kb_profile_auth_links al2\n                          WHERE lower(al2.email) = lower(al.email)\n                            AND al2.email_verified) = 1\n               )\n         ORDER BY i.created DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "team_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "invited_email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "invited_by_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "role: TeamRole",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "token",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "status: InvitationStatus",
+        "type_info": {
+          "Custom": {
+            "name": "invitation_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "accepted",
+                "declined",
+                "expired"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "created",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1671ead6f424d261233271c96e9680a8da8418454d4eeaed3d87b0b4b135fc8f"
+}

@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT block_id            AS \"block_id!\",\n                  block_seq           AS \"block_seq!\",\n                  source_kind         AS \"source_kind!\",\n                  source_id           AS \"source_id!\",\n                  source_uri,\n                  accretion_seq       AS \"accretion_seq!\",\n                  contributed_by_event_id AS \"contributed_by_event_id!\",\n                  created             AS \"created!\"\n             FROM resource_block_provenance($1, 'profile', $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "block_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_seq!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "source_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "source_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "accretion_seq!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "contributed_by_event_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "bcb240afeece3b0e7ccf5076c84fba316db7101bac377de02312dd82e0dc4a1f"
+}

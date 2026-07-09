@@ -138,6 +138,20 @@ fn packed_to_incoming(
     }
 }
 
+/// The declared segment-text hash must match the segment text. This is the one integrity check a
+/// caller that does not chunk locally can honor, so it is the check every caller honors — the CLI
+/// already sends exactly these two fields and, before this, had them read by nothing.
+fn verify_content_hash(payload: &AppendBlockPayload) -> Result<(), TemperError> {
+    let actual = temper_core::hash::sha256_hex(payload.content.as_bytes());
+    if actual != payload.content_hash {
+        return Err(TemperError::BadRequest(format!(
+            "content_hash mismatch for seq {}: declared {}, computed {}",
+            payload.seq, payload.content_hash, actual
+        )));
+    }
+    Ok(())
+}
+
 /// Unpack a caller-supplied `chunks_packed` blob into substrate-native `IncomingChunk`s, ordered by
 /// `chunk_index` so the body-hash merkle matches the substrate's stored `body_hash`. A malformed blob is
 /// the caller's fault → `BadRequest`.
@@ -372,16 +386,21 @@ impl DbBackend {
         }
     }
 
-    /// The landed (non-folded) segment set for a resource, ordered by `seq`. `content_hash` is
-    /// the per-block merkle (`kb_block_revisions.block_body_hash`, latest revision per block) —
-    /// see [`SegmentInfo`]'s doc for why this is NOT the same hash the client sends inbound on
-    /// append. Shared by `append_block`/`list_blocks` (Backend trait) and the ingest handler's
+    /// The landed (non-folded) segment set for a resource, ordered by `seq`, plus the resource's
+    /// live `body_hash` — the whole [`BlocksResponse`] every segmented read returns.
+    ///
+    /// `SegmentInfo.content_hash` is the per-block merkle (`kb_block_revisions.block_body_hash`,
+    /// latest revision per block) — see [`SegmentInfo`]'s doc for why this is NOT the same hash the
+    /// client sends inbound on append. `body_hash` is the resource-level merkle a caller echoes back
+    /// at finalize.
+    ///
+    /// Shared by `append_block`/`list_blocks` (Backend trait) and the ingest handler's
     /// segmented-begin branch (reading block 0 back right after `create_resource` lands it),
     /// so the "currently landed set" projection lives in exactly one place.
-    async fn landed_segments(
+    async fn landed_blocks(
         pool: &PgPool,
         resource: ResourceId,
-    ) -> Result<Vec<SegmentInfo>, TemperError> {
+    ) -> Result<BlocksResponse, TemperError> {
         let rows = sqlx::query!(
             r#"
             SELECT b.seq AS "seq!", r.block_body_hash AS "block_body_hash!"
@@ -398,13 +417,30 @@ impl DbBackend {
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
-        Ok(rows
-            .into_iter()
-            .map(|r| SegmentInfo {
-                seq: r.seq as u32,
-                content_hash: r.block_body_hash,
-            })
-            .collect())
+
+        // `kb_resources.body_hash` is nullable: a metadata-only resource has no body and therefore
+        // no merkle. Such a resource has no landed blocks either, so it reports an empty hash
+        // alongside an empty set. Finalizing it would fail in `resource_finalize` (NULL IS DISTINCT
+        // FROM ''), which is the correct outcome — there is nothing to finalize.
+        let body_hash = sqlx::query_scalar!(
+            "SELECT body_hash FROM kb_resources WHERE id = $1",
+            resource.uuid(),
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(api_err)?
+        .unwrap_or_default();
+
+        Ok(BlocksResponse {
+            blocks: rows
+                .into_iter()
+                .map(|r| SegmentInfo {
+                    seq: r.seq as u32,
+                    content_hash: r.block_body_hash,
+                })
+                .collect(),
+            body_hash,
+        })
     }
 
     /// Record the per-resource source-provenance row for a segmented-begin create (design §4
@@ -2202,6 +2238,8 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(resource.uuid()).await?;
+        // Then the payload's own integrity, before anything is prepared or written.
+        verify_content_hash(&payload)?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -2230,8 +2268,8 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let blocks = Self::landed_segments(&self.pool, resource).await?;
-        Ok(CommandOutput::new(BlocksResponse { blocks }))
+        let landed = Self::landed_blocks(&self.pool, resource).await?;
+        Ok(CommandOutput::new(landed))
     }
 
     async fn finalize_ingest(
@@ -2270,8 +2308,8 @@ impl Backend for DbBackend {
         // Gated the same as append/finalize (not a general visibility passthrough): an
         // in-progress segmented ingest's landed-block set is caller-private until finalized.
         self.check_can_modify_next(resource.uuid()).await?;
-        let blocks = Self::landed_segments(&self.pool, resource).await?;
-        Ok(CommandOutput::new(BlocksResponse { blocks }))
+        let landed = Self::landed_blocks(&self.pool, resource).await?;
+        Ok(CommandOutput::new(landed))
     }
 }
 

@@ -135,6 +135,15 @@ pub struct AppendBlockPayload {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct BlocksResponse {
     pub blocks: Vec<SegmentInfo>,
+    /// The resource's live `kb_resources.body_hash` after the landed set — the value a caller
+    /// echoes back as [`FinalizePayload::expected_body_hash`].
+    ///
+    /// A caller that does not chunk locally (the MCP surface) cannot derive this merkle itself, so
+    /// the server hands it over. Finalize's comparison then asserts "nothing changed between my
+    /// last append and now" — a real consistency check against a dropped or concurrent write —
+    /// rather than an assertion such a caller would have to be exempted from. Opaque: echo it back
+    /// verbatim, never parse it.
+    pub body_hash: String,
 }
 
 /// Declare a segmented ingest complete — `POST /api/resources/{id}/finalize`.
@@ -485,11 +494,16 @@ mod tests {
                     content_hash: "h1".to_owned(),
                 },
             ],
+            body_hash: "sha256:deadbeef".to_owned(),
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: BlocksResponse = serde_json::from_str(&j).unwrap();
         assert_eq!(back.blocks.len(), 2);
         assert_eq!(back.blocks[1].seq, 1);
+        assert_eq!(
+            back.body_hash, "sha256:deadbeef",
+            "the echo-back value must survive the wire"
+        );
     }
 
     #[test]

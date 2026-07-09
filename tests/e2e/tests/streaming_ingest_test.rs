@@ -502,7 +502,7 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
     let append1 = AppendBlockPayload {
         seq: 1,
         content: segments[1].text.clone(),
-        content_hash: "unused-client-text-hash".to_string(),
+        content_hash: temper_core::hash::sha256_hex(segments[1].text.as_bytes()),
         chunks_packed: chunks1,
     };
     app.client
@@ -545,7 +545,7 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
         let append = AppendBlockPayload {
             seq: *seq,
             content: segments[idx].text.clone(),
-            content_hash: "unused-client-text-hash".to_string(),
+            content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
             chunks_packed: packed,
         };
         app.client
