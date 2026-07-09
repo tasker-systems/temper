@@ -46,6 +46,10 @@ pub struct ProfileAuthLink {
     pub auth_provider: String,
     pub auth_provider_user_id: String,
     pub email: Option<String>,
+    /// Whether the identity provider has verified `email` (persisted from the
+    /// `email_verified` claim at provisioning; refreshed on verified sign-ins).
+    /// Email-based matching (reconciliation, invitation resolution) requires it.
+    pub email_verified: bool,
     pub is_default: bool,
     pub linked_at: DateTime<Utc>,
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at\n          FROM kb_profile_auth_links\n         WHERE profile_id = $1\n         ORDER BY linked_at ASC\n        ",
+  "query": "\n        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,\n               is_default, linked_at\n          FROM kb_profile_auth_links\n         WHERE auth_provider = $1\n           AND auth_provider_user_id = $2\n        ",
   "describe": {
     "columns": [
       {
@@ -30,18 +30,24 @@
       },
       {
         "ordinal": 5,
-        "name": "is_default",
+        "name": "email_verified",
         "type_info": "Bool"
       },
       {
         "ordinal": 6,
+        "name": "is_default",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
         "name": "linked_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
@@ -51,8 +57,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "f1e08329001a94d3f7f23265ad328a9ee1fe2e64cbf0682177f9b344deeb3366"
+  "hash": "204398d3f6d5e3e8f4e67a2e52634e47efd80601045cbb447672c9f67fe53db0"
 }
