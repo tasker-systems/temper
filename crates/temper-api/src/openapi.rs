@@ -168,6 +168,10 @@ use temper_workflow::types::resource::{
         temper_core::types::reassign::ReassignAck,
         temper_core::types::reassign::BulkReassignRequest,
         temper_core::types::reassign::BulkReassignAck,
+        temper_core::types::access_gate::JoinRequest,
+        temper_core::types::access_gate::JoinRequestStatus,
+        temper_core::types::access_gate::PublicSystemSettings,
+        crate::handlers::access::CreateRequestBody,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -185,6 +189,7 @@ use temper_workflow::types::resource::{
         (name = "Invitations", description = "Team invitations (invite/list/accept/decline)"),
         (name = "Reassign", description = "Resource ownership reassignment (single + bulk team-scoped)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
+        (name = "Access", description = "System access gate — self-service join requests and public settings"),
     ),
     info(
         title = "Temper Cloud API",

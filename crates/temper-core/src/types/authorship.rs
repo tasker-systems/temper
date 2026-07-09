@@ -101,7 +101,7 @@ impl ActContext {
 /// The assembler owns the **one** cross-surface validation — "confidence is required iff any other
 /// authorship field is supplied" — in a single place, so MCP/API/CLI can never drift on it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema, utoipa::IntoParams))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(
     any(feature = "mcp", feature = "scenario-schema"),

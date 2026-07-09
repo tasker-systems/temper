@@ -7,6 +7,7 @@ use uuid::Uuid;
 /// Status of a join request in its lifecycle.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "join_request_status", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +21,7 @@ pub enum JoinRequestStatus {
 /// A user-initiated request to join a team (typically the gating team).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct JoinRequest {
     pub id: Uuid,
@@ -108,6 +110,7 @@ pub struct SystemSettings {
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicSystemSettings {
     pub access_mode: String,
