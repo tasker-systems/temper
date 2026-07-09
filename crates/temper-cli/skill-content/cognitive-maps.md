@@ -73,18 +73,24 @@ place only if it serves the telos.
 Open one **invocation envelope** per authoring pass; every authored act carries its id.
 
 ```bash
-inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual)   # server mints the id
+# The server mints the id. In a script stdout is non-TTY, so temper emits JSON by default —
+# read the generic `id` key (every create-style response carries it).
+inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual --format json | jq -r .id)
 # ... read the charter, then for each source you distill:
 
-# 1. create the node INTO the map, citing its source(s)
+# 1. create the node INTO the map, citing its source(s). `--sources-as-edges` also asserts
+#    one derived_from edge per resource-valued source, so step 2 is usually unnecessary.
 temper resource create --cogmap <MAP> --type concept --title "<ascii title>" \
-    --sources <SOURCE_REF>[,<SOURCE_REF2>] \
+    --sources <SOURCE_REF>[,<SOURCE_REF2>] --sources-as-edges \
     --invocation <INV> --confidence confident \
     --reasoning "why this node under this telos" --model "<your-model>" \
     --body @node-body.md
 
-# 2. assert its provenance edge back to the source (+ any inter-node edges)
-temper edge assert <NODE_REF> <SOURCE_REF> --kind express --polarity forward \
+# 2. only if you did NOT pass --sources-as-edges: assert the provenance edge by hand.
+#    `derived_from` is structurally (leads-to, inverse) — the same triple --sources-as-edges
+#    writes. Asserting it as (express, forward) makes an edge that shares the label but not
+#    the shape, and the region math treats the two differently.
+temper edge assert <NODE_REF> <SOURCE_REF> --kind leads-to --polarity inverse \
     --label derived_from --weight 1.0 \
     --invocation <INV> --confidence confident --reasoning "distills <SOURCE_REF>"
 
@@ -222,27 +228,28 @@ temper search "relational character web" --cogmap <MAP>
 temper resource show <NODE_REF> --edges          # note the derived_from correlation id
 
 # 3. Open the accountability envelope.
-inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual)
+inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual --format json | jq -r .id)
 
 # 4. Re-read the (changed) source and judge: materially changed? If yes —
 temper edge fold <DERIVED_FROM_CORRELATION_ID> --reason "source materially changed" \
     --invocation "$inv" --confidence probable --reasoning "folding stale derived_from"
 
-# 5. Create the FRESH node (never edit in place), citing the source, stamping provenance.
+# 5. Create the FRESH node (never edit in place), citing the source. `--sources-as-edges`
+#    re-asserts the derived_from edge for you, with the canonical (leads-to, inverse) shape.
 temper resource create --cogmap <MAP> --type concept \
     --title "Relational web edges exceed temper's single-weight edge" \
-    --sources <SOURCE_REF> \
+    --sources <SOURCE_REF> --sources-as-edges \
     --invocation "$inv" --confidence confident \
     --reasoning "distills the updated character-modeling doc under the map's telos" \
     --model "<your-model>" --body @new-node.md
 
-# 6. Re-assert provenance + any inter-node edges, with graded weights.
-temper edge assert <NEW_NODE_REF> <SOURCE_REF> --kind express --polarity forward \
-    --label derived_from --weight 1.0 \
-    --invocation "$inv" --confidence confident --reasoning "distills <SOURCE_REF>"
+# 6. Any INTER-NODE edges (the provenance edge is already asserted by step 5), graded by weight.
+temper edge assert <NEW_NODE_REF> <OTHER_NODE_REF> --kind near --polarity forward \
+    --label relates_to --weight 0.6 \
+    --invocation "$inv" --confidence probable --reasoning "adjacent claims under this telos"
 
 # 7. Close, then materialize so regions pick up the change.
-temper invocation close "$inv" --disposition completed --outcome '{"nodes":1,"edges":1,"folds":1}'
+temper invocation close "$inv" --disposition completed --outcome '{"nodes":1,"edges":2,"folds":1}'
 temper cogmap materialize <MAP>
 ```
 
