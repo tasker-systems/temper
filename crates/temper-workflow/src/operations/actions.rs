@@ -9,9 +9,11 @@ use serde_json::Value;
 use temper_core::types::ids::ResourceId;
 use thiserror::Error;
 
+use temper_core::types::authorship::ActContext;
+
 use crate::defaults::apply_managed_defaults;
 use crate::frontmatter::fields::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
-use crate::types::managed_meta::ManagedMeta;
+use crate::types::managed_meta::{ManagedMeta, PROVENANCE_LLM_DISCOVERED, PROVENANCE_USER_CREATED};
 
 use super::commands::{CreateResource, UpdateResource};
 
@@ -378,6 +380,45 @@ pub fn validate_open_meta_keys(open_meta: &serde_json::Value) -> Result<(), Stri
 /// `temper-context` or `temper-type` — those remain so the update path can detect structural-move
 /// attempts. (Moved here from `temper-api`'s `ingest_service` at the WS6 collapse — a pure helper over
 /// temper-core's own field registry, used by the substrate create path.)
+/// Fill the managed-tier provenance trio from the act envelope, never overwriting a
+/// value the caller supplied.
+///
+/// The CLI's `--model` / `--invocation` / `--confidence` flags populate the *act event*
+/// (the accountability chain), but historically wrote nothing to the resource's own
+/// `managed_meta` — so a node's provenance stamp read back empty while three separate
+/// stewardship docs insisted every authored node carry it. Deriving it here, on the
+/// shared write path, means every surface (CLI, MCP, API) is stamped uniformly and the
+/// contract cannot drift. This is the receive-side symmetric-defense pattern that
+/// `ensure_managed_identity_keys` uses.
+///
+/// Fill-missing, never overwrite: an MCP agent that already passes an explicit
+/// `managed_meta` keeps its values.
+///
+/// A model in the act's authorship means the resource was LLM-authored
+/// ([`PROVENANCE_LLM_DISCOVERED`]); its absence means a person authored it
+/// ([`PROVENANCE_USER_CREATED`]). An invocation without a model is still a human act —
+/// correlation is not authorship.
+pub fn stamp_provenance(meta: &mut ManagedMeta, act: &ActContext) {
+    let model = act.authorship.as_ref().and_then(|a| a.model.as_deref());
+
+    if meta.llm_model.is_none() {
+        meta.llm_model = model.map(String::from);
+    }
+    if meta.llm_run.is_none() {
+        meta.llm_run = act.invocation.map(|i| uuid::Uuid::from(i).to_string());
+    }
+    if meta.provenance.is_none() {
+        meta.provenance = Some(
+            if model.is_some() {
+                PROVENANCE_LLM_DISCOVERED
+            } else {
+                PROVENANCE_USER_CREATED
+            }
+            .to_string(),
+        );
+    }
+}
+
 pub fn strip_system_managed_fields(mut meta: Value) -> Value {
     // temper-context and temper-type are kept for structural-move detection.
     const KEEP_FOR_MOVE_DETECTION: &[&str] = &["temper-context", "temper-type"];
@@ -466,6 +507,94 @@ pub fn validate_managed_meta(
             params.doc_type,
             detail.join("; ")
         )))
+    }
+}
+
+#[cfg(test)]
+mod stamp_provenance_tests {
+    use super::*;
+    use temper_core::types::authorship::{ActContext, AgentAuthorship, ConfidenceBand};
+    use temper_core::types::ids::InvocationId;
+
+    fn authored(model: Option<&str>) -> AgentAuthorship {
+        AgentAuthorship {
+            reasoning: None,
+            confidence: ConfidenceBand::Confident,
+            rationale: None,
+            persona: None,
+            model: model.map(String::from),
+        }
+    }
+
+    #[test]
+    fn stamp_provenance_fills_trio_from_llm_act() {
+        let inv = InvocationId::from(uuid::Uuid::nil());
+        let act = ActContext {
+            invocation: Some(inv),
+            authorship: Some(authored(Some("claude-opus-4-8"))),
+        };
+        let mut meta = ManagedMeta::default();
+
+        stamp_provenance(&mut meta, &act);
+
+        assert_eq!(meta.llm_model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(
+            meta.llm_run.as_deref(),
+            Some(uuid::Uuid::nil().to_string().as_str())
+        );
+        assert_eq!(meta.provenance.as_deref(), Some(PROVENANCE_LLM_DISCOVERED));
+    }
+
+    #[test]
+    fn stamp_provenance_marks_non_llm_act_user_created() {
+        let act = ActContext::default();
+        let mut meta = ManagedMeta::default();
+
+        stamp_provenance(&mut meta, &act);
+
+        assert_eq!(meta.provenance.as_deref(), Some(PROVENANCE_USER_CREATED));
+        assert!(meta.llm_model.is_none(), "no model to record");
+        assert!(meta.llm_run.is_none(), "no invocation to record");
+    }
+
+    #[test]
+    fn stamp_provenance_never_overwrites_caller_values() {
+        let act = ActContext {
+            invocation: Some(InvocationId::from(uuid::Uuid::nil())),
+            authorship: Some(authored(Some("claude-opus-4-8"))),
+        };
+        let mut meta = ManagedMeta {
+            llm_model: Some("caller-model".to_string()),
+            llm_run: Some("caller-run".to_string()),
+            provenance: Some(PROVENANCE_USER_CREATED.to_string()),
+            ..ManagedMeta::default()
+        };
+
+        stamp_provenance(&mut meta, &act);
+
+        assert_eq!(meta.llm_model.as_deref(), Some("caller-model"));
+        assert_eq!(meta.llm_run.as_deref(), Some("caller-run"));
+        assert_eq!(meta.provenance.as_deref(), Some(PROVENANCE_USER_CREATED));
+    }
+
+    #[test]
+    fn stamp_provenance_authored_without_model_is_user_created() {
+        // Authorship present (confidence supplied) but no model: a human act inside an
+        // invocation. Provenance must not claim llm-discovered.
+        let act = ActContext {
+            invocation: Some(InvocationId::from(uuid::Uuid::nil())),
+            authorship: Some(authored(None)),
+        };
+        let mut meta = ManagedMeta::default();
+
+        stamp_provenance(&mut meta, &act);
+
+        assert_eq!(meta.provenance.as_deref(), Some(PROVENANCE_USER_CREATED));
+        assert!(meta.llm_model.is_none());
+        assert_eq!(
+            meta.llm_run.as_deref(),
+            Some(uuid::Uuid::nil().to_string().as_str())
+        );
     }
 }
 

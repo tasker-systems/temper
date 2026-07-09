@@ -4,6 +4,22 @@ use serde_json::Value;
 
 use temper_core::types::ids::ResourceId;
 
+/// `temper-provenance` value for a resource authored by a model.
+///
+/// This and [`PROVENANCE_USER_CREATED`] are the closed vocabulary declared by
+/// `schemas/base.schema.json` (`"enum": ["llm-discovered", "user-created"]`).
+///
+/// [`ManagedMeta::provenance`] stays a `String` rather than a typed enum: `ManagedMeta`
+/// is a `deny_unknown_fields` deserialization target for rows already in the database,
+/// and a closed enum would turn any historical value outside the pair into a hard
+/// readback failure.
+pub const PROVENANCE_LLM_DISCOVERED: &str = "llm-discovered";
+
+/// `temper-provenance` value for a resource authored by a person.
+///
+/// See [`PROVENANCE_LLM_DISCOVERED`].
+pub const PROVENANCE_USER_CREATED: &str = "user-created";
+
 /// Temper-governed **workflow + provenance** metadata for a vault resource.
 ///
 /// This is a **closed, temper-owned vocabulary** of exactly the `KeyFate::Property`
