@@ -4,7 +4,8 @@
     "title": "Temper Cloud API",
     "description": "Knowledge base management API for temper cloud",
     "license": {
-      "name": ""
+      "name": "MIT",
+      "identifier": "MIT"
     },
     "version": "0.1.0"
   },
@@ -600,7 +601,7 @@
         "tags": [
           "Cognitive Maps"
         ],
-        "operationId": "grant",
+        "operationId": "grant_cogmap_access",
         "parameters": [
           {
             "name": "id",
@@ -648,7 +649,7 @@
         "tags": [
           "Cognitive Maps"
         ],
-        "operationId": "revoke",
+        "operationId": "revoke_cogmap_access",
         "parameters": [
           {
             "name": "id",
@@ -1126,7 +1127,7 @@
         "tags": [
           "Contexts"
         ],
-        "operationId": "list",
+        "operationId": "list_contexts",
         "responses": {
           "200": {
             "description": "List of visible contexts with resource counts",
@@ -1152,7 +1153,7 @@
         "tags": [
           "Contexts"
         ],
-        "operationId": "create",
+        "operationId": "create_context",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1205,7 +1206,7 @@
         "tags": [
           "Contexts"
         ],
-        "operationId": "get",
+        "operationId": "get_context",
         "parameters": [
           {
             "name": "id",
@@ -2087,7 +2088,7 @@
         "tags": [
           "Ingest"
         ],
-        "operationId": "create",
+        "operationId": "create_ingest",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2143,7 +2144,7 @@
         "tags": [
           "Ingest"
         ],
-        "operationId": "update",
+        "operationId": "update_ingest",
         "parameters": [
           {
             "name": "id",
@@ -2364,7 +2365,7 @@
         "tags": [
           "Invocations"
         ],
-        "operationId": "list",
+        "operationId": "list_invocations",
         "parameters": [
           {
             "name": "cogmap",
@@ -2580,7 +2581,7 @@
         "tags": [
           "Profile"
         ],
-        "operationId": "get",
+        "operationId": "get_profile",
         "responses": {
           "200": {
             "description": "Current authenticated profile with entitlements"
@@ -2606,7 +2607,7 @@
         "tags": [
           "Profile"
         ],
-        "operationId": "update",
+        "operationId": "update_profile",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3115,7 +3116,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "list",
+        "operationId": "list_resources",
         "parameters": [
           {
             "name": "kb_doc_type_id",
@@ -3297,7 +3298,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "create",
+        "operationId": "create_resource",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3387,7 +3388,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "get",
+        "operationId": "get_resource",
         "parameters": [
           {
             "name": "id",
@@ -3442,7 +3443,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "delete",
+        "operationId": "delete_resource",
         "parameters": [
           {
             "name": "id",
@@ -3603,7 +3604,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "update",
+        "operationId": "update_resource",
         "parameters": [
           {
             "name": "id",
@@ -3705,7 +3706,7 @@
         "tags": [
           "Ingest"
         ],
-        "operationId": "list_blocks_handler",
+        "operationId": "list_blocks",
         "parameters": [
           {
             "name": "id",
@@ -3743,7 +3744,7 @@
         "tags": [
           "Ingest"
         ],
-        "operationId": "append_block_handler",
+        "operationId": "append_block",
         "parameters": [
           {
             "name": "id",
@@ -3883,7 +3884,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "list",
+        "operationId": "list_resource_edges",
         "parameters": [
           {
             "name": "id",
@@ -3958,7 +3959,7 @@
         "tags": [
           "Ingest"
         ],
-        "operationId": "finalize_handler",
+        "operationId": "finalize_resource",
         "parameters": [
           {
             "name": "id",
@@ -4019,7 +4020,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "grant",
+        "operationId": "grant_resource_access",
         "parameters": [
           {
             "name": "id",
@@ -4084,7 +4085,7 @@
         "tags": [
           "Resources"
         ],
-        "operationId": "revoke",
+        "operationId": "revoke_resource_access",
         "parameters": [
           {
             "name": "id",
@@ -4811,7 +4812,7 @@
         "tags": [
           "Teams"
         ],
-        "operationId": "list",
+        "operationId": "list_teams",
         "responses": {
           "200": {
             "description": "Teams the caller is a member of",
@@ -4837,7 +4838,7 @@
         "tags": [
           "Teams"
         ],
-        "operationId": "create",
+        "operationId": "create_team",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4931,7 +4932,7 @@
         "tags": [
           "Teams"
         ],
-        "operationId": "delete",
+        "operationId": "delete_team",
         "parameters": [
           {
             "name": "id",
@@ -4968,7 +4969,7 @@
         "tags": [
           "Teams"
         ],
-        "operationId": "update",
+        "operationId": "update_team",
         "parameters": [
           {
             "name": "id",
@@ -5036,7 +5037,7 @@
         "tags": [
           "Invitations"
         ],
-        "operationId": "list",
+        "operationId": "list_team_invitations",
         "parameters": [
           {
             "name": "id",
@@ -5094,7 +5095,7 @@
         "tags": [
           "Invitations"
         ],
-        "operationId": "create",
+        "operationId": "create_team_invitation",
         "parameters": [
           {
             "name": "id",
@@ -8850,6 +8851,19 @@
           }
         }
       },
+      "ResourceSortField": {
+        "type": "string",
+        "description": "Sort field for resource listing.",
+        "enum": [
+          "updated",
+          "created",
+          "title",
+          "stage",
+          "seq",
+          "context_name",
+          "doc_type_name"
+        ]
+      },
       "ResourceUpdateRequest": {
         "allOf": [
           {
@@ -9324,6 +9338,14 @@
             "description": "Focus resource ids. Must be non-empty — R4 is always drilled in around a focus."
           }
         }
+      },
+      "SortOrder": {
+        "type": "string",
+        "description": "Sort direction.",
+        "enum": [
+          "desc",
+          "asc"
+        ]
       },
       "Subscription": {
         "type": "object",

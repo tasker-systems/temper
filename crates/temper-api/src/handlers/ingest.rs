@@ -41,6 +41,7 @@ impl IntoResponse for IngestCreateResponse {
 
 #[utoipa::path(
     post,
+    operation_id = "create_ingest",
     path = "/api/ingest",
     tag = "Ingest",
     security(("bearer_auth" = [])),
@@ -166,6 +167,7 @@ pub async fn create(
 
 #[utoipa::path(
     put,
+    operation_id = "update_ingest",
     path = "/api/ingest/{id}",
     tag = "Ingest",
     params(("id" = Uuid, Path, description = "Resource ID")),
