@@ -40,6 +40,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::BlockMutated>("block_mutated");
     check::<p::BlockFolded>("block_folded");
     check::<p::BlockProvenanceCorrected>("block_provenance_corrected");
+    check::<p::BlockProvenanceAnnotated>("block_provenance_annotated");
 }
 
 #[test]

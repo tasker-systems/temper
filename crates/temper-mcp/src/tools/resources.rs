@@ -99,6 +99,27 @@ pub struct GetBlockProvenanceInput {
     pub resource: Uuid,
 }
 
+/// MCP input for annotate_resource (issue #355) — attach provenance sources without a body revise.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnnotateResourceInput {
+    /// The resource to annotate (UUID).
+    pub id: Uuid,
+    /// Sources to attach to the addressed block: resource refs (UUID or decorated) or external
+    /// http/https URLs. A URL may carry a span-locator fragment (e.g. `…/doc.md#L120-L180`), which is
+    /// preserved verbatim and surfaced by `get_block_provenance`. Position → accretion `seq`. Required
+    /// and non-empty — an annotate with nothing to attribute is an error.
+    pub sources: Vec<String>,
+    /// Which content block to annotate (a block UUID). Omit to address the resource's sole non-folded
+    /// body block (the default); required for a resource with more than one block. The block must
+    /// belong to the resource and be non-folded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_block: Option<Uuid>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level keys;
+    /// all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
+}
+
 /// MCP input for list_resources.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListResourcesInput {
@@ -844,6 +865,64 @@ pub async fn update_resource(
     let enriched = enrich_resource(pool, profile.id, &row).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
+    )]))
+}
+
+pub async fn annotate_resource(
+    svc: &TemperMcpService,
+    input: AnnotateResourceInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+    let profile_id = ProfileId::from(profile.id);
+    let resource_id = ResourceId::from(input.id);
+
+    let act = input
+        .act
+        .into_act_context()
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+    // Classify each source (http/https URL → Remote, else ref → Resource) with the shared resolver;
+    // an unparseable value is a hard error, never a silent drop.
+    let sources = input
+        .sources
+        .iter()
+        .map(|s| temper_workflow::operations::resolve_provenance_source(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
+        })?;
+    let cmd = temper_workflow::operations::AnnotateResource {
+        resource: resource_id,
+        sources,
+        content_block: input.content_block,
+        act,
+        origin: Surface::Mcp,
+    };
+
+    let backend = DbBackend::new(pool.clone(), profile_id);
+    backend.annotate_resource(cmd).await.map_err(|e| match e {
+        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Resource not found or not modifiable".to_string(),
+            None,
+        ),
+        TemperError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
+        }
+        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to annotate resource: {other}"), None)
+        }
+    })?;
+
+    // Return the itemized provenance so the caller sees the rows it just recorded (the read that
+    // proves the annotate landed), rather than re-fetching the unchanged resource body.
+    let rows = substrate_read::resource_block_provenance_select(pool, profile_id, input.id)
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
+        })?;
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&rows),
     )]))
 }
 

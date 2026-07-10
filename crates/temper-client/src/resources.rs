@@ -14,8 +14,8 @@ use temper_workflow::types::managed_meta::{
     MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
 };
 use temper_workflow::types::resource::{
-    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceDetail, ResourceListParams,
-    ResourceListResponse, ResourceRow, ResourceUpdateRequest,
+    ContentResponse, DeleteResponse, ResourceAnnotateRequest, ResourceCreateRequest,
+    ResourceDetail, ResourceListParams, ResourceListResponse, ResourceRow, ResourceUpdateRequest,
 };
 
 /// Sub-client for resource CRUD operations.
@@ -85,6 +85,23 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.patch(&path).json(request);
         self.http
             .send_json(&Method::PATCH, &path, req, Some(&token))
+            .await
+    }
+
+    /// Annotate a resource's block with provenance sources — no body revise (issue #355).
+    ///
+    /// `POST /api/resources/{id}/provenance`. Records `kb_block_provenance` rows without re-chunking
+    /// or re-embedding; returns the (content-unchanged) resource row.
+    pub async fn annotate(
+        &self,
+        id: Uuid,
+        request: &ResourceAnnotateRequest,
+    ) -> Result<ResourceRow> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/provenance");
+        let req = self.http.post(&path).json(request);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 

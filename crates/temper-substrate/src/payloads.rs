@@ -492,6 +492,20 @@ pub struct BlockMutated {
     pub incorporated: Vec<Incorporation>,
 }
 
+/// Payload for `block_provenance_annotated` — attach provenance sources to an EXISTING block
+/// without revising its content (issue #355). Carries only the block id + the ordered incorporation
+/// list; the projector records them into `kb_block_provenance` via the same `_insert_block_provenance`
+/// helper the create/revise paths use, but touches NO chunks — no re-chunk, no re-embed, no
+/// `block_body_hash` recompute. `incorporated` is non-empty by construction (the `block_annotate`
+/// write path rejects an empty list — an annotate with nothing to attribute is a caller error, not a
+/// silent no-op).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct BlockProvenanceAnnotated {
+    pub block_id: BlockId,
+    pub incorporated: Vec<Incorporation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BlockFolded {
@@ -549,8 +563,8 @@ pub struct InvocationClosed {
     pub outcome: serde_json::Value,
 }
 
-/// The 15 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 15] = [
+/// The 16 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 16] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -566,6 +580,7 @@ pub const TYPED_EVENT_NAMES: [&str; 15] = [
     "block_mutated",
     "block_folded",
     "block_provenance_corrected",
+    "block_provenance_annotated",
 ];
 
 /// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must
@@ -601,6 +616,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "relationship_folded" => {
                     serde_json::from_value::<RelationshipFolded>(r.payload.clone())?;
+                }
+                "block_provenance_annotated" => {
+                    serde_json::from_value::<BlockProvenanceAnnotated>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.

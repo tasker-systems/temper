@@ -179,6 +179,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Attach provenance sources to a resource's block WITHOUT a body revise (no re-chunk/re-embed) — the cheap, citation-grade backfill for a corpus imported without sources. Records block-provenance rows on the addressed block; body and embeddings are unchanged. A source URL may carry a span-locator fragment (e.g. '…/doc.md#L120-L180'), preserved verbatim and surfaced by get_block_provenance. Returns the resulting per-block provenance."
+    )]
+    async fn annotate_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::AnnotateResourceInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::annotate_resource(self, input).await
+    }
+
+    #[tool(
         description = "Update a resource's frontmatter (managed_meta and open_meta) without re-chunking or re-embedding. Use for metadata-only edits like stage, tags, or relationship declarations. For content changes, use update_resource."
     )]
     async fn update_resource_meta(

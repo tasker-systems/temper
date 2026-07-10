@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlockProvenanceAnnotated",
+  "description": "Payload for `block_provenance_annotated` — attach provenance sources to an EXISTING block\nwithout revising its content (issue #355). Carries only the block id + the ordered incorporation\nlist; the projector records them into `kb_block_provenance` via the same `_insert_block_provenance`\nhelper the create/revise paths use, but touches NO chunks — no re-chunk, no re-embed, no\n`block_body_hash` recompute. `incorporated` is non-empty by construction (the `block_annotate`\nwrite path rejects an empty list — an annotate with nothing to attribute is a caller error, not a\nsilent no-op).",
+  "type": "object",
+  "properties": {
+    "block_id": {
+      "$ref": "#/$defs/BlockId"
+    },
+    "incorporated": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Incorporation"
+      }
+    }
+  },
+  "required": [
+    "block_id",
+    "incorporated"
+  ],
+  "$defs": {
+    "BlockId": {
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "Incorporation": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "source",
+        "seq"
+      ]
+    },
+    "ProvenanceSource": {
+      "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "event"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resource"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "An external URL (e.g. a Linear issue, a GitHub PR, a doc). The value is the URL as supplied;\nthe projector normalizes + resolves it to a `kb_remote_sources.id` via `_upsert_remote_source`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "remote"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
+      ]
+    }
+  }
+}
