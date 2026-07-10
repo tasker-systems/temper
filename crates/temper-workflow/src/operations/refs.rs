@@ -111,7 +111,7 @@ pub fn parse_ref(s: &str) -> Result<ResourceId, TemperError> {
     )))
 }
 
-/// Classify one `--sources` value into a [`ProvenanceSource`]: an http/https URL becomes
+/// Classify one `--sources` value into a [`ProvenanceSource`]: an http/https/file URL becomes
 /// [`ProvenanceSource::Remote`] (an external source, carried verbatim — the projector normalizes it);
 /// anything else is a ref (UUID or decorated) resolved to [`ProvenanceSource::Resource`] via
 /// [`parse_ref`]. A value that is neither a URL nor a parseable ref is a hard error — never a silent
@@ -126,12 +126,14 @@ pub fn resolve_provenance_source(value: &str) -> Result<ProvenanceSource, Temper
     }
 }
 
-/// A source value is remote iff it carries an http/https scheme. Scheme-only + conservative, so a bare
-/// UUID or decorated ref can never be mistaken for a URL (and a non-web scheme like `ftp://` is not a
-/// provenance source — it falls through to `parse_ref` and errors).
+/// A source value is remote iff it carries an http/https/file scheme. Scheme-only + conservative, so a
+/// bare UUID or decorated ref can never be mistaken for a URL (and an unlisted scheme like `ftp://` is
+/// not a provenance source — it falls through to `parse_ref` and errors). `file://` (issue #353) lets a
+/// bulk importer record a local working-tree path as provenance; the server's `normalize_remote_uri`
+/// already accepts any scheme, so the value is carried verbatim with no server change.
 fn is_remote_url(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
+    lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("file://")
 }
 
 #[cfg(test)]
@@ -298,9 +300,24 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provenance_source_classifies_file_uri_as_remote() {
+        // `file://` (issue #353): a local working-tree path is a legitimate provenance source —
+        // carried verbatim as Remote (the server's normalize_remote_uri accepts any scheme).
+        assert_eq!(
+            resolve_provenance_source("file:///path/to/doc.md").unwrap(),
+            ProvenanceSource::Remote("file:///path/to/doc.md".to_owned())
+        );
+        // Case-insensitive scheme match; casing preserved verbatim (not lowercased whole).
+        assert_eq!(
+            resolve_provenance_source("  FILE:///Path/To/Doc.md  ").unwrap(),
+            ProvenanceSource::Remote("FILE:///Path/To/Doc.md".to_owned())
+        );
+    }
+
+    #[test]
     fn resolve_provenance_source_rejects_non_url_non_ref() {
         // neither a URL nor a parseable ref → hard error (escalate, never a silent drop)
         assert!(resolve_provenance_source("just-a-slug").is_err());
-        assert!(resolve_provenance_source("ftp://host/x").is_err()); // non-http scheme is not remote
+        assert!(resolve_provenance_source("ftp://host/x").is_err()); // non-web/non-file scheme is not remote
     }
 }

@@ -297,6 +297,57 @@ async fn remote_url_source_round_trips_through_cli_api_db(pool: sqlx::PgPool) {
     );
 }
 
+/// A `file://` source round-trips end to end (issue #353): `create --sources file://<path>` records a
+/// `'remote'` provenance row and the HTTP endpoint surfaces the raw `file://` URI. Proves a local
+/// working-tree path — the bulk-import case — flows the same CLI → client → Axum → DbBackend →
+/// substrate → kb_remote_sources spine as an http(s) URL, with no server change (the server's
+/// `normalize_remote_uri` already accepts any scheme). AC for #353.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn file_uri_source_round_trips_through_cli_api_db(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    let dist_body = app.vault_dir.path().join("file-distilled.md");
+    std::fs::write(
+        &dist_body,
+        "# File Distilled\n\nDistilled from a local working-tree file.\n",
+    )
+    .unwrap();
+    // A local import path — the motivating case: the importer has the exact path in hand at create time.
+    let uri = "file:///corpus/repo/docs/spec.md";
+    cli_create(
+        &app,
+        "File Distilled",
+        format!("@{}", dist_body.display()),
+        vec![uri.to_string()],
+    )
+    .await;
+    let distilled = created_id_for_title(&pool, "File Distilled").await;
+
+    let prov = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read");
+    assert_eq!(prov.len(), 1, "one file source recorded, got {prov:?}");
+    assert_eq!(prov[0].source_kind, "remote");
+    assert_eq!(
+        prov[0].source_uri.as_deref(),
+        Some(uri),
+        "the raw file:// URI is surfaced, not the minted uuid"
+    );
+}
+
 /// Per-content-block addressing round-trips (T7c Task 11): `update --content-block <id> --sources`
 /// applies the revise + sources to the addressed block (discovered via the provenance read), and a
 /// `--content-block` that does not belong to the resource is rejected with no write. Drives the full
