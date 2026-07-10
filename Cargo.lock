@@ -5188,6 +5188,7 @@ dependencies = [
  "temper-ingest",
  "temper-mcp",
  "temper-services",
+ "temper-substrate",
  "temper-workflow",
  "tempfile",
  "tokio",

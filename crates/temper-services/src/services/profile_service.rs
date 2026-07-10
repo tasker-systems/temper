@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, PrincipalKind, Profile, ProfileAuthLink};
+use temper_workflow::operations::Surface;
 
 use crate::error::{ApiError, ApiResult};
 
@@ -345,14 +346,18 @@ async fn provision_profile_entities(
     // (`<handle>@<surface>` — `writes::resolve_emitter`). The deleted synthesis
     // bootstrap used to create these; without them an auto-provisioned profile
     // could not emit events (every write would 500 on a missing emitter).
-    for surface in ["web", "cli", "mcp"] {
+    //
+    // Driven off `Surface::ALL` so a new surface variant provisions its emitter here by
+    // construction. Existing profiles still need an additive backfill migration — see
+    // `20260709000030_backfill_sdk_emitter_entities.sql` for the shape.
+    for surface in Surface::ALL {
         sqlx::query!(
             r#"
             INSERT INTO kb_entities (profile_id, name, metadata)
             VALUES ($1, $2, '{}'::jsonb)
             "#,
             profile_id,
-            format!("{handle}@{surface}"),
+            format!("{handle}@{}", surface.marker()),
         )
         .execute(pool)
         .await?;

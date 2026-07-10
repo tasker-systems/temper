@@ -42,9 +42,13 @@ pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<Profil
 }
 
 /// The durable per-surface emitter entity `<handle>@<surface>` for a profile (§1b). `surface` is
-/// the lowercase surface marker (`cli` / `mcp` / `web`); `<handle>` is the profile's
-/// `kb_profiles.handle`. Resolves by joining through kb_profiles so the actor name is
-/// handle-derived (no hardcoded literal) and needs no extra round-trip.
+/// the lowercase surface marker (`cli` / `mcp` / `web` / `sdk` — see `Surface::marker`);
+/// `<handle>` is the profile's `kb_profiles.handle`. Resolves by joining through kb_profiles so the
+/// actor name is handle-derived (no hardcoded literal) and needs no extra round-trip.
+///
+/// `fetch_one`, so a missing emitter is a hard error — there is no lazy creation. A new marker
+/// therefore needs its entity provisioned (`profile_service`) *and* backfilled (a migration)
+/// before any caller can send it.
 pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -> Result<EntityId> {
     let id: Uuid = sqlx::query(
         "SELECT e.id FROM kb_entities e \
