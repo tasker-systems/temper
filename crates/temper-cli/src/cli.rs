@@ -112,6 +112,7 @@ impl ActArgs {
 #[derive(Parser)]
 #[command(
     name = "temper",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Developer workflow tool for agent-assisted development",
     styles = crate::output::clap_styles()
 )]
@@ -300,6 +301,18 @@ pub enum Commands {
     Steward {
         #[command(subcommand)]
         cmd: StewardCmd,
+    },
+
+    /// Print the CLI version, optionally with the running binary's SHA-256.
+    ///
+    /// `temper --version` / `-V` (injected by clap) is the terse form. This
+    /// subcommand renders a typed report through the `--format json|toon`
+    /// machinery; `--checksum` folds in the running binary's own SHA-256 and
+    /// resolved path (self-attestation — NOT the published archive checksum).
+    Version {
+        /// Also compute and print the SHA-256 of the running binary.
+        #[arg(long)]
+        checksum: bool,
     },
 }
 
