@@ -23,7 +23,10 @@ use crate::services::context_service::resolve_context_ref;
 use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
-use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
+use temper_core::types::api::{
+    SearchDiagnostics, SearchParams, SearchReason, SearchResponse, SearchScope,
+    UnifiedSearchResultRow,
+};
 use temper_core::types::cognitive_maps::{
     CharterBlock, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow, CogmapRegulationRow,
     CogmapStaleness,
@@ -444,20 +447,107 @@ async fn resolve_search_scope(
 /// Failure mode is fallback-with-warn: if the model errors (e.g. unavailable on an unexpected target),
 /// we log and proceed with FTS + graph only rather than turning a soft degradation into a hard 500 —
 /// partial results beat none, and this preserves the pre-#297 behavior on embed failure.
-fn embed_query_if_missing(params: &mut SearchParams) {
+///
+/// Returns `true` when a query needed server-side embedding but it *failed* (the "degraded" case
+/// surfaced in [`SearchDiagnostics`], issue #360); `false` when the vector signal is intact — the
+/// query already carried an embedding, there was nothing to embed, or the embed succeeded.
+fn embed_query_if_missing(params: &mut SearchParams) -> bool {
     if params.embedding.is_some() {
-        return;
+        return false;
     }
     let query = match params.query.as_deref().map(str::trim) {
         Some(q) if !q.is_empty() => q.to_string(),
-        _ => return,
+        _ => return false,
     };
     match temper_ingest::embed::embed_text(&query) {
-        Ok(embedding) => params.embedding = Some(embedding),
-        Err(e) => tracing::warn!(
-            error = %e,
-            "server-side query embedding failed; falling back to FTS + graph only"
+        Ok(embedding) => {
+            params.embedding = Some(embedding);
+            false
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "server-side query embedding failed; falling back to FTS + graph only"
+            );
+            true
+        }
+    }
+}
+
+/// Classify the scope selector of a search request (issue #360). Mirrors the mutual-exclusion the
+/// server already enforces in [`resolve_search_scope`]; `Global` is the no-selector default.
+fn classify_scope(params: &SearchParams) -> SearchScope {
+    if params.wayfind {
+        SearchScope::Wayfind
+    } else if params.cogmap_id.is_some() {
+        SearchScope::Cogmap
+    } else if params.context_ref.is_some() {
+        SearchScope::Context
+    } else {
+        SearchScope::Global
+    }
+}
+
+/// Build the agent-facing one-liner for a search's [`SearchDiagnostics`] (issue #360). Pure — no DB —
+/// so it is unit-testable. Returns `None` only when the result set is unremarkable (`Ok` reason and
+/// no degraded signal); otherwise it explains the shape and suggests a concrete next step.
+fn search_hint(
+    scope: SearchScope,
+    reason: SearchReason,
+    scope_size: Option<i64>,
+    degraded: bool,
+) -> Option<String> {
+    // wayfind's defining trap (issue #360): it only reaches cogmap-distilled content, so content that
+    // is context-homed (in no cogmap) is unreachable *by construction* — no rephrasing will ever
+    // surface it. Because the public L0 kernel is visible to everyone, a wayfind scope is rarely
+    // truly empty, so this guidance must fire on `NoMatch` too, not just `OutOfScope`; otherwise an
+    // agent keeps retrying phrasings against content wayfind can never see.
+    const WAYFIND_UNREACHABLE: &str =
+        "wayfind only reaches cogmap-distilled content — if what you \
+        want is context-homed (in no cogmap), it is unreachable here regardless of phrasing. Try \
+        `--context <ref>`, or drop `--wayfind` for an unscoped search.";
+
+    let mut parts: Vec<String> = Vec::new();
+    match (scope, reason) {
+        (SearchScope::Wayfind, SearchReason::OutOfScope) => parts.push(format!(
+            "wayfind scope is empty: 0 candidate resources across the cogmaps you can see. \
+             {WAYFIND_UNREACHABLE}"
+        )),
+        (SearchScope::Wayfind, SearchReason::NoMatch) => {
+            let prefix = scope_size
+                .map(|n| format!("{n} candidate resource(s) in wayfind scope; "))
+                .unwrap_or_default();
+            parts.push(format!(
+                "{prefix}nothing matched the query. Note: {WAYFIND_UNREACHABLE}"
+            ));
+        }
+        (SearchScope::Cogmap, SearchReason::OutOfScope) => parts.push(
+            "this cogmap admits 0 resources you can see — check the cogmap ref, or try \
+             `--context <ref>`."
+                .to_string(),
         ),
+        (_, SearchReason::NoMatch) => {
+            let prefix = scope_size
+                .map(|n| format!("{n} candidate resource(s) in scope; "))
+                .unwrap_or_default();
+            parts.push(format!(
+                "{prefix}nothing matched the query — try rephrasing or a broader scope."
+            ));
+        }
+        // `Ok` (any scope) and the impossible `OutOfScope` for Global/Context need no reason hint.
+        _ => {}
+    }
+    if degraded {
+        parts.push(
+            "vector ranking was unavailable (server-side embedding failed); results are FTS + \
+             graph only."
+                .to_string(),
+        );
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
     }
 }
 
@@ -468,8 +558,9 @@ pub async fn search_select(
     pool: &PgPool,
     profile_id: ProfileId,
     mut params: SearchParams,
-) -> ApiResult<Vec<UnifiedSearchResultRow>> {
-    embed_query_if_missing(&mut params);
+) -> ApiResult<SearchResponse> {
+    let degraded = embed_query_if_missing(&mut params);
+    let scope = classify_scope(&params);
     let clamped = clamp_search_params(&params);
     let (context_id, scope_ids) = resolve_search_scope(pool, profile_id, &params).await?;
 
@@ -527,7 +618,40 @@ pub async fn search_select(
             context_owner_ref: row.context_owner_ref,
         });
     }
-    Ok(out)
+
+    // Scope-stage diagnostics (issue #360): let an agent distinguish "rephrase the query" from
+    // "this scope can never see that content." `scope_size` is only cheaply knowable for the
+    // bounded id-set selectors (wayfind/cogmap); an *empty* set there is the structurally-out-of-
+    // scope case, never a rephrase problem.
+    let scope_size: Option<i64> = match scope {
+        SearchScope::Wayfind | SearchScope::Cogmap => {
+            scope_ids.as_ref().map(|ids| ids.len() as i64)
+        }
+        SearchScope::Global | SearchScope::Context => None,
+    };
+    let matched = out.len() as i64;
+    let reason =
+        if matches!(scope, SearchScope::Wayfind | SearchScope::Cogmap) && scope_size == Some(0) {
+            SearchReason::OutOfScope
+        } else if matched == 0 {
+            SearchReason::NoMatch
+        } else {
+            SearchReason::Ok
+        };
+    let hint = search_hint(scope, reason, scope_size, degraded);
+
+    Ok(SearchResponse {
+        results: out,
+        // Always populated server-side; `None` is reserved for the client's old-server degrade path.
+        diagnostics: Some(SearchDiagnostics {
+            scope,
+            scope_size,
+            matched,
+            reason,
+            degraded,
+            hint,
+        }),
+    })
 }
 
 /// `cogmap_shape` — the surface-tier read of a cognitive map's materialized regions. Service-direct
@@ -791,7 +915,11 @@ mod clamp_tests {
             embedding: Some(precomputed.clone()),
             ..SearchParams::default()
         };
-        embed_query_if_missing(&mut p);
+        let degraded = embed_query_if_missing(&mut p);
+        assert!(
+            !degraded,
+            "a precomputed embedding is not a degraded signal"
+        );
         assert_eq!(
             p.embedding.as_deref(),
             Some(precomputed.as_slice()),
@@ -807,12 +935,118 @@ mod clamp_tests {
                 embedding: None,
                 ..SearchParams::default()
             };
-            embed_query_if_missing(&mut p);
+            let degraded = embed_query_if_missing(&mut p);
             assert!(
-                p.embedding.is_none(),
-                "empty/whitespace/absent query must not trigger embedding (query={q:?})"
+                !degraded && p.embedding.is_none(),
+                "empty/whitespace/absent query must not embed and is not degraded (query={q:?})"
             );
         }
+    }
+
+    #[test]
+    fn classify_scope_picks_the_active_selector() {
+        use temper_core::types::api::SearchScope;
+        let global = SearchParams::default();
+        assert_eq!(classify_scope(&global), SearchScope::Global);
+
+        let ctx = SearchParams {
+            context_ref: Some("@me/temper".into()),
+            ..SearchParams::default()
+        };
+        assert_eq!(classify_scope(&ctx), SearchScope::Context);
+
+        let cog = SearchParams {
+            cogmap_id: Some(uuid::Uuid::now_v7()),
+            ..SearchParams::default()
+        };
+        assert_eq!(classify_scope(&cog), SearchScope::Cogmap);
+
+        let way = SearchParams {
+            wayfind: true,
+            ..SearchParams::default()
+        };
+        assert_eq!(classify_scope(&way), SearchScope::Wayfind);
+    }
+
+    #[test]
+    fn hint_out_of_scope_wayfind_suggests_context() {
+        let h = search_hint(
+            SearchScope::Wayfind,
+            SearchReason::OutOfScope,
+            Some(0),
+            false,
+        )
+        .expect("out-of-scope wayfind must hint");
+        assert!(h.contains("wayfind scope is empty"), "got: {h}");
+        assert!(h.contains("--context"), "must suggest --context; got: {h}");
+    }
+
+    #[test]
+    fn hint_out_of_scope_cogmap_mentions_cogmap() {
+        let h = search_hint(
+            SearchScope::Cogmap,
+            SearchReason::OutOfScope,
+            Some(0),
+            false,
+        )
+        .expect("out-of-scope cogmap must hint");
+        assert!(h.contains("cogmap"), "got: {h}");
+    }
+
+    #[test]
+    fn hint_no_match_reports_scope_size_when_known() {
+        let with = search_hint(SearchScope::Cogmap, SearchReason::NoMatch, Some(7), false)
+            .expect("no-match must hint");
+        assert!(with.contains('7'), "should surface scope_size; got: {with}");
+        assert!(
+            with.contains("rephras"),
+            "should suggest rephrasing; got: {with}"
+        );
+
+        let without = search_hint(SearchScope::Global, SearchReason::NoMatch, None, false)
+            .expect("no-match must hint even without scope_size");
+        assert!(without.contains("matched"), "got: {without}");
+    }
+
+    #[test]
+    fn hint_wayfind_no_match_still_flags_unreachable_and_suggests_context() {
+        // The dogfood trap: wayfind scope is non-empty (L0 is always visible), the query simply
+        // doesn't match — but the content may be context-homed and unreachable by construction.
+        // A bare "rephrase" hint would perpetuate the retry loop, so this must name --context.
+        let h = search_hint(SearchScope::Wayfind, SearchReason::NoMatch, Some(3), false)
+            .expect("wayfind no-match must hint");
+        assert!(h.contains('3'), "should surface scope_size; got: {h}");
+        assert!(
+            h.contains("--context") && h.contains("unreachable"),
+            "wayfind no-match must flag context-homed unreachability and suggest --context; got: {h}"
+        );
+    }
+
+    #[test]
+    fn hint_ok_is_silent_unless_degraded() {
+        assert!(
+            search_hint(SearchScope::Global, SearchReason::Ok, None, false).is_none(),
+            "an unremarkable Ok result needs no hint"
+        );
+        let degraded = search_hint(SearchScope::Global, SearchReason::Ok, None, true)
+            .expect("a degraded Ok result must still warn");
+        assert!(degraded.contains("vector ranking"), "got: {degraded}");
+    }
+
+    #[test]
+    fn hint_appends_degraded_to_a_reason() {
+        let h = search_hint(
+            SearchScope::Wayfind,
+            SearchReason::OutOfScope,
+            Some(0),
+            true,
+        )
+        .expect("hint");
+        assert!(h.contains("wayfind scope is empty"), "got: {h}");
+        assert!(
+            h.contains("vector ranking"),
+            "degraded note must append; got: {h}"
+        );
     }
 }
 

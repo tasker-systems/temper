@@ -431,6 +431,17 @@ async fn wayfind_excludes_private_peer_map_content(pool: PgPool) {
         "wayfind deny must return 200 (deny-as-empty), never error"
     );
 
+    // Issue #360: an empty wayfind must be *diagnosable*. The body contract is unchanged (a bare
+    // array), and the scope-stage diagnostics ride the additive `x-temper-search-diagnostics`
+    // header — read it BEFORE consuming the body.
+    let diag: serde_json::Value = {
+        let raw = resp
+            .headers()
+            .get("x-temper-search-diagnostics")
+            .expect("empty wayfind must carry the diagnostics header");
+        serde_json::from_slice(raw.as_bytes()).expect("diagnostics header is JSON")
+    };
+
     let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
     let ids: Vec<String> = rows
         .iter()
@@ -443,6 +454,27 @@ async fn wayfind_excludes_private_peer_map_content(pool: PgPool) {
     assert!(
         rows.is_empty(),
         "B's wayfind for A's private term yields zero results; got {rows:?}"
+    );
+
+    // The header tells the caller this was a scoped search that matched nothing, and points at
+    // `--context` (the content it wants may be context-homed and unreachable by wayfind), instead
+    // of an inscrutable `[]`.
+    assert_eq!(
+        diag["scope"], "wayfind",
+        "diagnostics must name the scope; got {diag}"
+    );
+    assert_eq!(diag["matched"], 0, "no results matched; got {diag}");
+    let reason = diag["reason"].as_str().expect("reason string");
+    assert!(
+        matches!(reason, "no_match" | "out_of_scope"),
+        "an empty wayfind is no_match or out_of_scope, never Ok; got {reason}"
+    );
+    let hint = diag["hint"]
+        .as_str()
+        .expect("empty wayfind must carry a hint");
+    assert!(
+        hint.contains("--context"),
+        "the hint must point at --context for context-homed content; got {hint:?}"
     );
 }
 

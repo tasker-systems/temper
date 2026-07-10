@@ -3,7 +3,7 @@
 //! All testable functions. The CLI command is a thin wrapper over these.
 //! Cloud-only: no local index, no manifest enrichment.
 
-use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
+use temper_core::types::api::{SearchParams, SearchResponse};
 
 use crate::error::{Result, TemperError};
 
@@ -107,11 +107,12 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
     })
 }
 
-/// Call the search API with full SearchParams.
+/// Call the search API with full SearchParams, returning the full response envelope — ranked hits
+/// plus scope-stage diagnostics (issue #360).
 pub async fn search_api(
     client: &temper_client::TemperClient,
     params: SearchParams,
-) -> Result<Vec<UnifiedSearchResultRow>> {
+) -> Result<SearchResponse> {
     client
         .search()
         .search_with_params(&params)
@@ -359,6 +360,14 @@ mod tests {
             .collect();
         let doc = crate::commands::search_cmd::SearchResultsResponse {
             results: rows_value,
+            diagnostics: Some(temper_core::types::api::SearchDiagnostics {
+                scope: temper_core::types::api::SearchScope::Global,
+                scope_size: None,
+                matched: 1,
+                reason: temper_core::types::api::SearchReason::Ok,
+                degraded: false,
+                hint: None,
+            }),
         };
         let out =
             crate::format::render(&doc, crate::format::OutputFormat::Json).expect("json render");

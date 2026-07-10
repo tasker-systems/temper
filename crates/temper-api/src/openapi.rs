@@ -5,8 +5,8 @@ use utoipa::{Modify, OpenApi};
 
 use crate::handlers::resources::ListResourcesResponse;
 use temper_core::types::api::{
-    EventCursorResponse, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
-    UnifiedSearchResultRow,
+    EventCursorResponse, HealthResponse, ProfileUpdateRequest, SearchDiagnostics, SearchParams,
+    SearchReason, SearchResultRow, SearchScope, UnifiedSearchResultRow,
 };
 use temper_core::types::context::{
     ContextRowWithCounts, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
@@ -48,6 +48,9 @@ use temper_workflow::types::resource::{
         SearchParams,
         SearchResultRow,
         UnifiedSearchResultRow,
+        SearchDiagnostics,
+        SearchScope,
+        SearchReason,
         temper_workflow::types::managed_meta::MetaUpdatePayload,
         temper_workflow::types::managed_meta::ResourceMetaResponse,
         temper_workflow::types::managed_meta::ManagedMeta,
