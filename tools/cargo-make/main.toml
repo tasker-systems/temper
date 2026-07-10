@@ -227,15 +227,9 @@ script = [
 
 [tasks.openapi-check]
 description = "Verify the committed openapi.json matches a fresh emission from the router"
-script = [
-  "committed=${CARGO_MAKE_WORKING_DIRECTORY}/openapi.json",
-  "if [ ! -s \"$committed\" ]; then echo 'ERROR: openapi.json is missing or empty — run: cargo make openapi'; exit 1; fi",
-  "fresh=$(mktemp)",
-  "trap 'rm -f \"$fresh\"' EXIT",
-  "cargo run --quiet -p temper-api --bin emit-openapi > \"$fresh\"",
-  "if ! diff -u \"$committed\" \"$fresh\"; then echo 'ERROR: openapi.json is out of date with the router — run: cargo make openapi'; exit 1; fi",
-  "echo 'openapi.json is up to date with the router'"
-]
+# Delegates to the script so CI and local dev run identical logic. CI cannot call
+# cargo-make at all: the root Makefile.toml requires a ./.env that no runner has.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-spec.sh"]
 
 # =============================================================================
 # Docker Tasks

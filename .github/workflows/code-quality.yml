@@ -47,10 +47,10 @@ jobs:
         with:
           prefix-key: code-quality
 
-      - name: Install cargo-sqlx and cargo-make
+      - name: Install cargo-sqlx
         uses: taiki-e/install-action@v2
         with:
-          tool: sqlx-cli,cargo-make
+          tool: sqlx-cli
 
       - name: Run migrations
         run: cargo sqlx migrate run
@@ -62,7 +62,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Check OpenAPI spec is up to date with the router
-        run: cargo make openapi-check
+        run: bash .github/scripts/check-openapi-spec.sh
 
       - name: Check every route is documented (OpenAPI route allowlist)
         run: bash .github/scripts/check-openapi-routes.sh
