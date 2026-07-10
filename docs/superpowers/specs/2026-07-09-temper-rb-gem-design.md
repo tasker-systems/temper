@@ -4,7 +4,7 @@
 **Status:** Design approved. Supersedes the P4 section of
 [2026-07-09-temper-rb-ruby-bindings-design.md](2026-07-09-temper-rb-ruby-bindings-design.md), which
 scoped four preamble beats but deliberately left the gem unspecced.
-**Beats:** P0 ✅ (#341) · P1 ✅ (#340) · P2 ✅ (#343) · P3 in flight · **P5 (new)** · then the gem.
+**Beats:** P0 ✅ (#341) · P1 ✅ (#340) · P2 ✅ (#343) · P3 ✅ (#345) · **P5 (new)** · then the gem.
 
 This document does two things. It specifies **P5**, a fifth preamble beat that discovery forced into
 existence, and it records the **full design of the gem** so the decisions behind it survive the gap.
@@ -69,7 +69,9 @@ embedder. Resolved by **D9**.
   `gty == "client-credentials"` — hyphen, not underscore.
 - `temper-client` has **no refresh-and-retry on 401**. Its refreshing method exists but no sub-client
   calls it on the request path. It is a poor template for the gem's auth.
-- P3's `correlation` field has **not** landed on `ActInput`/`ActContext` as of this writing.
+- P3 **has landed** (#345). `ActContext.correlation` and `ActInput.correlation_id` both exist, typed
+  `Option<CorrelationId>`, and `CorrelationId` is a registered component schema. The gem designs
+  against it directly rather than waiting for it.
 
 ---
 
@@ -78,14 +80,25 @@ embedder. Resolved by **D9**.
 ## Defect 1 — two `$ref`s point at nothing
 
 `GET /api/resources` declares `sort` as `oneOf: [{type: null}, {$ref: ".../ResourceSortField"}]`, and
-`order` against `SortOrder`. Neither component exists: 151 refs used, 152 schemas defined, those two
-missing.
+`order` against `SortOrder`. Neither component exists — post-P3, 153 schemas are defined and those
+two are still missing.
 
-Both enums derive `ToSchema` (`crates/temper-workflow/src/types/resource.rs:105,123`), so utoipa
+Both enums derive `ToSchema` (`crates/temper-workflow/src/types/resource.rs:108,126`), so utoipa
 correctly emits a `$ref`. But `components(schemas(...))` (`crates/temper-api/src/openapi.rs:28`) is a
 hand-maintained ~95-entry list, and they are not in it. `.routes()` auto-collects schemas reachable
 from request and response **bodies**; these two are reachable only through an `IntoParams` query
 struct (`ResourceListParams`), which it does not walk.
+
+**P3 supplies the control case.** It added a `correlation_id` query parameter to
+`DELETE /api/resources/{id}` and `PUT /api/cognitive-maps/{id}` whose schema is
+`oneOf: [{type: null}, {$ref: ".../CorrelationId"}]` — structurally identical to the two broken
+params. Yet `CorrelationId` resolves, and nobody hand-registered it. It resolves because it *also*
+hangs off `ActInput`, a request-**body** schema, and collection is transitive from bodies.
+`ResourceSortField` and `SortOrder` hang off nothing but an `IntoParams` struct.
+
+So the rule is exact: **a schema reachable only from `IntoParams` is never collected.** Every
+query-only enum added in future re-breaks the contract, which is why the fix ships with a test rather
+than only two registrations.
 
 > **This settles an open thread from P2.** That session note suspected `components(schemas(...))` was
 > *"plausibly deletable now that `.routes()` auto-collects schemas."* It is not. `.routes()` does not
@@ -339,10 +352,16 @@ supplying `reasoning`, `rationale`, `persona`, or `model` without `confidence` r
 locally instead of earning a 400. That is the parse-don't-validate answer to `AgentAuthorship.confidence`
 being non-`Option`. `Act` is optional on every call; in v1 `authorship` is normally absent, per D5.
 
-**When P3 lands,** `Act` grows `correlation:` and the gem regenerates. The enqueue boundary then reads
-as the goal describes: the Puma request mints a correlation UUID, serializes it into the job arguments
-as a bare UUID that outlives any credential, and the worker stamps the same value while writing as a
-different principal (`dana@sdk` → `acme-app@sdk`).
+**P3 has landed**, so `Act` carries `correlation:` from the gem's first commit — there is no follow-up
+regeneration to remember. It maps to `ActInput.correlation_id`, which the contract carries as a body
+field on the flattened write endpoints and as a query parameter on `DELETE /api/resources/{id}` and
+`PUT /api/cognitive-maps/{id}`. The enqueue boundary then reads as the goal describes: the Puma request
+mints a correlation UUID, serializes it into the job arguments as a bare UUID that outlives any
+credential, and the worker stamps the same value while writing as a different principal
+(`dana@sdk` → `acme-app@sdk`).
+
+Correlation is provenance, never authorization — nothing gates on it — and an act with no supplied
+correlation self-roots to its own event id. So the gem may always omit it.
 
 `Temper.parse_ref` is a ~10-line pure Ruby port of `temper_workflow::operations::parse_ref`
 (`crates/temper-workflow/src/operations/refs.rs:94`): bare UUID, or trailing-UUID-only from the last
@@ -464,10 +483,12 @@ support; `tasker-rb` pins `>= 3.4.0`, which is tighter than a library needs to b
 
 ## Open threads
 
-- **P3 is in flight in a sibling session.** It adds `correlation: Option<Uuid>` to `ActInput` and
-  `ActContext`. P5 touches only annotations and the schema-registration list, so the two do not
-  collide; whichever lands second regenerates `openapi.json`. If P3 lands first, its new field rides
-  the existing `params(ActInput)` with no annotation churn.
+- **P3 landed and is merged into the P5 branch** (#345). Its `correlation` field rode the existing
+  `params(ActInput)` with no annotation churn, exactly as predicted, and it registered `CorrelationId`
+  as a component without touching `components(schemas(...))` — the control case that pins down why
+  `ResourceSortField`/`SortOrder` dangle. It also left a follow-up task (`019f4a19`): threading a
+  segmented ingest session's `block_created` + `resource_finalized` events onto one correlation now
+  that a caller can supply one, which needs a precedence rule against the caller's value.
 - **`components(schemas(...))` stays hand-maintained.** P5 adds two entries rather than deleting the
   list. The deletion P2 hoped for requires `.routes()` to walk `IntoParams` schemas, which it does not.
   Worth an upstream utoipa issue.
