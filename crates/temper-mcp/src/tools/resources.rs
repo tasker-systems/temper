@@ -53,7 +53,9 @@ pub struct CreateResourceInput {
     /// metadata — first-class here, never a `managed_meta` key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
-    /// Optional origin URI. Defaults to `mcp://agent/{uuid}`.
+    /// Optional origin URI. Defaults to `mcp://agent/{uuid}`. An external (http/https) origin URI
+    /// with `content` but no explicit `sources` seeds a Remote block-provenance record pointing at
+    /// it (issue #352), so a resource distilled from a URL is citation-grade by default.
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,

@@ -81,6 +81,7 @@ async fn cli_create(
                     from: None,
                     sources,
                     sources_as_edges: false,
+                    no_source: false,
                     format: temper_cli::format::OutputFormat::Json,
                     act: Default::default(),
                 },
@@ -295,6 +296,156 @@ async fn remote_url_source_round_trips_through_cli_api_db(pool: sqlx::PgPool) {
         Some(url),
         "the raw external URL is surfaced, not the minted uuid"
     );
+}
+
+/// The #352 default: a create that carries an external (http/https) `origin_uri` but declares NO
+/// explicit `--sources` gets a Remote block-provenance row synthesized server-side, pointing at
+/// the origin. Drives the real spine (`temper-client` → Axum → `DbBackend` → substrate →
+/// kb_remote_sources), which is exactly the path `resource create --from <url>` takes once the CLI
+/// wires the URL onto `origin_uri`. Proves "cite the block that supports this claim" works over a
+/// URL import with no extra flags — the corpus-wide gap the issue reported.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn external_origin_uri_seeds_remote_provenance_by_default(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    // Create through the ingest client with an external origin and NO sources — the same shape the
+    // CLI produces for `create --from <url>` (origin_uri populated, sources empty). Server-side
+    // chunk+embed is the unconditional fallback (chunks_packed: None).
+    use temper_core::types::ingest::IngestPayload;
+    let url = "https://Example.com/import/doc-99";
+    let body_text = "# Imported Doc\n\nDistilled from an external URL.\n";
+    let payload = IngestPayload {
+        segmented: None,
+        goal: None,
+        title: "Imported From URL".to_string(),
+        origin_uri: url.to_string(),
+        context_ref: "@me/prov".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: None,
+        content: body_text.to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: None,
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    let created = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("create with external origin_uri");
+
+    // Acceptance: ≥1 Remote provenance row pointing at the origin URL, with no explicit sources.
+    let prov = app
+        .client
+        .resources()
+        .provenance(created.id.uuid())
+        .await
+        .expect("provenance read");
+    assert_eq!(
+        prov.len(),
+        1,
+        "the external origin seeds exactly one Remote row, got {prov:?}"
+    );
+    assert_eq!(prov[0].source_kind, "remote");
+    assert_eq!(
+        prov[0].source_uri.as_deref(),
+        Some(url),
+        "provenance points at the origin URL"
+    );
+
+    // Acceptance: origin_uri is populated on the created resource.
+    let stored_origin: String =
+        sqlx::query_scalar("SELECT origin_uri FROM kb_resources WHERE id = $1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .expect("resource row");
+    assert_eq!(stored_origin, url, "origin_uri is stored on the resource");
+}
+
+/// The explicit-`--sources` override still wins even when an external `origin_uri` is present: the
+/// declared sources are recorded and NO Remote row is synthesized from the origin (issue #352).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn explicit_sources_override_the_origin_uri_default(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    // A resource to attribute to (the explicit source).
+    let src_body = app.vault_dir.path().join("ovr-src.md");
+    std::fs::write(&src_body, "# Override Source\n\nThe cited resource.\n").unwrap();
+    cli_create(
+        &app,
+        "Override Source",
+        format!("@{}", src_body.display()),
+        vec![],
+    )
+    .await;
+    let source = created_id_for_title(&pool, "Override Source").await;
+
+    // Create carrying BOTH an external origin_uri and an explicit resource source.
+    use temper_core::types::ingest::IngestPayload;
+    let url = "https://example.com/should-not-be-cited";
+    let payload = IngestPayload {
+        segmented: None,
+        goal: None,
+        title: "Explicit Over Origin".to_string(),
+        origin_uri: url.to_string(),
+        context_ref: "@me/prov".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: None,
+        content: "# Explicit Over Origin\n\nAttributed to a resource, not the URL.\n".to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: None,
+        act: Default::default(),
+        sources: vec![temper_core::types::provenance::ProvenanceSource::Resource(
+            source,
+        )],
+    };
+    let created = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("create with explicit source + origin_uri");
+
+    let prov = app
+        .client
+        .resources()
+        .provenance(created.id.uuid())
+        .await
+        .expect("provenance read");
+    assert_eq!(prov.len(), 1, "only the explicit source, got {prov:?}");
+    assert_eq!(
+        prov[0].source_kind, "resource",
+        "explicit --sources wins; no Remote synthesized from origin_uri"
+    );
+    assert_eq!(prov[0].source_id, source);
 }
 
 /// Per-content-block addressing round-trips (T7c Task 11): `update --content-block <id> --sources`
