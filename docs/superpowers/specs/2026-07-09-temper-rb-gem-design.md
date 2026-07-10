@@ -309,7 +309,10 @@ client = Temper::Client.new(
 # Sidekiq — memoized per process, refreshes itself
 client = Temper::Client.new(
   credentials: Temper::Credentials::ClientCredentials.new(
-    client_id:, client_secret:, audience: ENV.fetch("TEMPER_AUTH_AUDIENCE")))
+    token_url:     ENV.fetch("TEMPER_M2M_TOKEN_URL"),
+    client_id:     ENV.fetch("TEMPER_M2M_CLIENT_ID"),
+    client_secret: ENV.fetch("TEMPER_M2M_CLIENT_SECRET"),
+    audience:      ENV.fetch("TEMPER_M2M_AUDIENCE")))
 ```
 
 Two strategies behind one interface:
@@ -320,10 +323,50 @@ Two strategies behind one interface:
   validation before `normalize_machine` ever runs. The machine profile auto-provisions server-side on
   first call.
 
+**The env surface is not invented here — it is the steward's.** `packages/agent-workflows/steward/`
+is the machine-principal SDK caller already running in production, and
+`agent/lib/temper-auth.ts::mintM2mToken` is the shape to port: the same four `TEMPER_M2M_*` variables,
+`requireEnv` semantics (throw, never default), and a cache keyed on an **absolute** `expires_at` with a
+**60s skew**. A gem that invents a fifth spelling of "the machine's audience" recreates the exact drift
+that module's header documents — the schedules authenticated Connect-first while the MCP connection was
+M2M-first, so on the Auth0-fronted prod instance the schedules' REST calls *silently failed* while MCP
+worked. One token source, one precedence order.
+
+The Ruby side avoids that seam structurally: precedence is not discovered from the environment, it is
+the caller's explicit choice of `BearerToken` or `ClientCredentials`.
+
 **On 401:** `ClientCredentials` re-fetches once and retries, then raises. `BearerToken` cannot refresh
 and raises `Unauthorized` immediately. **Idempotent reads (GET/HEAD)** retry on 5xx and transport
 failures, three attempts at 200ms/400ms — mirroring `should_retry` in the Rust client. **Writes never
 auto-retry.**
+
+Refresh-ahead-of-expiry alone is **not sufficient**, and the steward proves it: its schedules resolve a
+token once per tick, so a tick that outlives its cached token takes a 401 that nothing recovers
+(`lib/fetch-retry.ts` correctly declines to retry 4xx). A Sidekiq job holding a token across a long unit
+of work has precisely this bug. Hence re-mint-*on*-401, not merely refresh-before-expiry.
+
+The steward's cache is a bare module global — sound only because a serverless function is
+single-threaded. Under Puma it is a race at expiry, with every in-flight thread minting at once. Port it
+**behind a mutex**.
+
+### Authentication is not authorization — the onboarding cliff
+
+A minted M2M token gets the caller a JIT-provisioned agent profile and nothing else. Going live with
+the steward required, *separately from auth*: an Auth0 M2M app plus client-grant, then a **cogmap write
+grant** on the target map and **team membership** for read reach. Until both exist, every call
+authenticates cleanly and then 403s.
+
+This is the first wall a `temper-rb` user hits, and it is invisible from the contract. The gem answers
+it in three places rather than leaving it to support:
+
+- `Forbidden` and `SystemAccessRequired` error messages name the missing grant, using the server's
+  `error.details`, instead of surfacing a bare 403.
+- The README carries a **Going live** section: provision the M2M app, set the four `TEMPER_M2M_*`
+  variables, grant the agent profile cogmap write, add it to the team.
+- `Temper::Client#whoami` (a thin wrapper over `GET /api/profile`) exists so a deploy can assert the
+  profile resolved and report what it can reach, rather than discovering it on first write.
+
+### Fork safety
 
 **Fork safety** is a genuine gap with no precedent to copy: `tasker-rb` sidesteps it by never forking
 (its example app runs single-mode Puma, and nothing hooks `Process._fork`). The gem exposes
@@ -497,3 +540,11 @@ support; `tasker-rb` pins `>= 3.4.0`, which is tighter than a library needs to b
   rather than typhoeus.
 - **Fork safety is designed, not proven.** `Temper.reset_connection!` plus documented hooks is the
   plan; no existing gem in either repo demonstrates it, so it needs a real forked-Puma test before v1.
+- **G3 overlaps D12 and needs an owner.** A sibling task — *"G3 — a machine-principal auth path for SDK
+  callers (`client_credentials`)"* (plan/medium, backlog) — designs the same auth path this doc
+  specifies for Ruby. There is no shared *code* (the steward is TypeScript, the gem is Ruby), but there
+  is a shared **contract**: the four `TEMPER_M2M_*` variables, machine-identity-first precedence, the
+  absolute-`expires_at`-plus-60s-skew cache, and re-mint-on-401. D12 now conforms to it. If G3 later
+  changes that contract — or lands `client_credentials` in `temper-client` (Rust), which this doc
+  defers — D12 must move with it. Whoever executes G3 should treat `agent/lib/temper-auth.ts` and this
+  section as the two ends of one invariant.
