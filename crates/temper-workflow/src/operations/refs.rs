@@ -111,15 +111,15 @@ pub fn parse_ref(s: &str) -> Result<ResourceId, TemperError> {
     )))
 }
 
-/// Classify one `--sources` value into a [`ProvenanceSource`]: an http/https URL becomes
+/// Classify one `--sources` value into a [`ProvenanceSource`]: an http/https/file URI becomes
 /// [`ProvenanceSource::Remote`] (an external source, carried verbatim — the projector normalizes it);
 /// anything else is a ref (UUID or decorated) resolved to [`ProvenanceSource::Resource`] via
-/// [`parse_ref`]. A value that is neither a URL nor a parseable ref is a hard error — never a silent
+/// [`parse_ref`]. A value that is neither a URI nor a parseable ref is a hard error — never a silent
 /// drop (parse-don't-validate / escalate). Shared by the CLI `--sources` flag and the MCP `sources`
 /// input so both surfaces classify identically (one classifier, no send/receive drift).
 pub fn resolve_provenance_source(value: &str) -> Result<ProvenanceSource, TemperError> {
     let value = value.trim();
-    if is_remote_url(value) {
+    if is_remote_provenance_uri(value) {
         Ok(ProvenanceSource::Remote(value.to_owned()))
     } else {
         Ok(ProvenanceSource::Resource(Uuid::from(parse_ref(value)?)))
@@ -130,12 +130,24 @@ pub fn resolve_provenance_source(value: &str) -> Result<ProvenanceSource, Temper
 /// conservative, so a bare UUID or decorated ref can never be mistaken for a URL (and a non-web
 /// scheme like `ftp://` is not a provenance source — it falls through to `parse_ref` and errors).
 ///
-/// The one canonical external-URL classifier, shared by the `--sources` resolver, the CLI `--from`
-/// URL/path split, and the server-side origin-URI provenance default (issue #352) so all three
-/// classify identically.
+/// The one canonical **network-fetchable** URL classifier, shared by the CLI `--from` URL/path split
+/// (a match is fetched over HTTP) and the server-side origin-URI provenance default (issue #352) so
+/// both classify identically. `file://` is deliberately **not** remote here — it is a local path, not
+/// something to fetch over the network; the `--sources` provenance path admits it separately via
+/// `is_remote_provenance_uri`.
 pub fn is_remote_url(value: &str) -> bool {
     let lower = value.trim().to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// A `--sources` value is an external (Remote) provenance URI iff it is a network-fetchable URL
+/// ([`is_remote_url`]) **or** a `file://` URI (issue #353). `file://` lets a bulk importer record a
+/// local working-tree path as provenance — the server's `normalize_remote_uri` already accepts any
+/// scheme, so the value is carried verbatim with no server change. This is a strict superset of
+/// `is_remote_url`, scoped to provenance classification: it must NOT gate the `--from` fetch path
+/// (you cannot reqwest a `file://`) nor the origin-URI default, which stay http/https-only.
+fn is_remote_provenance_uri(value: &str) -> bool {
+    is_remote_url(value) || value.trim().to_ascii_lowercase().starts_with("file://")
 }
 
 #[cfg(test)]
@@ -302,9 +314,40 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provenance_source_classifies_file_uri_as_remote() {
+        // `file://` (issue #353): a local working-tree path is a legitimate provenance source —
+        // carried verbatim as Remote (the server's normalize_remote_uri accepts any scheme).
+        assert_eq!(
+            resolve_provenance_source("file:///path/to/doc.md").unwrap(),
+            ProvenanceSource::Remote("file:///path/to/doc.md".to_owned())
+        );
+        // Case-insensitive scheme match; casing preserved verbatim (not lowercased whole).
+        assert_eq!(
+            resolve_provenance_source("  FILE:///Path/To/Doc.md  ").unwrap(),
+            ProvenanceSource::Remote("FILE:///Path/To/Doc.md".to_owned())
+        );
+    }
+
+    #[test]
     fn resolve_provenance_source_rejects_non_url_non_ref() {
         // neither a URL nor a parseable ref → hard error (escalate, never a silent drop)
         assert!(resolve_provenance_source("just-a-slug").is_err());
-        assert!(resolve_provenance_source("ftp://host/x").is_err()); // non-http scheme is not remote
+        assert!(resolve_provenance_source("ftp://host/x").is_err()); // non-web/non-file scheme is not remote
+    }
+
+    #[test]
+    fn file_uri_is_a_provenance_source_but_not_network_remote() {
+        // Collision guard (issue #353 vs #352): `file://` is a valid *provenance* URI but is NOT a
+        // network-fetchable URL. `is_remote_url` gates the `--from` HTTP-fetch path and the origin-URI
+        // default — routing `file://` there would try to reqwest a local path — so it must stay false;
+        // only the provenance-scoped predicate admits it.
+        assert!(!is_remote_url("file:///path/to/doc.md"));
+        assert!(is_remote_provenance_uri("file:///path/to/doc.md"));
+        // http/https answer yes to both; the provenance predicate is a strict superset.
+        assert!(is_remote_url("https://a.test/x"));
+        assert!(is_remote_provenance_uri("https://a.test/x"));
+        // ftp is neither.
+        assert!(!is_remote_url("ftp://h/x"));
+        assert!(!is_remote_provenance_uri("ftp://h/x"));
     }
 }
