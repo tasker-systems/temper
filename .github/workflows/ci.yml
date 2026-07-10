@@ -20,6 +20,7 @@ jobs:
       run-code-quality: ${{ steps.detect.outputs.run-code-quality }}
       run-test-rust: ${{ steps.detect.outputs.run-test-rust }}
       run-test-typescript: ${{ steps.detect.outputs.run-test-typescript }}
+      run-test-ruby: ${{ steps.detect.outputs.run-test-ruby }}
       scope-summary: ${{ steps.detect.outputs.scope-summary }}
     steps:
       - name: Checkout code
@@ -54,16 +55,24 @@ jobs:
     if: needs.detect-scope.outputs.run-test-typescript == 'true'
     uses: ./.github/workflows/test-typescript.yml
 
+  # Path-scoped: runs only for clients/temper-rb/**, openapi.json, and its own
+  # workflow. See detect-ci-scope.sh for why that scoping is safe.
+  test-ruby:
+    needs: detect-scope
+    if: needs.detect-scope.outputs.run-test-ruby == 'true'
+    uses: ./.github/workflows/test-ruby.yml
+
   # ==========================================================================
   # Stage 2: CI Success Gate
   # The single check meant for branch protection. Always runs and validates
   # each job's result against whether scope said it should run — so a
-  # correctly-skipped job (docs-only) still yields a green gate, while a
-  # failed or cancelled in-scope job fails it.
+  # correctly-skipped job (docs-only, or a path-scoped job like test-ruby that
+  # the change cannot affect) still yields a green gate, while a failed or
+  # cancelled in-scope job fails it.
   # ==========================================================================
   ci-success:
     name: CI Success
-    needs: [detect-scope, code-quality, test-rust, test-typescript]
+    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -91,7 +100,7 @@ jobs:
               fi
             else
               if [ "$result" = "skipped" ]; then
-                echo "  SKIP: ${name} (docs-only, correctly skipped)"
+                echo "  SKIP: ${name} (out of scope, correctly skipped)"
               elif [ "$result" = "success" ]; then
                 echo "  PASS: ${name} (not in scope but succeeded anyway)"
               else
@@ -111,6 +120,10 @@ jobs:
           check_job "test-typescript" \
             "${{ needs.test-typescript.result }}" \
             "${{ needs.detect-scope.outputs.run-test-typescript }}"
+
+          check_job "test-ruby" \
+            "${{ needs.test-ruby.result }}" \
+            "${{ needs.detect-scope.outputs.run-test-ruby }}"
 
           echo ""
           if [ -n "$FAILED" ]; then
