@@ -118,6 +118,18 @@ fn begin_input(context_ref: &str, title: &str, segment0: &str) -> IngestBeginInp
 }
 
 async fn append(svc: &TemperMcpService, resource: &str, seq: u32, text: &str) -> BlocksResponse {
+    append_with_sources(svc, resource, seq, text, None).await
+}
+
+/// Append one segment, optionally carrying per-block provenance sources — the `ingest_append`
+/// sources path (issue #354).
+async fn append_with_sources(
+    svc: &TemperMcpService,
+    resource: &str,
+    seq: u32,
+    text: &str,
+    sources: Option<Vec<String>>,
+) -> BlocksResponse {
     parse_tool_json(
         temper_mcp::tools::ingest::ingest_append(
             svc,
@@ -126,6 +138,7 @@ async fn append(svc: &TemperMcpService, resource: &str, seq: u32, text: &str) ->
                 seq,
                 content: text.to_string(),
                 content_hash: sha(text),
+                sources,
             },
         )
         .await
@@ -422,6 +435,7 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
             seq: 1,
             content: segments[1].to_string(),
             content_hash: "deadbeef".to_string(),
+            sources: None,
         },
     )
     .await
@@ -434,4 +448,109 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
 
     let landed = blocks(&svc, &begin.resource_id.to_string()).await;
     assert_eq!(landed.blocks.len(), 1, "a rejected append lands nothing");
+}
+
+// ── Per-block provenance (issue #354) ────────────────────────────────────────────
+
+/// The itemized per-block provenance for a resource, read the service-direct way (the same path the
+/// HTTP `/provenance` endpoint and the CLI `--provenance` view use).
+async fn provenance(
+    pool: &sqlx::PgPool,
+    profile: uuid::Uuid,
+    resource: uuid::Uuid,
+) -> Vec<temper_core::types::provenance::BlockProvenanceRow> {
+    temper_services::backend::substrate_read::resource_block_provenance_select(
+        pool,
+        ProfileId::from(profile),
+        resource,
+    )
+    .await
+    .expect("resource_block_provenance_select")
+}
+
+/// The acceptance criterion for issue #354: a document ingested `begin → N × append(sources=[…]) →
+/// finalize` records per-block provenance, block-aligned. Each appended segment's source lands on
+/// *that* block (seq), and the un-attributed begin block (seq 0) records nothing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let profile = app.client.profile().get().await.expect("profile").id;
+    app.client
+        .contexts()
+        .create("mcp-prov", None)
+        .await
+        .expect("context create");
+
+    let svc = mcp_service(&pool).await;
+    let segments = corpus();
+
+    // Begin carries no sources (block 0 is un-attributed).
+    let begin: SegmentedBeginResponse = parse_tool_json(
+        temper_mcp::tools::ingest::ingest_begin(
+            &svc,
+            begin_input("@me/mcp-prov", "Attributed", segments[0]),
+        )
+        .await
+        .expect("ingest_begin"),
+    );
+    let resource = begin.resource_id.to_string();
+
+    // Two appends, each attributing its own segment to a distinct external source. Mixed-case host
+    // is preserved raw in `source_uri` (normalized only in the server-side dedup key).
+    let src_one = "https://Example.com/issue/1";
+    let src_two = "https://example.com/PR/2";
+    append_with_sources(
+        &svc,
+        &resource,
+        1,
+        segments[1],
+        Some(vec![src_one.to_string()]),
+    )
+    .await;
+    // finalize echoes the body_hash after the *last* append.
+    let body_hash = append_with_sources(
+        &svc,
+        &resource,
+        2,
+        segments[2],
+        Some(vec![src_two.to_string()]),
+    )
+    .await
+    .body_hash;
+    finalize(&svc, &resource, segments.len() as u32, &body_hash).await;
+
+    let rows = provenance(&pool, profile, begin.resource_id).await;
+
+    // One row per attributed append, none for the un-attributed begin block.
+    assert_eq!(
+        rows.len(),
+        2,
+        "one provenance row per attributed append, zero for the begin block; got {rows:?}"
+    );
+    assert!(
+        rows.iter().all(|r| r.block_seq != 0),
+        "block 0 (the un-attributed begin) records no provenance; got {rows:?}"
+    );
+
+    // Block alignment: each source is on its own block, in append order.
+    let by_seq = |seq: i32| {
+        rows.iter()
+            .find(|r| r.block_seq == seq)
+            .unwrap_or_else(|| panic!("no provenance row for block_seq {seq}; got {rows:?}"))
+    };
+    let b1 = by_seq(1);
+    assert_eq!(b1.source_kind, "remote");
+    assert_eq!(b1.source_uri.as_deref(), Some(src_one));
+    assert_eq!(b1.accretion_seq, 0, "single source per block sits at seq 0");
+
+    let b2 = by_seq(2);
+    assert_eq!(b2.source_kind, "remote");
+    assert_eq!(b2.source_uri.as_deref(), Some(src_two));
+
+    // The two sources landed on distinct blocks — the whole point of per-block (not per-resource)
+    // attribution.
+    assert_ne!(
+        b1.block_id, b2.block_id,
+        "each append's source is recorded against its own content block"
+    );
 }

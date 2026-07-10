@@ -304,6 +304,9 @@ pub async fn run_segmented_create(
             // The CLI always chunks + embeds client-side; the server-chunk branch is for callers
             // without an embedder (MCP).
             chunks_packed: Some(chunks_packed),
+            // Whole-file streaming: the source is attributed once at begin (create-path
+            // `--sources`), not per programmatically-cut segment.
+            sources: Vec::new(),
         };
         let response = client
             .ingest()

@@ -505,6 +505,7 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
         content: segments[1].text.clone(),
         content_hash: temper_core::hash::sha256_hex(segments[1].text.as_bytes()),
         chunks_packed: Some(chunks1),
+        sources: Vec::new(),
     };
     app.client
         .ingest()
@@ -548,6 +549,7 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
             content: segments[idx].text.clone(),
             content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
             chunks_packed: Some(packed),
+            sources: Vec::new(),
         };
         app.client
             .ingest()

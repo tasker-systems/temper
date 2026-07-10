@@ -176,22 +176,29 @@ fn unpack_incoming_chunks(
     Ok(chunks.iter().map(packed_to_incoming).collect())
 }
 
-/// A body update's declared provenance sources → substrate `Incorporation`s, with each source's
-/// position in the list becoming its accretion `seq`. `None` (metadata-only update, or no body) and
-/// an empty `sources` both yield no incorporations — the projector then writes no `kb_block_provenance`
-/// rows. Shared by the create and update paths so both derive `seq` identically.
+/// Declared provenance sources → substrate `Incorporation`s, with each source's position in the
+/// list becoming its accretion `seq`. An empty slice yields no incorporations — the projector then
+/// writes no `kb_block_provenance` rows. The single seq-assignment rule, shared by every write path
+/// (create body, update body, and segmented append) so they derive `seq` identically.
+fn incorporations_from_sources(
+    sources: &[temper_core::types::provenance::ProvenanceSource],
+) -> Vec<temper_substrate::payloads::Incorporation> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(i, source)| temper_substrate::payloads::Incorporation {
+            source: source.clone(),
+            seq: i as i32,
+        })
+        .collect()
+}
+
+/// A body update's declared provenance sources → substrate `Incorporation`s. `None` (metadata-only
+/// update, or no body) and an empty `sources` both yield no incorporations. Thin adapter over
+/// [`incorporations_from_sources`] for the create and update paths.
 fn body_sources(body: Option<&BodyUpdate>) -> Vec<temper_substrate::payloads::Incorporation> {
-    body.map(|b| {
-        b.sources
-            .iter()
-            .enumerate()
-            .map(|(i, source)| temper_substrate::payloads::Incorporation {
-                source: source.clone(),
-                seq: i as i32,
-            })
-            .collect()
-    })
-    .unwrap_or_default()
+    body.map(|b| incorporations_from_sources(&b.sources))
+        .unwrap_or_default()
 }
 
 /// Build the substrate-native charter [`PreparedBlock`]s from a wire [`ReconcileTelos`] (client-embedded
@@ -2354,10 +2361,10 @@ impl Backend for DbBackend {
             writes::AppendParams {
                 resource,
                 block: &block,
-                // Segment appends carry no block-provenance sources in this beat (the ordinary
-                // create/update path's `sources` covers whole-body distillation attribution;
-                // per-segment attribution is out of scope here).
-                sources: Vec::new(),
+                // Per-segment block provenance: the caller's declared sources are recorded against
+                // this appended block (list position → accretion `seq`), the same projector path as
+                // the create/update body sources. Empty = an un-attributed append.
+                sources: incorporations_from_sources(&payload.sources),
                 emitter,
             },
         )

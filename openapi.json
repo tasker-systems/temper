@@ -5612,6 +5612,13 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceSource"
+            },
+            "description": "Block-provenance sources this appended segment's content was distilled from — recorded\nagainst **this** content block (a block, not a chunk), list position → accretion `seq`.\nSame value grammar and projector path as `IngestPayload::sources` / `resource create\n--sources` (a resource ref → `Resource`; an http/https URL → `Remote`). Empty (the default,\nskipped on the wire) = an un-attributed append, exactly the prior behaviour."
           }
         }
       },
