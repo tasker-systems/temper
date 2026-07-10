@@ -1,19 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_rehome($1,$2,$3,$4)",
+  "query": "SELECT resource_create($1,$2,$3,$4,$5,$6)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "resource_rehome",
+        "name": "resource_create",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
         "Jsonb",
+        "Jsonb",
         "Uuid",
         "Jsonb",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -21,5 +23,5 @@
       null
     ]
   },
-  "hash": "f3b41a4639448aa89f047022d7f368225c4637b306370882847b75582b35e59c"
+  "hash": "e10517ca71c57de007eac06998d745a74fe9a0ff87a0740ce548b9b86431d2de"
 }

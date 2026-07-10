@@ -53,6 +53,10 @@ pub struct ActArgs {
     /// Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`).
     #[arg(long)]
     pub invocation: Option<String>,
+    /// Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint).
+    /// Provenance only — it never authorizes. Omit and the event self-roots.
+    #[arg(long)]
+    pub correlation: Option<String>,
     /// Graded authorship confidence: tentative, probable, or confident.
     #[arg(long, value_enum)]
     pub confidence: Option<CliConfidence>,
@@ -85,8 +89,17 @@ impl ActArgs {
                     .map(|id| temper_core::types::ids::InvocationId::from(id.0))
             })
             .transpose()?;
+        let correlation_id = self
+            .correlation
+            .as_deref()
+            .map(|r| {
+                temper_workflow::operations::parse_ref(r)
+                    .map(|id| temper_core::types::ids::CorrelationId::from(id.0))
+            })
+            .transpose()?;
         Ok(temper_core::types::ActInput {
             invocation_id,
+            correlation_id,
             reasoning: self.reasoning,
             confidence: self.confidence.map(Into::into),
             rationale: self.rationale,

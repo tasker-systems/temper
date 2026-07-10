@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT relationship_retype($1,$2,$3,$4)",
+  "query": "SELECT resource_rehome($1,$2,$3,$4,$5)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "relationship_retype",
+        "name": "resource_rehome",
         "type_info": "Uuid"
       }
     ],
@@ -14,6 +14,7 @@
         "Jsonb",
         "Uuid",
         "Jsonb",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -21,5 +22,5 @@
       null
     ]
   },
-  "hash": "e54223d6568dcd55f24f1bc9954b1602c7096a7d0a63b390d649174776709b67"
+  "hash": "9931294cd8484a04ddf2c1dd488d435bfd66e3ced1e409c83566a413bc545492"
 }

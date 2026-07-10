@@ -10,6 +10,6 @@
 //! `.bind(id)` and `row.get::<NewType, _>()` accept the newtype directly.
 
 pub use temper_core::types::ids::{
-    BlockId, ChunkId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, LensId,
-    ProfileId, PropertyId, RegionId, ResourceId,
+    BlockId, ChunkId, CogmapId, ContextId, CorrelationId, EdgeId, EntityId, EventId, InvocationId,
+    LensId, ProfileId, PropertyId, RegionId, ResourceId,
 };

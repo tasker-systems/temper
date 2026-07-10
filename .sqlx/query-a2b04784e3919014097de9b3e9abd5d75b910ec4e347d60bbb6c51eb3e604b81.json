@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT relationship_reweight($1,$2,$3,$4)",
+  "query": "SELECT relationship_retype($1,$2,$3,$4,$5)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "relationship_reweight",
+        "name": "relationship_retype",
         "type_info": "Uuid"
       }
     ],
@@ -14,6 +14,7 @@
         "Jsonb",
         "Uuid",
         "Jsonb",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -21,5 +22,5 @@
       null
     ]
   },
-  "hash": "df47d5ecc1bc64c7ccbf8fc123b68a092d29d3639024746a8435bfde3b5fc857"
+  "hash": "a2b04784e3919014097de9b3e9abd5d75b910ec4e347d60bbb6c51eb3e604b81"
 }

@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::TemperError;
-use crate::types::ids::InvocationId;
+use crate::types::ids::{CorrelationId, InvocationId};
 
 /// The agent's SUBJECTIVE self-assessment of an authored act — a graded band, not a false-precision
 /// scalar. Ordinal: `Tentative < Probable < Confident`.
@@ -80,6 +80,11 @@ pub struct ActContext {
     /// correlation-≠-authz invariant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation: Option<InvocationId>,
+    /// The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional; when
+    /// absent the event self-roots. Caller-minted, so two writes from different processes under
+    /// different credentials can share one act — see [`CorrelationId`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<CorrelationId>,
     /// The agent's authorship of this act (`kb_events.metadata`). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorship: Option<AgentAuthorship>,
@@ -89,7 +94,7 @@ impl ActContext {
     /// True when nothing is attached — equivalent to `ActContext::default()`. Lets surfaces skip
     /// building a command field when neither correlation nor authorship was supplied.
     pub fn is_empty(&self) -> bool {
-        self.invocation.is_none() && self.authorship.is_none()
+        self.invocation.is_none() && self.correlation.is_none() && self.authorship.is_none()
     }
 }
 
@@ -112,6 +117,10 @@ pub struct ActInput {
     /// correlation aid, never a substitute for authn/authz.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_id: Option<InvocationId>,
+    /// The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+    /// minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<CorrelationId>,
     /// Free-text reasoning for the act. Authorship field — requires `confidence`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
@@ -135,11 +144,12 @@ impl ActInput {
     /// Authorship is `Some` iff `confidence` is supplied. Supplying any other authorship field
     /// (`reasoning`/`rationale`/`persona`/`model`) without a `confidence` band is a hard
     /// [`TemperError::BadRequest`] — `AgentAuthorship::confidence` is non-`Option`, so a graded
-    /// band is mandatory once authorship is claimed. The `invocation_id` correlator rides
-    /// independently and may be present with no authorship at all.
+    /// band is mandatory once authorship is claimed. The `invocation_id` and `correlation_id`
+    /// correlators ride independently and may be present with no authorship at all.
     pub fn into_act_context(self) -> Result<ActContext, TemperError> {
         let ActInput {
             invocation_id,
+            correlation_id,
             reasoning,
             confidence,
             rationale,
@@ -174,6 +184,7 @@ impl ActInput {
 
         Ok(ActContext {
             invocation: invocation_id,
+            correlation: correlation_id,
             authorship,
         })
     }
@@ -187,6 +198,7 @@ impl From<ActContext> for ActInput {
     fn from(ctx: ActContext) -> Self {
         let ActContext {
             invocation,
+            correlation,
             authorship,
         } = ctx;
         match authorship {
@@ -198,6 +210,7 @@ impl From<ActContext> for ActInput {
                 model,
             }) => ActInput {
                 invocation_id: invocation,
+                correlation_id: correlation,
                 reasoning,
                 confidence: Some(confidence),
                 rationale,
@@ -206,6 +219,7 @@ impl From<ActContext> for ActInput {
             },
             None => ActInput {
                 invocation_id: invocation,
+                correlation_id: correlation,
                 ..Default::default()
             },
         }
@@ -249,15 +263,27 @@ mod tests {
     fn act_context_default_is_empty() {
         let ctx = ActContext::default();
         assert!(ctx.is_empty());
-        assert!(ctx.invocation.is_none() && ctx.authorship.is_none());
-        // Empty context serializes to `{}` (both fields skip).
+        assert!(ctx.invocation.is_none() && ctx.correlation.is_none() && ctx.authorship.is_none());
+        // Empty context serializes to `{}` (all fields skip).
         assert_eq!(serde_json::to_value(&ctx).unwrap(), serde_json::json!({}));
     }
 
     #[test]
-    fn act_context_round_trips_invocation_and_authorship() {
+    fn act_context_with_only_correlation_is_not_empty() {
+        // Correlation alone is a meaningful context: the surface must still build a command field
+        // for it. Were `is_empty` to ignore correlation, the caller's thread would be dropped.
+        let ctx = ActContext {
+            correlation: Some(CorrelationId::new()),
+            ..Default::default()
+        };
+        assert!(!ctx.is_empty());
+    }
+
+    #[test]
+    fn act_context_round_trips_invocation_correlation_and_authorship() {
         let ctx = ActContext {
             invocation: Some(InvocationId::new()),
+            correlation: Some(CorrelationId::new()),
             authorship: Some(AgentAuthorship {
                 reasoning: Some("r".into()),
                 confidence: ConfidenceBand::Confident,
@@ -268,6 +294,20 @@ mod tests {
         };
         let back: ActContext = serde_json::from_value(serde_json::to_value(&ctx).unwrap()).unwrap();
         assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn correlation_serializes_as_a_bare_uuid_string() {
+        // The newtype is `#[serde(transparent)]`, so the wire shape is exactly the bare UUID a
+        // non-Rust caller (temper-rb, a Sidekiq job argument) mints and sends. If this ever
+        // becomes `{"correlation":{"0":"…"}}` every generated client breaks.
+        let id = CorrelationId::new();
+        let ctx = ActContext {
+            correlation: Some(id),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&ctx).unwrap();
+        assert_eq!(v["correlation"], serde_json::json!(id.uuid().to_string()));
     }
 
     // ── ActInput discrete-fields assembler ──────────────────────────────────
@@ -330,11 +370,33 @@ mod tests {
     }
 
     #[test]
+    fn act_input_correlation_only_assembles_without_authorship_or_invocation() {
+        // The temper-rb background-worker shape: a bare correlation, no run envelope, no persona.
+        let corr = CorrelationId::new();
+        let ctx = ActInput {
+            correlation_id: Some(corr),
+            ..Default::default()
+        }
+        .into_act_context()
+        .expect("correlation-only input is valid");
+        assert_eq!(ctx.correlation, Some(corr));
+        assert!(ctx.invocation.is_none(), "correlation rides without a run");
+        assert!(ctx.authorship.is_none(), "correlation is not authorship");
+        assert!(!ctx.is_empty());
+        // …and survives the authorship-less arm of the inverse translator.
+        let back = ActInput::from(ctx.clone())
+            .into_act_context()
+            .expect("reassembles");
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
     fn act_context_to_act_input_roundtrips() {
         // The translator path turns a command's ActContext back into the discrete ActInput wire
         // shape; the handler reassembles it. The roundtrip must be identity.
         let ctx = ActContext {
             invocation: Some(InvocationId::new()),
+            correlation: Some(CorrelationId::new()),
             authorship: Some(AgentAuthorship {
                 reasoning: Some("r".into()),
                 confidence: ConfidenceBand::Confident,

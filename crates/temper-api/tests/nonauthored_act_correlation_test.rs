@@ -59,6 +59,7 @@ fn sample_authorship() -> AgentAuthorship {
 fn stamped(inv: InvocationId) -> ActContext {
     ActContext {
         invocation: Some(inv),
+        correlation: None,
         authorship: Some(sample_authorship()),
     }
 }
@@ -253,6 +254,7 @@ async fn nonauthored_act_claiming_unknown_invocation_is_not_found(pool: PgPool) 
     let resource = make_resource(&backend, context, "ghost").await;
     let act = ActContext {
         invocation: Some(InvocationId::from(Uuid::now_v7())),
+        correlation: None,
         authorship: None,
     };
     let result = backend
@@ -297,6 +299,7 @@ async fn nonauthored_act_on_closed_invocation_is_conflict(pool: PgPool) {
             force: false,
             act: ActContext {
                 invocation: Some(inv),
+                correlation: None,
                 authorship: None,
             },
             origin: Surface::ApiHttp,

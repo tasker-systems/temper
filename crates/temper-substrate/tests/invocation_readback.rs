@@ -76,6 +76,7 @@ async fn invocation_show_and_list_surface_for_reader_and_gate_outsider(pool: PgP
         EventContext {
             authorship: None,
             invocation: Some(invocation),
+            correlation: None,
         },
     )
     .await
