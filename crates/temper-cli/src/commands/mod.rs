@@ -19,6 +19,7 @@ pub mod status;
 pub mod steward;
 pub mod task;
 pub mod team;
+pub mod update;
 pub mod version;
 pub mod warmup;
 

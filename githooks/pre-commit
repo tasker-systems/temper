@@ -19,6 +19,21 @@ echo "  Checking docs..."
 SQLX_OFFLINE=true RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --quiet
 echo "  ✓ Docs OK"
 
+# openapi.json is a committed product of the Axum router, so it goes stale from a new route OR from a
+# new field on any schema type reachable from one. Nothing else in this hook notices. Cheap here:
+# clippy above already compiled temper-api, so this is just running the emit-openapi bin.
+# Output is captured and replayed only on failure — check-openapi-spec.sh prints the offending diff.
+echo "  Checking OpenAPI spec..."
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+for openapi_gate in check-openapi-spec.sh check-openapi-routes.sh; do
+  if ! openapi_out=$(SQLX_OFFLINE=true bash "$REPO_ROOT/.github/scripts/$openapi_gate" 2>&1); then
+    echo "$openapi_out" >&2
+    echo "  ✗ OpenAPI check failed ($openapi_gate) — run: cargo make openapi" >&2
+    exit 1
+  fi
+done
+echo "  ✓ OpenAPI OK"
+
 # TypeScript checks (packages/temper-cloud)
 echo "  TypeScript typecheck..."
 (cd packages/temper-cloud && bun run typecheck)

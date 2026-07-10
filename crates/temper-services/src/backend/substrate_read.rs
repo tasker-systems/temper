@@ -715,6 +715,7 @@ pub async fn invocation_show_select(
         outcome: row.outcome,
         opened_at: row.opened_at,
         closed_at: row.closed_at,
+        correlation_id: row.correlation_id,
         acts: row
             .acts
             .into_iter()
@@ -753,6 +754,7 @@ pub async fn invocation_list_select(
             originating_cogmap_id: r.originating_cogmap_id,
             opened_at: r.opened_at,
             closed_at: r.closed_at,
+            correlation_id: r.correlation_id,
         })
         .collect())
 }

@@ -2155,7 +2155,10 @@ impl Backend for DbBackend {
             .await?;
         }
 
-        // 4. Claim up to `cap` for fan-out (one isolated session per claimed job downstream).
+        // 4. Claim up to `cap` for fan-out (one isolated session per claimed job downstream), stamping
+        //    each claimed row with this tick's correlation. That stamp is the ONLY carrier of the tick
+        //    id into the data layer: `invocation_open` inherits it from the active job, so a session's
+        //    invocation joins back to its tick with nothing asked of the agent.
         let cap = cmd.cap.unwrap_or(DEFAULT_STEWARD_DISPATCH_CAP) as i32;
         let claimed = workflow_job_service::claim(
             &self.pool,
@@ -2163,6 +2166,7 @@ impl Backend for DbBackend {
             DispatchType::Steward.as_str(),
             cap,
             DEFAULT_STEWARD_LEASE_SECONDS,
+            cmd.correlation,
         )
         .await?;
 

@@ -852,6 +852,7 @@ pub struct InvocationShowRow {
     pub outcome: Option<Value>,
     pub opened_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
+    pub correlation_id: Option<Uuid>,
     pub acts: Vec<InvocationActRecord>,
 }
 
@@ -865,6 +866,7 @@ pub struct InvocationListRow {
     pub originating_cogmap_id: Uuid,
     pub opened_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
+    pub correlation_id: Option<Uuid>,
 }
 
 /// The show read of one invocation envelope plus its acts. The access gate is INSIDE the SQL: the
@@ -882,7 +884,8 @@ pub async fn invocation_show(
 ) -> Result<Option<InvocationShowRow>> {
     let Some(row) = sqlx::query(
         "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.parent_cogmap_id,
-                i.scoped_entity_id, i.telos_resource_id, i.outcome, i.opened_at, i.closed_at
+                i.scoped_entity_id, i.telos_resource_id, i.outcome, i.opened_at, i.closed_at,
+                i.correlation_id
            FROM kb_invocations i
           WHERE i.id = $1
             AND anchor_readable_by_profile($2, 'kb_cogmaps', i.originating_cogmap_id)",
@@ -927,6 +930,7 @@ pub async fn invocation_show(
         outcome: row.get("outcome"),
         opened_at: row.get("opened_at"),
         closed_at: row.get("closed_at"),
+        correlation_id: row.get("correlation_id"),
         acts,
     }))
 }
@@ -945,7 +949,8 @@ pub async fn invocation_list(
     status: Option<String>,
 ) -> Result<Vec<InvocationListRow>> {
     let rows = sqlx::query(
-        "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.opened_at, i.closed_at
+        "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.opened_at, i.closed_at,
+                i.correlation_id
            FROM kb_invocations i
           WHERE anchor_readable_by_profile($1, 'kb_cogmaps', i.originating_cogmap_id)
             AND ($2::uuid IS NULL OR i.originating_cogmap_id = $2)
@@ -967,6 +972,7 @@ pub async fn invocation_list(
             originating_cogmap_id: r.get("originating_cogmap_id"),
             opened_at: r.get("opened_at"),
             closed_at: r.get("closed_at"),
+            correlation_id: r.get("correlation_id"),
         })
         .collect())
 }

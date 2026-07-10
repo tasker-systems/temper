@@ -79,6 +79,7 @@ mod tests {
             outcome: None,
             opened_at: Utc::now(),
             closed_at: None,
+            correlation_id: None,
             acts: vec![],
         };
         let out =
@@ -96,6 +97,7 @@ mod tests {
             originating_cogmap_id: Uuid::from_u128(2),
             opened_at: Utc::now(),
             closed_at: Some(Utc::now()),
+            correlation_id: Some(Uuid::from_u128(9)),
         }];
         let out =
             crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");

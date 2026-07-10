@@ -28,6 +28,13 @@ import { requireEnv, temperToken } from "../lib/temper-auth.js";
  * to `/dispatch` (temper-api logs it on entry), so the cron → dispatch chain shares one key in the logs
  * of BOTH Vercel apps even when a hop fails before any DB row exists (the load-bearing, infra-resilient
  * trace). We also log the `/dispatch` response's `x-vercel-id` as a bridge into Vercel's per-request view.
+ *
+ * The id also reaches the data layer, deterministically and with nothing asked of the model: `/dispatch`
+ * stamps it on every job it claims (`kb_workflow_jobs.correlation_id`), and each session's
+ * `invocation_open` inherits it server-side from that active job (`kb_invocations.correlation_id`). So a
+ * tick's runs are queryable, not just greppable. The fan-out prompt therefore does NOT mention the
+ * correlation: one tick is one dispatch act plus N run-grain sessions, and an agent that passed the tick
+ * id to a write tool's `correlation_id` would collapse act grain into run grain.
  * Design: docs/superpowers/specs/2026-07-06-steward-dispatch-correlation-id-design.md
  */
 export default defineSchedule({
@@ -69,9 +76,21 @@ export default defineSchedule({
           // Bridge to Vercel's own request id for the infra-side view of this hop (design item 3).
           const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
 
-          const { claimed } = (await res.json()) as {
+          const { claimed, correlation_id: stampedId } = (await res.json()) as {
             claimed: { id: string; cogmap_id: string }[];
+            correlation_id?: string;
           };
+
+          // The server echoes the correlation it parsed and stamped onto the claimed jobs. A mismatch
+          // (or an absent echo) means the tick's DB-side trace is broken even though the log trace is
+          // intact — the jobs self-rooted and their sessions' invocations will inherit nothing. Never
+          // fatal: correlation is provenance, and the distillation work should still run.
+          if (stampedId !== correlationId) {
+            console.warn(
+              `[steward-dispatch] tick ${correlationId}: server stamped ${stampedId ?? "<none>"}; ` +
+                `this tick's jobs and invocations will not carry it`,
+            );
+          }
 
           console.log(
             `[steward-dispatch] tick ${correlationId}: claimed ${claimed.length} job(s)` +
@@ -89,8 +108,7 @@ export default defineSchedule({
                 target: {},
                 auth: appAuth,
                 message:
-                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id}; ` +
-                  `correlation ${correlationId}). ` +
+                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id}). ` +
                   `This map was already selected by the deterministic drift sweep, so its ingest delta ` +
                   `has cleared threshold — you do not need to re-check it. Pass this SINGLE cogmap id ` +
                   `as the \`cogmap\` argument to every temper tool. Load the map-stewardship skill, ` +

@@ -68,7 +68,12 @@ opened_at: string,
 /**
  * When the invocation closed; `None` while still open.
  */
-closed_at: string | null, };
+closed_at: string | null, 
+/**
+ * The dispatch tick that spawned this run; `None` for a manual open. Filtering a list by this
+ * answers "every session this tick fanned out to".
+ */
+correlation_id: string | null, };
 
 /**
  * The full show projection of an invocation envelope: the `kb_invocations`
@@ -126,6 +131,12 @@ opened_at: string,
  * When the invocation closed; `None` while still open.
  */
 closed_at: string | null, 
+/**
+ * The dispatch tick that spawned this run, inherited server-side at open from the active claimed
+ * job for `originating_cogmap_id`. `None` for a manual open with no active job. This is the
+ * run→tick join; an individual act joins through its `invocation_id`, not by carrying the tick.
+ */
+correlation_id: string | null, 
 /**
  * The acts (stamped events) that occurred under this envelope.
  */

@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ContextId, EdgeId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
@@ -283,10 +283,15 @@ pub struct AdvanceStewardWatermark {
 /// maps the principal can read, enqueue each (deduped by the in-flight index), and claim up to `cap`
 /// steward jobs for fan-out. Returns the claimed jobs — the caller starts one isolated session per
 /// job, each tending a single cogmap. `threshold`/`cap` default when `None`.
+///
+/// `correlation` is the caller's per-tick id (the steward cron's `x-steward-correlation-id`). It is
+/// stamped onto every job this tick claims, and each claimed job's session then inherits it onto its
+/// invocation server-side. Optional and provenance-only: `None` claims exactly as before.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StewardDispatchTick {
     pub threshold: Option<i64>,
     pub cap: Option<i64>,
+    pub correlation: Option<CorrelationId>,
     pub origin: Surface,
 }
 

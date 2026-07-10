@@ -126,4 +126,9 @@ pub struct DispatchTickRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispatchTickResponse {
     pub claimed: Vec<ClaimedJob>,
+    /// The correlation the server parsed out of `x-steward-correlation-id` and stamped onto every
+    /// claimed job — echoed so the caller can assert its tick id survived, rather than assume it.
+    /// `None` when the header was absent or not a UUID (both self-root; neither is an error).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<Uuid>,
 }
