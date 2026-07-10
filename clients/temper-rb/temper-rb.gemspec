@@ -39,5 +39,5 @@ Gem::Specification.new do |spec|
   # and drops pooled sockets from a Process._fork hook. That, not
   # Temper.reset_connection!, is what stops a forked Puma/Sidekiq worker from
   # riding its parent's socket. Proven in spec/temper/fork_safety_spec.rb.
-  spec.add_dependency 'connection_pool', '>= 2.4'
+  spec.add_dependency 'connection_pool', '>= 2.4', '< 4.0'
 end
