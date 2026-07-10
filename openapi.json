@@ -6659,6 +6659,14 @@
             "items": {
               "$ref": "#/components/schemas/ClaimedJob"
             }
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The correlation the server parsed out of `x-steward-correlation-id` and stamped onto every\nclaimed job — echoed so the caller can assert its tick id survived, rather than assume it.\n`None` when the header was absent or not a UUID (both self-root; neither is an error)."
           }
         }
       },
@@ -7472,6 +7480,14 @@
             "format": "date-time",
             "description": "When the invocation closed; `None` while still open."
           },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The dispatch tick that spawned this run; `None` for a manual open. Filtering a list by this\nanswers \"every session this tick fanned out to\"."
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -7525,6 +7541,14 @@
             ],
             "format": "date-time",
             "description": "When the invocation closed; `None` while still open."
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The dispatch tick that spawned this run, inherited server-side at open from the active claimed\njob for `originating_cogmap_id`. `None` for a manual open with no active job. This is the\nrun→tick join; an individual act joins through its `invocation_id`, not by carrying the tick."
           },
           "disposition": {
             "oneOf": [
