@@ -2185,6 +2185,18 @@ Currently `detect-ci-scope.sh` is binary: docs-only or full pipeline. The gem's 
 **Interfaces:**
 - Produces: `detect-scope` job output `run-test-ruby` (`"true"` / `"false"`); a reusable `test-ruby.yml` invoked via `workflow_call`.
 
+> **Two traps.** (1) `run_test`'s assertion grep has no `|| true`, so asserting a flag the script does not yet emit **kills the harness via `set -e`** instead of reporting a FAIL — it can fail on a wrong value but not a missing one, which is exactly what a new flag needs. Fix that first or you never see an honest red. (2) The `__force_full_ci__` no-diff fallback must turn `test-ruby` **on**. A safety fallback that silently skips a job is not a safety fallback.
+
+- [ ] **Step 0: Let the harness fail on a missing key**
+
+In `.github/scripts/test-detect-ci-scope.sh`, inside `run_test`:
+```bash
+        local actual
+        # `|| true`: an ABSENT key must report a FAIL with actual='', not kill the
+        # harness via set -e.
+        actual="$(echo "$output" | grep "^${var_name}=" | head -1 | cut -d= -f2- || true)"
+```
+
 - [ ] **Step 1: Write the failing scope-detection tests**
 
 Append to `.github/scripts/test-detect-ci-scope.sh`, before the summary block:
@@ -2225,10 +2237,13 @@ Expected: FAIL — `RUN_TEST_RUBY: expected='true' actual=''`.
 
 In `.github/scripts/detect-ci-scope.sh`, after the `HAS_SELF` block (line ~107), add:
 ```bash
-# Ruby SDK: the gem's own tree, plus the contract it is generated from. A
-# contract change must be SEEN to move the gem, so openapi.json triggers it.
+# Ruby SDK: the gem's own tree, the contract it is generated from, and its CI
+# workflow. openapi.json is in this set precisely because a contract change must
+# be SEEN to move the gem -- that is what the codegen drift gate proves.
+#
+# The no-diff safety fallback must run everything, this job included.
 HAS_RUBY=false
-if changes_match '^clients/temper-rb/|^openapi\.json$'; then
+if changes_match '^clients/temper-rb/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^__force_full_ci__$'; then
     HAS_RUBY=true
 fi
 ```
@@ -2266,7 +2281,7 @@ and
         echo "run-test-ruby=${RUN_TEST_RUBY}"
 ```
 
-Also extend the `debug` line to include `HAS_RUBY=$HAS_RUBY`.
+Also extend the `debug` line to include `HAS_RUBY=$HAS_RUBY`, update the two existing harness cases that assert `SCOPE_SUMMARY` verbatim, and change `ci-success`'s skip message from `(docs-only, correctly skipped)` to `(out of scope, correctly skipped)` — a job can now be correctly skipped for path-scope reasons.
 
 - [ ] **Step 4: Run the scope tests to verify they pass**
 
@@ -2313,8 +2328,16 @@ jobs:
 
       # The generated core is committed, so contributors need no Docker to build
       # or test the gem. CI is where we prove it still matches the contract.
+      #
+      # This step is why the job is path-scoped -- it pulls a ~1GB image.
       - name: Codegen drift gate
         run: bundle exec rake drift
+
+      # A gem that cannot be packaged is not shippable, and the gemspec loads
+      # lib/temper/version.rb standalone -- a regression there is invisible to
+      # rspec but fatal to `gem build`.
+      - name: Build the gem
+        run: gem build temper-rb.gemspec
 ```
 
 - [ ] **Step 6: Wire it into `ci.yml`**
