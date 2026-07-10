@@ -661,6 +661,12 @@ pub async fn find_edge(
 /// search read floor. Reads the stored `kb_resource_search_index` tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
 ///
+/// The query is parsed with `websearch_to_tsquery` (issue #356) — mirroring the Surface A
+/// `search_fts_candidates` SQL function — so `"quoted phrases"`, `OR`, and `-negation` are
+/// expressible. Plain unquoted input parses identically to `plainto_tsquery`, so this is fully
+/// backward-compatible (the `fts_search_parity_with_inline_recipe` test keeps a `plainto_tsquery`
+/// oracle precisely to pin that equivalence).
+///
 /// Returns the preserved resource id (not `origin_uri`): `origin_uri` is NOT unique (empty for
 /// CLI/agent-created resources — 166/1214 in the production corpus), so an origin_uri-keyed result
 /// collapses every empty-`origin_uri` match onto one indistinguishable handle and the caller cannot
@@ -702,8 +708,8 @@ pub async fn fts_search(
            JOIN kb_resources r             ON r.id = si.resource_id
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
           WHERE r.is_active
-            AND si.search_vector @@ plainto_tsquery('english', $2)
-          ORDER BY ts_rank(si.search_vector, plainto_tsquery('english', $2)) DESC",
+            AND si.search_vector @@ websearch_to_tsquery('english', $2)
+          ORDER BY ts_rank(si.search_vector, websearch_to_tsquery('english', $2)) DESC",
     )
     .bind(principal)
     .bind(query)

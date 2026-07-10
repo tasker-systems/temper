@@ -122,6 +122,62 @@ async fn fts_candidates_normalized_and_scoped(pool: sqlx::PgPool) {
     );
 }
 
+/// Issue #356: `search_fts_candidates` now parses with `websearch_to_tsquery`, so a quoted phrase
+/// forces adjacency. Two resources share both terms; only the one with them ADJACENT is a candidate
+/// for the quoted query, while the unquoted query still surfaces both (backward compatible).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fts_candidates_supports_quoted_phrase(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "phrase").await;
+    let adjacent = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Doc adjacent",
+        "the quench hardening process strengthens steel",
+        "temper://phrase/adjacent",
+    )
+    .await;
+    let split = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Doc split",
+        "quench the billet, then begin hardening it slowly",
+        "temper://phrase/split",
+    )
+    .await;
+
+    // Quoted phrase → only the adjacent resource is a candidate.
+    let quoted: Vec<Uuid> = fts_candidates(&pool, owner.uuid(), "\"quench hardening\"")
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        quoted.contains(&adjacent),
+        "quoted phrase yields the adjacent-terms resource as a candidate"
+    );
+    assert!(
+        !quoted.contains(&split),
+        "quoted phrase excludes the non-adjacent resource (plainto_tsquery would not have)"
+    );
+
+    // Unquoted → both (AND semantics preserved).
+    let unquoted: Vec<Uuid> = fts_candidates(&pool, owner.uuid(), "quench hardening")
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        unquoted.contains(&adjacent) && unquoted.contains(&split),
+        "unquoted query surfaces both resources (backward compatible)"
+    );
+}
+
 // ── Vector candidates ─────────────────────────────────────────────────────────────────────────────
 
 /// One block/chunk with a caller-chosen 768-d embedding (ONNX-free — structural).
