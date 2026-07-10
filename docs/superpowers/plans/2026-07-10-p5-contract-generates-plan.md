@@ -13,6 +13,12 @@
 - **utoipa version is 5.4.0.** `#[utoipa::path(...)]` accepts `operation_id = "..."` (verified: `utoipa-gen-5.4.0/src/path.rs:130`). It is the only supported spelling.
 - **No behavior change.** Routes, handler bodies, wire types, and SQL are untouched. Only `#[utoipa::path]` attributes, the `components(schemas(...))` list, its `use` statement, tests, and the emitted artifact change.
 - **`openapi.json` is never hand-edited.** It is a product of the router. Regenerate with `cargo make openapi`. The existing `check-openapi-spec.sh` gate diffs the committed file against a fresh emission and fails on drift.
+- **A merge conflict in `openapi.json` is never resolved by hand.** Sibling sessions are landing correlation-threading work that also regenerates it, and this branch renames 27 `operationId`s, so a textual conflict is near-certain. Resolution is always: take either side wholesale, re-run `cargo make openapi`, and let `check-openapi-spec.sh` confirm. Hand-merging a generated 300KB artifact produces a file that matches no router.
+
+  ```bash
+  git checkout --theirs openapi.json && cargo make openapi
+  bash .github/scripts/check-openapi-spec.sh
+  ```
 - **`--all-features` for builds and clippy**, per repo convention. Do **not** pass `--all-features` to the nextest commands in this plan: it enables `test-db`, which requires a live `DATABASE_URL`. These tests need no database.
 - **Never `cargo nextest run -p temper-api` unscoped** — it hangs at test-list enumeration on the `temper-api` bin target. Always scope with `--lib` (verified working).
 - **Lint suppression uses `#[expect(lint, reason = "...")]`**, never `#[allow]`.
