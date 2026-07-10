@@ -22,6 +22,7 @@ use temper_workflow::types::graph::GraphEdgeRow;
 
 #[utoipa::path(
     get,
+    operation_id = "list_resource_edges",
     path = "/api/resources/{id}/edges",
     tag = "Resources",
     params(("id" = Uuid, Path, description = "Resource ID")),

@@ -26,6 +26,7 @@ use temper_workflow::operations::Backend;
 
 #[utoipa::path(
     post,
+    operation_id = "append_block",
     path = "/api/resources/{id}/blocks",
     tag = "Ingest",
     params(("id" = Uuid, Path, description = "Resource ID")),
@@ -54,6 +55,7 @@ pub async fn append_block_handler(
 
 #[utoipa::path(
     post,
+    operation_id = "finalize_resource",
     path = "/api/resources/{id}/finalize",
     tag = "Ingest",
     params(("id" = Uuid, Path, description = "Resource ID")),
@@ -82,6 +84,7 @@ pub async fn finalize_handler(
 
 #[utoipa::path(
     get,
+    operation_id = "list_blocks",
     path = "/api/resources/{id}/blocks",
     tag = "Ingest",
     params(("id" = Uuid, Path, description = "Resource ID")),

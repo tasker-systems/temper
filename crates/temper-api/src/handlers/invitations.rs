@@ -22,6 +22,7 @@ use temper_services::state::AppState;
 
 #[utoipa::path(
     post,
+    operation_id = "create_team_invitation",
     path = "/api/teams/{id}/invite",
     tag = "Invitations",
     params(("id" = Uuid, Path, description = "Team ID")),
@@ -56,6 +57,7 @@ pub async fn create(
 
 #[utoipa::path(
     get,
+    operation_id = "list_team_invitations",
     path = "/api/teams/{id}/invitations",
     tag = "Invitations",
     params(("id" = Uuid, Path, description = "Team ID")),

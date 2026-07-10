@@ -47,6 +47,7 @@ impl axum::response::IntoResponse for ListResourcesResponse {
 
 #[utoipa::path(
     get,
+    operation_id = "list_resources",
     path = "/api/resources",
     tag = "Resources",
     params(ResourceListParams),
@@ -82,6 +83,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
+    operation_id = "get_resource",
     path = "/api/resources/{id}",
     tag = "Resources",
     params(("id" = Uuid, Path, description = "Resource ID")),
@@ -164,6 +166,7 @@ pub async fn provenance(
 
 #[utoipa::path(
     post,
+    operation_id = "create_resource",
     path = "/api/resources",
     tag = "Resources",
     request_body = ResourceCreateRequest,
@@ -225,6 +228,7 @@ pub async fn create(
 
 #[utoipa::path(
     patch,
+    operation_id = "update_resource",
     path = "/api/resources/{id}",
     tag = "Resources",
     params(("id" = Uuid, Path, description = "Resource ID")),
@@ -322,6 +326,7 @@ pub async fn update(
 
 #[utoipa::path(
     delete,
+    operation_id = "delete_resource",
     path = "/api/resources/{id}",
     tag = "Resources",
     params(
@@ -359,6 +364,7 @@ pub async fn delete(
 
 #[utoipa::path(
     post,
+    operation_id = "grant_resource_access",
     path = "/api/resources/{id}/grants",
     tag = "Resources",
     params(("id" = Uuid, Path, description = "Resource ID")),
@@ -397,6 +403,7 @@ pub async fn grant(
 
 #[utoipa::path(
     delete,
+    operation_id = "revoke_resource_access",
     path = "/api/resources/{id}/grants",
     tag = "Resources",
     params(("id" = Uuid, Path, description = "Resource ID")),

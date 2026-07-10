@@ -341,6 +341,7 @@ pub async fn unbind_team(
 
 #[utoipa::path(
     post,
+    operation_id = "grant_cogmap_access",
     path = "/api/cognitive-maps/{id}/grants",
     tag = "Cognitive Maps",
     params(("id" = Uuid, Path, description = "Cognitive map ID")),
@@ -377,6 +378,7 @@ pub async fn grant(
 
 #[utoipa::path(
     delete,
+    operation_id = "revoke_cogmap_access",
     path = "/api/cognitive-maps/{id}/grants",
     tag = "Cognitive Maps",
     params(("id" = Uuid, Path, description = "Cognitive map ID")),

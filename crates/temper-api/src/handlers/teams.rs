@@ -19,6 +19,7 @@ use temper_services::state::AppState;
 
 #[utoipa::path(
     get,
+    operation_id = "list_teams",
     path = "/api/teams",
     tag = "Teams",
     security(("bearer_auth" = [])),
@@ -34,6 +35,7 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Js
 
 #[utoipa::path(
     post,
+    operation_id = "create_team",
     path = "/api/teams",
     tag = "Teams",
     security(("bearer_auth" = [])),
@@ -105,6 +107,7 @@ pub async fn detail(
 
 #[utoipa::path(
     patch,
+    operation_id = "update_team",
     path = "/api/teams/{id}",
     tag = "Teams",
     params(("id" = Uuid, Path, description = "Team ID")),
@@ -134,6 +137,7 @@ pub async fn update(
 
 #[utoipa::path(
     delete,
+    operation_id = "delete_team",
     path = "/api/teams/{id}",
     tag = "Teams",
     params(("id" = Uuid, Path, description = "Team ID")),

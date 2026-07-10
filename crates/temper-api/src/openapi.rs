@@ -414,4 +414,50 @@ mod tests {
             "spec $refs component schemas that are not defined: {dangling:?}",
         );
     }
+
+    /// Every HTTP method that OpenAPI allows on a path item.
+    const HTTP_METHODS: [&str; 8] = [
+        "get", "put", "post", "delete", "options", "head", "patch", "trace",
+    ];
+
+    /// OpenAPI requires `operationId` to be present and unique across the whole document.
+    /// utoipa defaults it to the handler's fn name, so two handlers both named `list` collide —
+    /// and a generator partitions methods by tag, so a within-tag collision silently emits
+    /// `list_0`. Uniqueness is what makes the generated client's method names stable.
+    #[test]
+    fn operation_ids_are_present_and_unique() {
+        use std::collections::BTreeMap;
+
+        let spec = crate::routes::openapi_spec();
+        let json = serde_json::to_value(&spec).expect("spec serializes to JSON");
+        let paths = json["paths"].as_object().expect("paths is an object");
+
+        let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut missing: Vec<String> = Vec::new();
+
+        for (path, item) in paths {
+            for method in HTTP_METHODS {
+                let Some(operation) = item.get(method) else {
+                    continue;
+                };
+                let location = format!("{} {path}", method.to_uppercase());
+                match operation.get("operationId").and_then(|id| id.as_str()) {
+                    Some(id) => owners.entry(id.to_owned()).or_default().push(location),
+                    None => missing.push(location),
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "operations without an operationId: {missing:?}"
+        );
+
+        let duplicates: BTreeMap<&String, &Vec<String>> =
+            owners.iter().filter(|(_, ops)| ops.len() > 1).collect();
+        assert!(
+            duplicates.is_empty(),
+            "operationId must be unique across the document; duplicates: {duplicates:#?}",
+        );
+    }
 }
