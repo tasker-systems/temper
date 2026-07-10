@@ -56,6 +56,9 @@ pub enum TemperError {
     #[error("network error: {0}")]
     Network(String),
 
+    #[error("Install error: {0}")]
+    Install(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 

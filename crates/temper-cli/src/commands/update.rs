@@ -116,9 +116,12 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
     };
     let target_version = normalize_version(&target_tag);
 
-    // "Already current" only applies to the unpinned path: an explicit pin
-    // always proceeds so it doubles as a repair/downgrade lever.
-    let up_to_date = pinned.is_none() && target_version == VERSION;
+    // "No update needed" (unpinned path only): the latest release is not
+    // strictly newer than what's running — i.e. we're current *or ahead*. An
+    // explicit --version pin always proceeds, so it doubles as the deliberate
+    // downgrade/repair lever; the unpinned path must never silently downgrade a
+    // newer running build back to an older "latest".
+    let up_to_date = pinned.is_none() && !is_strictly_newer(target_version, VERSION);
 
     // 3. --check: report and exit, mutating nothing.
     if check {
@@ -132,18 +135,37 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
         return Ok(());
     }
 
-    // 4. No-op when already current and not forced.
+    // 4. No-op when there's nothing newer and no --force.
     if up_to_date && !force {
-        crate::output::success(format!("already up to date (v{VERSION})"));
+        crate::output::success(format!(
+            "already up to date (running v{VERSION}; latest release v{target_version})"
+        ));
         return Ok(());
     }
 
-    // 5. Hand off to the embedded installer for download → verify → atomic swap.
-    run_installer(&target_tag)?;
+    // 5. Hand off to the embedded installer for download → checksum-verify →
+    //    run-verify → atomic swap. The installer refuses to finalize unless the
+    //    new binary actually runs, so a failure here leaves the prior install
+    //    in place (it prints the exact recovery state to stderr).
+    run_installer(&install_dir, &target_tag)?;
 
-    // 6. Confirm the new version landed by reading it back from the installed
-    //    binary (best-effort).
+    // 6. Confirm the new version landed by running the installed binary. The
+    //    installer already gated on runnability, so this is a belt-and-braces
+    //    confirmation — but a mismatch or an unrunnable read-back is surfaced
+    //    loudly rather than swallowed.
     let installed_version = read_installed_version(&install_dir);
+    match &installed_version {
+        Some(v) if v.contains(target_version) => {}
+        Some(v) => crate::output::warning(format!(
+            "installed binary reports \"{v}\", but {target_tag} was requested — \
+             the updated binary may not be the one first on your PATH. \
+             Check `which temper` and `temper --version`."
+        )),
+        None => crate::output::warning(
+            "could not confirm the installed version by running the new binary; \
+             run `temper --version` to verify.",
+        ),
+    }
 
     let report = UpdateReport {
         previous_version: VERSION,
@@ -202,6 +224,11 @@ fn resolve_latest_tag() -> Result<String> {
         let client = reqwest::Client::builder()
             // GitHub's API rejects requests without a User-Agent.
             .user_agent(format!("temper-cli/{VERSION}"))
+            // Bounded timeouts so a black-hole network fails fast instead of
+            // hanging forever (reqwest has no default timeout). Nothing has been
+            // touched at this point, so a timeout is a clean, non-destructive error.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| TemperError::Network(format!("building HTTP client: {e}")))?;
         let resp = client
@@ -210,6 +237,16 @@ fn resolve_latest_tag() -> Result<String> {
             .send()
             .await
             .map_err(|e| TemperError::Network(format!("querying GitHub releases: {e}")))?;
+        // A 403 is almost always the unauthenticated rate limit (shared NAT/CI
+        // IPs hit it) — flag it as transient and reassure nothing was changed,
+        // rather than leaving a bare "403 Forbidden" that reads like an auth wall.
+        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(TemperError::Network(
+                "GitHub API rate-limited or forbidden (HTTP 403). Your install is \
+                 unchanged — retry in a few minutes."
+                    .to_string(),
+            ));
+        }
         if !resp.status().is_success() {
             return Err(TemperError::Api(format!(
                 "GitHub releases API returned {}",
@@ -224,10 +261,12 @@ fn resolve_latest_tag() -> Result<String> {
     })
 }
 
-/// Pipe the embedded `install.sh` to `sh -s -- --version <tag>`. The
-/// installer's own progress chatter is redirected to stderr so this command's
-/// stdout carries only the final machine-readable report.
-fn run_installer(tag: &str) -> Result<()> {
+/// Pipe the embedded `install.sh` to `sh -s -- --version <tag>`, aiming it at
+/// the detected `install_dir` (via `TEMPER_INSTALL_DIR`) so the swap targets
+/// exactly where the running binary lives. The installer's own progress
+/// chatter is redirected to stderr so this command's stdout carries only the
+/// final machine-readable report.
+fn run_installer(install_dir: &Path, tag: &str) -> Result<()> {
     crate::output::progress(format!("Updating to {tag}…\n"));
 
     let mut child = Command::new("sh")
@@ -235,26 +274,33 @@ fn run_installer(tag: &str) -> Result<()> {
         .arg("--")
         .arg("--version")
         .arg(tag)
+        // Detection is authoritative: install into the dir the running binary
+        // actually lives in, not whatever the XDG default recomputes to.
+        .env("TEMPER_INSTALL_DIR", install_dir)
         .stdin(Stdio::piped())
         .stdout(installer_stdout())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| TemperError::Config(format!("spawning installer shell: {e}")))?;
+        .map_err(|e| TemperError::Install(format!("spawning installer shell: {e}")))?;
 
     child
         .stdin
         .take()
-        .ok_or_else(|| TemperError::Config("installer stdin unavailable".into()))?
+        .ok_or_else(|| TemperError::Install("installer stdin unavailable".into()))?
         .write_all(INSTALL_SH.as_bytes())
-        .map_err(|e| TemperError::Config(format!("writing installer script: {e}")))?;
+        .map_err(|e| TemperError::Install(format!("writing installer script: {e}")))?;
 
     let status = child
         .wait()
-        .map_err(|e| TemperError::Config(format!("waiting on installer: {e}")))?;
+        .map_err(|e| TemperError::Install(format!("waiting on installer: {e}")))?;
 
     if !status.success() {
-        return Err(TemperError::Api(format!(
-            "installer exited with {status}; prior install left intact"
+        // The installer prints the true post-failure state to stderr (untouched,
+        // restored, or — worst case — where the backup survives), so relay
+        // rather than assert an intactness we can't verify from here.
+        return Err(TemperError::Install(format!(
+            "installer exited with {status}; see the installer output above for \
+             the state of your install"
         )));
     }
     Ok(())
@@ -302,6 +348,34 @@ fn normalize_version(s: &str) -> &str {
     s.strip_prefix('v').unwrap_or(s)
 }
 
+/// Parse a `MAJOR.MINOR.PATCH` core into a comparable tuple, ignoring any
+/// `-prerelease` / `+build` suffix. Returns `None` when the core isn't exactly
+/// three numeric components, so callers can fall back to a safe default rather
+/// than mis-order an exotic version string.
+fn parse_core(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.split(['-', '+']).next().unwrap_or(v);
+    let mut it = core.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next()?.parse().ok()?;
+    let patch = it.next()?.parse().ok()?;
+    if it.next().is_some() {
+        return None; // more than three components — not a plain core
+    }
+    Some((major, minor, patch))
+}
+
+/// Is `candidate` a strictly newer release than `base`? Compares the numeric
+/// `MAJOR.MINOR.PATCH` cores. If *either* side can't be parsed as a plain core
+/// (e.g. a prerelease-only or non-semver tag), fall back to string inequality —
+/// so an odd version never wedges `update` into refusing to act, while the
+/// common case still refuses to silently downgrade a newer running build.
+fn is_strictly_newer(candidate: &str, base: &str) -> bool {
+    match (parse_core(candidate), parse_core(base)) {
+        (Some(c), Some(b)) => c > b,
+        _ => candidate != base,
+    }
+}
+
 /// Ensure a user-supplied `--version` carries the leading `v` the release tags
 /// (and `install.sh`'s archive naming) use, so `--version 0.3.0` and
 /// `--version v0.3.0` both resolve the same archive.
@@ -336,14 +410,51 @@ mod tests {
         assert_eq!(ensure_v_prefix("v0.3.0"), "v0.3.0");
     }
 
-    /// The equality the unpinned "already current" branch relies on: the
-    /// normalized latest tag equals the compiled `CARGO_PKG_VERSION` exactly
-    /// when they name the same release.
+    /// The comparison the unpinned no-op branch relies on: the same release is
+    /// not "strictly newer" than itself, so an up-to-date install is a clean
+    /// no-op; a higher latest is newer.
     #[test]
-    fn up_to_date_equality_matches_compiled_version() {
-        let latest_tag = format!("v{VERSION}");
-        assert_eq!(normalize_version(&latest_tag), VERSION);
-        assert_ne!(normalize_version("v99.99.99"), VERSION);
+    fn up_to_date_comparison_matches_compiled_version() {
+        let same = normalize_version(&format!("v{VERSION}")).to_string();
+        assert!(
+            !is_strictly_newer(&same, VERSION),
+            "same version isn't newer"
+        );
+        assert!(
+            is_strictly_newer("99.99.99", VERSION),
+            "a higher latest is newer"
+        );
+    }
+
+    /// `parse_core` accepts a plain `X.Y.Z`, drops a prerelease/build suffix,
+    /// and rejects non-cores (too few/many components, non-numeric).
+    #[test]
+    fn parse_core_handles_plain_and_prerelease() {
+        assert_eq!(parse_core("0.3.0"), Some((0, 3, 0)));
+        assert_eq!(parse_core("1.2.3-rc1"), Some((1, 2, 3)));
+        assert_eq!(parse_core("1.2.3+build.7"), Some((1, 2, 3)));
+        assert_eq!(parse_core("0.3"), None);
+        assert_eq!(parse_core("0.3.0.1"), None);
+        assert_eq!(parse_core("nightly"), None);
+    }
+
+    /// The anti-downgrade guard: a newer running build is NOT "up to date"-
+    /// eligible for a downgrade — a lower latest is not strictly newer, so the
+    /// unpinned path no-ops instead of rolling the user back.
+    #[test]
+    fn strictly_newer_refuses_silent_downgrade() {
+        assert!(is_strictly_newer("0.4.0", "0.3.0"));
+        // would-be downgrade → not newer
+        assert!(!is_strictly_newer("0.3.0", "0.4.0"));
+        // equal → not newer
+        assert!(!is_strictly_newer("0.3.0", "0.3.0"));
+        // A newer running prerelease vs an older stable latest: the core compare
+        // says the stable isn't newer, so no downgrade.
+        assert!(!is_strictly_newer("0.3.0", "0.4.0-rc1"));
+        // Unparseable on either side → string-inequality fallback (still acts
+        // when the tags genuinely differ, never wedges).
+        assert!(is_strictly_newer("nightly", "0.3.0"));
+        assert!(!is_strictly_newer("nightly", "nightly"));
     }
 
     /// `has_ort_lib_sibling` is the curl-vs-cargo discriminator. A dir with
