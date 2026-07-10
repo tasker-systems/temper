@@ -40,7 +40,46 @@ Four consequences follow, and they are the substance of this design:
    profile the new credential cannot act as. Nothing errors. The corruption is invisible until
    somebody asks "what has this agent written" and receives half an answer.
 
-Point 4 is the sharpest. Note the asymmetry it sits inside: rotating the *client secret* is
+### What production actually contains (verified 2026-07-10, `temper-cloud/main`)
+
+Read-only queries against the production database, run while writing this spec:
+
+- **Exactly one `auth0-m2m` auth link exists**: client id `y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu`, profile
+  `agent-y23aqxuvzjysb5n8laueuigixoftcwyu`, linked `2026-07-03`. That client id is the same one
+  pinned in `normalize.rs`'s known-answer test. It is the steward, and it is the only machine
+  principal. The backfill's assumption holds.
+- Its four per-surface emitter entities (`@cli`, `@mcp`, `@sdk`, `@web`) are all present.
+- **Its cogmap write grant is on a specific cogmap**, `019f2391-…` / *Temper — self-cognition*:
+  `kb_access_grants(subject_table='kb_cogmaps', can_read, can_write)`. Not a team-scoped grant.
+- **It holds three team memberships**: `owner` of its own auto-provisioned personal team, `watcher`
+  on `temper-system`, and `member` of `personal-j-cole-taylor` (hand-added for read reach).
+
+That last pair of facts is the concrete vindication of treating `team_id` as *owner* and not as
+*reach*: the steward's reach is three memberships and one cogmap grant. A single `team_id` column
+would describe a third of it.
+
+### The gate is the only line, not the second line
+
+`kb_system_settings.access_mode` is **`open`** in production. `has_system_access` short-circuits to
+`true` for every profile under that mode, and `trg_sync_system_membership` — firing on every
+`kb_profiles` insert — then auto-joins the new profile to the `temper-system` gating team as
+`watcher`. (`trg_sync_personal_team` likewise mints a personal team. Both are database triggers, so
+they fire wherever the profile is created; the inversion below does not have to reproduce them.)
+
+The consequence: **`require_system_access` passes for everyone in production today**, including any
+profile JIT-created by a machine token. So the sequence available right now to anyone who can mint an
+M2M token for the temper audience in the Auth0 tenant is: authenticate → get a profile → get emitter
+entities → get system access → pass the gated router. There is no second line behind the missing
+allowlist.
+
+Two things follow. First, this raises Phase A from hygiene to the actual control. Second, the
+`is_system_admin` check on the registration endpoints is **load-bearing, not defense-in-depth** —
+placing those routes in the system-gated router buys nothing while `access_mode` is `open`.
+`is_system_admin` resolves to *owner of the gating team*, which is exactly one profile
+(`j-cole-taylor`), so the check is sound; it simply must not be omitted on the assumption that the
+router already gated it.
+
+Point 4 above is the sharpest of the four. Note the asymmetry it sits inside: rotating the *client secret* is
 completely free — the `client_id` is unchanged, so the auth link, the agent profile, its emitter
 entities, and its entire authorship history stay stitched together, and temper never needs to know
 it happened. That property is already true today and this design preserves it. It is only
@@ -137,10 +176,12 @@ CREATE TABLE kb_machine_clients (
   team a registration was performed on behalf of, so `provision` can report what it did and an
   operator can answer "whose machine is this." It is emphatically **not** the machine's *reach*.
   Reach is `kb_access_grants` plus team membership, both plural, and a useful agent will span more
-  than one team. A single FK reads like reach, and if anyone ever writes an authorization predicate
-  against it, that predicate will be strictly narrower than `resources_visible_to` — the read-gate
-  subset bug this codebase has already been bitten by. The column comment in the migration must say
-  this. Nullable, because a machine need not belong to a team.
+  than one team — the steward, concretely, holds three memberships and one cogmap grant. A single FK
+  reads like reach, and if anyone ever writes an authorization predicate against it, that predicate
+  will be strictly narrower than `resources_visible_to` — the read-gate subset bug this codebase has
+  already been bitten by. The column comment in the migration must say this. Nullable, because a
+  machine need not belong to a team. It is **never** the agent's own auto-provisioned personal team,
+  which `trg_sync_personal_team` creates for every profile and which carries no meaning here.
 
 - **`last_seen_at`** is written on the authentication path and is the only field here that is not
   load-bearing for the gate. Its write is made **coarse**: update only when the stored value is
@@ -218,11 +259,27 @@ follows for shape.
 
 | Subcommand | Behavior |
 |---|---|
-| `provision --client-id <id> --label <l> [--team <ref>]` | Create the agent profile, its auth link, its emitter entities, and the `kb_machine_clients` row. With `--team`, also add team membership and apply the cogmap write grant, and record `team_id`. One transaction. |
+| `provision --client-id <id> --label <l> [--owner-team <ref>] [--team <ref>[:role]]... [--cogmap <ref>[:rw]]...` | Create the agent profile, its auth link, its emitter entities, and the `kb_machine_clients` row; add each `--team` membership; apply each `--cogmap` grant. `--owner-team` records `team_id`. One transaction. |
 | `rebind --client-id <new> --to <machine-ref> [--no-revoke-old]` | Register `<new>` against the **existing** agent profile of `<machine-ref>`, and revoke the old client's row. One transaction. `--no-revoke-old` leaves both credentials live for an overlap window. |
 | `list [--include-revoked]` | Enumerate registered clients: client id, label, agent profile handle, owning team, last seen, revocation state. |
 | `show <ref>` | One client in full, including its grants. |
 | `revoke <ref>` | Set `revoked_at` / `revoked_by_profile_id`. Non-interactive, matching `resource delete`. |
+
+**Reach is plural, and `provision` must model it as plural.** The steward's live configuration is the
+worked example: a `can_read`/`can_write` grant on one specific cogmap (`kb_access_grants` with
+`subject_table = 'kb_cogmaps'`), plus membership in a human's personal team for read reach. Neither
+is inferable from an owning team, so neither `--cogmap` nor `--team` may be inferred from
+`--owner-team`. `--team` and `--cogmap` are repeatable; `--team` takes an optional `:role` defaulting
+to `member`; `--cogmap` takes an optional `:rw` defaulting to `rw` (a read-only agent is unusual but
+expressible). The `temper-system` watcher membership and the personal team are trigger-created and
+must not be passed.
+
+**Revocation does not strip reach.** `revoke` sets `revoked_at` and nothing else: the agent profile
+keeps its grants and memberships. This is deliberate, and it is what makes `rebind` work — the new
+credential inherits the reach the old one had, because the reach hangs off the *profile*, not the
+client. An operator who wants the reach gone too must say so explicitly, by revoking the grants and
+memberships as separate actions. Anyone reading `revoke` as "deprovision this machine" will be
+surprised; the CLI help text must say which one it is.
 
 `rebind` is the answer to problem 4. A fresh `client_id` is pointed at the agent profile that
 already exists, and the old row is revoked in the same transaction. Authorship history stays
@@ -236,9 +293,13 @@ afterward. Secret rotation, as established, requires no temper action at all.
 `POST/GET /api/machine-clients`, `GET/DELETE /api/machine-clients/{id}`, and
 `POST /api/machine-clients/{id}/rebind`.
 
-Authorization is `is_system_admin` (`access_service.rs:43`), checked explicitly in the handler.
-Routes sit in the system-gated router. **Phase A's authorization is system-admin only, deliberately**
-— see "Deferred" below. The path is chosen so that Phase B widens the *predicate*, not the *route*.
+Authorization is `is_system_admin` (`access_service.rs:43` → the SQL `is_system_admin`, i.e. *owner of
+the gating team*), checked **explicitly in the handler**. Routes also sit in the system-gated router,
+but as established above that router admits every profile while `access_mode = 'open'`, so the
+explicit check is the only thing protecting these endpoints. It is not optional and not redundant.
+
+**Phase A's authorization is system-admin only, deliberately** — see "Deferred" below. The path is
+chosen so that Phase B widens the *predicate*, not the *route*.
 
 Handlers stay thin: validate, dispatch one service call, serialize. SQL lives in a new
 `machine_client_service` in `temper-services/src/services/`. Per the repository's persistence rule,
@@ -379,7 +440,20 @@ The two halves of Phase B are independent and may ship in either order.
 - **D9 — `last_seen_at` is coarse (five minutes).** It is the only non-load-bearing column, and its
   coarseness preserves D3's "authentication does not write" in the common case.
 
-- **D10 — Backfilled rows are honestly labeled.** `registered_by_profile_id` is the agent's own
+- **D10 — Reach is plural and always explicit.** `provision` takes repeatable `--team` and `--cogmap`
+  and infers neither from `--owner-team`. The steward's live configuration — one cogmap-scoped grant
+  plus three team memberships, two of them trigger-created — is the proof that no single-valued
+  inference is correct.
+
+- **D11 — `revoke` denies authentication and nothing else.** Grants and memberships hang off the
+  agent *profile*, not the client, and survive revocation. This is what lets `rebind` inherit reach.
+  Stripping reach is a separate, explicit act.
+
+- **D12 — The `is_system_admin` check on the registration endpoints is load-bearing.** Production runs
+  `access_mode = 'open'`, under which `require_system_access` admits every profile. The router is not
+  a gate; the explicit check is.
+
+- **D13 — Backfilled rows are honestly labeled.** `registered_by_profile_id` is the agent's own
   profile, not a fabricated human. The ledger records that nobody authorized these.
 
 ## Rejected
@@ -410,22 +484,25 @@ The two halves of Phase B are independent and may ship in either order.
 
 ## Open questions and risks
 
-- **The backfill assumes every existing `auth0-m2m` auth link should become a registered client.**
-  In production that set is exactly the steward. Verify against Neon before running: if the set is
-  larger than expected, some machine authenticated that nobody authorized — which is precisely the
-  condition this design exists to make impossible, and worth knowing about before it is legitimized
-  by a backfill.
+- **RESOLVED — the backfill set is exactly the steward.** Verified against `temper-cloud/main` on
+  2026-07-10: one `auth0-m2m` auth link, whose client id matches `normalize.rs`'s known-answer test.
+  No unauthorized machine has ever authenticated. Re-verify immediately before running the migration;
+  the window between now and then is small but not zero.
+
+- **RESOLVED — `provision` cannot infer the cogmap.** The steward's grant is on a specific cogmap,
+  not on a team, so `--cogmap` is explicit and repeatable. See "CLI surface."
+
+- **`access_mode = 'open'` is a separate exposure, and Phase A does not close it.** Under `open`,
+  every profile — human or machine, invited or not — passes `require_system_access`. Phase A means an
+  unregistered machine can no longer *get* a profile, which removes the machine path into that
+  exposure. It does nothing about the human path. Whether `open` is still the right production
+  setting is a real question, and it is not this task's to answer. It should be raised on its own.
 
 - **`rebind`'s transaction spans a profile that may have in-flight requests** authenticating under
   the old `client_id`. Those requests resolve the old row, which is being revoked. Postgres'
   read-committed default means an in-flight authentication either sees the pre-revocation row or the
   post-revocation one; both are safe (the latter 401s, and the caller retries with the new
   credential). No lock is needed, but the test should assert the interleaving.
-
-- **`provision --team` applies a cogmap write grant.** Which cogmap? For the steward it is the team's
-  map. The flag surface needs a `--cogmap <ref>` or a documented default before the command can be
-  called complete; the grant itself is an ordinary `kb_access_grants` row and carries no new
-  machinery.
 
 - **temper-rb's `Credentials::ClientCredentials` (D12 of the gem design) is unaffected by the phase
   split.** The gem mints against a token URL either way, and the contract it depends on — the env
