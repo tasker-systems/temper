@@ -105,16 +105,36 @@ never auto-retried.** The SDK classifies; it does not decide to re-submit.
 
 ## Going live
 
-Authentication is not authorization. A minted M2M token gets you a
-JIT-provisioned agent profile and *nothing else* — every call will authenticate
-cleanly and then 403. This is invisible from the contract, and it is the first
-wall a new caller hits.
+Authentication is not authorization, and a machine principal is not
+self-serve. A valid M2M token does **not** get you in on its own: temper keeps
+a registration allowlist, so an operator must register your `client_id` before
+your first call. An unregistered (or revoked) client authenticates cleanly at
+Auth0 and is then rejected with a terminal `Unauthorized` — `client 'X' is not
+registered with this instance` — which the SDK classifies as a `PermanentError`
+(a Sidekiq worker dead-letters it rather than retrying). This is the first wall
+a new caller hits.
 
 1. Provision an Auth0 M2M application and a client grant for the API's audience.
 2. Set `TEMPER_M2M_TOKEN_URL`, `TEMPER_M2M_CLIENT_ID`, `TEMPER_M2M_CLIENT_SECRET`,
    and `TEMPER_M2M_AUDIENCE`.
-3. Grant the agent profile a **cogmap write grant** on the map it will author into.
-4. Give the agent profile **team membership** in the team whose contexts it must read.
+3. Have an operator **register the client and grant its reach in one command**:
+
+   ```bash
+   temper admin machine provision \
+     --client-id "$TEMPER_M2M_CLIENT_ID" --label "acme-worker" \
+     --team +acme --cogmap <map-ref>
+   ```
+
+   `temper admin machine provision` creates the agent profile up front (there is
+   no first-call auto-provisioning) and enrolls it in the gating team. Each
+   `--team` gives it **team membership** for read reach; each `--cogmap` applies a
+   **cogmap write grant** on that map. Reach is plural and explicit; nothing is
+   inferred from one flag. There is no self-serve path — an operator runs this.
+
+Rotating credentials afterward: rotating the Auth0 **secret** needs no temper
+action (the `client_id` is unchanged). Rotating the Auth0 **application** —
+a new `client_id` — needs `temper admin machine rebind`, which binds the new id
+to the same agent profile so authorship history stays continuous.
 
 Assert it worked at boot rather than discovering it on the first write:
 
@@ -122,8 +142,10 @@ Assert it worked at boot rather than discovering it on the first write:
 Temper::Client.new(credentials: CREDENTIALS).whoami
 ```
 
-`Forbidden` and `SystemAccessRequired` name the missing grant, using the server's
-`error.details`, instead of surfacing a bare 403.
+An unregistered client surfaces as `Unauthorized` naming the client id; a
+registered-but-under-granted one surfaces as `Forbidden` / `SystemAccessRequired`
+naming the missing grant — both from the server's `error.details`, not a bare
+4xx.
 
 ## Forking
 

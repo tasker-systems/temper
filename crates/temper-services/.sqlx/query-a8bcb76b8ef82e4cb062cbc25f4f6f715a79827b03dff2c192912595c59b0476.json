@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at) VALUES ($1, $2, 'auth0-m2m', $3, NULL, false, true, now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a8bcb76b8ef82e4cb062cbc25f4f6f715a79827b03dff2c192912595c59b0476"
+}

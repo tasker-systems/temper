@@ -689,6 +689,22 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
                 .to_string(),
             None,
         ),
+        // An `Unauthorized` here is a terminal authentication denial, not a transient
+        // failure — most often the machine-principal registration gate rejecting an
+        // unregistered or revoked `client_id` (G3 Phase A). It must surface as a terminal
+        // error the way `Deactivated` / `SystemAccessDenied` do, so a conformant client (or
+        // a Sidekiq worker, per the temper-rb contract) does not retry a permanent denial.
+        // The HTTP surface already returns a 401 for the same case; this keeps the two
+        // surfaces consistent. Any other `ProfileResolution` error is a genuine internal
+        // fault (a DB failure mid-resolution) and stays retryable.
+        AuthzError::ProfileResolution(temper_services::error::ApiError::Unauthorized(msg)) => {
+            tracing::warn!(%msg, "rejected: machine principal not admitted by the gate");
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                format!("{msg} This error is terminal and should not be retried."),
+                None,
+            )
+        }
         AuthzError::ProfileResolution(err) => {
             rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {err}"), None)
         }

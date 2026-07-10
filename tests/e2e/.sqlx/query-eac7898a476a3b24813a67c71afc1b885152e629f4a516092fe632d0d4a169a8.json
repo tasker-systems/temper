@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_machine_clients SET revoked_at = now() WHERE client_id = 'doomed-client'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "eac7898a476a3b24813a67c71afc1b885152e629f4a516092fe632d0d4a169a8"
+}

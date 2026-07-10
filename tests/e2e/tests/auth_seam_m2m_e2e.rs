@@ -1,8 +1,9 @@
 #![cfg(feature = "test-db")]
 //! Stage 4b: a machine (`client_credentials`) token, driven through the real mcp
-//! gate `ensure_profile_from_parts`, provisions a dedicated agent profile under
-//! the `auth0-m2m` link namespace with a NULL email — never the email-reconcile
-//! path.
+//! gate `ensure_profile_from_parts`. Since G3 Phase A, registration is fail-closed:
+//! an unregistered client is rejected and creates nothing; a registered one resolves
+//! to its pre-created agent profile. temper-mcp inherits the gate from
+//! `temper-services` — it has no gate of its own (D4).
 
 mod common;
 
@@ -48,23 +49,62 @@ fn machine_parts(client_id: &str) -> axum::http::request::Parts {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn machine_token_provisions_agent_profile_via_mcp(pool: sqlx::PgPool) {
+async fn unregistered_machine_token_is_rejected_by_the_mcp_gate(pool: sqlx::PgPool) {
     let _app = common::setup(pool.clone()).await;
     let svc = build_mcp_service(&pool).await;
 
-    svc.ensure_profile_from_parts(&machine_parts("steward-client-1"))
+    let err = svc
+        .ensure_profile_from_parts(&machine_parts("steward-client-1"))
         .await
-        .expect("mcp gate must admit + provision the agent");
+        .expect_err("an unregistered machine must be rejected at the mcp gate");
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains("not registered"),
+        "the mcp surface inherits the services-layer gate (D4): {rendered}"
+    );
+    // The rejection must be TERMINAL, not a retryable internal error: a permanent auth
+    // denial that a Sidekiq worker would otherwise retry forever (temper-rb contract). The
+    // terminal INVALID_REQUEST arm is the only one that emits "should not be retried" — the
+    // retryable internal_error arm says "Failed to resolve profile" instead — so this
+    // substring distinguishes the two without an rmcp dependency here.
+    assert!(
+        rendered.contains("should not be retried"),
+        "a gate rejection must be terminal, not a transient internal_error: {rendered}"
+    );
 
-    let link = sqlx::query!(
-        "SELECT auth_provider, email FROM kb_profile_auth_links \
-         WHERE auth_provider = $1 AND auth_provider_user_id = $2",
-        "auth0-m2m",
-        "steward-client-1",
+    let links = sqlx::query_scalar!(
+        "SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider = 'auth0-m2m'",
     )
     .fetch_one(&pool)
     .await
-    .expect("agent link row exists");
-    assert_eq!(link.auth_provider, "auth0-m2m");
-    assert!(link.email.is_none(), "agent link email must be NULL");
+    .expect("count links");
+    assert_eq!(links, Some(0), "rejection creates no auth link");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool) {
+    let _app = common::setup(pool.clone()).await;
+    let svc = build_mcp_service(&pool).await;
+
+    let profile_id = uuid::Uuid::now_v7();
+    sqlx::query!(
+        "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+         VALUES ($1, 'agent-steward', 'agent-steward', NULL, '{}')",
+        profile_id,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed profile");
+    sqlx::query!(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ('steward-client-1', 'test', $1, $1)",
+        profile_id,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed registration");
+
+    svc.ensure_profile_from_parts(&machine_parts("steward-client-1"))
+        .await
+        .expect("mcp gate must admit a registered machine");
 }

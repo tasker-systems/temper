@@ -871,6 +871,60 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminSamlAction,
     },
+    /// Register and rotate machine (client_credentials) principals
+    Machine {
+        #[command(subcommand)]
+        action: AdminMachineAction,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum AdminMachineAction {
+    /// Register a machine principal: creates its agent profile, emitters, gating-team
+    /// membership, and the reach you specify. Run this BEFORE the machine's first call.
+    Provision {
+        /// The IdP client id (Auth0 M2M application client id)
+        #[arg(long = "client-id")]
+        client_id: String,
+        /// Human-facing label
+        #[arg(long)]
+        label: String,
+        /// Team recorded as this machine's OWNER. Not its reach.
+        #[arg(long = "owner-team")]
+        owner_team: Option<String>,
+        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (role defaults to `member`).
+        /// Repeatable. Reach is plural and never inferred from --owner-team.
+        #[arg(long = "team")]
+        teams: Vec<String>,
+        /// Cogmap to grant, as `<ref>` or `<ref>:ro` (defaults to read+write). Repeatable.
+        #[arg(long = "cogmap")]
+        cogmaps: Vec<String>,
+    },
+    /// Point a fresh client id at an existing agent profile, preserving its authorship
+    /// history. Revokes the old client unless --no-revoke-old.
+    Rebind {
+        /// The machine client being rotated away from (its `id`, from `list`)
+        from: String,
+        /// The new IdP client id
+        #[arg(long = "client-id")]
+        client_id: String,
+        /// Label for the new registration
+        #[arg(long)]
+        label: String,
+        /// Leave both credentials live for an overlap window
+        #[arg(long = "no-revoke-old")]
+        no_revoke_old: bool,
+    },
+    /// List registered machine clients
+    List {
+        /// Include revoked clients
+        #[arg(long = "include-revoked")]
+        include_revoked: bool,
+    },
+    /// Show one machine client
+    Show { id: String },
+    /// Revoke a machine client. Denies authentication; grants and memberships survive.
+    Revoke { id: String },
 }
 
 #[derive(Subcommand)]

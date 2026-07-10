@@ -1,8 +1,8 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AdminAction, AdminRequestsAction, AdminSamlAction, AuthAction, Cli, CogmapCmd, Commands,
-    ConfigAction, ContextAction, InvocationCmd, ResourceAction, SkillAction, StewardCmd,
-    TeamAction,
+    AdminAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction, AuthAction, Cli,
+    CogmapCmd, Commands, ConfigAction, ContextAction, InvocationCmd, ResourceAction, SkillAction,
+    StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -672,6 +672,82 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         Box::pin(async move {
                             temper_cli::commands::admin_saml::verify(client, &instance_url, db)
                                 .await
+                        })
+                    })
+                }
+            },
+            AdminAction::Machine { action } => match action {
+                AdminMachineAction::Provision {
+                    client_id,
+                    label,
+                    owner_team,
+                    teams,
+                    cogmaps,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_machine::provision_remote(
+                            client,
+                            &client_id,
+                            &label,
+                            owner_team.as_deref(),
+                            &teams,
+                            &cogmaps,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminMachineAction::Rebind {
+                    from,
+                    client_id,
+                    label,
+                    no_revoke_old,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_machine::rebind_remote(
+                            client,
+                            &from,
+                            &client_id,
+                            &label,
+                            no_revoke_old,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminMachineAction::List { include_revoked } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_machine::list_remote(
+                                client,
+                                include_revoked,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+                AdminMachineAction::Show { id } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_machine::show_remote(
+                                client,
+                                &id,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+                AdminMachineAction::Revoke { id } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_machine::revoke_remote(
+                                client,
+                                &id,
+                                output_format,
+                            )
+                            .await
                         })
                     })
                 }

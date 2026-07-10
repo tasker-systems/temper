@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) VALUES ($1, 'admin', 'Admin', 'admin@example.test', '{}')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0903b6561ad09d5bcf5a55135d4bc4e17ced24840fa0939f4910d6b025f50b33"
+}

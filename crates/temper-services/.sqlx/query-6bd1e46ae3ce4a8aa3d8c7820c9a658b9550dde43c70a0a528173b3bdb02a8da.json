@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) VALUES ($1, 'agent-revoked', 'agent-revoked', NULL, '{}')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6bd1e46ae3ce4a8aa3d8c7820c9a658b9550dde43c70a0a528173b3bdb02a8da"
+}

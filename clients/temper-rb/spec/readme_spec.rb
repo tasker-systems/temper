@@ -10,10 +10,13 @@ RSpec.describe 'README' do
       .each { |var| expect(readme).to include(var) }
   end
 
-  # Authentication is not authorization: a minted M2M token yields a
-  # JIT-provisioned agent profile and nothing else.
-  it 'carries a Going live section naming both authorization steps' do
+  # Authentication is not authorization, and (since G3 Phase A) a machine
+  # principal is not self-serve: an operator must register the client_id before
+  # its first call, and that same command grants its reach. There is no
+  # first-call JIT provisioning anymore.
+  it 'carries a Going live section naming registration and both reach steps' do
     expect(readme).to match(/##\s*Going live/i)
+    expect(readme).to match(/temper admin machine provision/i)
     expect(readme).to match(/cogmap write grant/i)
     expect(readme).to match(/team membership/i)
   end

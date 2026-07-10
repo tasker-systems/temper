@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id, revoked_at) VALUES ('dead-client', 'test', $1, $1, now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "015877dcff7a665088a77f5856ccc3b692ad6daa1f4fb8234bd0b6b53b0bc961"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) VALUES ($1, 'test', $2, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bbfad811554e1ae896a861be774e92628c5e34298fb40a578ed483bd3e7a3ea3"
+}

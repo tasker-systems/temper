@@ -107,17 +107,25 @@ pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bo
     Ok(ok)
 }
 
-/// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
-/// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
-/// the row already existed and was updated in place.
-pub async fn grant_capability(
-    pool: &PgPool,
-    caller: ProfileId,
-    req: &GrantCapabilityRequest,
-) -> ApiResult<GrantOutcome> {
-    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+/// The columns of one `kb_access_grants` upsert. A params struct because the
+/// insert takes seven domain values (repo rule: >5 ⇒ struct).
+#[derive(Debug, Clone)]
+pub struct InsertGrantParams {
+    pub subject_table: String,
+    pub subject_id: Uuid,
+    pub principal_table: String,
+    pub principal_id: Uuid,
+    pub can_read: bool,
+    pub can_write: bool,
+    pub can_delete: bool,
+    pub can_grant: bool,
+    pub granted_by_profile_id: Uuid,
+}
+
+/// Raw upsert of one access grant, on a connection so it can join a transaction.
+/// **Performs no authorization** — every caller must gate first (auth before writes).
+/// Returns whether the row was freshly inserted (`xmax = 0`) rather than updated.
+pub async fn insert_grant(conn: &mut sqlx::PgConnection, p: &InsertGrantParams) -> ApiResult<bool> {
     // `xmax = 0` distinguishes a fresh INSERT from an ON CONFLICT UPDATE (xmax is the deleting/locking
     // txid — zero only on a row this txn just inserted).
     let inserted = sqlx::query_scalar!(
@@ -130,19 +138,49 @@ pub async fn grant_capability(
                          can_delete = EXCLUDED.can_delete, can_grant = EXCLUDED.can_grant,
                          granted_by_profile_id = EXCLUDED.granted_by_profile_id, granted_at = now()
            RETURNING (xmax = 0) AS "inserted!""#,
-        req.subject_table,
-        req.subject_id,
-        req.principal_table,
-        req.principal_id,
-        req.can_read,
-        req.can_write,
-        req.can_delete,
-        req.can_grant,
-        *caller,
+        p.subject_table,
+        p.subject_id,
+        p.principal_table,
+        p.principal_id,
+        p.can_read,
+        p.can_write,
+        p.can_delete,
+        p.can_grant,
+        p.granted_by_profile_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
-    Ok(GrantOutcome { granted: inserted })
+    Ok(inserted)
+}
+
+/// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
+/// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
+/// the row already existed and was updated in place.
+pub async fn grant_capability(
+    pool: &PgPool,
+    caller: ProfileId,
+    req: &GrantCapabilityRequest,
+) -> ApiResult<GrantOutcome> {
+    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let mut conn = pool.acquire().await?;
+    let granted = insert_grant(
+        &mut conn,
+        &InsertGrantParams {
+            subject_table: req.subject_table.clone(),
+            subject_id: req.subject_id,
+            principal_table: req.principal_table.clone(),
+            principal_id: req.principal_id,
+            can_read: req.can_read,
+            can_write: req.can_write,
+            can_delete: req.can_delete,
+            can_grant: req.can_grant,
+            granted_by_profile_id: *caller,
+        },
+    )
+    .await?;
+    Ok(GrantOutcome { granted })
 }
 
 /// Delete one access grant. Auth before write: `can_administer_grant`. Absent row ⇒ no-op success

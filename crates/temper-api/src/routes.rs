@@ -151,6 +151,24 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/promote",
             post(handlers::access::promote_admin),
         )
+        // Operator-only machine-principal registration (G3 Phase A). Mounted with plain
+        // `.route()`, like `/api/access/admin/*` above, so it stays OUT of the OpenAPI
+        // contract — it is an admin surface, not a public one. Its paths are allowlisted in
+        // `.github/scripts/check-openapi-routes.sh`. The `is_system_admin` gate is enforced
+        // inside each handler (load-bearing: the gated router admits everyone under
+        // access_mode='open').
+        .route(
+            "/api/machine-clients",
+            get(handlers::machine_clients::list).post(handlers::machine_clients::provision),
+        )
+        .route(
+            "/api/machine-clients/{id}",
+            get(handlers::machine_clients::get).delete(handlers::machine_clients::revoke),
+        )
+        .route(
+            "/api/machine-clients/{id}/rebind",
+            post(handlers::machine_clients::rebind),
+        )
 }
 
 /// Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.
