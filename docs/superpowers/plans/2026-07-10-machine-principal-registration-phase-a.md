@@ -1406,10 +1406,22 @@ async fn apply_reach(
     Ok(())
 }
 
-/// Map a unique-violation on `client_id` to a 409 rather than a 500.
+/// Both unique constraints a duplicate `client_id` can trip. The auth-link one fires
+/// first, because `create_agent_profile_and_link` inserts before the registration row.
+const DUPLICATE_CONSTRAINTS: [&str; 2] = [
+    "kb_machine_clients_client_id_key",
+    "kb_profile_auth_links_auth_provider_auth_provider_user_id_key",
+];
+
+/// Name the client id in a duplicate-registration conflict.
+///
+/// `From<sqlx::Error> for ApiError` already maps SQLSTATE 23505 to
+/// `Conflict("Resource already exists")`, so this is purely about the message: an operator
+/// registering a client that already exists should be told *which* one. Any other error
+/// falls through to the standard mapping.
 fn map_duplicate(err: sqlx::Error, client_id: &str) -> ApiError {
     if let sqlx::Error::Database(ref db) = err {
-        if db.constraint() == Some("kb_machine_clients_client_id_key") {
+        if db.constraint().is_some_and(|c| DUPLICATE_CONSTRAINTS.contains(&c)) {
             return ApiError::Conflict(format!("machine client '{client_id}' is already registered"));
         }
     }
@@ -1427,13 +1439,25 @@ pub async fn provision(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
+    // Auth before writes is the handler's job; this is the friendly-conflict check. It is
+    // NOT the race guard — two concurrent provisions both pass it. The unique constraints
+    // are the guard, and `map_duplicate` turns either one into a 409 naming the client id.
+    if machine_client_service::lookup_by_client_id(pool, &req.client_id).await?.is_some() {
+        return Err(ApiError::Conflict(format!(
+            "machine client '{}' is already registered",
+            req.client_id
+        )));
+    }
+
     let (profile_id, handle) =
         profile_service::create_agent_profile_and_link(&mut tx, &req.client_id)
             .await
             .map_err(|e| match e {
-                ApiError::Internal(msg) if msg.contains("kb_profile_auth_links") => {
-                    ApiError::Conflict(format!("machine client '{}' is already registered", req.client_id))
-                }
+                // The auth-link unique constraint fires before the registration row's.
+                ApiError::Conflict(_) => ApiError::Conflict(format!(
+                    "machine client '{}' is already registered",
+                    req.client_id
+                )),
                 other => other,
             })?;
 
