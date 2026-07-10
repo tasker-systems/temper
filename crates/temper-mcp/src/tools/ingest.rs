@@ -90,6 +90,12 @@ pub struct IngestAppendInput {
     pub content: String,
     /// Bare-hex sha256 of `content`. A mismatch is rejected before anything lands.
     pub content_hash: String,
+    /// Optional block-provenance sources this segment was distilled from — recorded against this
+    /// appended content block. Same value grammar as `create_resource`'s `sources` / `resource
+    /// create --sources`: each entry is a resource ref (UUID or decorated `slug-<uuid>`) or an
+    /// http/https URL. Omit for an un-attributed append.
+    #[serde(default)]
+    pub sources: Option<Vec<String>>,
 }
 
 /// MCP input for `ingest_finalize`.
@@ -160,6 +166,19 @@ pub async fn ingest_append(
     let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
+    // Classify each source (resource ref → Resource, http/https URL → Remote) with the same shared
+    // resolver the CLI and `create_resource` use; an unparseable value is a hard error, never a
+    // silent drop.
+    let sources = input
+        .sources
+        .unwrap_or_default()
+        .iter()
+        .map(|s| temper_workflow::operations::resolve_provenance_source(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
+        })?;
+
     let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
     let out = backend
         .append_block(
@@ -170,6 +189,7 @@ pub async fn ingest_append(
                 content_hash: input.content_hash,
                 // No chunker, no embedder on this surface: the server chunks `content`.
                 chunks_packed: None,
+                sources,
             },
             Surface::Mcp,
         )

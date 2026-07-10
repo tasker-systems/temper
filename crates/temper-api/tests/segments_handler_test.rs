@@ -94,6 +94,7 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
         content: "second segment".to_string(),
         content_hash: temper_core::hash::sha256_hex(b"second segment"),
         chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+        sources: Vec::new(),
     };
     let append_resp = app
         .client
@@ -198,6 +199,7 @@ async fn append_on_other_profile_resource_returns_403(pool: PgPool) {
         content: "second segment".to_string(),
         content_hash: temper_core::hash::sha256_hex(b"second segment"),
         chunks_packed: Some(one_chunk_packed("second segment", "dd")),
+        sources: Vec::new(),
     };
     let resp = app
         .client
@@ -239,6 +241,7 @@ async fn append_without_auth_returns_401(pool: PgPool) {
             content: "x".to_string(),
             content_hash: temper_core::hash::sha256_hex(b"x"),
             chunks_packed: Some(one_chunk_packed("x", "ee")),
+            sources: Vec::new(),
         })
         .send()
         .await

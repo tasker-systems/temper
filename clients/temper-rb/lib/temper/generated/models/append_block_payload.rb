@@ -26,13 +26,17 @@ module Temper::Generated
 
     attr_accessor :seq
 
+    # Block-provenance sources this appended segment's content was distilled from — recorded against **this** content block (a block, not a chunk), list position → accretion `seq`. Same value grammar and projector path as `IngestPayload::sources` / `resource create --sources` (a resource ref → `Resource`; an http/https URL → `Remote`). Empty (the default, skipped on the wire) = an un-attributed append, exactly the prior behaviour.
+    attr_accessor :sources
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'chunks_packed' => :'chunks_packed',
         :'content' => :'content',
         :'content_hash' => :'content_hash',
-        :'seq' => :'seq'
+        :'seq' => :'seq',
+        :'sources' => :'sources'
       }
     end
 
@@ -52,7 +56,8 @@ module Temper::Generated
         :'chunks_packed' => :'String',
         :'content' => :'String',
         :'content_hash' => :'String',
-        :'seq' => :'Integer'
+        :'seq' => :'Integer',
+        :'sources' => :'Array<ProvenanceSource>'
       }
     end
 
@@ -99,6 +104,12 @@ module Temper::Generated
         self.seq = attributes[:'seq']
       else
         self.seq = nil
+      end
+
+      if attributes.key?(:'sources')
+        if (value = attributes[:'sources']).is_a?(Array)
+          self.sources = value
+        end
       end
     end
 
@@ -179,7 +190,8 @@ module Temper::Generated
           chunks_packed == o.chunks_packed &&
           content == o.content &&
           content_hash == o.content_hash &&
-          seq == o.seq
+          seq == o.seq &&
+          sources == o.sources
     end
 
     # @see the `==` method
@@ -191,7 +203,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [chunks_packed, content, content_hash, seq].hash
+      [chunks_packed, content, content_hash, seq, sources].hash
     end
 
     # Builds the object from hash
