@@ -265,6 +265,15 @@ follows for shape.
 | `show <ref>` | One client in full, including its grants. |
 | `revoke <ref>` | Set `revoked_at` / `revoked_by_profile_id`. Non-interactive, matching `resource delete`. |
 
+**`provision` must enroll the agent in the gating team.** Today, `open` mode auto-joins every new
+profile to `temper-system` as `watcher` via `trg_sync_system_membership`, invisibly. Under
+`invite_only` — which temperkb.io intends to flip to — that trigger enrolls nothing, and a
+newly-provisioned machine authenticates and then 403s at `require_system_access`. This is precisely
+the "authentication buys nothing" cliff the goal document describes, reproduced by the two changes
+in combination. So `provision` inserts the gating-team membership explicitly (role `watcher`), the
+way `review_request` already does for an approved human. It must not rely on the trigger, because
+the trigger's behavior is a function of `access_mode` and will change.
+
 **Reach is plural, and `provision` must model it as plural.** The steward's live configuration is the
 worked example: a `can_read`/`can_write` grant on one specific cogmap (`kb_access_grants` with
 `subject_table = 'kb_cogmaps'`), plus membership in a human's personal team for read reach. Neither
@@ -456,6 +465,11 @@ The two halves of Phase B are independent and may ship in either order.
 - **D13 — Backfilled rows are honestly labeled.** `registered_by_profile_id` is the agent's own
   profile, not a fabricated human. The ledger records that nobody authorized these.
 
+- **D14 — `provision` enrolls the agent in the gating team explicitly**, rather than relying on
+  `trg_sync_system_membership`. That trigger's behavior depends on `access_mode`, which is about to
+  change; depending on it would make Phase A silently correct today and silently broken after the
+  flip.
+
 ## Rejected
 
 - **A `client_id → arbitrary existing profile` binding**, letting a machine credential act as a
@@ -492,11 +506,19 @@ The two halves of Phase B are independent and may ship in either order.
 - **RESOLVED — `provision` cannot infer the cogmap.** The steward's grant is on a specific cogmap,
   not on a team, so `--cogmap` is explicit and repeatable. See "CLI surface."
 
-- **`access_mode = 'open'` is a separate exposure, and Phase A does not close it.** Under `open`,
-  every profile — human or machine, invited or not — passes `require_system_access`. Phase A means an
-  unregistered machine can no longer *get* a profile, which removes the machine path into that
-  exposure. It does nothing about the human path. Whether `open` is still the right production
-  setting is a real question, and it is not this task's to answer. It should be raised on its own.
+- **`access_mode = 'open'` is a separate exposure. Phase A closes the machine path into it; the flip
+  to `invite_only` is its own task.** Researched 2026-07-10 against prod: the flip costs zero existing
+  profiles (no trigger on `kb_system_settings`, and every existing profile is already a `watcher` on
+  the gating team, which is exactly what `invite_only` requires), and the approval path is sound
+  (`review_request` inserts the gating membership directly rather than depending on the predicate it
+  establishes). Tracked as its own task, gated on a prerequisite fix — the never-executed 403 payload
+  advertises a CLI remedy that does not exist.
+
+  **The interaction is a hard dependency, and it binds Phase A**: under `invite_only` the trigger no
+  longer auto-joins, so `provision` must enroll the agent in the gating team explicitly. See "CLI
+  surface." Flipping first is also a legitimate *interim* mitigation — a JIT machine profile stops
+  reaching the gated router — though it leaves the auth-only routes reachable and provides no
+  allowlist and no audit trail, so it is not a substitute for Phase A.
 
 - **`rebind`'s transaction spans a profile that may have in-flight requests** authenticating under
   the old `client_id`. Those requests resolve the old row, which is being revoked. Postgres'
