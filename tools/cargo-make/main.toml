@@ -15,11 +15,17 @@ extend = [
 
 [tasks.check]
 description = "Run all quality checks (Rust + TypeScript)"
+# Mirrors the `code-quality / Rust Quality` CI job. The two OpenAPI gates belong here for the same
+# reason the rest do: openapi.json is a committed *product of the router*, so a new route — or merely
+# a new field on a response DTO — leaves the committed artifact stale, and nothing else notices.
+# Omitting them meant a green local `check` followed by a red CI job; that is what bit PR #348.
 dependencies = [
   "rust-fmt-check",
   "rust-clippy",
   "rust-docs",
   "rust-machete",
+  "openapi-check",
+  "openapi-routes-check",
   "ts-check"
 ]
 
@@ -230,6 +236,10 @@ description = "Verify the committed openapi.json matches a fresh emission from t
 # Delegates to the script so CI and local dev run identical logic. CI cannot call
 # cargo-make at all: the root Makefile.toml requires a ./.env that no runner has.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-spec.sh"]
+
+[tasks.openapi-routes-check]
+description = "Verify every plain .route(...) mount is on the operator-only allowlist"
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-routes.sh"]
 
 [tasks.openapi-validate]
 description = "Validate the committed openapi.json with openapi-generator (requires Docker)"

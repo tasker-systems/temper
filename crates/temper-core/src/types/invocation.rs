@@ -115,6 +115,11 @@ pub struct InvocationView {
     pub opened_at: DateTime<Utc>,
     /// When the invocation closed; `None` while still open.
     pub closed_at: Option<DateTime<Utc>>,
+    /// The dispatch tick that spawned this run, inherited server-side at open from the active claimed
+    /// job for `originating_cogmap_id`. `None` for a manual open with no active job. This is the
+    /// run→tick join; an individual act joins through its `invocation_id`, not by carrying the tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<Uuid>,
     /// The acts (stamped events) that occurred under this envelope.
     pub acts: Vec<InvocationActRow>,
 }
@@ -138,6 +143,10 @@ pub struct InvocationSummary {
     pub opened_at: DateTime<Utc>,
     /// When the invocation closed; `None` while still open.
     pub closed_at: Option<DateTime<Utc>>,
+    /// The dispatch tick that spawned this run; `None` for a manual open. Filtering a list by this
+    /// answers "every session this tick fanned out to".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<Uuid>,
 }
 
 // ── MCP surface inputs ──────────────────────────────────────────────────────
@@ -219,6 +228,7 @@ mod tests {
             outcome: None,
             opened_at: Utc::now(),
             closed_at: None,
+            correlation_id: None,
             acts: vec![InvocationActRow {
                 event_id: Uuid::from_u128(5),
                 event_kind: "facet_set".to_string(),
@@ -259,6 +269,7 @@ mod tests {
             outcome: None,
             opened_at: Utc::now(),
             closed_at: Some(Utc::now()),
+            correlation_id: None,
             acts: vec![],
         };
         let json = serde_json::to_string(&view).expect("serialize");
@@ -268,6 +279,55 @@ mod tests {
         );
         let back: InvocationView = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, view);
+    }
+
+    #[test]
+    fn invocation_view_carries_the_tick_correlation_as_a_bare_uuid() {
+        // A run spawned by a steward tick inherits that tick's id. The wire shape is a bare UUID
+        // string (not a wrapped newtype) — the steward cron reads it back to confirm its tick landed.
+        let tick = Uuid::from_u128(42);
+        let view = InvocationView {
+            id: Uuid::from_u128(1),
+            status: "open".to_string(),
+            disposition: None,
+            trigger_kind: "delegated".to_string(),
+            originating_cogmap_id: Uuid::from_u128(2),
+            parent_cogmap_id: None,
+            scoped_entity_id: Uuid::from_u128(3),
+            telos_resource_id: Uuid::from_u128(4),
+            outcome: None,
+            opened_at: Utc::now(),
+            closed_at: None,
+            correlation_id: Some(tick),
+            acts: vec![],
+        };
+        let value = serde_json::to_value(&view).expect("serialize");
+        assert_eq!(value["correlation_id"], serde_json::json!(tick.to_string()));
+        let back: InvocationView = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(back, view);
+    }
+
+    #[test]
+    fn invocation_view_omits_correlation_for_a_manual_open() {
+        // A manual open has no active job to inherit from → the key is absent, not `null`. Callers
+        // that never dispatch a tick see exactly today's wire shape.
+        let view = InvocationView {
+            id: Uuid::from_u128(1),
+            status: "open".to_string(),
+            disposition: None,
+            trigger_kind: "manual".to_string(),
+            originating_cogmap_id: Uuid::from_u128(2),
+            parent_cogmap_id: None,
+            scoped_entity_id: Uuid::from_u128(3),
+            telos_resource_id: Uuid::from_u128(4),
+            outcome: None,
+            opened_at: Utc::now(),
+            closed_at: None,
+            correlation_id: None,
+            acts: vec![],
+        };
+        let json = serde_json::to_string(&view).expect("serialize");
+        assert!(!json.contains("correlation_id"), "json: {json}");
     }
 
     #[test]

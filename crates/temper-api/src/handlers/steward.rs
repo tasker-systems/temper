@@ -19,7 +19,7 @@ use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::steward_service;
 use temper_services::state::AppState;
 
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::{CogmapId, CorrelationId, ProfileId};
 use temper_core::types::steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
     DriftSweepRow, IngestDelta,
@@ -153,20 +153,36 @@ pub async fn dispatch(
     // per-tick id and sends it as `x-steward-correlation-id`. Log it — plus Vercel's own inbound
     // `x-vercel-id` — on entry, so this outbound-from-the-cron request (which lands in temper-api's
     // logs, not the steward-agent's) is joinable to the originating tick across the two apps. Both are
-    // optional; a caller without them logs `<none>`.
-    let correlation_id = headers
+    // optional; a caller without them logs `<none>`. This log line is the load-bearing half of the
+    // trace: it fires before any DB work, so a tick that dies here still leaves the id somewhere.
+    let raw_correlation = headers
         .get("x-steward-correlation-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("<none>");
+        .and_then(|v| v.to_str().ok());
+    let correlation_id = raw_correlation.unwrap_or("<none>");
     let vercel_id = headers
         .get("x-vercel-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("<none>");
     tracing::info!(correlation_id, vercel_id, "steward dispatch received");
 
+    // Parse leniently into the typed correlator that gets stamped on the claimed jobs. Correlation is
+    // a correlation aid, never authorization — an absent or malformed header must self-root, never
+    // 400. A malformed one is worth a warn: it means a caller believes it is tracing and is not.
+    let correlation = raw_correlation.and_then(|raw| match Uuid::parse_str(raw) {
+        Ok(id) => Some(CorrelationId::from(id)),
+        Err(_) => {
+            tracing::warn!(
+                correlation_id,
+                "x-steward-correlation-id is not a UUID; this tick's jobs will self-root"
+            );
+            None
+        }
+    });
+
     let cmd = StewardDispatchTick {
         threshold: req.threshold,
         cap: req.cap,
+        correlation,
         origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -174,5 +190,10 @@ pub async fn dispatch(
         .steward_dispatch_tick(cmd)
         .await
         .map_err(ApiError::from)?;
-    Ok(Json(DispatchTickResponse { claimed: out.value }))
+    // Echo the correlation the server actually stamped — so the cron can assert its id survived
+    // parsing rather than assuming it did.
+    Ok(Json(DispatchTickResponse {
+        claimed: out.value,
+        correlation_id: correlation.map(|c| c.uuid()),
+    }))
 }

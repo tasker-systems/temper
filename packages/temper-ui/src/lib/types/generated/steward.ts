@@ -54,7 +54,13 @@ attempts: number, };
  * Response for a dispatch tick — the jobs claimed for fan-out (one isolated session per entry,
  * each tending a single cogmap).
  */
-export type DispatchTickResponse = { claimed: Array<ClaimedJob>, };
+export type DispatchTickResponse = { claimed: Array<ClaimedJob>, 
+/**
+ * The correlation the server parsed out of `x-steward-correlation-id` and stamped onto every
+ * claimed job — echoed so the caller can assert its tick id survived, rather than assume it.
+ * `None` when the header was absent or not a UUID (both self-root; neither is an error).
+ */
+correlation_id: string | null, };
 
 /**
  * One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark.

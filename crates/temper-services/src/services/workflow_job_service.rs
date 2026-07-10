@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
+use temper_core::types::ids::CorrelationId;
 use temper_core::types::workflow_job::{ClaimedEmbedJob, ClaimedJob};
 
 /// Enqueue a job for `(cogmap, persona, dispatch_type)`. Returns `Some(id)` when a new row was
@@ -27,23 +28,28 @@ pub async fn enqueue(
     Ok(id)
 }
 
-/// Claim up to `limit` claimable jobs, leasing each for `lease_seconds`.
+/// Claim up to `limit` claimable jobs, leasing each for `lease_seconds`, stamping each claimed row
+/// with the `correlation` of the dispatch tick that claimed it (`None` → NULL; the tick sent no
+/// `x-steward-correlation-id`). The stamp is what `invocation_open` later inherits, so a session's
+/// invocation joins back to its tick without the agent threading anything.
 pub async fn claim(
     pool: &PgPool,
     persona: &str,
     dispatch_type: &str,
     limit: i32,
     lease_seconds: i32,
+    correlation: Option<CorrelationId>,
 ) -> ApiResult<Vec<ClaimedJob>> {
     let rows = sqlx::query!(
         r#"
         SELECT id AS "id!: Uuid", cogmap_id AS "cogmap_id!: Uuid", attempts AS "attempts!: i32"
-          FROM workflow_job_claim($1, $2, $3, $4)
+          FROM workflow_job_claim($1, $2, $3, $4, $5)
         "#,
         persona,
         dispatch_type,
         limit,
         lease_seconds,
+        correlation.map(|c| c.uuid()),
     )
     .fetch_all(pool)
     .await?;
@@ -228,21 +234,96 @@ mod tests {
     async fn claim_leases_and_increments_attempts(pool: PgPool) {
         let c = a_cogmap(&pool).await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        let claimed = claim(&pool, "steward", "steward", 10, 600).await.unwrap();
+        let claimed = claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].cogmap_id, c);
         assert_eq!(claimed[0].attempts, 1, "attempts incremented at claim");
         assert_eq!(status_of(&pool, claimed[0].id).await, "in_progress");
         // A second claim finds nothing — it is no longer claimable.
-        let again = claim(&pool, "steward", "steward", 10, 600).await.unwrap();
+        let again = claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
         assert!(again.is_empty(), "in_progress is not re-claimable");
+    }
+
+    async fn correlation_of(pool: &PgPool, id: Uuid) -> Option<Uuid> {
+        sqlx::query_scalar("SELECT correlation_id FROM kb_workflow_jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn claim_stamps_the_tick_correlation(pool: PgPool) {
+        let c = a_cogmap(&pool).await;
+        enqueue(&pool, c, "steward", "steward").await.unwrap();
+        // The steward cron mints a v4 uuid per tick; CorrelationId carries whatever the caller sends
+        // (the column has no version requirement — see the design doc's "do not fix it to v7" note).
+        let tick = CorrelationId::new();
+        let claimed = claim(&pool, "steward", "steward", 10, 600, Some(tick))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(
+            correlation_of(&pool, claimed[0].id).await,
+            Some(tick.uuid()),
+            "the claimed row records the tick that claimed it"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn claim_without_a_correlation_leaves_it_null(pool: PgPool) {
+        // A caller that sends no `x-steward-correlation-id` claims exactly as before — NULL, never an
+        // error. Correlation is provenance; nothing gates on it.
+        let c = a_cogmap(&pool).await;
+        enqueue(&pool, c, "steward", "steward").await.unwrap();
+        let claimed = claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
+        assert_eq!(correlation_of(&pool, claimed[0].id).await, None);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reclaim_after_reap_rebinds_to_the_new_tick(pool: PgPool) {
+        // A job whose lease expired is requeued and re-claimed by a LATER tick. It must record the tick
+        // that actually claimed it, not the one that lost it — otherwise a crashed tick's id would
+        // haunt every subsequent retry, and the invocation would inherit a correlation whose logs
+        // describe a different run.
+        let c = a_cogmap(&pool).await;
+        enqueue(&pool, c, "steward", "steward").await.unwrap();
+        let first = CorrelationId::new();
+        let claimed = claim(&pool, "steward", "steward", 10, -1, Some(first))
+            .await
+            .unwrap();
+        let id = claimed[0].id;
+        reap(&pool, "lease expired").await.unwrap();
+
+        // Re-claim with an expiring lease again, so the row can be reaped once more below.
+        let second = CorrelationId::new();
+        claim(&pool, "steward", "steward", 10, -1, Some(second))
+            .await
+            .unwrap();
+        assert_eq!(correlation_of(&pool, id).await, Some(second.uuid()));
+
+        // …and a subsequent uncorrelated re-claim clears it rather than preserving the stale id.
+        // (attempts is 2 here, below max_attempts=3, so the reap retries rather than killing it.)
+        reap(&pool, "lease expired").await.unwrap();
+        claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
+        assert_eq!(correlation_of(&pool, id).await, None);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn complete_marks_done_and_frees_the_slot(pool: PgPool) {
         let c = a_cogmap(&pool).await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        claim(&pool, "steward", "steward", 10, 600).await.unwrap();
+        claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
         let done = complete(&pool, c, "steward", "steward").await.unwrap();
         assert!(done.is_some());
         // Slot freed: a fresh drift episode can enqueue again.
@@ -258,15 +339,21 @@ mod tests {
         let c = a_cogmap(&pool).await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
         // Claim with an already-past lease (negative seconds → lease_expires_at in the past).
-        let claimed = claim(&pool, "steward", "steward", 10, -1).await.unwrap();
+        let claimed = claim(&pool, "steward", "steward", 10, -1, None)
+            .await
+            .unwrap();
         let id = claimed[0].id;
         // attempts=1, max=3 → reap sends it to waiting_for_retry.
         assert_eq!(reap(&pool, "boom").await.unwrap(), 1);
         assert_eq!(status_of(&pool, id).await, "waiting_for_retry");
         // Two more claim+reap cycles (attempts 2, then 3) → dead at attempts >= max_attempts.
-        claim(&pool, "steward", "steward", 10, -1).await.unwrap();
+        claim(&pool, "steward", "steward", 10, -1, None)
+            .await
+            .unwrap();
         reap(&pool, "boom").await.unwrap();
-        claim(&pool, "steward", "steward", 10, -1).await.unwrap();
+        claim(&pool, "steward", "steward", 10, -1, None)
+            .await
+            .unwrap();
         reap(&pool, "boom").await.unwrap();
         assert_eq!(
             status_of(&pool, id).await,
@@ -318,7 +405,10 @@ mod tests {
         assert_eq!(status_of(&pool, claimed[0].id).await, "in_progress");
         // A steward claim never picks up a resource-keyed job (disjoint scopes).
         assert!(
-            claim(&pool, "embed", "embed", 10, 600).await.unwrap().is_empty(),
+            claim(&pool, "embed", "embed", 10, 600, None)
+                .await
+                .unwrap()
+                .is_empty(),
             "the cogmap-claim's cogmap_id RETURNING would choke on a resource job — scopes are disjoint"
         );
         // Complete frees the slot: a fresh episode can enqueue again.

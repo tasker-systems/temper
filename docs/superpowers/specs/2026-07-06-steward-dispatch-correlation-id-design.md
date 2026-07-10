@@ -137,9 +137,33 @@ view, not as the trace itself. The design therefore takes **no dependency on OTe
 Vercel later propagates a trace across the eve channel boundary, it can be logged alongside
 `correlationId` as another bridge key without changing the primary design.
 
-## Fast-follow (spec'd, deferred to a follow-up task)
+## Fast-follow — SHIPPED (task `019f4be3`, migration `20260710000010_steward_tick_correlation`)
 
-The query-convenience layer, for ticks that reach the DB. Additive-only, safe on `main`.
+Implemented as spec'd below, with one correction the implementation forced and one question it settled.
+
+**Correction.** Item 1 said "set at claim time in `handlers::steward::dispatch`". The handler cannot do
+it: `/dispatch` fires **zero** `kb_events` — reap→sweep→enqueue→claim touch only `kb_workflow_jobs`, and
+`drift_sweep` is a pure read. The stamp therefore rides *inside* `workflow_job_claim` (which grew a
+`p_correlation` argument), not as a follow-up write. It is set **unconditionally** on each claim: a
+re-claim after a reap belongs to the tick that claimed it, not the one that lost its lease.
+
+**Settled: act grain vs run grain.** A steward tick is **one dispatch act plus N run-grain sessions**,
+not one act. `kb_events.correlation_id` stays act-grain (a block's event stream); a session's writes are
+already run-correlated by `invocation_id`. So the tick id stops at the invocation, and an act joins to
+its tick through `kb_events.invocation_id → kb_invocations.correlation_id`. Stamping the tick onto every
+session event would buy a one-hop join and destroy a distinction the ledger already asserts.
+
+A consequence: the fan-out prompt **no longer mentions the correlation id**. P3 exposed `correlation_id`
+on the MCP write tools' `ActInput`, so telling the model the tick id invited exactly the grain collapse
+above. Inheritance is server-side; the agent is told nothing and passes nothing.
+
+**Replay.** `_project_delegated_launch` reads the correlation off the **event**, never the job table
+(`NULLIF(correlation_id, p_event)` — an uncorrelated event self-roots to its own id). Replay rebuilds
+`kb_invocations.correlation_id` from the ledger alone, with no job row in existence. A projection that
+re-read the queue passes every other test and is caught only by
+`tick_correlation_survives_replay_without_the_job_table`.
+
+The original spec follows, for the record. Additive-only, safe on `main`.
 
 1. **Migration — `kb_workflow_jobs.correlation_id UUID NULL`.** Set at **claim** time in
    `handlers::steward::dispatch` from the `x-steward-correlation-id` header, so every claimed job
