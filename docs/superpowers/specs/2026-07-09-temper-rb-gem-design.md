@@ -141,6 +141,28 @@ partitions methods into one class per tag:
 Both want to be `ResourcesApi#list`. The generator emits the second as **`list_0`** — the only `_N`
 artifact in the whole client.
 
+## Defect 3 — the license is empty, and that alone blocks generation
+
+Found only by running the validator, after Defects 1 and 2 were repaired. Neither Rust test would
+ever have caught it.
+
+`info.license` was emitted as `{"name": ""}`. No crate in this workspace sets `license` in its
+`Cargo.toml`, so utoipa fabricates an empty `License` (it populates both `name` and `identifier` from
+`CARGO_PKG_LICENSE`, which is unset). An empty license name is invalid OpenAPI, and
+`openapi-generator validate` rejects the whole document:
+
+```
+- attribute info.license.identifier is missing
+[error] Spec has 1 errors.
+```
+
+Because `generate` validates by default, this defeats P5 on its own: the contract still would not
+produce a client without `--skip-validate-spec`. The repo ships an MIT `LICENSE` file; the contract
+simply never said so.
+
+This is the argument for Task 3 in miniature. Two hand-written tests guard the two defects we knew
+about. The generator is what finds the third.
+
 ## D8 — the contract is repaired at the source, and CI learns to validate it
 
 Not patched by a gem-side overlay, and not worked around with `--skip-validate-spec`. `openapi.json`
@@ -149,23 +171,43 @@ is a published artifact; a third party generating any client hits the same crash
 
 **Scope of P5:**
 
-1. Register `ResourceSortField` and `SortOrder` in `components(schemas(...))`.
-2. Set explicit `operation_id` on the 24 colliding operations, named for what they do
-   (`list_resources`, `list_edges`, `create_context`, `grant_resource_access`, …). Also fix the three
-   Ingest ops whose fn names leak a `_handler` suffix into the contract (`list_blocks_handler`,
-   `append_block_handler`, `finalize_handler`).
-3. Regenerate `openapi.json`.
-4. Extend the `openapi-check` gate from *diff* to *validate*: every `$ref` resolves; every
-   `operationId` is present and unique; `openapi-generator validate` passes with no
-   `--skip-validate-spec`. The gate cannot invoke `cargo make` (it needs `./.env`), so the logic
-   lives in `.github/scripts/` beside the existing scripts.
+**Scope of P5, as built:**
 
-**Acceptance:** `openapi-generator generate -g ruby --library=faraday` succeeds with no
-`--skip-validate-spec` and emits a non-empty client; no emitted method is named `list_0`; CI goes red
-if either defect is reintroduced, proven by temporarily removing a schema registration.
+1. Register `ResourceSortField` and `SortOrder` in `components(schemas(...))`. Schemas 153 → 155.
+2. Set explicit `operation_id` on all 27 affected operations — the 24 colliding ones plus the three
+   segmented-ingest handlers whose `_handler` fn-name suffix leaked into the contract. 79 operations,
+   79 unique ids. The diff is 27 attribute insertions and nothing else.
+3. Declare `info(license(name = "MIT", identifier = "MIT"))` — Defect 3.
+4. Regenerate `openapi.json`.
+5. Guard all three invariants where they belong. **The gate is Rust unit tests, not a third shell
+   script.** They live in `crates/temper-api/src/openapi.rs`'s `mod tests`, beside the existing
+   `every_path_documents_the_surface_header`:
+   - `every_schema_ref_resolves` — walks the serialized spec, fails on a dangling `$ref`.
+   - `operation_ids_are_present_and_unique` — fails on a missing or duplicated `operationId`.
+   - `openapi_spec_is_valid` — additionally asserts the license name is non-empty.
 
-No behavior changes. Routes, handlers, and wire types are untouched — only annotations, the schema
-registration list, the emitted artifact, and the gate.
+   The invariants are properties of the *spec*, and `check-openapi-spec.sh` already proves
+   `committed == fresh`. So testing the fresh spec validates the published artifact transitively,
+   hand-edits included. A third shell script would duplicate that for no coverage.
+
+   `openapi-generator`'s own validator is exposed as **`cargo make openapi-validate`** rather than
+   wired into CI: it pulls a ~1GB image for the same signal the tests give in milliseconds. Run it
+   when changing the shape of the contract, and before cutting a client SDK. It is for the
+   unknown-unknowns — Defect 3 is what it caught.
+
+**Acceptance — met.** `openapi-generator validate` reports **0 errors**. `generate -g ruby
+--library=faraday` succeeds with **no `--skip-validate-spec`**, emitting 347 files, 152 models, and
+18 tag-partitioned API classes. No method is named `list_0`; `ResourcesApi` exposes `list_resources`
+and `list_resource_edges`. Both new tests were verified to *bite*: unregistering `SortOrder` fails
+the first, and pointing `edges::list` at `"list_resources"` fails the second.
+
+> Note on that second proof. *Deleting* an `operation_id` does not fail the test — utoipa falls back
+> to the fn name, and after the rename `list` collides with nothing. The test guards **uniqueness**,
+> which is the invariant OpenAPI states, not annotation presence. Forcing a genuine collision is the
+> honest way to prove it bites.
+
+No behavior changes. Routes, handler bodies, and wire types are untouched — only `#[utoipa::path]`
+attributes, the schema registration list, the info block, tests, and the emitted artifact.
 
 ---
 
@@ -532,6 +574,11 @@ support; `tasker-rb` pins `>= 3.4.0`, which is tighter than a library needs to b
   `ResourceSortField`/`SortOrder` dangle. It also left a follow-up task (`019f4a19`): threading a
   segmented ingest session's `block_created` + `resource_finalized` events onto one correlation now
   that a caller can supply one, which needs a precedence rule against the caller's value.
+- **Three component schemas are registered but referenced by no operation.** `openapi-generator
+  validate` reports them as recommendations: `SearchResultRow`, `EmbedDispatchSummary`,
+  `InvocationCloseAck`. Dead registrations in `components(schemas(...))`. Harmless — they only bloat
+  the emitted client with three unused models — and deliberately out of P5's scope, which was to make
+  the contract *valid*, not tidy. Worth a follow-up.
 - **`components(schemas(...))` stays hand-maintained.** P5 adds two entries rather than deleting the
   list. The deletion P2 hoped for requires `.routes()` to walk `IntoParams` schemas, which it does not.
   Worth an upstream utoipa issue.

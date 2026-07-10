@@ -574,10 +574,20 @@ Temporarily remove `SortOrder,` from `components(schemas(...))`, run
 `cargo nextest run -p temper-api --lib -E 'test(every_schema_ref_resolves)'`, and confirm it **FAILS**
 naming `SortOrder`. Restore it.
 
-Temporarily delete `operation_id = "list_resource_edges",` from `edges.rs`, run
+**CORRECTED (this instruction was wrong as originally written).** *Deleting*
+`operation_id = "list_resource_edges",` from `edges.rs` does **not** fail the test: utoipa falls back to
+the fn name `list`, which — after the rename — now collides with nothing, so the spec stays valid and
+the test correctly passes. The test guards **uniqueness**, the invariant OpenAPI actually states, not
+annotation presence.
+
+To prove it bites, force a genuine collision. Change `edges.rs`'s
+`operation_id = "list_resource_edges"` to `operation_id = "list_resources"`, run
 `cargo nextest run -p temper-api --lib -E 'test(operation_ids_are_present_and_unique)'`, and confirm it
-**FAILS** naming `list` as duplicated across `GET /api/resources` and `GET /api/resources/{id}/edges`.
-Restore it.
+**FAILS** naming `list_resources` as duplicated across `GET /api/resources` and
+`GET /api/resources/{id}/edges`. Restore it.
+
+**Restore from a file copy, never `git checkout --`.** These edits sit on top of uncommitted work; a
+checkout silently discards the whole task.
 
 Then re-run `cargo nextest run -p temper-api --lib` and confirm green.
 
