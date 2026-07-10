@@ -148,6 +148,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create with --task must succeed")
@@ -273,6 +274,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create without --task must succeed")
@@ -344,6 +346,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
         })
@@ -419,6 +422,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
         })
@@ -493,6 +497,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
         })

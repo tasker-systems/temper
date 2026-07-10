@@ -194,6 +194,37 @@ fn body_sources(body: Option<&BodyUpdate>) -> Vec<temper_substrate::payloads::In
     .unwrap_or_default()
 }
 
+/// Block-provenance for a *create*: the body's declared sources, or — when the body declares none
+/// and the resource carries an external (http/https) `origin_uri` — a single synthesized `Remote`
+/// incorporation pointing at that origin (issue #352).
+///
+/// This is the one canonical default that makes `resource create --from <url>` (CLI) and any
+/// MCP/API create carrying an external origin URI citation-grade with no explicit `--sources`: a
+/// resource distilled from a URL gets a Remote block-provenance row by default, so downstream
+/// "cite the block that supports this claim" retrieval works over bulk imports. Explicit sources
+/// always win (a non-empty declared list short-circuits). The synthesis is gated on there being a
+/// body block to attribute and on the origin being an external URL — an internal
+/// `mcp://`/`kb://`/`temper://` origin is never a citable external source, so it is not synthesized.
+/// The projector normalizes + resolves the URL to a `kb_remote_sources` id (`_upsert_remote_source`).
+fn create_sources(
+    body: Option<&BodyUpdate>,
+    origin_uri: &str,
+) -> Vec<temper_substrate::payloads::Incorporation> {
+    let declared = body_sources(body);
+    if !declared.is_empty() {
+        return declared;
+    }
+    let has_body = body.is_some_and(|b| !b.content.is_empty());
+    if has_body && temper_workflow::operations::is_remote_url(origin_uri) {
+        vec![temper_substrate::payloads::Incorporation {
+            source: temper_substrate::payloads::ProvenanceSource::Remote(origin_uri.to_owned()),
+            seq: 0,
+        }]
+    } else {
+        declared
+    }
+}
+
 /// Build the substrate-native charter [`PreparedBlock`]s from a wire [`ReconcileTelos`] (client-embedded
 /// chunks, carried verbatim — NO server-side ONNX). One block per role-tagged entry, seq-ordered by
 /// position. Shared by `apply_telos_phase` (reconcile) and `create_cognitive_map` (genesis) so the two
@@ -1158,8 +1189,9 @@ impl Backend for DbBackend {
             correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
-        // Block-provenance: the body's declared sources, position → accretion `seq`.
-        let sources = body_sources(cmd.body.as_ref());
+        // Block-provenance: the body's declared sources (position → accretion `seq`), or a Remote
+        // record synthesized from an external `origin_uri` when none were declared (issue #352).
+        let sources = create_sources(cmd.body.as_ref(), &origin_uri);
         // Defer embedding (issue #299) only for the SERVER-COMPUTED case — no precomputed chunks and a
         // non-empty body — and only when this deployment has the drain enabled. Caller-supplied chunks
         // (CLI/API bring-your-own vectors) always persist inline; there is nothing to defer.
@@ -2503,5 +2535,57 @@ mod tests {
         fn assert_obj(_: &dyn Backend) {}
         let _ = assert_obj;
         // If DbBackend were not object-safe, the boxed `dyn Backend` dispatch would not compile.
+    }
+
+    mod create_sources {
+        use super::*;
+        use temper_substrate::payloads::ProvenanceSource;
+
+        fn body_with(content: &str, sources: Vec<ProvenanceSource>) -> BodyUpdate {
+            let mut b = BodyUpdate::new(content.to_owned());
+            b.sources = sources;
+            b
+        }
+
+        #[test]
+        fn synthesizes_remote_from_external_origin_when_no_declared_sources() {
+            // The #352 default: a URL origin with a body but no explicit sources → one Remote row.
+            let body = body_with("distilled body", vec![]);
+            let out = create_sources(Some(&body), "https://Example.com/issue/42");
+            assert_eq!(out.len(), 1);
+            assert_eq!(
+                out[0].source,
+                ProvenanceSource::Remote("https://Example.com/issue/42".to_owned()),
+                "origin URL carried verbatim; the projector normalizes the dedup key"
+            );
+            assert_eq!(out[0].seq, 0);
+        }
+
+        #[test]
+        fn declared_sources_win_over_origin_default() {
+            // Explicit `--sources` (here a resource ref) short-circuits — no Remote synthesized.
+            let res = ProvenanceSource::Resource(uuid::Uuid::now_v7());
+            let body = body_with("distilled body", vec![res.clone()]);
+            let out = create_sources(Some(&body), "https://example.com/x");
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].source, res);
+        }
+
+        #[test]
+        fn no_synthesis_for_internal_origin_scheme() {
+            // MCP's default `mcp://agent/{uuid}` (and `kb://`/`temper://`) is not an external source.
+            let body = body_with("body", vec![]);
+            assert!(create_sources(Some(&body), "mcp://agent/abc").is_empty());
+            assert!(create_sources(Some(&body), "kb://ctx/task/x").is_empty());
+            assert!(create_sources(Some(&body), "").is_empty());
+        }
+
+        #[test]
+        fn no_synthesis_without_a_body_block_to_attribute() {
+            // A metadata-only create (no body / empty body) has no block to cite, so no provenance.
+            assert!(create_sources(None, "https://example.com/x").is_empty());
+            let empty = body_with("", vec![]);
+            assert!(create_sources(Some(&empty), "https://example.com/x").is_empty());
+        }
     }
 }

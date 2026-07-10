@@ -211,6 +211,7 @@ async fn segmented_create_roundtrips_large_body(pool: PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("segmented cloud create should succeed")
