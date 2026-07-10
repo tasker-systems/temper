@@ -12,7 +12,6 @@
 use std::sync::Arc;
 
 use temper_client::TemperClient;
-use temper_workflow::operations::Surface;
 
 use super::ctx::CloudBackendCtx;
 use crate::config::Config;
@@ -38,8 +37,6 @@ pub struct CloudBackend {
                   fields settled in Task 1 to mirror the backend shape"
     )]
     pub(crate) config: Arc<Config>,
-    #[expect(dead_code, reason = "stored for Phase 6 telemetry/event tagging")]
-    pub(crate) surface: Surface,
 }
 
 impl CloudBackend {
@@ -49,7 +46,6 @@ impl CloudBackend {
             owner: ctx.owner,
             context_ref: ctx.context_ref,
             config: ctx.config,
-            surface: ctx.surface,
         }
     }
 }
@@ -435,7 +431,6 @@ mod embed_impl {
                 owner: "@me".to_string(),
                 context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
-                surface: Surface::CliCloud,
             };
             CloudBackend::new(ctx)
         }
@@ -453,7 +448,6 @@ mod embed_impl {
                 owner: "@me".to_string(),
                 context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
-                surface: Surface::CliCloud,
             };
             let backend = CloudBackend::new(ctx);
             assert!(Arc::ptr_eq(&backend.client, &client));
@@ -737,7 +731,6 @@ mod non_embed_impl {
                 client,
                 owner: "@me".to_string(),
                 config: Arc::new(make_config(temp.path())),
-                surface: Surface::CliCloud,
             };
             let backend = CloudBackend::new(ctx);
             use temper_workflow::operations::CreateResource;

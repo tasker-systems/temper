@@ -80,6 +80,10 @@ impl TemperClient {
     /// the store — the override path keeps the request path off any further
     /// store reads for the lifetime of this client. The store is still held
     /// for refresh / logout / status operations.
+    ///
+    /// `surface` carries the same meaning as in [`TemperClient::new`]: it is sent as
+    /// `X-Temper-Surface` and selects the `<handle>@<marker>` emitter this client's
+    /// writes are attributed to.
     pub fn with_token(
         base_url: &str,
         device_id: Option<String>,

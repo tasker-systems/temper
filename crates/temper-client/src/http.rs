@@ -141,6 +141,10 @@ impl HttpClient {
     /// Intended for testing and scripting contexts, or for client
     /// construction where the token was already resolved upstream (e.g.
     /// `build_client_from` after a successful `store.load()`).
+    ///
+    /// `surface` carries the same meaning as in [`HttpClient::new`] — there is no
+    /// default, because a defaulted surface would silently attribute every write
+    /// to `@web`.
     pub fn with_token_override(
         base_url: &str,
         device_id: Option<String>,
