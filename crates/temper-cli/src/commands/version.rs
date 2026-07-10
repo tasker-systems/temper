@@ -13,7 +13,7 @@
 //! not the bare binary — so a locally-computed binary hash will never equal
 //! the published archive checksum. This surface is pure self-attestation of
 //! the installed binary; verifying a downloaded archive against the published
-//! sidecar is `temper update`'s job. The [`CHECKSUM_NOTE`] carried in the
+//! sidecar is `temper update`'s job. The `CHECKSUM_NOTE` carried in the
 //! output makes that distinction explicit so no caller mistakes the two.
 
 use serde::Serialize;
