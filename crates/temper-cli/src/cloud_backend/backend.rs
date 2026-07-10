@@ -54,17 +54,18 @@ impl CloudBackend {
 mod embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
-        CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
-        ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
-        RetypeRelationship, ReweightRelationship, SearchResources, ShowResource,
-        StewardDispatchTick, UpdateResource,
+        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, CloseInvocation,
+        CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent,
+        FoldRelationship, ListResources, MaterializeOnThreshold, OpenInvocation,
+        ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship, SearchResources,
+        ShowResource, StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::operations::{ResourceSummary, SearchHit};
     use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
     use super::super::translators::{
-        cmd_to_ingest_payload, cmd_to_resource_update_request, wire_resource_to_resource_row,
+        cmd_to_ingest_payload, cmd_to_resource_annotate_request, cmd_to_resource_update_request,
+        wire_resource_to_resource_row,
     };
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -105,6 +106,25 @@ mod embed_impl {
             let resource_id = updated.id;
             Ok(CommandOutput {
                 value: wire_resource_to_resource_row(&updated),
+                events: vec![DomainEvent::RemoteSynced { resource_id }],
+            })
+        }
+
+        async fn annotate_resource(
+            &self,
+            cmd: AnnotateResource,
+        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+            let req = cmd_to_resource_annotate_request(&cmd);
+            let id = uuid::Uuid::from(cmd.resource);
+            let annotated = self
+                .client
+                .resources()
+                .annotate(id, &req)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let resource_id = annotated.id;
+            Ok(CommandOutput {
+                value: wire_resource_to_resource_row(&annotated),
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
         }
@@ -466,11 +486,11 @@ mod embed_impl {
 mod non_embed_impl {
     use async_trait::async_trait;
     use temper_workflow::operations::{
-        AdvanceStewardWatermark, AssertRelationship, Backend, CloseInvocation, CommandOutput,
-        CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
-        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
-        RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, ShowResource,
-        StewardDispatchTick, UpdateResource,
+        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, CloseInvocation,
+        CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+        ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+        ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit, SearchResources,
+        ShowResource, StewardDispatchTick, UpdateResource,
     };
     use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -505,6 +525,15 @@ mod non_embed_impl {
             &self,
             _cmd: DeleteResource,
         ) -> Result<CommandOutput<()>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn annotate_resource(
+            &self,
+            _cmd: AnnotateResource,
+        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

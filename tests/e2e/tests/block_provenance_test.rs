@@ -93,6 +93,190 @@ async fn cli_create(
     .expect("spawn_blocking joined");
 }
 
+/// Drive a cloud-mode CLI `resource annotate <ref> --sources …` on a blocking thread.
+async fn cli_annotate(
+    app: &common::E2eTestApp,
+    resource_ref: String,
+    sources: Vec<String>,
+) -> temper_cli::error::Result<()> {
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = global_config_path(app);
+    let cli_config = app.cli_config.clone();
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            temper_cli::commands::resource::annotate(
+                &cli_config,
+                temper_cli::commands::resource::AnnotateParams {
+                    r#ref: &resource_ref,
+                    sources: &sources,
+                    content_block: None,
+                    format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
+                },
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined")
+}
+
+/// issue #355: annotate-only backfill through the full CLI → client → Axum → DbBackend → substrate
+/// spine. A resource created with NO sources is annotated with a resource source + a remote source
+/// carrying a `#L…` span locator; the provenance read shows both new rows (locator surfaced verbatim),
+/// and the resource's body is UNCHANGED (body_hash + chunk embeddings identical — no re-chunk/re-embed).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn annotate_backfills_provenance_without_revise_through_cli_api_db(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("prov", None)
+        .await
+        .expect("context create");
+
+    // A source resource to cite, and a distilled note created with NO provenance (the corpus-import
+    // precondition the annotate path exists to repair).
+    let src_body = app.vault_dir.path().join("ann-src.md");
+    std::fs::write(&src_body, "# Annotate Source\n\nThe cited resource.\n").unwrap();
+    cli_create(
+        &app,
+        "Annotate Source",
+        format!("@{}", src_body.display()),
+        vec![],
+    )
+    .await;
+    let source = created_id_for_title(&pool, "Annotate Source").await;
+
+    let dist_body = app.vault_dir.path().join("ann-distilled.md");
+    std::fs::write(
+        &dist_body,
+        "# Annotate Distilled\n\nImported with no sources.\n",
+    )
+    .unwrap();
+    cli_create(
+        &app,
+        "Annotate Distilled",
+        format!("@{}", dist_body.display()),
+        vec![],
+    )
+    .await;
+    let distilled = created_id_for_title(&pool, "Annotate Distilled").await;
+
+    // No provenance yet — nothing was cited on create.
+    let prov0 = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read");
+    assert!(
+        prov0.is_empty(),
+        "no provenance before annotate, got {prov0:?}"
+    );
+
+    // Snapshot the resource's content-derived state BEFORE the annotate: body_hash, the block-revision
+    // count, and every current chunk's embedding. An annotate must leave all of these untouched.
+    let hash_before: String =
+        sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+            .bind(distilled)
+            .fetch_one(&pool)
+            .await
+            .expect("body_hash before");
+    let revisions_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_revisions br JOIN kb_content_blocks b ON b.id = br.block_id \
+         WHERE b.resource_id = $1",
+    )
+    .bind(distilled)
+    .fetch_one(&pool)
+    .await
+    .expect("revisions before");
+    let embeddings_before: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT c.embedding::text FROM kb_chunks c JOIN kb_content_blocks b ON b.id = c.block_id \
+         WHERE b.resource_id = $1 AND c.is_current ORDER BY c.id",
+    )
+    .bind(distilled)
+    .fetch_all(&pool)
+    .await
+    .expect("embeddings before");
+
+    // Annotate: a resource source + a remote source carrying a span-locator fragment. No body.
+    let located = "https://example.com/long-source.md#L120-L180";
+    cli_annotate(
+        &app,
+        distilled.to_string(),
+        vec![source.to_string(), located.to_string()],
+    )
+    .await
+    .expect("annotate should succeed");
+
+    // Both rows landed; the remote row surfaces the locator URL verbatim (the span round-trip).
+    let prov = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read after annotate");
+    assert_eq!(
+        prov.len(),
+        2,
+        "two sources recorded by annotate, got {prov:?}"
+    );
+    assert!(
+        prov.iter()
+            .any(|r| r.source_kind == "resource" && r.source_id == source),
+        "the resource source is recorded; got {prov:?}"
+    );
+    assert!(
+        prov.iter()
+            .any(|r| r.source_kind == "remote" && r.source_uri.as_deref() == Some(located)),
+        "the remote source's span locator is surfaced verbatim; got {prov:?}"
+    );
+
+    // NO body revise: body_hash, block-revision count, and chunk embeddings are all unchanged.
+    let hash_after: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+        .bind(distilled)
+        .fetch_one(&pool)
+        .await
+        .expect("body_hash after");
+    let revisions_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_revisions br JOIN kb_content_blocks b ON b.id = br.block_id \
+         WHERE b.resource_id = $1",
+    )
+    .bind(distilled)
+    .fetch_one(&pool)
+    .await
+    .expect("revisions after");
+    let embeddings_after: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT c.embedding::text FROM kb_chunks c JOIN kb_content_blocks b ON b.id = c.block_id \
+         WHERE b.resource_id = $1 AND c.is_current ORDER BY c.id",
+    )
+    .bind(distilled)
+    .fetch_all(&pool)
+    .await
+    .expect("embeddings after");
+    assert_eq!(
+        hash_before, hash_after,
+        "annotate leaves body_hash unchanged (no revise)"
+    );
+    assert_eq!(
+        revisions_before, revisions_after,
+        "annotate writes no new block revision"
+    );
+    assert_eq!(
+        embeddings_before, embeddings_after,
+        "annotate leaves chunk embeddings unchanged (no re-embed)"
+    );
+
+    // A source-less annotate is rejected (400) — nothing to attribute.
+    let empty = cli_annotate(&app, distilled.to_string(), vec![]).await;
+    assert!(empty.is_err(), "an annotate with no sources must fail");
+}
+
 /// The full CLI-driven round-trip: create-with-sources records provenance, update-with-a-second-
 /// source accretes, and both the HTTP provenance endpoint and the CLI `show --provenance` surface
 /// read it back.

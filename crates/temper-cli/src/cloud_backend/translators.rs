@@ -286,6 +286,21 @@ pub(crate) fn cmd_to_resource_update_request(
     })
 }
 
+/// Translate an [`AnnotateResource`](temper_workflow::operations::AnnotateResource) command into the
+/// wire [`ResourceAnnotateRequest`](temper_workflow::types::resource::ResourceAnnotateRequest)
+/// (issue #355). No body-trio work — annotate carries no content;
+/// the sources + block address + per-act context ride straight through.
+#[cfg(feature = "embed")]
+pub(crate) fn cmd_to_resource_annotate_request(
+    cmd: &temper_workflow::operations::AnnotateResource,
+) -> temper_workflow::types::resource::ResourceAnnotateRequest {
+    temper_workflow::types::resource::ResourceAnnotateRequest {
+        sources: cmd.sources.clone(),
+        content_block: cmd.content_block,
+        act: cmd.act.clone().into(),
+    }
+}
+
 /// Project a `ResourceRow` (returned by `temper-client` methods) into the
 /// `ResourceRow` shape required by the `Backend` trait.
 ///

@@ -22,10 +22,11 @@ use temper_core::types::ingest::{
 use temper_core::types::materialize::MaterializeAck;
 
 use super::commands::{
-    AdvanceStewardWatermark, AssertRelationship, CloseInvocation, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, ListResources, MaterializeOnThreshold,
-    OpenInvocation, ReconcileCognitiveMap, RetypeRelationship, ReweightRelationship,
-    SearchResources, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, CloseInvocation,
+    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, ListResources,
+    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RetypeRelationship,
+    ReweightRelationship, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
+    UpdateResource,
 };
 use super::output::CommandOutput;
 use super::surface::Surface;
@@ -71,6 +72,16 @@ pub trait Backend: Send + Sync {
     ) -> Result<CommandOutput<ResourceRow>, TemperError>;
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError>;
+
+    /// Attach provenance sources to an existing resource's block without a body revise (issue #355).
+    /// Records `kb_block_provenance` rows only — no re-chunk/re-embed, body_hash unchanged. Gated on
+    /// `can_modify_resource` (auth before write), like every other resource mutation. Returns the
+    /// updated resource row (the resource's own state is unchanged, but the row keeps the surface's
+    /// response shape uniform with `update_resource`).
+    async fn annotate_resource(
+        &self,
+        cmd: AnnotateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError>;
 
     async fn list_resources(
         &self,

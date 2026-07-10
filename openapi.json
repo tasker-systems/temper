@@ -4367,6 +4367,91 @@
             "bearer_auth": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "Resources"
+        ],
+        "operationId": "annotate_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceAnnotateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Annotated resource (unchanged body; new provenance rows recorded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No sources, or an invalid content_block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
       }
     },
     "/api/resources/{id}/reassign": {
@@ -8542,6 +8627,35 @@
             "type": "string"
           }
         }
+      },
+      "ResourceAnnotateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActInput",
+            "description": "Per-act correlation (`invocation_id`) + discrete agent authorship for the annotate act.\nFlattened as top-level keys; all optional.\n\n`ts(skip)`-ped: ts-rs cannot codegen a `#[serde(flatten)]` field, and the UI never sends\nauthorship (precedent: `ResourceUpdateRequest.act`)."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "content_block": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid",
+                "description": "Which content block to annotate. `None` → the resource's sole non-folded body block; `Some(id)`\naddresses that block explicitly (must belong to the resource and be non-folded)."
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProvenanceSource"
+                },
+                "description": "Sources to attach to the addressed block — resource refs, external URLs, or event ids\n(`{kind,value}`-tagged). Position → accretion `seq`. Must be non-empty.\n\n`ts(skip)`-ped for the same reason as `ResourceUpdateRequest.sources`: `ProvenanceSource` is a\ntagged enum the SvelteKit UI never sends (this is a CLI/agent write path)."
+              }
+            }
+          }
+        ],
+        "description": "Request body for annotating a resource's block with provenance sources (issue #355) —\n`POST /api/resources/{id}/provenance`. The annotate-only write: attach sources WITHOUT a body\nrevise (no re-chunk/re-embed). Carries no content — that is the whole point."
       },
       "ResourceCreateRequest": {
         "allOf": [

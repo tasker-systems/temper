@@ -269,6 +269,59 @@ pub async fn update_resource_deferred_with(
 /// begin/commit). The body-block lookup runs on `&mut *conn` so it shares the caller's transaction.
 /// `ctx` correlates every sub-event the update fires (`EventContext::default()` for an un-attributed
 /// update); it is cloned per sub-event since an update fans out to several.
+/// Resolve which content block a body revise / annotate targets: an explicitly-addressed
+/// `content_block` (validated to belong to `resource` and be non-folded), or — when `None` — the
+/// resource's single non-folded body block. Shared by the update (revise) and annotate paths so both
+/// address a block by the same rules. `op` names the caller in error messages ("update_resource" /
+/// "annotate_resource").
+async fn resolve_target_block(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    content_block: Option<Uuid>,
+    op: &str,
+) -> Result<Uuid> {
+    match content_block {
+        // Explicit addressing: validate the block belongs to this resource and is non-folded.
+        // A null row ⇒ not-this-resource; is_folded ⇒ folded — both rejected before any write.
+        Some(target) => {
+            let is_folded: Option<bool> = sqlx::query_scalar(
+                "SELECT is_folded FROM kb_content_blocks WHERE id=$1 AND resource_id=$2",
+            )
+            .bind(target)
+            .bind(resource.uuid())
+            .fetch_optional(&mut *conn)
+            .await?;
+            match is_folded {
+                Some(false) => Ok(target),
+                Some(true) => anyhow::bail!(
+                    "{op}: content block {target} is folded (folded blocks are not addressable)"
+                ),
+                None => anyhow::bail!(
+                    "{op}: content block {target} does not belong to resource {}",
+                    resource.uuid()
+                ),
+            }
+        }
+        // Default: resolve the resource's single non-folded body block (CONFORM scenario runner revise).
+        None => {
+            let block_ids: Vec<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+            )
+            .bind(resource.uuid())
+            .fetch_all(&mut *conn)
+            .await?;
+            match block_ids.as_slice() {
+                [one] => Ok(*one),
+                [] => anyhow::bail!("{op}: resource {} has no live block", resource.uuid()),
+                _ => anyhow::bail!(
+                    "{op}: resource {} has >1 block (pass --content-block to address one)",
+                    resource.uuid()
+                ),
+            }
+        }
+    }
+}
+
 pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     p: UpdateParams<'_>,
@@ -276,49 +329,9 @@ pub async fn update_resource_in_tx(
     defer: bool,
 ) -> Result<()> {
     if let Some(body) = p.body {
-        let block_id = match p.content_block {
-            // Explicit addressing: validate the block belongs to this resource and is non-folded.
-            // A null row ⇒ not-this-resource; is_folded ⇒ folded — both rejected before any write.
-            Some(target) => {
-                let is_folded: Option<bool> = sqlx::query_scalar(
-                    "SELECT is_folded FROM kb_content_blocks WHERE id=$1 AND resource_id=$2",
-                )
-                .bind(target)
-                .bind(p.resource.uuid())
-                .fetch_optional(&mut *conn)
+        let block_id =
+            resolve_target_block(&mut *conn, p.resource, p.content_block, "update_resource")
                 .await?;
-                match is_folded {
-                    Some(false) => target,
-                    Some(true) => anyhow::bail!(
-                        "update_resource: content block {target} is folded (folded blocks are not revisable)"
-                    ),
-                    None => anyhow::bail!(
-                        "update_resource: content block {target} does not belong to resource {}",
-                        p.resource.uuid()
-                    ),
-                }
-            }
-            // Default: resolve the resource's single non-folded body block (CONFORM scenario runner revise).
-            None => {
-                let block_ids: Vec<Uuid> = sqlx::query_scalar(
-                    "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
-                )
-                .bind(p.resource.uuid())
-                .fetch_all(&mut *conn)
-                .await?;
-                match block_ids.as_slice() {
-                    [one] => *one,
-                    [] => anyhow::bail!(
-                        "update_resource: resource {} has no live block",
-                        p.resource.uuid()
-                    ),
-                    _ => anyhow::bail!(
-                        "update_resource: resource {} has >1 block (pass --content-block to address one)",
-                        p.resource.uuid()
-                    ),
-                }
-            }
-        };
         let mut prepared = match (p.chunks, defer) {
             (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
             (None, false) => prepare_block(0, None, body)?,
@@ -386,6 +399,68 @@ pub async fn update_resource_in_tx(
     }
 
     Ok(())
+}
+
+/// Attach provenance sources to an existing resource's block **without a body revise** (issue #355).
+///
+/// The annotate-only write: it resolves the target block (the resource's sole non-folded body block,
+/// or `content_block` when addressed explicitly), then fires `block_provenance_annotated` — recording
+/// `kb_block_provenance` rows via the SAME `_insert_block_provenance` helper the create/revise paths
+/// use, but touching NO chunks. Body hash and embeddings are unchanged; there is no re-chunk/re-embed.
+/// Rejects an empty `sources` (an annotate with nothing to attribute is a caller error).
+#[derive(Debug)]
+pub struct AnnotateParams {
+    pub resource: ResourceId,
+    /// Sources to record onto the addressed block, position → accretion `seq` (as on create/update).
+    /// Non-empty by contract.
+    pub sources: Vec<Incorporation>,
+    /// Which block to annotate. `None` → the resource's sole non-folded body block; `Some(id)` →
+    /// that block explicitly (must belong to the resource and be non-folded).
+    pub content_block: Option<Uuid>,
+    pub emitter: EntityId,
+}
+
+/// [`annotate_block_sources_with`] under the default (un-attributed) context.
+pub async fn annotate_block_sources(pool: &PgPool, p: AnnotateParams) -> Result<BlockId> {
+    annotate_block_sources_with(pool, p, EventContext::default()).await
+}
+
+/// Annotate a block's provenance under an explicit [`EventContext`] — the `block_provenance_annotated`
+/// act carries the caller's authorship + invocation correlator (→ `kb_events.metadata`/`invocation_id`).
+pub async fn annotate_block_sources_with(
+    pool: &PgPool,
+    p: AnnotateParams,
+    ctx: EventContext,
+) -> Result<BlockId> {
+    let mut tx = begin_scoped(pool).await?;
+    let block = annotate_block_sources_in_tx(&mut tx, p, ctx).await?;
+    tx.commit().await?;
+    Ok(block)
+}
+
+/// In-transaction variant of [`annotate_block_sources`] — fires on a caller-supplied connection (no
+/// begin/commit). Resolves the target block on `&mut *conn` so it shares the caller's transaction.
+pub async fn annotate_block_sources_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: AnnotateParams,
+    ctx: EventContext,
+) -> Result<BlockId> {
+    if p.sources.is_empty() {
+        anyhow::bail!("annotate_resource: no sources to attach (annotate requires ≥1 source)");
+    }
+    let block_id =
+        resolve_target_block(&mut *conn, p.resource, p.content_block, "annotate_resource").await?;
+    fire_with(
+        &mut *conn,
+        SeedAction::BlockAnnotate {
+            block: BlockId::from(block_id),
+            incorporated: &p.sources,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .block()
 }
 
 /// Soft-delete a resource.

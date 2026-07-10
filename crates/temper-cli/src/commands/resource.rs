@@ -1592,6 +1592,71 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Args for [`annotate`] — the annotate-only provenance backfill (issue #355).
+pub struct AnnotateParams<'a> {
+    /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub r#ref: &'a str,
+    /// Provenance source refs/URLs (`--sources`) — resolved to `ProvenanceSource::Resource` (refs) or
+    /// `ProvenanceSource::Remote` (URLs, locator fragment preserved). Non-empty (clap `required`).
+    pub sources: &'a [String],
+    /// Which content block to annotate (`--content-block`, a block UUID). `None` → the sole body block.
+    pub content_block: Option<uuid::Uuid>,
+    /// Output format, resolved globally upstream in `main`.
+    pub format: crate::format::OutputFormat,
+    /// Per-act correlation + authorship for the annotate act.
+    pub act: temper_core::types::ActInput,
+}
+
+/// Attach provenance sources to a resource's block WITHOUT a body revise (issue #355).
+///
+/// The annotate-only counterpart to `update --sources`: it records block-provenance rows on the
+/// addressed block with no re-chunk/re-embed (body_hash + embeddings unchanged). Verify the recorded
+/// rows with `resource show --provenance`.
+pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
+    use temper_workflow::operations::AnnotateResource;
+
+    // Resolve the ref to an id + fetch the current row (for its home context — build_backend needs it).
+    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .get(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?
+    .row;
+
+    // Resolve --sources refs → provenance records. A ref that fails to parse is a hard error
+    // (escalate, never a silent drop). clap guarantees the list is non-empty (`required = true`).
+    let resolved_sources = resolve_provenance_sources(params.sources)?;
+
+    let cmd = AnnotateResource {
+        resource: id,
+        sources: resolved_sources,
+        content_block: params.content_block,
+        act: params.act.clone().into_act_context()?,
+        origin: temper_workflow::operations::Surface::CliCloud,
+    };
+
+    let (runtime, backend, _client) = crate::backend_select::build_backend(
+        config,
+        row.context_name.as_deref().unwrap_or_default(),
+    )?;
+    let output = runtime.block_on(backend.annotate_resource(cmd))?;
+
+    // The resource body is unchanged, so there is no projection file to rewrite — emit the same flat
+    // action result `update` does (status + resource row), so the two write verbs read identically.
+    let result = UpdateActionResult {
+        status: "ok",
+        resource: output.value,
+    };
+    let rendered = render_action_result_with_ref(&result, params.format)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// Per-flag schema validation for `update`. Lifted from the pre-B4 surface
 /// code so the friendlier per-flag error messages survive the migration.
 /// Only validates scalar managed-meta flags; array fields and `title` (a

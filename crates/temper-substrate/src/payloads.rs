@@ -492,6 +492,27 @@ pub struct BlockMutated {
     pub incorporated: Vec<Incorporation>,
 }
 
+/// Payload for `block_provenance_annotated` — attach provenance sources to an EXISTING block
+/// without revising its content (issue #355). Carries only the block id + the ordered incorporation
+/// list; the projector records them into `kb_block_provenance` via the same `_insert_block_provenance`
+/// helper the create/revise paths use, but touches NO chunks — no re-chunk, no re-embed, no
+/// `block_body_hash` recompute. `incorporated` is non-empty by construction (the `block_annotate`
+/// write path rejects an empty list — an annotate with nothing to attribute is a caller error, not a
+/// silent no-op).
+///
+/// Registered **permissive** (NULL `payload_schema`), like `resource_updated`/`invocation_closed`:
+/// it is a post-canonical-seed event added by migration `20260710000001`, so it cannot join the
+/// bootseed-stamped typed registry (that set is pinned to the immutable canonical-seed vocabulary via
+/// `system.yaml`, and `TYPED_EVENT_NAMES` must equal it). The payload is instead validated Rust-side
+/// through `verify_ledger_roundtrip`. The `JsonSchema` derive stays for parity with the other payload
+/// structs even though no committed snapshot is stamped for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct BlockProvenanceAnnotated {
+    pub block_id: BlockId,
+    pub incorporated: Vec<Incorporation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BlockFolded {
@@ -601,6 +622,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "relationship_folded" => {
                     serde_json::from_value::<RelationshipFolded>(r.payload.clone())?;
+                }
+                "block_provenance_annotated" => {
+                    serde_json::from_value::<BlockProvenanceAnnotated>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.

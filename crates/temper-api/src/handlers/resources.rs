@@ -7,8 +7,8 @@ use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::resource_service::{
-    ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
-    ResourceUpdateRequest,
+    ResourceAnnotateRequest, ResourceCreateRequest, ResourceListParams, ResourceListResponse,
+    ResourceRow, ResourceUpdateRequest,
 };
 use temper_services::services::{access_service, context_service};
 use temper_services::state::AppState;
@@ -162,6 +162,47 @@ pub async fn provenance(
     )
     .await
     .map(Json)
+}
+
+#[utoipa::path(
+    post,
+    operation_id = "annotate_resource",
+    path = "/api/resources/{id}/provenance",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    request_body = ResourceAnnotateRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Annotated resource (unchanged body; new provenance rows recorded)", body = ResourceRow),
+        (status = 400, description = "No sources, or an invalid content_block", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
+pub async fn annotate(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
+    Path(resource_id): Path<Uuid>,
+    Json(req): Json<ResourceAnnotateRequest>,
+) -> ApiResult<Json<ResourceRow>> {
+    use temper_workflow::operations::AnnotateResource;
+
+    let act = req.act.into_act_context().map_err(ApiError::from)?;
+    let cmd = AnnotateResource {
+        resource: ResourceId::from(resource_id),
+        sources: req.sources,
+        content_block: req.content_block,
+        act,
+        origin: surface,
+    };
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let out = backend
+        .annotate_resource(cmd)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(out.value))
 }
 
 #[utoipa::path(

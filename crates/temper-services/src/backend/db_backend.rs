@@ -32,11 +32,11 @@ use temper_core::types::reconcile::{
 use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AssertRelationship, Backend, BodyUpdate, CloseInvocation,
-    CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
-    ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
-    RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
-    StewardDispatchTick, Surface, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, BodyUpdate,
+    CloseInvocation, CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource,
+    FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, OpenInvocation,
+    ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
+    SearchResources, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -1508,6 +1508,62 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         Ok(CommandOutput::new(()))
+    }
+
+    async fn annotate_resource(
+        &self,
+        cmd: AnnotateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        // The inbound id IS the substrate resource id (no origin_uri remap).
+        let new_id = uuid::Uuid::from(cmd.resource);
+        // Auth before any write (WS2): the caller must be able to modify this resource.
+        self.check_can_modify_next(new_id).await?;
+        // Correlation-integrity gate for any claimed invocation — additive to the modify authz above.
+        self.check_act_invocation(cmd.act.invocation).await?;
+        // A source-less annotate has nothing to attribute — reject before resolving anything (the
+        // substrate rejects it too, but a 400 here is the honest surface error).
+        if cmd.sources.is_empty() {
+            return Err(TemperError::BadRequest(
+                "annotate requires at least one source (--sources)".to_owned(),
+            ));
+        }
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        // Reuse the shared sources→Incorporation mapping (position → accretion seq) so annotate and
+        // the body-revise `--sources` path derive seq identically.
+        let sources: Vec<temper_substrate::payloads::Incorporation> = cmd
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, source)| temper_substrate::payloads::Incorporation {
+                source: source.clone(),
+                seq: i as i32,
+            })
+            .collect();
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
+            authorship: cmd.act.authorship,
+        };
+        writes::annotate_block_sources_with(
+            &self.pool,
+            writes::AnnotateParams {
+                resource: ResourceId::from(new_id),
+                sources,
+                content_block: cmd.content_block,
+                emitter,
+            },
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
+        let row =
+            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+        Ok(CommandOutput::new(row))
     }
 
     async fn list_resources(

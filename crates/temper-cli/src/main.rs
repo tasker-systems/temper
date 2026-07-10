@@ -283,6 +283,21 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
+                ResourceAction::Annotate {
+                    r#ref,
+                    sources,
+                    content_block,
+                    act,
+                } => temper_cli::commands::resource::annotate(
+                    &config,
+                    temper_cli::commands::resource::AnnotateParams {
+                        r#ref: &r#ref,
+                        sources: &sources,
+                        content_block,
+                        format: output_format,
+                        act: act.into_act_input()?,
+                    },
+                ),
                 ResourceAction::Delete { r#ref, force, act } => {
                     temper_cli::commands::resource::delete(
                         &config,
