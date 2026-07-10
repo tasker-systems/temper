@@ -30,6 +30,15 @@ pub fn validate_preferences_size(preferences: Option<&Value>) -> ApiResult<()> {
 /// -2, -3, etc. if the handle already exists. `handle` is the substrate
 /// addressing key (`slug` is §7-dissolved).
 pub async fn generate_profile_handle(pool: &PgPool, display_name: &str) -> ApiResult<String> {
+    let mut conn = pool.acquire().await?;
+    generate_profile_handle_conn(&mut conn, display_name).await
+}
+
+/// Connection-taking twin of `generate_profile_handle`, for use inside a transaction.
+pub(crate) async fn generate_profile_handle_conn(
+    conn: &mut sqlx::PgConnection,
+    display_name: &str,
+) -> ApiResult<String> {
     let base: String = display_name
         .to_lowercase()
         .chars()
@@ -51,7 +60,7 @@ pub async fn generate_profile_handle(pool: &PgPool, display_name: &str) -> ApiRe
         "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE handle = $1) as \"exists!: bool\"",
         &base,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
 
     if !exists {
@@ -65,7 +74,7 @@ pub async fn generate_profile_handle(pool: &PgPool, display_name: &str) -> ApiRe
             "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE handle = $1) as \"exists!: bool\"",
             &candidate,
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
 
         if !exists {
@@ -109,23 +118,54 @@ async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiRes
     // 5: brand new profile + auth link, then provision its emitter entities and
     // default context.
     let (profile_id, handle) = create_new_profile_and_link(pool, claims).await?;
-    provision_profile_entities(pool, profile_id, &handle).await?;
+    let mut conn = pool.acquire().await?;
+    provision_profile_entities(&mut conn, profile_id, &handle).await?;
 
     get_by_id(pool, ProfileId::from(profile_id)).await
 }
 
-/// Machine path: link lookup under the `auth0-m2m` namespace → on first sight,
-/// provision a dedicated agent profile. NEVER enters email reconciliation — a
-/// machine has no verified email.
+/// Machine path: the registration gate (D2). Lookup-or-reject — there is no
+/// create branch, because `machine_registration_service::provision` creates the
+/// agent profile ahead of the machine's first call (D3).
+///
+/// This function is the ONLY machine-principal entry point for both temper-api and
+/// temper-mcp, which is why the gate lives here and not in an Axum middleware (D4):
+/// temper-mcp does not share temper-api's middleware stack, so a middleware gate would
+/// drift. Rejections are specific (D7) — the caller has already proven it holds a valid,
+/// correctly-audienced token, so naming the client id and the reason leaks nothing.
 async fn resolve_machine_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
-    if let Some(link) = lookup_link_by_provider(pool, claims).await? {
-        return get_by_id(pool, ProfileId::from(link.profile_id)).await;
+    let client_id = claims.external_user_id.as_str();
+
+    let Some(client) =
+        crate::services::machine_client_service::lookup_by_client_id(pool, client_id).await?
+    else {
+        tracing::warn!(client_id, "machine gate: rejected (unregistered client)");
+        return Err(ApiError::Unauthorized(format!(
+            "machine client '{client_id}' is not registered with this instance. \
+             An administrator must run: temper admin machine provision --client-id {client_id} --label <label>"
+        )));
+    };
+
+    if let Some(revoked_at) = client.revoked_at {
+        tracing::warn!(client_id, %revoked_at, "machine gate: rejected (revoked client)");
+        return Err(ApiError::Unauthorized(format!(
+            "machine client '{client_id}' was revoked at {}",
+            revoked_at.to_rfc3339()
+        )));
     }
 
-    let (profile_id, handle) = create_agent_profile_and_link(pool, claims).await?;
-    provision_profile_entities(pool, profile_id, &handle).await?;
+    // Coarse liveness (D9). Failure to touch must not fail the request.
+    if let Err(err) =
+        crate::services::machine_client_service::touch_last_seen(pool, client.id).await
+    {
+        tracing::warn!(
+            client_id,
+            ?err,
+            "machine gate: last_seen_at touch failed (ignored)"
+        );
+    }
 
-    get_by_id(pool, ProfileId::from(profile_id)).await
+    get_by_id(pool, ProfileId::from(client.profile_id)).await
 }
 
 /// Phase 1: direct lookup of an auth link by `(auth_provider, auth_provider_user_id)`.
@@ -295,14 +335,21 @@ async fn create_new_profile_and_link(
     Ok((profile_id, handle))
 }
 
-/// Create a brand-new agent profile and its default machine auth link. Email is
-/// SQL NULL (a machine has none); display name / handle derive from the client id.
-async fn create_agent_profile_and_link(
-    pool: &PgPool,
-    claims: &AuthClaims,
+/// Create an agent profile and its default machine auth link. Email is SQL NULL
+/// (a machine has none); display name / handle derive from the client id.
+///
+/// Takes a connection so registration can run it inside a transaction. No longer
+/// called from the authentication path — `provision` owns it now (D3).
+#[expect(
+    dead_code,
+    reason = "the only caller is machine_registration_service::provision, landing in Task 4; remove this attribute when that caller is wired"
+)]
+pub(crate) async fn create_agent_profile_and_link(
+    conn: &mut sqlx::PgConnection,
+    client_id: &str,
 ) -> ApiResult<(Uuid, String)> {
-    let display_name = format!("agent-{}", claims.external_user_id);
-    let handle = generate_profile_handle(pool, &display_name).await?;
+    let display_name = format!("agent-{client_id}");
+    let handle = generate_profile_handle_conn(&mut *conn, &display_name).await?;
     let profile_id = Uuid::now_v7();
 
     sqlx::query!(
@@ -314,7 +361,7 @@ async fn create_agent_profile_and_link(
         &handle,
         &display_name,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     let auth_link_id = Uuid::now_v7();
@@ -326,10 +373,10 @@ async fn create_agent_profile_and_link(
         "#,
         auth_link_id,
         profile_id,
-        &claims.provider,
-        &claims.external_user_id,
+        crate::auth::MACHINE_PROVIDER_TAG,
+        client_id,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok((profile_id, handle))
@@ -337,8 +384,8 @@ async fn create_agent_profile_and_link(
 
 /// Phase 5b: provision the per-surface emitter entities and the default context
 /// a freshly created profile needs.
-async fn provision_profile_entities(
-    pool: &PgPool,
+pub(crate) async fn provision_profile_entities(
+    conn: &mut sqlx::PgConnection,
     profile_id: Uuid,
     handle: &str,
 ) -> ApiResult<()> {
@@ -366,7 +413,7 @@ async fn provision_profile_entities(
             profile_id,
             format!("{handle}@{}", surface.marker()),
         )
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     }
 
@@ -381,7 +428,7 @@ async fn provision_profile_entities(
         Uuid::now_v7(),
         profile_id,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -706,43 +753,143 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn machine_first_sight_provisions_agent_profile(pool: PgPool) {
-        let c = machine_claims("agent-client-xyz");
-        let p = resolve_from_claims(&pool, &c)
+    /// The bite test. Under the old code this FAILS by finding a newly created profile.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn unregistered_machine_is_rejected_and_creates_no_profile(pool: PgPool) {
+        let before = sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
             .await
-            .expect("provision agent");
+            .expect("count before");
 
-        // Link created under the machine namespace with NULL email.
-        let link = sqlx::query!(
-            "SELECT auth_provider, email FROM kb_profile_auth_links \
-             WHERE auth_provider = $1 AND auth_provider_user_id = $2",
-            "auth0-m2m",
-            "agent-client-xyz",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("link row");
-        assert_eq!(link.auth_provider, "auth0-m2m");
-        assert!(link.email.is_none(), "machine link email must be NULL");
-        assert!(p.is_active);
+        let c = machine_claims("never-registered");
+        let err = resolve_from_claims(&pool, &c)
+            .await
+            .expect_err("an unregistered machine must be rejected");
+
+        match err {
+            ApiError::Unauthorized(msg) => {
+                assert!(
+                    msg.contains("never-registered"),
+                    "message names the client id: {msg}"
+                );
+                assert!(msg.contains("not registered"), "message says why: {msg}");
+                assert!(
+                    msg.contains("temper admin machine provision"),
+                    "message names the remedy: {msg}"
+                );
+            }
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+
+        let after = sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
+            .await
+            .expect("count after");
+        assert_eq!(
+            before, after,
+            "authentication must not create a profile (D3)"
+        );
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn machine_resolution_is_idempotent(pool: PgPool) {
-        let c = machine_claims("agent-idem");
-        let a = resolve_from_claims(&pool, &c).await.expect("first");
-        let b = resolve_from_claims(&pool, &c).await.expect("second");
-        assert_eq!(a.id, b.id, "same agent profile on second sight");
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn revoked_machine_is_rejected_distinguishably(pool: PgPool) {
+        // Seed a profile + registration, then revoke it.
+        let profile_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, 'agent-revoked', 'agent-revoked', NULL, '{}')",
+            profile_id,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed profile");
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id, revoked_at) \
+             VALUES ('dead-client', 'test', $1, $1, now())",
+            profile_id,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed revoked client");
 
-        let n = sqlx::query_scalar!(
-            "SELECT COUNT(*) FROM kb_profile_auth_links WHERE auth_provider_user_id = $1",
-            "agent-idem",
+        let err = resolve_from_claims(&pool, &machine_claims("dead-client"))
+            .await
+            .expect_err("a revoked machine must be rejected");
+
+        match err {
+            ApiError::Unauthorized(msg) => {
+                assert!(
+                    msg.contains("dead-client"),
+                    "message names the client id: {msg}"
+                );
+                assert!(
+                    msg.contains("revoked"),
+                    "revoked must be distinguishable from unregistered (D7): {msg}"
+                );
+            }
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn registered_machine_resolves_to_its_profile(pool: PgPool) {
+        let profile_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, 'agent-live', 'agent-live', NULL, '{}')",
+            profile_id,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed profile");
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+             VALUES ('live-client', 'test', $1, $1)",
+            profile_id,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed client");
+
+        let profile = resolve_from_claims(&pool, &machine_claims("live-client"))
+            .await
+            .expect("registered machine resolves");
+        assert_eq!(profile.id, profile_id);
+
+        // The gate touched last_seen_at.
+        let seen = sqlx::query_scalar!(
+            "SELECT last_seen_at FROM kb_machine_clients WHERE client_id = 'live-client'"
         )
         .fetch_one(&pool)
         .await
-        .expect("count");
-        assert_eq!(n, Some(1), "exactly one link, no duplicate");
+        .expect("read last_seen");
+        assert!(seen.is_some(), "the gate records liveness");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn machine_resolution_is_idempotent(pool: PgPool) {
+        let profile_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, 'agent-idem', 'agent-idem', NULL, '{}')",
+            profile_id,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed profile");
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+             VALUES ('agent-idem', 'test', $1, $1)",
+            profile_id,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed client");
+
+        let c = machine_claims("agent-idem");
+        let first = resolve_from_claims(&pool, &c).await.expect("first");
+        let second = resolve_from_claims(&pool, &c).await.expect("second");
+        assert_eq!(first.id, second.id, "resolution is stable across calls");
     }
 
     async fn seed_bare_profile(pool: &PgPool, handle: &str) -> Uuid {
@@ -772,9 +919,11 @@ mod tests {
         let handle = "concurrent-provision";
         let profile_id = seed_bare_profile(&pool, handle).await;
 
+        let mut conn_a = pool.acquire().await.expect("acquire conn a");
+        let mut conn_b = pool.acquire().await.expect("acquire conn b");
         let (a, b) = tokio::join!(
-            provision_profile_entities(&pool, profile_id, handle),
-            provision_profile_entities(&pool, profile_id, handle),
+            provision_profile_entities(&mut conn_a, profile_id, handle),
+            provision_profile_entities(&mut conn_b, profile_id, handle),
         );
         a.expect("first concurrent provision");
         b.expect("second concurrent provision");
@@ -793,10 +942,11 @@ mod tests {
         let handle = "repeat-provision";
         let profile_id = seed_bare_profile(&pool, handle).await;
 
-        provision_profile_entities(&pool, profile_id, handle)
+        let mut conn = pool.acquire().await.expect("acquire conn");
+        provision_profile_entities(&mut conn, profile_id, handle)
             .await
             .expect("first provision");
-        provision_profile_entities(&pool, profile_id, handle)
+        provision_profile_entities(&mut conn, profile_id, handle)
             .await
             .expect("second provision");
 

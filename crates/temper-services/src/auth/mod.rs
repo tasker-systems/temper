@@ -126,8 +126,48 @@ mod tests {
         }
     }
 
+    /// Register `client_id` against a fresh agent profile. Since G3 Phase A a machine
+    /// principal must be registered before it can authenticate at all, so the seam this
+    /// module guards is only reachable from the far side of the gate.
+    async fn register_machine(pool: &PgPool, client_id: &str) -> uuid::Uuid {
+        let profile_id = uuid::Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, $2, $2, NULL, '{}')",
+            profile_id,
+            format!("agent-{client_id}"),
+        )
+        .execute(pool)
+        .await
+        .expect("seed agent profile");
+        sqlx::query!(
+            "INSERT INTO kb_profile_auth_links \
+               (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at) \
+             VALUES ($1, $2, $3, $4, NULL, false, true, now())",
+            uuid::Uuid::now_v7(),
+            profile_id,
+            MACHINE_PROVIDER_TAG,
+            client_id,
+        )
+        .execute(pool)
+        .await
+        .expect("seed agent auth link");
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+             VALUES ($1, 'test', $2, $2)",
+            client_id,
+            profile_id,
+        )
+        .execute(pool)
+        .await
+        .expect("seed registration");
+        profile_id
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
-    async fn machine_principal_rides_ordinary_gate_rails(pool: PgPool) {
+    async fn registered_machine_principal_rides_ordinary_gate_rails(pool: PgPool) {
+        register_machine(&pool, "agent-rails").await;
+
         let c = machine_claims("agent-rails");
         let authed = authenticate(&pool, &c).await.expect("authenticate machine");
         assert!(authed.profile.is_active);
@@ -139,6 +179,19 @@ mod tests {
         require_system_access(&pool, &authed)
             .await
             .expect("open-mode machine should be system-authorized");
+    }
+
+    /// The gate is enforced in `temper-services`, so it binds every caller of
+    /// `authenticate` — both surfaces — rather than one surface's middleware (D4).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unregistered_machine_principal_never_reaches_the_gate_rails(pool: PgPool) {
+        let err = authenticate(&pool, &machine_claims("agent-unknown"))
+            .await
+            .expect_err("an unregistered machine must not authenticate");
+        assert!(
+            format!("{err:?}").contains("not registered"),
+            "rejection must say why: {err:?}"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

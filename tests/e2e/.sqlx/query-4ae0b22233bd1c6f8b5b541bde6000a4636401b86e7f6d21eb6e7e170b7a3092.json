@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT facet_set($1,$2,$3,$4)",
+  "query": "SELECT relationship_assert($1,$2,$3,$4,$5)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "facet_set",
+        "name": "relationship_assert",
         "type_info": "Uuid"
       }
     ],
@@ -14,6 +14,7 @@
         "Jsonb",
         "Uuid",
         "Jsonb",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -21,5 +22,5 @@
       null
     ]
   },
-  "hash": "155293593267a6cac22cf40c29d1009ddc4a597d35dde0647f483f1ffbaafba4"
+  "hash": "4ae0b22233bd1c6f8b5b541bde6000a4636401b86e7f6d21eb6e7e170b7a3092"
 }
