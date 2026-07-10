@@ -37,7 +37,7 @@ use std::process::{Command, Stdio};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::version::VERSION;
-use crate::error::{Result, TemperError};
+use crate::error::{CliError, CliResult, Result, TemperError};
 use crate::format::OutputFormat;
 
 /// The canonical installer, embedded at build time. `temper update` pipes
@@ -99,11 +99,16 @@ struct UpdateReport<'a> {
 }
 
 /// `temper update [--check] [--version vX.Y.Z] [--force]`.
-pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat) -> Result<()> {
+///
+/// Returns [`CliResult`]: install-specific failures surface as
+/// [`CliError::Install`] (kept out of the shared `TemperError` so server crates
+/// never carry install semantics); core failures — version resolution, render —
+/// propagate through `?` as [`CliError::Temper`].
+pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat) -> CliResult<()> {
     // 1. Provenance first: a cargo build has no install dir to swap.
     let install_dir = match detect_install_layout()? {
         InstallLayout::CurlScript { dir } => dir,
-        InstallLayout::Cargo => return Err(TemperError::Config(CARGO_REFUSAL.to_string())),
+        InstallLayout::Cargo => return Err(CliError::Install(CARGO_REFUSAL.to_string())),
     };
 
     // 2. Resolve the target tag. An explicit --version pin is a pass-through
@@ -266,7 +271,7 @@ fn resolve_latest_tag() -> Result<String> {
 /// exactly where the running binary lives. The installer's own progress
 /// chatter is redirected to stderr so this command's stdout carries only the
 /// final machine-readable report.
-fn run_installer(install_dir: &Path, tag: &str) -> Result<()> {
+fn run_installer(install_dir: &Path, tag: &str) -> CliResult<()> {
     crate::output::progress(format!("Updating to {tag}…\n"));
 
     let mut child = Command::new("sh")
@@ -281,24 +286,24 @@ fn run_installer(install_dir: &Path, tag: &str) -> Result<()> {
         .stdout(installer_stdout())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| TemperError::Install(format!("spawning installer shell: {e}")))?;
+        .map_err(|e| CliError::Install(format!("spawning installer shell: {e}")))?;
 
     child
         .stdin
         .take()
-        .ok_or_else(|| TemperError::Install("installer stdin unavailable".into()))?
+        .ok_or_else(|| CliError::Install("installer stdin unavailable".into()))?
         .write_all(INSTALL_SH.as_bytes())
-        .map_err(|e| TemperError::Install(format!("writing installer script: {e}")))?;
+        .map_err(|e| CliError::Install(format!("writing installer script: {e}")))?;
 
     let status = child
         .wait()
-        .map_err(|e| TemperError::Install(format!("waiting on installer: {e}")))?;
+        .map_err(|e| CliError::Install(format!("waiting on installer: {e}")))?;
 
     if !status.success() {
         // The installer prints the true post-failure state to stderr (untouched,
         // restored, or — worst case — where the backup survives), so relay
         // rather than assert an intactness we can't verify from here.
-        return Err(TemperError::Install(format!(
+        return Err(CliError::Install(format!(
             "installer exited with {status}; see the installer output above for \
              the state of your install"
         )));
