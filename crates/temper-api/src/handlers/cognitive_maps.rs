@@ -12,6 +12,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::{access_service, cogmap_service, materialize_service};
@@ -28,7 +29,7 @@ use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
 };
 use temper_workflow::operations::{
-    Backend, CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap, Surface,
+    Backend, CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap,
 };
 
 /// Query params for the shape read. `lens` is optional (omit → all lenses).
@@ -56,6 +57,7 @@ pub struct ShapeQuery {
 pub async fn reconcile(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(cogmap_id): Path<Uuid>,
     Query(act_in): Query<temper_core::types::authorship::ActInput>,
     Json(request): Json<ReconcileCogmapRequest>,
@@ -76,7 +78,7 @@ pub async fn reconcile(
         cogmap_id: CogmapId::from(cogmap_id),
         request,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
@@ -101,6 +103,7 @@ pub async fn reconcile(
 pub async fn genesis(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(request): Json<CreateCogmapRequest>,
 ) -> ApiResult<Json<CreateCogmapOutcome>> {
     // Genesis is open to any authenticated profile. The reserved-id guard and the creator-grant live
@@ -110,7 +113,7 @@ pub async fn genesis(
 
     let cmd = CreateCognitiveMap {
         request,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), profile_id);
     let out = backend
@@ -202,6 +205,7 @@ pub async fn materialize_delta(
 pub async fn materialize(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(cogmap_id): Path<Uuid>,
     Json(req): Json<MaterializeRequest>,
 ) -> ApiResult<Json<MaterializeAck>> {
@@ -209,7 +213,7 @@ pub async fn materialize(
     let cmd = MaterializeOnThreshold {
         cogmap: CogmapId::from(cogmap_id),
         threshold: req.threshold,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend

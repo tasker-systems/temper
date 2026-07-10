@@ -16,6 +16,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::state::AppState;
@@ -25,7 +26,7 @@ use temper_core::types::invocation::{InvocationSummary, InvocationView};
 use temper_core::types::invocation_requests::{
     CloseInvocationRequest, InvocationAck, OpenInvocationRequest,
 };
-use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation, Surface};
+use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation};
 
 /// Query params for the list read. Both filters are optional (omit → unfiltered).
 #[derive(Debug, Deserialize)]
@@ -48,6 +49,7 @@ pub struct ListQuery {
 pub async fn open(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(req): Json<OpenInvocationRequest>,
 ) -> ApiResult<Json<InvocationAck>> {
     // Auth-before-write lives inside DbBackend::open_invocation (check_can_read_cogmap) — just dispatch.
@@ -55,7 +57,7 @@ pub async fn open(
         trigger_kind: req.trigger_kind,
         originating_cogmap: CogmapId::from(req.originating_cogmap),
         parent_cogmap: req.parent_cogmap.map(CogmapId::from),
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.open_invocation(cmd).await.map_err(ApiError::from)?;
@@ -81,6 +83,7 @@ pub async fn open(
 pub async fn close(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(id): Path<Uuid>,
     Json(req): Json<CloseInvocationRequest>,
 ) -> ApiResult<StatusCode> {
@@ -90,7 +93,7 @@ pub async fn close(
         invocation: id,
         disposition: req.disposition,
         outcome: req.outcome,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     backend

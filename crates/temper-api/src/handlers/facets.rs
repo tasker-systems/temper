@@ -3,12 +3,13 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_core::types::facet_requests::{FacetAck, FacetSetRequest};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::{Backend, SetFacet, Surface};
+use temper_workflow::operations::{Backend, SetFacet};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ use temper_workflow::operations::{Backend, SetFacet, Surface};
 pub async fn set_facet(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(req): Json<FacetSetRequest>,
 ) -> ApiResult<Json<FacetAck>> {
     let act = req.act.into_act_context().map_err(ApiError::from)?;
@@ -37,7 +39,7 @@ pub async fn set_facet(
         values: req.values,
         weight: req.weight,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.set_facet(cmd).await.map_err(ApiError::from)?;

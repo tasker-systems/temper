@@ -4,6 +4,7 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::state::AppState;
@@ -12,7 +13,7 @@ use temper_core::context_ref::parse_context_ref;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_core::types::ingest::{IngestPayload, SegmentedBeginResponse};
-use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface, UpdateResource};
+use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::ResourceRow;
 
@@ -53,6 +54,7 @@ impl IntoResponse for IngestCreateResponse {
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<IngestCreateResponse> {
     let profile_id = ProfileId::from(auth.0.profile.id);
@@ -142,7 +144,7 @@ pub async fn create(
         chunks_packed: payload.chunks_packed,
         content_hash: payload.content_hash,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
 
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
@@ -178,6 +180,7 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
@@ -222,7 +225,7 @@ pub async fn update(
         move_to: None,
         context_ref: None,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;

@@ -15,13 +15,14 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::state::AppState;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::{AppendBlockPayload, BlocksResponse, FinalizePayload};
-use temper_workflow::operations::{Backend, Surface};
+use temper_workflow::operations::Backend;
 
 #[utoipa::path(
     post,
@@ -39,12 +40,13 @@ use temper_workflow::operations::{Backend, Surface};
 pub async fn append_block_handler(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<AppendBlockPayload>,
 ) -> ApiResult<Json<BlocksResponse>> {
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
-        .append_block(ResourceId::from(resource_id), payload, Surface::ApiHttp)
+        .append_block(ResourceId::from(resource_id), payload, surface)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(out.value))
@@ -66,12 +68,13 @@ pub async fn append_block_handler(
 pub async fn finalize_handler(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<FinalizePayload>,
 ) -> ApiResult<StatusCode> {
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     backend
-        .finalize_ingest(ResourceId::from(resource_id), payload, Surface::ApiHttp)
+        .finalize_ingest(ResourceId::from(resource_id), payload, surface)
         .await
         .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)

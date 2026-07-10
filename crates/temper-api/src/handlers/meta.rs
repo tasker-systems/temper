@@ -3,12 +3,13 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_workflow::operations::{Backend, Surface, UpdateResource};
+use temper_workflow::operations::{Backend, UpdateResource};
 use temper_workflow::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
 use temper_workflow::types::resource::ResourceRow;
 
@@ -55,6 +56,7 @@ pub async fn get_meta(
 pub async fn update_meta(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<MetaUpdatePayload>,
 ) -> ApiResult<Json<ResourceRow>> {
@@ -74,7 +76,7 @@ pub async fn update_meta(
         move_to: None,
         context_ref: None,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
