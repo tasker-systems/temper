@@ -11,7 +11,8 @@
 //! 2. **Existing profiles** — the additive backfill migration, executed here verbatim.
 //!
 //! The wire-level assertion (an `X-Temper-Surface: sdk` request attributing to `<handle>@sdk`)
-//! belongs to P2 — no client can send the marker yet. What P1 owes is that the entity resolves.
+//! landed in P2 and lives in `surface_attribution_e2e.rs`. What this file owes is that the
+//! entity resolves at all.
 
 mod common;
 
