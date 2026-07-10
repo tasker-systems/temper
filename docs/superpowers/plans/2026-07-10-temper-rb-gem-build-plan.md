@@ -132,18 +132,31 @@ Nothing generated yet. This task proves `bundle install` and `rspec` run green i
 **Interfaces:**
 - Produces: `Temper::VERSION` (String, SemVer). `Temper.configure { |c| ... }` with `c.base_url`, `c.device_id`. `Temper.config` returns the memoized `Temper::Configuration`.
 
-- [ ] **Step 1: Pin the Ruby version**
+- [ ] **Step 1: Pin the Ruby version, twice**
+
+**mise does not read `.ruby-version`** unless `idiomatic_version_file_enable_tools` names `ruby`, and that setting is an empty list by default (`mise settings get idiomatic_version_file_enable_tools` → `[]`). rbenv and `ruby/setup-ruby` read *only* `.ruby-version`. Neither file alone covers both, so both exist and must be kept equal.
 
 `clients/temper-rb/.ruby-version`:
 ```
 3.4.10
 ```
 
-Verify the interpreter resolves (mise reads `.ruby-version` with no extra config):
+`clients/temper-rb/mise.toml`:
+```toml
+# mise does NOT read `.ruby-version` unless `idiomatic_version_file_enable_tools`
+# names ruby, and that setting is empty by default. So the pin lives here for
+# mise, and in `.ruby-version` for rbenv and `ruby/setup-ruby`. Keep them equal.
+[tools]
+ruby = "3.4.10"
+```
+
+Verify the interpreter resolves:
 ```bash
-cd clients/temper-rb && mise exec ruby@3.4.10 -- ruby -v
+cd clients/temper-rb && mise trust && mise exec -- ruby -v
 ```
 Expected: `ruby 3.4.10 (...) [arm64-darwin25]` (or the local arch).
+
+> On macOS, `mise install ruby@3.4.10` fails **late** — after ~5 minutes of compiling — with `psych: Could not be configured` if libyaml is absent. `brew install libyaml` first.
 
 - [ ] **Step 2: Write the gemspec**
 
@@ -469,7 +482,7 @@ git status --porcelain | grep -vc "^?? lib/temper/generated" # 0 -- nothing else
 
 - [ ] **Step 4: Write the failing contract spec**
 
-`clients/temper-rb/spec/generated_contract_spec.rb`:
+`clients/temper-rb/spec/temper/generated_spec.rb` (the path RuboCop's `RSpec/SpecFilePathFormat` requires for `describe Temper::Generated`):
 ```ruby
 # frozen_string_literal: true
 
@@ -512,6 +525,8 @@ Expected: FAIL — `uninitialized constant Temper::CONTRACT_VERSION`.
 
 - [ ] **Step 6: Wire the generated core into the skin**
 
+**`version.rb` must NOT reference `Generated::VERSION`.** `temper-rb.gemspec` loads it via `require_relative` to read `spec.version`, at which point nothing generated is on the load path — `gem build` would raise `NameError`. Leave `version.rb` standalone and define the alias in `lib/temper.rb`, after the generated core loads.
+
 `clients/temper-rb/lib/temper/version.rb`:
 ```ruby
 # frozen_string_literal: true
@@ -519,22 +534,29 @@ Expected: FAIL — `uninitialized constant Temper::CONTRACT_VERSION`.
 module Temper
   # The gem's own SemVer. Independent of the API contract by design (D16):
   # a gem version and an API version answer different questions.
+  #
+  # This file is loaded by temper-rb.gemspec via require_relative, so it must
+  # stand alone: no reference to Temper::Generated, which is not loaded then.
+  # CONTRACT_VERSION is defined in lib/temper.rb, after the generated core.
   VERSION = '0.1.0'
-
-  # The contract this gem was generated against. Written by `rake generate`
-  # into the generated tree; aliased here so callers never reach into
-  # Temper::Generated for it.
-  CONTRACT_VERSION = Generated::VERSION
 end
 ```
 
 Append to `clients/temper-rb/lib/temper.rb`, replacing the trailing `require 'temper/version'`:
 ```ruby
+# `module Temper` must exist before anything generated is required: every
+# generated file opens with the compact form `module Temper::Generated`.
 require 'temper/generated'
 require 'temper/version'
+
+# The contract this gem was generated against. `rake generate` passes
+# openapi.json's info.version to the generator as `gemVersion`, so the generated
+# tree already carries it -- we alias it rather than reasserting it, and callers
+# never reach into Temper::Generated for it.
+Temper::CONTRACT_VERSION = Temper::Generated::VERSION
 ```
 
-> Order is load-bearing twice over: `module Temper` must exist before `temper/generated` (compact-form `module Temper::Generated`), and `Temper::Generated::VERSION` must exist before `temper/version` reads it.
+> A constant assignment, not a reopened `module Temper` block — RuboCop's `Style/OneClassPerFile` rejects the second top-level module definition in one file.
 
 - [ ] **Step 7: Run the spec to verify it passes**
 
@@ -548,13 +570,19 @@ Expected: PASS — 7 examples, 0 failures.
 ```bash
 cd clients/temper-rb && bundle exec rake drift
 ```
-Expected: exit 0, no diff. Now prove it **bites** — a drift gate that cannot fail is decoration:
+Expected: exit 0, no diff.
+
+Now prove it **bites** — a drift gate that cannot fail is decoration. The invariant is *"the **committed** generated tree equals a fresh generation from `openapi.json`."* So the tamper must be **staged**. Tampering the working tree alone proves nothing: `drift` depends on `generate`, which rewrites the file before `git diff` ever runs, and the gate correctly reports clean.
+
 ```bash
 printf '\n# tamper\n' >> lib/temper/generated/version.rb
-bundle exec rake drift; echo "exit=$?"   # expect non-zero
-git checkout -- lib/temper/generated/version.rb
+git add lib/temper/generated/version.rb        # the tamper is now "committed"
+bundle exec rake drift; echo "exit=$?"          # expect non-zero, diff shows -# tamper
+git add lib/temper/generated/version.rb        # regeneration already cleaned the worktree
+bundle exec rake drift; echo "exit=$?"          # expect 0 again
 ```
-Expected: the tampered run exits non-zero and prints the diff.
+
+> This is the same trap P5 documented: *deleting* an `operation_id` does not fail the uniqueness test, because utoipa falls back to the fn name. Falsify the invariant, don't remove the thing satisfying it.
 
 - [ ] **Step 9: Commit**
 
