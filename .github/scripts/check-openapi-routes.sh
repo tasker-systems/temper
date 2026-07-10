@@ -7,7 +7,7 @@
 # `.routes(routes!(handler))`, which registers the axum route AND collects its
 # `#[utoipa::path]` into the spec. A route mounted with plain `.route(...)` is
 # axum-only: it never enters the OpenAPI contract. That is correct for exactly
-# six operator-only / server-to-server surfaces (the allowlist below) and a bug
+# nine operator-only / server-to-server surfaces (the allowlist below) and a bug
 # for anything else — an undocumented public route that the emitted openapi.json
 # silently omits.
 #
@@ -38,6 +38,9 @@ ALLOWLIST='/api/access/admin/requests
 /api/access/admin/requests/{id}
 /api/access/admin/settings
 /api/access/admin/promote
+/api/machine-clients
+/api/machine-clients/{id}
+/api/machine-clients/{id}/rebind
 /internal/saml/reconcile
 /api/embed/dispatch'
 
