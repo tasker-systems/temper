@@ -437,7 +437,12 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
         .unwrap();
     }
 
-    // Legacy inline recipe (pre-swap), inlined here as the parity oracle.
+    // Legacy inline recipe, inlined here as the parity oracle. It deliberately stays on
+    // `plainto_tsquery` even though `fts_search` now parses with `websearch_to_tsquery` (issue
+    // #356): for the plain unquoted fixture queries below the two parse identically, so this
+    // assertion doubles as the backward-compatibility proof — the websearch swap changes nothing
+    // for unquoted input. (Quoted-phrase behavior — where they diverge — is covered by
+    // `fts_search_supports_quoted_phrase`.)
     async fn inline_fts(pool: &sqlx::PgPool, principal: Uuid, q: &str) -> Vec<Uuid> {
         let rows = sqlx::query(
             "WITH doc AS (
@@ -480,6 +485,100 @@ async fn fts_search_parity_with_inline_recipe(pool: sqlx::PgPool) {
             "stored-index fts_search set parity for query {q:?}"
         );
     }
+}
+
+/// Issue #356: `websearch_to_tsquery` makes exact phrases expressible via `"quotes"`, plus `OR`
+/// and `-negation`, while leaving plain unquoted input identical to `plainto_tsquery`.
+///
+/// Two resources share both terms `quench` and `hardening`, but only one has them ADJACENT.
+/// A quoted-phrase query must match only the adjacent one (the whole point — `plainto_tsquery`
+/// would have ANDed the terms and matched both). Unquoted input still matches both. Negation
+/// (`-term`) excludes a resource carrying the negated term.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fts_search_supports_quoted_phrase(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "phrase").await;
+
+    let mk = |title: &'static str, body: &'static str, uri: &'static str| {
+        let pool = pool.clone();
+        async move {
+            writes::create_resource(
+                &pool,
+                writes::CreateParams {
+                    sources: vec![],
+                    title,
+                    origin_uri: uri,
+                    body,
+                    doc_type: "concept",
+                    home: AnchorRef::context(home),
+                    owner,
+                    originator: owner,
+                    emitter,
+                    properties: &[],
+                    chunks: None,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid()
+        }
+    };
+
+    // Adjacent: "quench hardening" appears verbatim, terms next to each other.
+    let adjacent = mk(
+        "Doc adjacent",
+        "the quench hardening process strengthens steel",
+        "temper://phrase/adjacent",
+    )
+    .await;
+    // Split: both terms present but far apart (never adjacent) — and carries the extra term
+    // `billet` used by the negation assertion below.
+    let split = mk(
+        "Doc split",
+        "quench the billet, then begin hardening it slowly",
+        "temper://phrase/split",
+    )
+    .await;
+
+    let ids = |hits: Vec<temper_substrate::ids::ResourceId>| -> Vec<Uuid> {
+        hits.into_iter().map(|id| id.uuid()).collect()
+    };
+
+    // Quoted phrase → only the adjacent resource (the defect this issue fixes).
+    let quoted = ids(readback::fts_search(&pool, owner, "\"quench hardening\"")
+        .await
+        .unwrap());
+    assert!(
+        quoted.contains(&adjacent),
+        "quoted phrase matches the resource with adjacent terms"
+    );
+    assert!(
+        !quoted.contains(&split),
+        "quoted phrase EXCLUDES the resource whose terms are non-adjacent (plainto_tsquery would not have)"
+    );
+
+    // Unquoted → both (backward-compatible AND semantics, unchanged from plainto_tsquery).
+    let unquoted = ids(readback::fts_search(&pool, owner, "quench hardening")
+        .await
+        .unwrap());
+    assert!(
+        unquoted.contains(&adjacent) && unquoted.contains(&split),
+        "unquoted query still matches both resources (parity with plainto_tsquery)"
+    );
+
+    // Negation → `hardening -billet` keeps the adjacent doc, drops the one carrying `billet`.
+    let negated = ids(readback::fts_search(&pool, owner, "hardening -billet")
+        .await
+        .unwrap());
+    assert!(
+        negated.contains(&adjacent),
+        "negation keeps a resource lacking the negated term"
+    );
+    assert!(
+        !negated.contains(&split),
+        "negation drops the resource carrying the negated term `billet`"
+    );
 }
 
 /// A resource can be homed directly to a cogmap (not a context). The L0 reserved cogmap

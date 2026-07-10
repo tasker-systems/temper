@@ -588,6 +588,7 @@ pub async fn search_select(
             limit: clamped.limit,
             offset: params.offset.unwrap_or(0),
             scope_ids: scope_ids.as_deref(),
+            seed_only: params.seed_only,
         },
     )
     .await

@@ -661,6 +661,12 @@ pub async fn find_edge(
 /// search read floor. Reads the stored `kb_resource_search_index` tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
 ///
+/// The query is parsed with `websearch_to_tsquery` (issue #356) — mirroring the Surface A
+/// `search_fts_candidates` SQL function — so `"quoted phrases"`, `OR`, and `-negation` are
+/// expressible. Plain unquoted input parses identically to `plainto_tsquery`, so this is fully
+/// backward-compatible (the `fts_search_parity_with_inline_recipe` test keeps a `plainto_tsquery`
+/// oracle precisely to pin that equivalence).
+///
 /// Returns the preserved resource id (not `origin_uri`): `origin_uri` is NOT unique (empty for
 /// CLI/agent-created resources — 166/1214 in the production corpus), so an origin_uri-keyed result
 /// collapses every empty-`origin_uri` match onto one indistinguishable handle and the caller cannot
@@ -702,8 +708,8 @@ pub async fn fts_search(
            JOIN kb_resources r             ON r.id = si.resource_id
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
           WHERE r.is_active
-            AND si.search_vector @@ plainto_tsquery('english', $2)
-          ORDER BY ts_rank(si.search_vector, plainto_tsquery('english', $2)) DESC",
+            AND si.search_vector @@ websearch_to_tsquery('english', $2)
+          ORDER BY ts_rank(si.search_vector, websearch_to_tsquery('english', $2)) DESC",
     )
     .bind(principal)
     .bind(query)
@@ -1094,6 +1100,9 @@ pub struct UnifiedSearchQuery<'a> {
     pub limit: i64,
     pub offset: i64,
     pub scope_ids: Option<&'a [Uuid]>,
+    /// When true AND `seed_ids` is non-empty, the auto-seed union (blend top-N) is suppressed so the
+    /// explicit seeds alone define the graph neighborhood (issue #357). No effect with no seeds.
+    pub seed_only: bool,
 }
 
 /// Surface A general search (Beat 2): one composed SQL statement (`unified_search`) blending FTS +
@@ -1104,7 +1113,7 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     let edge_types: Vec<String> = q.edge_types.to_vec();
     let hits = sqlx::query_as::<_, ScoredHit>(
         "SELECT resource_id, fts_score, vector_score, graph_score, combined_score
-           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[])",
+           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[], $13)",
     )
     .bind(q.principal)
     .bind(q.query)
@@ -1118,6 +1127,7 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     .bind(q.limit)
     .bind(q.offset)
     .bind(q.scope_ids)     // $12 — Option<&[Uuid]> binds to uuid[] / NULL
+    .bind(q.seed_only)     // $13 — suppress the auto-seed union when explicit seeds are given
     .fetch_all(pool)
     .await?;
     Ok(hits)

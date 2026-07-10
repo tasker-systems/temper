@@ -71,6 +71,10 @@ pub struct SearchParams {
     /// Whether to expand results via graph edges (default true).
     #[serde(default = "default_graph_expand")]
     pub graph_expand: bool,
+    /// Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed
+    /// union (issue #357). No effect unless `seed_ids` is non-empty. Default false.
+    #[serde(default)]
+    pub seed_only: bool,
     /// Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only).
     /// Mutually exclusive with `context_ref`. When set, the corpus is the map's homed
     /// participants the principal can see.
@@ -103,6 +107,7 @@ impl Default for SearchParams {
             edge_types: None,
             graph_depth: None,
             graph_expand: default_graph_expand(),
+            seed_only: false,
             cogmap_id: None,
             wayfind: false,
             lens_id: None,

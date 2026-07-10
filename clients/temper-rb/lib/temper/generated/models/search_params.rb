@@ -58,6 +58,9 @@ module Temper::Generated
     # Explicit seed resource IDs for graph expansion.
     attr_accessor :seed_ids
 
+    # Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed union (issue #357). No effect unless `seed_ids` is non-empty. Default false.
+    attr_accessor :seed_only
+
     # Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the principal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`.
     attr_accessor :wayfind
 
@@ -78,6 +81,7 @@ module Temper::Generated
         :'regions' => :'regions',
         :'search_config' => :'search_config',
         :'seed_ids' => :'seed_ids',
+        :'seed_only' => :'seed_only',
         :'wayfind' => :'wayfind'
       }
     end
@@ -109,6 +113,7 @@ module Temper::Generated
         :'regions' => :'Integer',
         :'search_config' => :'String',
         :'seed_ids' => :'Array<String>',
+        :'seed_only' => :'Boolean',
         :'wayfind' => :'Boolean'
       }
     end
@@ -209,6 +214,10 @@ module Temper::Generated
         end
       end
 
+      if attributes.key?(:'seed_only')
+        self.seed_only = attributes[:'seed_only']
+      end
+
       if attributes.key?(:'wayfind')
         self.wayfind = attributes[:'wayfind']
       end
@@ -248,6 +257,7 @@ module Temper::Generated
           regions == o.regions &&
           search_config == o.search_config &&
           seed_ids == o.seed_ids &&
+          seed_only == o.seed_only &&
           wayfind == o.wayfind
     end
 
@@ -260,7 +270,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, context_ref, doc_type, edge_types, embedding, graph_depth, graph_expand, lens_id, limit, offset, query, regions, search_config, seed_ids, wayfind].hash
+      [cogmap_id, context_ref, doc_type, edge_types, embedding, graph_depth, graph_expand, lens_id, limit, offset, query, regions, search_config, seed_ids, seed_only, wayfind].hash
     end
 
     # Builds the object from hash

@@ -43,6 +43,7 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
         edge_types: args.edge_types.clone(),
         depth: args.depth,
         no_graph: args.no_graph,
+        seed_only: args.seed_only,
     })?;
     let response = runtime::with_client(|client| {
         Box::pin(async move { search_actions::search_api(client, params).await })

@@ -122,6 +122,62 @@ async fn fts_candidates_normalized_and_scoped(pool: sqlx::PgPool) {
     );
 }
 
+/// Issue #356: `search_fts_candidates` now parses with `websearch_to_tsquery`, so a quoted phrase
+/// forces adjacency. Two resources share both terms; only the one with them ADJACENT is a candidate
+/// for the quoted query, while the unquoted query still surfaces both (backward compatible).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn fts_candidates_supports_quoted_phrase(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "phrase").await;
+    let adjacent = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Doc adjacent",
+        "the quench hardening process strengthens steel",
+        "temper://phrase/adjacent",
+    )
+    .await;
+    let split = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "Doc split",
+        "quench the billet, then begin hardening it slowly",
+        "temper://phrase/split",
+    )
+    .await;
+
+    // Quoted phrase → only the adjacent resource is a candidate.
+    let quoted: Vec<Uuid> = fts_candidates(&pool, owner.uuid(), "\"quench hardening\"")
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        quoted.contains(&adjacent),
+        "quoted phrase yields the adjacent-terms resource as a candidate"
+    );
+    assert!(
+        !quoted.contains(&split),
+        "quoted phrase excludes the non-adjacent resource (plainto_tsquery would not have)"
+    );
+
+    // Unquoted → both (AND semantics preserved).
+    let unquoted: Vec<Uuid> = fts_candidates(&pool, owner.uuid(), "quench hardening")
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        unquoted.contains(&adjacent) && unquoted.contains(&split),
+        "unquoted query surfaces both resources (backward compatible)"
+    );
+}
+
 // ── Vector candidates ─────────────────────────────────────────────────────────────────────────────
 
 /// One block/chunk with a caller-chosen 768-d embedding (ONNX-free — structural).
@@ -444,7 +500,9 @@ async fn graph_expand_decay_and_max_over_paths(pool: sqlx::PgPool) {
 
     let got = graph_expand(&pool, owner.uuid(), &[a.uuid()], 2, &[], 0.5).await;
     let score = |id: Uuid| got.iter().find(|(g, _)| *g == id).map(|(_, s)| *s);
-    assert_eq!(score(a.uuid()), Some(1.0), "seed scored 1.0 at hop 0");
+    // Issue #357: the seed no longer self-scores 1.0 at hop 0 — it is absent from the output unless a
+    // genuine ≥1-hop path reaches it (here nothing does; the walk never revisits a path node).
+    assert_eq!(score(a.uuid()), None, "seed gets no hop-0 self-score");
     assert!(
         (score(b.uuid()).unwrap() - 0.5).abs() < 1e-5,
         "hop1: γ^1·w = 0.5"
@@ -578,6 +636,7 @@ fn q<'a>(principal: ProfileId) -> UnifiedSearchQuery<'a> {
         limit: 10,
         offset: 0,
         scope_ids: None,
+        seed_only: false,
     }
 }
 
@@ -804,4 +863,171 @@ async fn scope_ids_restricts_corpus(pool: sqlx::PgPool) {
     let ids: Vec<uuid::Uuid> = hits.iter().map(|h| h.resource_id.uuid()).collect();
     assert!(ids.contains(&id_a), "in-scope A should be present");
     assert!(!ids.contains(&id_b), "out-of-scope B must be filtered");
+}
+
+/// Issue #357 Option 2: `seed_only` suppresses the auto-seed union so only the caller's explicit
+/// seeds define the graph neighborhood.
+///
+/// `core` and `other` both match the text (so both are auto-seeds); each has a text-mismatching
+/// neighbor edged to it. With `seed_ids=[core]`:
+///   • seed_only=false → seeds = [core] ∪ auto-seeds{core, other} → BOTH neighbors surface.
+///   • seed_only=true  → seeds = [core] only → only core's neighbor surfaces; other's neighbor does not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn seed_only_suppresses_auto_seed_union(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "so").await;
+    // Two text-matching resources (both become auto-seeds), each with a non-matching neighbor.
+    let core = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "core",
+        "tempering core",
+        "temper://so/core",
+    )
+    .await;
+    let core_nbr = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "cn",
+        "unrelated alpha",
+        "temper://so/cn",
+    )
+    .await;
+    let other = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "other",
+        "tempering other",
+        "temper://so/other",
+    )
+    .await;
+    let other_nbr = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "on",
+        "unrelated beta",
+        "temper://so/on",
+    )
+    .await;
+    edge(
+        &pool,
+        ResourceId::from(core),
+        ResourceId::from(core_nbr),
+        home,
+        emitter,
+        EdgeKind::LeadsTo,
+        1.0,
+    )
+    .await;
+    edge(
+        &pool,
+        ResourceId::from(other),
+        ResourceId::from(other_nbr),
+        home,
+        emitter,
+        EdgeKind::LeadsTo,
+        1.0,
+    )
+    .await;
+
+    let seeds = [ResourceId::from(core)];
+    let run = |seed_only: bool| {
+        let pool = pool.clone();
+        async move {
+            let hits = readback::unified_search(
+                &pool,
+                UnifiedSearchQuery {
+                    query: Some("tempering"),
+                    seed_ids: &seeds,
+                    seed_only,
+                    ..q(owner)
+                },
+            )
+            .await
+            .unwrap();
+            hits.iter()
+                .map(|h| h.resource_id.uuid())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Auto-seed union active → both neighbors reached (core's AND other's).
+    let all = run(false).await;
+    assert!(
+        all.contains(&core_nbr),
+        "seed_only=false: core's neighbor surfaces"
+    );
+    assert!(
+        all.contains(&other_nbr),
+        "seed_only=false: the auto-seed `other`'s neighbor also surfaces (union active)"
+    );
+
+    // Seed-only → only core's neighborhood expands; other's neighbor is not pulled in.
+    let only = run(true).await;
+    assert!(
+        only.contains(&core_nbr),
+        "seed_only=true: core's neighbor still surfaces"
+    );
+    assert!(
+        !only.contains(&other_nbr),
+        "seed_only=true: the auto-seed union is suppressed, so other's neighbor is absent"
+    );
+}
+
+/// Issue #357 regression (e2e `search_context_ref_scopes_and_unknown_errors`): removing the hop-0
+/// self-score must NOT make an explicit seed vanish. A seed with NO FTS/vector signal (query and
+/// embedding both absent) still surfaces because it stays a candidate — but with graph_score 0, so it
+/// gets no +0.5 self-bonus (the whole point of the de-bias). Old behavior gave it graph_score 1.0.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn explicit_seed_surfaces_without_hop0_self_score(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "es").await;
+    // A lone resource, edged to nothing. It matches no query and has no embedding query below.
+    let anchor = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "anchor",
+        "anchor body",
+        "temper://es/anchor",
+    )
+    .await;
+    let seeds = [ResourceId::from(anchor)];
+
+    let hits = readback::unified_search(
+        &pool,
+        UnifiedSearchQuery {
+            query: None,     // no FTS signal
+            embedding: None, // no vector signal
+            seed_ids: &seeds,
+            graph_expand: true,
+            ..q(owner)
+        },
+    )
+    .await
+    .unwrap();
+
+    let hit = hits
+        .iter()
+        .find(|h| h.resource_id.uuid() == anchor)
+        .expect("the explicit seed still surfaces (candidate), even with no FTS/vector signal");
+    assert_eq!(
+        hit.graph_score, 0.0,
+        "the seed earns NO hop-0 self-score (was 1.0 before #357) — de-bias without vanishing"
+    );
+    assert_eq!(
+        hit.combined_score, 0.0,
+        "no signal at all ⇒ combined 0; present but unboosted"
+    );
 }

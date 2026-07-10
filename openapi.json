@@ -9330,6 +9330,10 @@
             },
             "description": "Explicit seed resource IDs for graph expansion."
           },
+          "seed_only": {
+            "type": "boolean",
+            "description": "Restrict graph expansion to the explicit `seed_ids` only, skipping the automatic top-N seed\nunion (issue #357). No effect unless `seed_ids` is non-empty. Default false."
+          },
           "wayfind": {
             "type": "boolean",
             "description": "Wayfind scope (Surface B Half 2): lens-driven region-salience discovery across the\nprincipal's visible maps. Mutually exclusive with `context_ref` and `cogmap_id`."
