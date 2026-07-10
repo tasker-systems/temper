@@ -1100,6 +1100,9 @@ pub struct UnifiedSearchQuery<'a> {
     pub limit: i64,
     pub offset: i64,
     pub scope_ids: Option<&'a [Uuid]>,
+    /// When true AND `seed_ids` is non-empty, the auto-seed union (blend top-N) is suppressed so the
+    /// explicit seeds alone define the graph neighborhood (issue #357). No effect with no seeds.
+    pub seed_only: bool,
 }
 
 /// Surface A general search (Beat 2): one composed SQL statement (`unified_search`) blending FTS +
@@ -1110,7 +1113,7 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     let edge_types: Vec<String> = q.edge_types.to_vec();
     let hits = sqlx::query_as::<_, ScoredHit>(
         "SELECT resource_id, fts_score, vector_score, graph_score, combined_score
-           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[])",
+           FROM unified_search($1, $2, $3::vector, $4::uuid[], $5, $6::text[], $7, $8, $9, $10::int, $11::int, $12::uuid[], $13)",
     )
     .bind(q.principal)
     .bind(q.query)
@@ -1124,6 +1127,7 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
     .bind(q.limit)
     .bind(q.offset)
     .bind(q.scope_ids)     // $12 — Option<&[Uuid]> binds to uuid[] / NULL
+    .bind(q.seed_only)     // $13 — suppress the auto-seed union when explicit seeds are given
     .fetch_all(pool)
     .await?;
     Ok(hits)

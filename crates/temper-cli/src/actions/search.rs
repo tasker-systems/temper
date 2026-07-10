@@ -42,6 +42,8 @@ pub struct CliSearchArgs<'a> {
     pub edge_types: Vec<String>,
     pub depth: Option<i32>,
     pub no_graph: bool,
+    /// Restrict graph expansion to the explicit `seed_ids`, skipping the auto-seed union (#357).
+    pub seed_only: bool,
 }
 
 /// Build a SearchParams from CLI arguments.
@@ -103,6 +105,7 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
         },
         graph_depth: args.depth,
         graph_expand: !args.no_graph,
+        seed_only: args.seed_only,
         ..SearchParams::default()
     })
 }
@@ -174,6 +177,7 @@ mod tests {
             edge_types: vec!["broader".into()],
             depth: Some(3),
             no_graph: false,
+            seed_only: false,
         };
         let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.query.as_deref(), Some("hello"));
@@ -203,9 +207,42 @@ mod tests {
             edge_types: vec![],
             depth: None,
             no_graph: true,
+            seed_only: false,
         };
         let params = build_search_params(args).expect("build_search_params");
         assert!(!params.graph_expand);
+    }
+
+    #[test]
+    fn test_build_search_params_carries_seed_only() {
+        let base = |seed_only: bool| CliSearchArgs {
+            query: "x",
+            embedding: None,
+            context: None,
+            cogmap: None,
+            wayfind: false,
+            lens: None,
+            regions: None,
+            doc_type: None,
+            limit: None,
+            seed_ids: vec![],
+            edge_types: vec![],
+            depth: None,
+            no_graph: false,
+            seed_only,
+        };
+        assert!(
+            !build_search_params(base(false))
+                .expect("build_search_params")
+                .seed_only,
+            "default: seed_only false"
+        );
+        assert!(
+            build_search_params(base(true))
+                .expect("build_search_params")
+                .seed_only,
+            "--seed-only threads into SearchParams"
+        );
     }
 
     #[test]
@@ -225,6 +262,7 @@ mod tests {
             edge_types: vec![],
             depth: None,
             no_graph: true,
+            seed_only: false,
         };
         let params = build_search_params(args).expect("build_search_params");
         assert_eq!(params.cogmap_id, Some(id));
@@ -249,6 +287,7 @@ mod tests {
             edge_types: vec![],
             depth: None,
             no_graph: true,
+            seed_only: false,
         };
         let err = build_search_params(args).expect_err("both scopes must be rejected client-side");
         assert!(
@@ -275,6 +314,7 @@ mod tests {
             edge_types: vec![],
             depth: None,
             no_graph: true,
+            seed_only: false,
         };
         let params = build_search_params(args).expect("build_search_params");
         assert!(params.wayfind);
@@ -300,6 +340,7 @@ mod tests {
             edge_types: vec![],
             depth: None,
             no_graph: true,
+            seed_only: false,
         };
         let err = build_search_params(args).expect_err("context + wayfind must be rejected");
         assert!(
@@ -326,6 +367,7 @@ mod tests {
             edge_types: vec![],
             depth: None,
             no_graph: true,
+            seed_only: false,
         };
         let err = build_search_params(args).expect_err("--lens without --wayfind must be rejected");
         assert!(

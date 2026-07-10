@@ -277,6 +277,10 @@ pub enum Commands {
         /// Disable graph expansion (enabled by default)
         #[arg(long)]
         no_graph: bool,
+        /// Restrict graph expansion to your explicit --seed ids, skipping the automatic top-N seed
+        /// union (no effect unless at least one --seed is given)
+        #[arg(long = "seed-only")]
+        seed_only: bool,
     },
 
     /// Assert or mutate a relationship between resources (writes go through the cloud API)

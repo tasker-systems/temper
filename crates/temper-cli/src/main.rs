@@ -823,6 +823,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             edge_types,
             depth,
             no_graph,
+            seed_only,
         } => {
             use temper_cli::actions::search as search_actions;
             // Resolve the query embedding at the call site, then bundle every
@@ -847,6 +848,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     edge_types,
                     depth,
                     no_graph,
+                    seed_only,
                 },
                 output_format,
             )
