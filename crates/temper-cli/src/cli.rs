@@ -314,6 +314,28 @@ pub enum Commands {
         #[arg(long)]
         checksum: bool,
     },
+
+    /// Self-update the CLI to the latest release (curl-script installs only).
+    ///
+    /// Resolves the latest published release, compares it against the running
+    /// binary's compiled version, and — when newer or `--force` — invokes the
+    /// embedded installer to download, checksum-verify, and atomically replace
+    /// the whole install directory (binary + bundled `lib/libonnxruntime.*`),
+    /// re-pointing the on-PATH symlink. Refuses on `cargo install` builds (no
+    /// archive provenance). `--check` reports current-vs-latest, mutating
+    /// nothing. Unix-first; Windows self-update is a follow-up.
+    Update {
+        /// Report current-vs-latest and exit without mutating anything (dry run).
+        #[arg(long)]
+        check: bool,
+        /// Pin a specific release tag to install (e.g. v0.3.0), bypassing the
+        /// latest-release lookup and the already-current no-op.
+        #[arg(long)]
+        version: Option<String>,
+        /// Reinstall even when already on the latest version (repair path).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]

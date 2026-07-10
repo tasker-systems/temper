@@ -857,5 +857,20 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         Commands::Version { checksum } => {
             temper_cli::commands::version::run(checksum, output_format)
         }
+        Commands::Update {
+            check,
+            version,
+            force,
+        } => {
+            // `update` raises a CLI-local `CliError` (install failures never
+            // belong in the shared `TemperError`), so render + exit here rather
+            // than laundering it back through the `TemperError` return path.
+            if let Err(e) = temper_cli::commands::update::run(check, version, force, output_format)
+            {
+                temper_cli::output::error(format!("temper: {e}"));
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
 }
