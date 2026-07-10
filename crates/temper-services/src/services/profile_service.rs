@@ -340,10 +340,6 @@ async fn create_new_profile_and_link(
 ///
 /// Takes a connection so registration can run it inside a transaction. No longer
 /// called from the authentication path — `provision` owns it now (D3).
-#[expect(
-    dead_code,
-    reason = "the only caller is machine_registration_service::provision, landing in Task 4; remove this attribute when that caller is wired"
-)]
 pub(crate) async fn create_agent_profile_and_link(
     conn: &mut sqlx::PgConnection,
     client_id: &str,

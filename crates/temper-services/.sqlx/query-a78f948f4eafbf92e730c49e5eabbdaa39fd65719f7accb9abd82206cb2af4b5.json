@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_system_settings SET access_mode = 'invite_only', gating_team_slug = 'temper-system'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "a78f948f4eafbf92e730c49e5eabbdaa39fd65719f7accb9abd82206cb2af4b5"
+}

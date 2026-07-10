@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider = 'auth0-m2m' AND auth_provider_user_id = 'acme-agent'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d4a1ea48b5b1d710db4d3e679402d0963c4578c3a01e28407d0b6de186ff4b97"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_resources (id, title, origin_uri) VALUES ($1, 'acme-telos', '')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1fce33009c4eadcce5512a4c9fcd88f0b6da8776405fb7102584f168763cd651"
+}

@@ -8,6 +8,7 @@ pub mod event_service;
 pub mod graph_service;
 pub mod invitation_service;
 pub mod machine_client_service;
+pub mod machine_registration_service;
 pub mod materialize_service;
 pub mod profile_service;
 pub mod reassign_service;
