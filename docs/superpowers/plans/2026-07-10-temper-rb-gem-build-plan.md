@@ -43,7 +43,8 @@
 
 **Three generated-code facts that decide skin implementation:**
 
-- `Generated::ApiClient#build_connection` calls `conn.adapter(Faraday.default_adapter)` **before** `config.configure_connection(conn)` (`api_client.rb:224–225`). Faraday's builder lets the later `adapter` call replace the earlier one — which is the *only* reason D11's "swap the adapter via `configure_connection`" works. Do not move it to `configure_middleware`, which runs *before* the default adapter is set.
+- **The adapter registrar is `Configuration#configure_faraday_connection(&block)`, not `configure_connection`.** `configure_connection(conn)` is the *invoker* the ApiClient calls with the connection; passing it a block raises `ArgumentError: wrong number of arguments`. D12 names the invoker. The generated doc-comment shows the right one, with `conn.adapter :typhoeus` as its example.
+- `Generated::ApiClient#build_connection` calls `conn.adapter(Faraday.default_adapter)` **before** `config.configure_connection(conn)` (`api_client.rb:224–225`). Faraday's builder lets the later `adapter` call replace the earlier one — which is the *only* reason the swap works. An adapter set via `configure_middleware` runs *before* the default and is silently overwritten. Assert `conn.builder.adapter == Faraday::Adapter::NetHttpPersistent`: with no block registered, Faraday falls back to `NetHttp` and nothing else fails.
 - `Generated::ApiClient#call_api` rescues `Faraday::TimeoutError` and `Faraday::ConnectionFailed` and re-raises them as `ApiError.new('Connection timed out')` / `ApiError.new('Connection failed')` (`api_client.rb:76–79`). Those carry **`code == nil`**. The error classifier must map a nil-code `ApiError` to `Temper::ConnectionError`, or every timeout becomes an unclassified `Temper::Error`.
 - `Generated::ApiError` exposes `#code` (the HTTP status, Integer), `#response_headers`, `#response_body`, and `#message`.
 
@@ -1215,10 +1216,11 @@ module Temper
         c.base_path = base.path
         c.access_token_getter = -> { Temper.current_token }
 
-        # configure_connection runs AFTER the generated build_connection sets
+        # configure_faraday_connection REGISTERS the block; configure_connection
+        # is the invoker. It runs AFTER build_connection sets
         # Faraday.default_adapter, so this replaces it. configure_middleware
         # runs BEFORE, and would be silently overwritten.
-        c.configure_connection { |conn| conn.adapter :net_http_persistent, pool_size: 5 }
+        c.configure_faraday_connection { |conn| conn.adapter :net_http_persistent, pool_size: 5 }
       end
 
       Generated::ApiClient.new(generated).tap do |client|
