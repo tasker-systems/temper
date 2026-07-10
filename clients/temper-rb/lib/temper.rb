@@ -21,4 +21,13 @@ module Temper
   end
 end
 
+# `module Temper` must exist before anything generated is required: every
+# generated file opens with the compact form `module Temper::Generated`.
+require 'temper/generated'
 require 'temper/version'
+
+# The contract this gem was generated against. `rake generate` passes
+# openapi.json's info.version to the generator as `gemVersion`, so the generated
+# tree already carries it -- we alias it rather than reasserting it, and callers
+# never reach into Temper::Generated for it.
+Temper::CONTRACT_VERSION = Temper::Generated::VERSION

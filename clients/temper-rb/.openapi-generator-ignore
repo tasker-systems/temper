@@ -1,0 +1,19 @@
+# The generator's ONLY output is lib/temper/generated/** (plus its aggregator,
+# lib/temper/generated.rb, and the .openapi-generator/ manifest).
+#
+# Everything below is hand-written and must never be overwritten. The skin lives
+# OUTSIDE the generated tree, so this file is defense-in-depth, not the only
+# thing standing between `rake generate` and your code.
+
+Gemfile
+Rakefile
+README.md
+git_push.sh
+.gitignore
+.rspec
+.rubocop.yml
+.travis.yml
+.gitlab-ci.yml
+temper/generated.gemspec
+spec/**
+docs/**
