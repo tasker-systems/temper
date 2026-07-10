@@ -231,6 +231,18 @@ description = "Verify the committed openapi.json matches a fresh emission from t
 # cargo-make at all: the root Makefile.toml requires a ./.env that no runner has.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-spec.sh"]
 
+[tasks.openapi-validate]
+description = "Validate the committed openapi.json with openapi-generator (requires Docker)"
+# Deliberately NOT a CI gate. It pulls a ~1GB image for the same signal that
+# `openapi::tests::every_schema_ref_resolves` and
+# `openapi::tests::operation_ids_are_present_and_unique` give in milliseconds --
+# those two tests guard the defects we know about (dangling $refs, duplicate
+# operationIds). This task catches the ones we don't: run it when changing the
+# shape of the contract, and before cutting a client SDK.
+script = [
+  "docker run --rm -v ${CARGO_MAKE_WORKING_DIRECTORY}:/local openapitools/openapi-generator-cli validate -i /local/openapi.json"
+]
+
 # =============================================================================
 # Docker Tasks
 # =============================================================================

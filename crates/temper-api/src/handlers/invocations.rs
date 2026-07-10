@@ -129,6 +129,7 @@ pub async fn show(
 
 #[utoipa::path(
     get,
+    operation_id = "list_invocations",
     path = "/api/invocations",
     tag = "Invocations",
     params(

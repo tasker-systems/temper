@@ -19,6 +19,7 @@ pub struct ProfileWithEntitlements {
 
 #[utoipa::path(
     get,
+    operation_id = "get_profile",
     path = "/api/profile",
     tag = "Profile",
     security(("bearer_auth" = [])),
@@ -44,6 +45,7 @@ pub async fn get(
 
 #[utoipa::path(
     patch,
+    operation_id = "update_profile",
     path = "/api/profile",
     tag = "Profile",
     request_body = ProfileUpdateRequest,

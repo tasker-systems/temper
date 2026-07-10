@@ -14,6 +14,7 @@ use temper_services::state::AppState;
 
 #[utoipa::path(
     get,
+    operation_id = "list_contexts",
     path = "/api/contexts",
     tag = "Contexts",
     security(("bearer_auth" = [])),
@@ -32,6 +33,7 @@ pub async fn list(
 
 #[utoipa::path(
     post,
+    operation_id = "create_context",
     path = "/api/contexts",
     tag = "Contexts",
     security(("bearer_auth" = [])),
@@ -55,6 +57,7 @@ pub async fn create(
 
 #[utoipa::path(
     get,
+    operation_id = "get_context",
     path = "/api/contexts/{id}",
     tag = "Contexts",
     params(("id" = Uuid, Path, description = "Context ID")),
