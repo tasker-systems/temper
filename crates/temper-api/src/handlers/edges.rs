@@ -3,6 +3,7 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_core::types::ids::{EdgeId, ProfileId};
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
@@ -14,7 +15,6 @@ use temper_services::services::edge_service;
 use temper_services::state::AppState;
 use temper_workflow::operations::{
     AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
-    Surface,
 };
 use temper_workflow::types::graph::GraphEdgeRow;
 
@@ -59,6 +59,7 @@ pub async fn list(
 pub async fn assert(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(req): Json<AssertRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let act = req.act.into_act_context().map_err(ApiError::from)?;
@@ -70,7 +71,7 @@ pub async fn assert(
         label: req.label,
         weight: req.weight,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
@@ -100,6 +101,7 @@ pub async fn assert(
 pub async fn retype(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<RetypeRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
@@ -109,7 +111,7 @@ pub async fn retype(
         edge_kind: req.edge_kind,
         polarity: req.polarity,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
@@ -139,6 +141,7 @@ pub async fn retype(
 pub async fn reweight(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<ReweightRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
@@ -147,7 +150,7 @@ pub async fn reweight(
         edge_handle: EdgeId::from(edge_handle),
         weight: req.weight,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
@@ -177,6 +180,7 @@ pub async fn reweight(
 pub async fn fold(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<FoldRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
@@ -185,7 +189,7 @@ pub async fn fold(
         edge_handle: EdgeId::from(edge_handle),
         reason: req.reason,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend

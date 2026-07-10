@@ -31,7 +31,7 @@ fn try_build_client() -> Option<TemperClient> {
             return None;
         }
     }
-    match build_client(store) {
+    match build_client(store, temper_workflow::operations::Surface::CliCloud) {
         Ok(c) => Some(c),
         Err(e) => {
             eprintln!("skipping integration test: {e}");

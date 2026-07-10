@@ -334,8 +334,14 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 
     let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
         std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
-    let client = temper_client::config::build_client_from(&temper_config, store)
-        .expect("Failed to build test client");
+    // The harness client stands in for the CLI in cloud mode, so it declares `Surface::CliCloud`
+    // and sends `X-Temper-Surface: cli` on every request.
+    let client = temper_client::config::build_client_from(
+        &temper_config,
+        store,
+        temper_workflow::operations::Surface::CliCloud,
+    )
+    .expect("Failed to build test client");
 
     let cli_config = temper_cli::config::load_from(&temper_config, None);
 
@@ -427,8 +433,14 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
 
     let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
         std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
-    let client = temper_client::config::build_client_from(&temper_config, store)
-        .expect("Failed to build test client");
+    // The harness client stands in for the CLI in cloud mode, so it declares `Surface::CliCloud`
+    // and sends `X-Temper-Surface: cli` on every request.
+    let client = temper_client::config::build_client_from(
+        &temper_config,
+        store,
+        temper_workflow::operations::Surface::CliCloud,
+    )
+    .expect("Failed to build test client");
 
     let cli_config = temper_cli::config::load_from(&temper_config, None);
 

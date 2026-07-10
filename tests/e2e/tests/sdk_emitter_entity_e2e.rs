@@ -11,7 +11,8 @@
 //! 2. **Existing profiles** — the additive backfill migration, executed here verbatim.
 //!
 //! The wire-level assertion (an `X-Temper-Surface: sdk` request attributing to `<handle>@sdk`)
-//! belongs to P2 — no client can send the marker yet. What P1 owes is that the entity resolves.
+//! landed in P2 and lives in `surface_attribution_e2e.rs`. What this file owes is that the
+//! entity resolves at all.
 
 mod common;
 
@@ -123,7 +124,8 @@ async fn fresh_profile_is_provisioned_with_every_surface_emitter(pool: PgPool) {
 }
 
 /// A profile that predates the `sdk` surface gains its `@sdk` emitter from the backfill, and the
-/// backfill is idempotent — it has no unique constraint to lean on, only its `NOT EXISTS` guard.
+/// backfill is idempotent on the strength of its own `NOT EXISTS` guard — written when
+/// `kb_entities` had no unique constraint to lean on.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn backfill_provisions_sdk_for_a_legacy_profile_and_is_idempotent(pool: PgPool) {
     let handle = "legacy-user";
@@ -157,9 +159,11 @@ async fn backfill_provisions_sdk_for_a_legacy_profile_and_is_idempotent(pool: Pg
         .await
         .expect("sdk emitter resolves after the backfill");
 
-    // `kb_entities` has no unique constraint on (profile_id, name), so a second run guarded only
-    // by NOT EXISTS is the sole thing standing between us and a duplicate emitter — which would
-    // make `resolve_emitter`'s `fetch_one` ambiguous.
+    // The backfill's own `NOT EXISTS` guard is what makes a second run insert nothing. Since
+    // `20260709000040_kb_entities_unique_profile_name.sql` the unique index would also reject a
+    // duplicate — but it would reject by *erroring*, so the guard is still what keeps this
+    // idempotent rather than fatal. Both matter: a duplicate emitter would make
+    // `resolve_emitter`'s `fetch_one` silently ambiguous.
     run_backfill(&pool).await;
     assert_eq!(
         emitters_for(&pool, handle).await,

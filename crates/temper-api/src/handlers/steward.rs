@@ -13,6 +13,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::steward_service;
@@ -23,7 +24,7 @@ use temper_core::types::steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
     DriftSweepRow, IngestDelta,
 };
-use temper_workflow::operations::{AdvanceStewardWatermark, Backend, StewardDispatchTick, Surface};
+use temper_workflow::operations::{AdvanceStewardWatermark, Backend, StewardDispatchTick};
 
 /// Query params for the delta read. `threshold` is optional (omit → the service default).
 #[derive(Debug, Deserialize)]
@@ -77,6 +78,7 @@ pub async fn delta(
 pub async fn advance(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(cogmap): Path<Uuid>,
     Json(req): Json<AdvanceWatermarkRequest>,
 ) -> ApiResult<Json<AdvanceWatermarkAck>> {
@@ -84,7 +86,7 @@ pub async fn advance(
     let cmd = AdvanceStewardWatermark {
         cogmap: CogmapId::from(cogmap),
         event_id: req.event_id,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend
@@ -143,6 +145,7 @@ pub async fn candidates(
 pub async fn dispatch(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     headers: HeaderMap,
     Json(req): Json<DispatchTickRequest>,
 ) -> ApiResult<Json<DispatchTickResponse>> {
@@ -164,7 +167,7 @@ pub async fn dispatch(
     let cmd = StewardDispatchTick {
         threshold: req.threshold,
         cap: req.cap,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend

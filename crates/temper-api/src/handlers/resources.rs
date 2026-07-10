@@ -3,6 +3,7 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::resource_service::{
@@ -20,7 +21,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
-use temper_workflow::operations::{Backend, CreateResource, DeleteResource, Surface};
+use temper_workflow::operations::{Backend, CreateResource, DeleteResource};
 use temper_workflow::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse, ResourceDetail};
 
@@ -94,14 +95,15 @@ pub async fn list(
 pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceDetail>> {
     use temper_core::types::ids::ResourceId;
-    use temper_workflow::operations::{ShowResource, Surface};
+    use temper_workflow::operations::ShowResource;
 
     let cmd = ShowResource {
         resource: ResourceId::from(resource_id),
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
@@ -177,6 +179,7 @@ pub async fn provenance(
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(req): Json<ResourceCreateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
     // Resolve the context UUID from the request — visibility-gated to the principal.
@@ -213,7 +216,7 @@ pub async fn create(
         chunks_packed: None,
         content_hash: None,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
@@ -238,6 +241,7 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
@@ -309,7 +313,7 @@ pub async fn update(
         move_to,
         context_ref: None,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
@@ -335,6 +339,7 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Query(act_in): Query<temper_core::types::authorship::ActInput>,
 ) -> ApiResult<Json<DeleteResponse>> {
@@ -345,7 +350,7 @@ pub async fn delete(
         resource: ResourceId::from(resource_id),
         force: false,
         act,
-        origin: Surface::ApiHttp,
+        origin: surface,
     };
     let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     backend.delete_resource(cmd).await.map_err(ApiError::from)?;

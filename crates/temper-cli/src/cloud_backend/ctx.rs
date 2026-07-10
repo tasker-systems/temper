@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use temper_client::TemperClient;
-use temper_workflow::operations::Surface;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
@@ -28,7 +27,6 @@ pub struct CloudBackendCtx {
     /// the hard-reject for bare names (spec Decision 1).
     pub context_ref: String,
     pub config: Arc<Config>,
-    pub surface: Surface,
 }
 
 /// Build a tokio runtime + fully-populated [`CloudBackendCtx`] for a
@@ -69,7 +67,6 @@ pub fn assemble_cloud_backend(
         owner,
         context_ref,
         config: Arc::new(config.clone()),
-        surface: Surface::CliCloud,
     };
 
     Ok((runtime, ctx))

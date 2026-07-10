@@ -5,6 +5,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The HTTP header a remote client uses to claim its calling surface.
+///
+/// The value is the claimed surface's [`Surface::marker`] spelling — the same `<marker>` half
+/// of the `<handle>@<marker>` emitter natural key the write will be attributed to. The header
+/// names the emitter the caller claims to be.
+///
+/// The server trusts exactly `cli` and `sdk`; everything else degrades to [`Surface::ApiHttp`].
+/// Surface is provenance, never authorization.
+pub const SURFACE_HEADER: &str = "X-Temper-Surface";
+
 /// The originating surface of a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,6 +83,13 @@ mod tests {
     fn markers_are_distinct() {
         let markers: HashSet<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
         assert_eq!(markers.len(), Surface::ALL.len());
+    }
+
+    /// Both ends of the wire spell the header from this constant. A literal on either side
+    /// would be a silent, untestable drift.
+    #[test]
+    fn surface_header_name_is_stable() {
+        assert_eq!(SURFACE_HEADER, "X-Temper-Surface");
     }
 
     /// The markers are a durable natural key: `kb_entities.name` is `<handle>@<marker>`, and
