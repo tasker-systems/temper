@@ -1,0 +1,54 @@
+plugins:
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 3.1
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    # `rake generate` is the only writer of the generated tree. Linting it would
+    # mean hand-editing it.
+    - 'lib/temper/generated/**/*'
+    - 'lib/temper/generated.rb'
+    - 'vendor/**/*'
+
+Style/Documentation:
+  Enabled: false
+
+Layout/LineLength:
+  Max: 120
+
+Metrics/BlockLength:
+  Exclude:
+    - 'spec/**/*'
+
+# CLAUDE.md's "more than 5 domain params gets a params struct" targets positional
+# sprawl. Temper::Act IS that struct -- it models ActInput's seven wire keys, and
+# they are keyword args, which are self-documenting at every call site.
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+
+# 10 is tight for a begin/rescue/retry block, and `retry` cannot be extracted
+# from its rescue clause -- Client#call's re-mint and backoff paths must stay
+# lexically inside it. 15 is the smallest bound that fits. (tasker-rb uses 70.)
+Metrics/MethodLength:
+  Max: 15
+
+RSpec/MultipleExpectations:
+  Enabled: false
+
+# connection_spec exercises module-level behaviour spread across Temper and
+# Temper::Generated (memoization, fiber-local token scoping, adapter install).
+# There is no single class to name, and naming Temper would demand the file sit
+# at spec/temper_spec.rb, which already describes the configuration surface.
+RSpec/DescribeClass:
+  Exclude:
+    - 'spec/temper/connection_spec.rb'
+    # parse_ref is a module function on Temper, and spec/temper_spec.rb already
+    # describes the configuration surface.
+    - 'spec/temper/refs_spec.rb'
+    # Fork safety is a property of the process, not of one class.
+    - 'spec/temper/fork_safety_spec.rb'
+
+RSpec/ExampleLength:
+  Enabled: false

@@ -32,7 +32,10 @@ run_test() {
         local var_name="${assertion%%=*}"
         local expected="${assertion#*=}"
         local actual
-        actual="$(echo "$output" | grep "^${var_name}=" | head -1 | cut -d= -f2-)"
+        # `|| true`: an ABSENT key must report a FAIL with actual='', not kill the
+        # harness via set -e. Without this, adding an assertion for a flag the
+        # script does not yet emit aborts the whole run instead of going red.
+        actual="$(echo "$output" | grep "^${var_name}=" | head -1 | cut -d= -f2- || true)"
         if [ "$actual" != "$expected" ]; then
             test_passed=false
             failures="${failures}    ${var_name}: expected='${expected}' actual='${actual}'
@@ -62,7 +65,8 @@ CLAUDE.md" \
     "RUN_CODE_QUALITY=false" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false" \
-    "SCOPE_SUMMARY=docs-only: skipping code-quality, test-rust, test-typescript"
+    "RUN_TEST_RUBY=false" \
+    "SCOPE_SUMMARY=docs-only: skipping code-quality, test-rust, test-typescript, test-ruby"
 
 # --- per-crate doc files are still docs-only ---
 run_test "crate-dir docs only: docs-only scope" \
@@ -80,7 +84,7 @@ run_test "rust source change: full CI" \
     "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=true" \
     "RUN_TEST_TYPESCRIPT=true" \
-    "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline"
+    "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline (test-ruby=false)"
 
 # --- typescript source change: full CI ---
 run_test "typescript source change: full CI" \
@@ -137,6 +141,60 @@ run_test "no-diff fallback: full CI" \
     "DOCS_ONLY=false" \
     "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=true"
+
+# ---------------------------------------------------------------------------
+# test-ruby is the one PATH-SCOPED job: it needs Docker for the codegen drift
+# gate, so it stays off PRs that cannot possibly affect the gem. Every other
+# job is all-or-nothing on docs-only. These cases pin both directions.
+# ---------------------------------------------------------------------------
+
+run_test "ruby gem source change: test-ruby runs" \
+    "clients/temper-rb/lib/temper/client.rb" \
+    "DOCS_ONLY=false" \
+    "RUN_TEST_RUBY=true"
+
+# The contract is the gem's generator input, so a contract change must be SEEN
+# to move the gem -- that is what the drift gate exists to prove.
+run_test "openapi.json change: test-ruby runs" \
+    "openapi.json" \
+    "DOCS_ONLY=false" \
+    "RUN_TEST_RUBY=true"
+
+run_test "ruby CI workflow change: test-ruby runs" \
+    ".github/workflows/test-ruby.yml" \
+    "RUN_TEST_RUBY=true"
+
+run_test "unrelated rust change: test-ruby skipped, rust runs" \
+    "crates/temper-api/src/handlers/resources.rs" \
+    "RUN_TEST_RUBY=false" \
+    "RUN_TEST_RUST=true"
+
+run_test "unrelated typescript change: test-ruby skipped" \
+    "packages/temper-ui/src/routes/+page.svelte" \
+    "RUN_TEST_RUBY=false"
+
+# The gem's own markdown is still just markdown.
+run_test "gem README only: docs-only, test-ruby skipped" \
+    "clients/temper-rb/README.md" \
+    "DOCS_ONLY=true" \
+    "RUN_TEST_RUBY=false"
+
+# Mixed: docs never reduce scope, and the gem source still turns test-ruby on.
+run_test "mixed docs + gem source: test-ruby runs" \
+    "README.md
+clients/temper-rb/lib/temper/errors.rb" \
+    "DOCS_ONLY=false" \
+    "RUN_TEST_RUBY=true"
+
+# Self-referential changes force every job on, test-ruby included.
+run_test "detect script changed: test-ruby runs too" \
+    ".github/scripts/detect-ci-scope.sh" \
+    "RUN_TEST_RUBY=true"
+
+# The no-diff safety fallback must run EVERYTHING, including the path-scoped job.
+run_test "no-diff fallback: test-ruby runs" \
+    "__force_full_ci__" \
+    "RUN_TEST_RUBY=true"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

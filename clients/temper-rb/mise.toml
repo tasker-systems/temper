@@ -1,0 +1,5 @@
+# mise does NOT read `.ruby-version` unless `idiomatic_version_file_enable_tools`
+# names ruby, and that setting is empty by default. So the pin lives here for
+# mise, and in `.ruby-version` for rbenv and `ruby/setup-ruby`. Keep them equal.
+[tools]
+ruby = "3.4.10"

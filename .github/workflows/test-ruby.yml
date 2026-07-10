@@ -1,0 +1,47 @@
+name: Ruby SDK Tests
+
+on:
+  workflow_call:
+
+jobs:
+  test-ruby:
+    name: temper-rb (rubocop, rspec, codegen drift)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: clients/temper-rb
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          # Floats to the newest 3.4.x. The gem's floor is >= 3.1; the dev pin in
+          # .ruby-version / mise.toml is 3.4.10.
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: clients/temper-rb
+
+      - name: Lint
+        run: bundle exec rubocop
+
+      - name: Test
+        run: bundle exec rspec
+
+      # The generated core is committed, so contributors need neither Docker nor a
+      # JVM to build or test the gem. CI is where we prove it still matches the
+      # contract: `rake drift` regenerates and fails on any diff.
+      #
+      # This step is why the job is path-scoped -- it pulls a ~1GB image.
+      - name: Codegen drift gate
+        run: bundle exec rake drift
+
+      # A gem that cannot be packaged is not shippable, and the gemspec loads
+      # lib/temper/version.rb standalone -- a regression there is invisible to
+      # rspec but fatal to `gem build`.
+      - name: Build the gem
+        run: gem build temper-rb.gemspec
