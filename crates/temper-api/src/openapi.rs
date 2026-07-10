@@ -429,6 +429,13 @@ mod tests {
         let mut referenced = BTreeSet::new();
         collect_schema_refs(&json, &mut referenced);
 
+        // Guard against a vacuous pass: an empty spec references nothing and would trivially
+        // report no dangling refs.
+        assert!(
+            !referenced.is_empty(),
+            "spec references no component schemas"
+        );
+
         let dangling: Vec<&String> = referenced.difference(&defined).collect();
         assert!(
             dangling.is_empty(),
@@ -468,6 +475,9 @@ mod tests {
                 }
             }
         }
+
+        // Guard against a vacuous pass: an empty `paths` map has no duplicate ids either.
+        assert!(!owners.is_empty(), "spec has no operations to check");
 
         assert!(
             missing.is_empty(),

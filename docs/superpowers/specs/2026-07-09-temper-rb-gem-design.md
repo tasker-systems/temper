@@ -169,8 +169,6 @@ Not patched by a gem-side overlay, and not worked around with `--skip-validate-s
 is a published artifact; a third party generating any client hits the same crash, and `temper-py` and
 `temper-ts` inherit whatever we do here.
 
-**Scope of P5:**
-
 **Scope of P5, as built:**
 
 1. Register `ResourceSortField` and `SortOrder` in `components(schemas(...))`. Schemas 153 → 155.
