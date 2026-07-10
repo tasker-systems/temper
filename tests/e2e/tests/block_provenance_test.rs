@@ -352,7 +352,7 @@ async fn external_origin_uri_seeds_remote_provenance_by_default(pool: sqlx::PgPo
     let prov = app
         .client
         .resources()
-        .provenance(created.id)
+        .provenance(created.id.uuid())
         .await
         .expect("provenance read");
     assert_eq!(
@@ -437,7 +437,7 @@ async fn explicit_sources_override_the_origin_uri_default(pool: sqlx::PgPool) {
     let prov = app
         .client
         .resources()
-        .provenance(created.id)
+        .provenance(created.id.uuid())
         .await
         .expect("provenance read");
     assert_eq!(prov.len(), 1, "only the explicit source, got {prov:?}");
