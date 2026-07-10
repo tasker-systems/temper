@@ -15,10 +15,13 @@ extend = [
 
 [tasks.check]
 description = "Run all quality checks (Rust + TypeScript)"
-# Mirrors the `code-quality / Rust Quality` CI job. The two OpenAPI gates belong here for the same
+# Mirrors the `code-quality / Rust Quality` CI job. The OpenAPI gates belong here for the same
 # reason the rest do: openapi.json is a committed *product of the router*, so a new route — or merely
 # a new field on a response DTO — leaves the committed artifact stale, and nothing else notices.
 # Omitting them meant a green local `check` followed by a red CI job; that is what bit PR #348.
+# `openapi-rb-drift` extends that same reasoning to the temper-rb generated gem (a product of
+# openapi.json), whose drift gate is otherwise CI-only — the exact gap that bit #354. It needs
+# Docker and skips without it (the test-ruby CI job is the never-skipping backstop).
 dependencies = [
   "rust-fmt-check",
   "rust-clippy",
@@ -26,6 +29,7 @@ dependencies = [
   "rust-machete",
   "openapi-check",
   "openapi-routes-check",
+  "openapi-rb-drift",
   "ts-check"
 ]
 
@@ -223,13 +227,30 @@ script = [
 ]
 
 [tasks.openapi]
-description = "Emit the OpenAPI contract (product of the router) to openapi.json at the repo root"
+description = "Emit the OpenAPI contract + regenerate the temper-rb gem (both products of the router)"
+# openapi.json AND the temper-rb generated core are both products of the router: a
+# new DTO field restales both. Regenerating them together is what keeps the two in
+# lockstep, so following openapi-check's "run cargo make openapi" remedy fixes the
+# gem too (the exact gap that bit #354). Gem regen needs Docker; when it is absent
+# this still emits the spec and points at `cargo make openapi-rb` for later.
 script = [
   "out=${CARGO_MAKE_WORKING_DIRECTORY}/openapi.json",
   "cargo run --quiet -p temper-api --bin emit-openapi > \"$out\"",
   "if [ ! -s \"$out\" ]; then echo 'ERROR: openapi.json is missing or empty'; exit 1; fi",
-  "echo \"OpenAPI spec written: $out ($(wc -c < \"$out\" | tr -d ' ') bytes)\""
+  "echo \"OpenAPI spec written: $out ($(wc -c < \"$out\" | tr -d ' ') bytes)\"",
+  "if docker info >/dev/null 2>&1; then bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh && echo 'temper-rb gem regenerated'; else echo 'NOTE: Docker unavailable — skipped temper-rb gem regen; run cargo make openapi-rb once Docker is up.'; fi"
 ]
+
+[tasks.openapi-rb]
+description = "Regenerate the temper-rb gem from openapi.json (requires Docker)"
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh"]
+
+[tasks.openapi-rb-drift]
+description = "Fail if the committed temper-rb generated core drifts from openapi.json (skips without Docker)"
+# The local mirror of the test-ruby CI job's `rake drift`. In `check` so a DTO
+# change cannot pass a green local gate and then redden Ruby CI. Skips (does not
+# fail) when Docker is absent; the CI ruby job is the never-skipping backstop.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-rb-drift.sh"]
 
 [tasks.openapi-check]
 description = "Verify the committed openapi.json matches a fresh emission from the router"

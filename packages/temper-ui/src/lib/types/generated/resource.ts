@@ -26,6 +26,13 @@ managed_meta: ManagedMeta | null,
 open_meta: JsonValue | null, };
 
 /**
+ * Request body for annotating a resource's block with provenance sources (issue #355) —
+ * `POST /api/resources/{id}/provenance`. The annotate-only write: attach sources WITHOUT a body
+ * revise (no re-chunk/re-embed). Carries no content — that is the whole point.
+ */
+export type ResourceAnnotateRequest = {  };
+
+/**
  * Aggregated doc-type facet counts for the current filter set.
  */
 export type ResourceFacets = { doc_type: { [key in string]?: bigint }, };

@@ -50,6 +50,9 @@ pub enum EventKind {
     RegionMaterialized,
     RelationshipFolded,
     BlockMutated,
+    /// The `block_provenance_annotated` event (issue #355) — attach provenance sources to an existing
+    /// block without a content revise. Records `kb_block_provenance` rows only; touches no chunks.
+    BlockProvenanceAnnotated,
     /// The (now fired) `block_created` event — one appended segment of a segmented ingest
     /// (`SeedAction::BlockAppend`). Was seeded but dormant before streaming ingestion (Beat 1).
     BlockCreated,
@@ -77,6 +80,7 @@ impl EventKind {
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
             EventKind::BlockMutated => "block_mutated",
+            EventKind::BlockProvenanceAnnotated => "block_provenance_annotated",
             EventKind::BlockCreated => "block_created",
             EventKind::CharterSet => "charter_set",
             EventKind::DelegatedLaunch => "delegated_launch",
@@ -107,6 +111,7 @@ impl EventKind {
             "region_materialized" => EventKind::RegionMaterialized,
             "relationship_folded" => EventKind::RelationshipFolded,
             "block_mutated" => EventKind::BlockMutated,
+            "block_provenance_annotated" => EventKind::BlockProvenanceAnnotated,
             "block_created" => EventKind::BlockCreated,
             "charter_set" => EventKind::CharterSet,
             "delegated_launch" => EventKind::DelegatedLaunch,
@@ -241,6 +246,15 @@ pub enum SeedAction<'a> {
         incorporated: &'a [payloads::Incorporation],
         emitter: EntityId,
     },
+    /// Attach provenance sources to an EXISTING block without a content revise (issue #355). Unlike
+    /// `BlockMutate` (which supersedes chunks and re-embeds), this records `kb_block_provenance` rows
+    /// only — no chunk touch, no re-embed, `block_body_hash` unchanged. `incorporated` must be
+    /// non-empty (the SQL entry fn rejects an empty list).
+    BlockAnnotate {
+        block: BlockId,
+        incorporated: &'a [payloads::Incorporation],
+        emitter: EntityId,
+    },
     /// Append a NEW block at `block.seq` to an existing resource (segmented ingest).
     /// Unlike `BlockMutate` (revise-in-place), this creates a fresh block and fires
     /// the `block_created` event. Idempotent in SQL on (resource, seq, block merkle).
@@ -324,6 +338,7 @@ impl SeedAction<'_> {
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
+            SeedAction::BlockAnnotate { .. } => EventKind::BlockProvenanceAnnotated,
             SeedAction::BlockAppend { .. } => EventKind::BlockCreated,
             SeedAction::CharterSet { .. } => EventKind::CharterSet,
             SeedAction::ResourceDelete { .. } => EventKind::ResourceDeleted,
@@ -468,7 +483,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
 /// `kb_events.metadata`/`invocation_id`/`correlation_id`): the authored-4
 /// (`ResourceCreate`/`RelationshipAssert`/`FacetSet`/`RelationshipFold`) plus the non-authored writes
 /// (`ResourceUpdate`/`ResourceDelete`/`ResourceRehome`/`ResourceReassign`/`PropertySet`/`BlockMutate`/
-/// `BlockAppend`/`CharterSet`/`RelationshipRetype`/`RelationshipReweight`). The pure-seed/lens/
+/// `BlockAnnotate`/`BlockAppend`/`CharterSet`/`RelationshipRetype`/`RelationshipReweight`). The pure-seed/lens/
 /// materialize arms (and the legacy 2-arg `PropertyAssert`) ignore it. [`fire`] is the
 /// `EventContext::default()` delegate.
 pub async fn fire_with(
@@ -787,6 +802,31 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("block_mutate returned null")?;
+            Ok(Fired::Block(BlockId::from(id)))
+        }
+
+        SeedAction::BlockAnnotate {
+            block,
+            incorporated,
+            emitter,
+        } => {
+            // Annotate-only: no chunk manifest, no content sidecar. The projector records
+            // provenance rows via `_insert_block_provenance` and touches nothing else.
+            let payload = payloads::BlockProvenanceAnnotated {
+                block_id: block,
+                incorporated: incorporated.to_vec(),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT block_annotate($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("block_annotate returned null")?;
             Ok(Fired::Block(BlockId::from(id)))
         }
 

@@ -75,7 +75,18 @@ cargo make run
 
 # Generate TypeScript types from Rust structs
 cargo make generate-ts-types
+
+# Regenerate openapi.json AND the temper-rb gem (both products of the router)
+cargo make openapi
 ```
+
+> **OpenAPI + the temper-rb gem are products of the router.** A new/changed response DTO
+> (a new field, a renamed type) restales **both** the committed `openapi.json` *and* the
+> generated Ruby gem under `clients/temper-rb/lib/temper/generated`. `cargo make openapi`
+> regenerates both in one step (gem regen needs Docker). `cargo make check` gates both:
+> `openapi-check` (spec) and `openapi-rb-drift` (gem — Docker-based, **skips** without Docker;
+> the `test-ruby` CI job is the never-skipping backstop). The generator pin + params live in
+> one place — `.github/scripts/generate-temper-rb.sh` — shared by cargo-make and the gem's Rakefile.
 
 ### Running a single Rust test
 ```bash

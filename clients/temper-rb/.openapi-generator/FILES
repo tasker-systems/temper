@@ -132,6 +132,7 @@ lib/temper/generated/models/reconcile_tombstone.rb
 lib/temper/generated/models/relationship_ack.rb
 lib/temper/generated/models/residual_bucket.rb
 lib/temper/generated/models/residual_groups.rb
+lib/temper/generated/models/resource_annotate_request.rb
 lib/temper/generated/models/resource_create_request.rb
 lib/temper/generated/models/resource_detail.rb
 lib/temper/generated/models/resource_facets.rb

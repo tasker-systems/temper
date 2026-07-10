@@ -147,6 +147,29 @@ pub struct UpdateResource {
     pub origin: Surface,
 }
 
+/// Annotate an existing resource's block with provenance sources — **without a body revise**
+/// (issue #355). The annotate-only write: it records `kb_block_provenance` rows against the addressed
+/// block, touching no chunks (no re-chunk, no re-embed, body_hash unchanged). This is the cheap,
+/// citation-grade backfill path for a corpus imported without sources, where a full `update` (which
+/// re-embeds) would be wasteful.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnnotateResource {
+    pub resource: ResourceId,
+    /// Sources to attach — resource refs (`Resource`), external URLs (`Remote`), or event ids
+    /// (`Event`). Position in the list becomes the accretion `seq` (the same rule the create/update
+    /// `sources` path uses). Non-empty: an annotate with nothing to attribute is a 400.
+    pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
+    /// Which content block to annotate. `None` → the resource's sole non-folded body block (the
+    /// default); `Some(id)` addresses that block explicitly (must belong to the resource and be
+    /// non-folded) — the escape hatch for a multi-block resource.
+    pub content_block: Option<uuid::Uuid>,
+    /// Per-act correlation + authorship — stamps the `block_provenance_annotated` act. Empty by
+    /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
+    pub origin: Surface,
+}
+
 /// Delete a resource. In the cloud-first model this is a soft-delete on the
 /// server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

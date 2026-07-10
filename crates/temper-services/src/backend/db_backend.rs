@@ -32,11 +32,11 @@ use temper_core::types::reconcile::{
 use temper_core::types::workflow_job::{DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AssertRelationship, Backend, BodyUpdate, CloseInvocation,
-    CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
-    ListResources, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, ResourceSummary,
-    RetypeRelationship, ReweightRelationship, SearchHit, SearchResources, SetFacet, ShowResource,
-    StewardDispatchTick, Surface, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, Backend, BodyUpdate,
+    CloseInvocation, CommandOutput, CreateCognitiveMap, CreateResource, DeleteResource,
+    FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, OpenInvocation,
+    ReconcileCognitiveMap, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
+    SearchResources, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
 use temper_workflow::types::resource::{ResourceDetail, ResourceRow};
 
@@ -176,22 +176,29 @@ fn unpack_incoming_chunks(
     Ok(chunks.iter().map(packed_to_incoming).collect())
 }
 
-/// A body update's declared provenance sources → substrate `Incorporation`s, with each source's
-/// position in the list becoming its accretion `seq`. `None` (metadata-only update, or no body) and
-/// an empty `sources` both yield no incorporations — the projector then writes no `kb_block_provenance`
-/// rows. Shared by the create and update paths so both derive `seq` identically.
+/// Declared provenance sources → substrate `Incorporation`s, with each source's position in the
+/// list becoming its accretion `seq`. An empty slice yields no incorporations — the projector then
+/// writes no `kb_block_provenance` rows. The single seq-assignment rule, shared by every write path
+/// (create body, update body, and segmented append) so they derive `seq` identically.
+fn incorporations_from_sources(
+    sources: &[temper_core::types::provenance::ProvenanceSource],
+) -> Vec<temper_substrate::payloads::Incorporation> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(i, source)| temper_substrate::payloads::Incorporation {
+            source: source.clone(),
+            seq: i as i32,
+        })
+        .collect()
+}
+
+/// A body update's declared provenance sources → substrate `Incorporation`s. `None` (metadata-only
+/// update, or no body) and an empty `sources` both yield no incorporations. Thin adapter over
+/// [`incorporations_from_sources`] for the create and update paths.
 fn body_sources(body: Option<&BodyUpdate>) -> Vec<temper_substrate::payloads::Incorporation> {
-    body.map(|b| {
-        b.sources
-            .iter()
-            .enumerate()
-            .map(|(i, source)| temper_substrate::payloads::Incorporation {
-                source: source.clone(),
-                seq: i as i32,
-            })
-            .collect()
-    })
-    .unwrap_or_default()
+    body.map(|b| incorporations_from_sources(&b.sources))
+        .unwrap_or_default()
 }
 
 /// Block-provenance for a *create*: the body's declared sources, or — when the body declares none
@@ -1503,6 +1510,62 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(()))
     }
 
+    async fn annotate_resource(
+        &self,
+        cmd: AnnotateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        // The inbound id IS the substrate resource id (no origin_uri remap).
+        let new_id = uuid::Uuid::from(cmd.resource);
+        // Auth before any write (WS2): the caller must be able to modify this resource.
+        self.check_can_modify_next(new_id).await?;
+        // Correlation-integrity gate for any claimed invocation — additive to the modify authz above.
+        self.check_act_invocation(cmd.act.invocation).await?;
+        // A source-less annotate has nothing to attribute — reject before resolving anything (the
+        // substrate rejects it too, but a 400 here is the honest surface error).
+        if cmd.sources.is_empty() {
+            return Err(TemperError::BadRequest(
+                "annotate requires at least one source (--sources)".to_owned(),
+            ));
+        }
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        // Reuse the shared sources→Incorporation mapping (position → accretion seq) so annotate and
+        // the body-revise `--sources` path derive seq identically.
+        let sources: Vec<temper_substrate::payloads::Incorporation> = cmd
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, source)| temper_substrate::payloads::Incorporation {
+                source: source.clone(),
+                seq: i as i32,
+            })
+            .collect();
+        let act_ctx = EventContext {
+            invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
+            authorship: cmd.act.authorship,
+        };
+        writes::annotate_block_sources_with(
+            &self.pool,
+            writes::AnnotateParams {
+                resource: ResourceId::from(new_id),
+                sources,
+                content_block: cmd.content_block,
+                emitter,
+            },
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
+        let row =
+            native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+        Ok(CommandOutput::new(row))
+    }
+
     async fn list_resources(
         &self,
         _cmd: ListResources,
@@ -2386,10 +2449,10 @@ impl Backend for DbBackend {
             writes::AppendParams {
                 resource,
                 block: &block,
-                // Segment appends carry no block-provenance sources in this beat (the ordinary
-                // create/update path's `sources` covers whole-body distillation attribution;
-                // per-segment attribution is out of scope here).
-                sources: Vec::new(),
+                // Per-segment block provenance: the caller's declared sources are recorded against
+                // this appended block (list position → accretion `seq`), the same projector path as
+                // the create/update body sources. Empty = an un-attributed append.
+                sources: incorporations_from_sources(&payload.sources),
                 emitter,
             },
         )

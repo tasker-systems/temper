@@ -55,7 +55,10 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::resources::delete
         ))
         .routes(routes!(handlers::resources::get_content))
-        .routes(routes!(handlers::resources::provenance))
+        .routes(routes!(
+            handlers::resources::provenance,
+            handlers::resources::annotate
+        ))
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
         .routes(routes!(handlers::edges::assert))

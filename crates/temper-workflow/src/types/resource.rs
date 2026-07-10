@@ -206,6 +206,38 @@ pub struct ResourceCreateRequest {
     pub act: temper_core::types::authorship::ActInput,
 }
 
+/// Request body for annotating a resource's block with provenance sources (issue #355) —
+/// `POST /api/resources/{id}/provenance`. The annotate-only write: attach sources WITHOUT a body
+/// revise (no re-chunk/re-embed). Carries no content — that is the whole point.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ResourceAnnotateRequest {
+    /// Sources to attach to the addressed block — resource refs, external URLs, or event ids
+    /// (`{kind,value}`-tagged). Position → accretion `seq`. Must be non-empty.
+    ///
+    /// `ts(skip)`-ped for the same reason as `ResourceUpdateRequest.sources`: `ProvenanceSource` is a
+    /// tagged enum the SvelteKit UI never sends (this is a CLI/agent write path).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub sources: Vec<temper_core::types::provenance::ProvenanceSource>,
+    /// Which content block to annotate. `None` → the resource's sole non-folded body block; `Some(id)`
+    /// addresses that block explicitly (must belong to the resource and be non-folded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub content_block: Option<uuid::Uuid>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship for the annotate act.
+    /// Flattened as top-level keys; all optional.
+    ///
+    /// `ts(skip)`-ped: ts-rs cannot codegen a `#[serde(flatten)]` field, and the UI never sends
+    /// authorship (precedent: `ResourceUpdateRequest.act`).
+    #[serde(default, flatten)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub act: temper_core::types::authorship::ActInput,
+}
+
 /// Request body for updating a resource.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]

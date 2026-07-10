@@ -139,6 +139,13 @@ pub struct AppendBlockPayload {
     /// boundary. Mirrors `IngestPayload::chunks_packed`'s optionality.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
+    /// Block-provenance sources this appended segment's content was distilled from — recorded
+    /// against **this** content block (a block, not a chunk), list position → accretion `seq`.
+    /// Same value grammar and projector path as `IngestPayload::sources` / `resource create
+    /// --sources` (a resource ref → `Resource`; an http/https URL → `Remote`). Empty (the default,
+    /// skipped on the wire) = an un-attributed append, exactly the prior behaviour.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<crate::types::provenance::ProvenanceSource>,
 }
 
 /// Response to append / `GET /api/resources/{id}/blocks`: the currently landed segment set.
@@ -474,6 +481,7 @@ mod tests {
             content: "x".into(),
             content_hash: "h".into(),
             chunks_packed: Some("b64".into()),
+            sources: Vec::new(),
         };
         let j = serde_json::to_string(&p).unwrap();
         let back: super::AppendBlockPayload = serde_json::from_str(&j).unwrap();
@@ -488,7 +496,41 @@ mod tests {
         let json = r#"{"seq":2,"content":"x","content_hash":"h"}"#;
         let p: super::AppendBlockPayload = serde_json::from_str(json).unwrap();
         assert!(p.chunks_packed.is_none());
+        assert!(p.sources.is_empty());
         assert!(!serde_json::to_string(&p).unwrap().contains("chunks_packed"));
+        assert!(!serde_json::to_string(&p).unwrap().contains("sources"));
+    }
+
+    // An append carrying per-block provenance sources round-trips: the tagged {kind,value} shape is
+    // preserved and the field rides the wire only when non-empty.
+    #[test]
+    fn append_payload_round_trips_with_sources() {
+        use crate::types::provenance::ProvenanceSource;
+        let p = super::AppendBlockPayload {
+            seq: 3,
+            content: "x".into(),
+            content_hash: "h".into(),
+            chunks_packed: None,
+            sources: vec![
+                ProvenanceSource::Resource(uuid::Uuid::nil()),
+                ProvenanceSource::Remote("https://example.com/issue/1".into()),
+            ],
+        };
+        let j = serde_json::to_string(&p).unwrap();
+        assert!(
+            j.contains("\"sources\""),
+            "non-empty sources must serialize"
+        );
+        let back: super::AppendBlockPayload = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.sources.len(), 2);
+        assert_eq!(
+            back.sources[0],
+            ProvenanceSource::Resource(uuid::Uuid::nil())
+        );
+        assert_eq!(
+            back.sources[1],
+            ProvenanceSource::Remote("https://example.com/issue/1".into())
+        );
     }
 
     #[test]

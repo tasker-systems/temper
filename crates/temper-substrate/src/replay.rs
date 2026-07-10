@@ -170,6 +170,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::LensCreated
             | EventKind::RegionMaterialized
             | EventKind::RelationshipFolded
+            | EventKind::BlockProvenanceAnnotated
             | EventKind::ResourceReassigned
             | EventKind::DelegatedLaunch
             | EventKind::InvocationClosed => None,
@@ -341,6 +342,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
             EventKind::RelationshipReweighted => {
                 sqlx::query("SELECT _project_relationship_reweighted($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            // Annotate-only provenance (issue #355): payload-only projector, no sidecar — records
+            // kb_block_provenance rows, touches no chunks (so replay reprojects it without prose).
+            EventKind::BlockProvenanceAnnotated => {
+                sqlx::query("SELECT _project_block_annotated($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)

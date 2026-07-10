@@ -580,6 +580,277 @@ async fn update_with_folded_content_block_is_rejected(pool: sqlx::PgPool) {
     );
 }
 
+/// issue #355: annotate-only. A create then an `annotate_block_sources` records a NEW provenance row
+/// WITHOUT a body revise — `block_body_hash`, the chunk rows, and the revision count are all unchanged
+/// (no re-chunk, no re-embed), and the annotate replays byte-identically through `_project_block_annotated`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn annotate_records_provenance_without_touching_chunks(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+    use temper_substrate::writes::{self, AnnotateParams, CreateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+
+    let resource = writes::create_resource_deferred_with(
+        &pool,
+        CreateParams {
+            title: "distilled",
+            origin_uri: "temper://prov/annotate",
+            body: "deployment pipeline staging and rollout cadence",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![], // imported with NO provenance — the corpus-backfill precondition
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create");
+
+    let block_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Snapshot the content-derived state BEFORE annotating: body hash, revision count, chunk rows +
+    // their embeddings. An annotate must leave every one of these untouched.
+    let hash_before: String = sqlx::query_scalar(
+        "SELECT block_body_hash FROM kb_block_revisions WHERE block_id=$1 ORDER BY created DESC LIMIT 1",
+    )
+    .bind(block_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let revisions_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_block_revisions WHERE block_id=$1")
+            .bind(block_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    // (chunk_id, version, embedding-as-text) for every chunk row of the block.
+    let chunks_before: Vec<(uuid::Uuid, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, version, embedding::text FROM kb_chunks WHERE block_id=$1 ORDER BY id",
+    )
+    .bind(block_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let src = uuid::Uuid::now_v7();
+    let returned = writes::annotate_block_sources_with(
+        &pool,
+        AnnotateParams {
+            resource,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(src),
+                seq: 0,
+            }],
+            content_block: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("annotate");
+    assert_eq!(
+        returned.uuid(),
+        block_id,
+        "annotate returns the addressed block id"
+    );
+
+    // The provenance row landed, attributed to a `block_provenance_annotated` event.
+    let (kind, sid, seq, ev_type): (String, uuid::Uuid, i32, String) = sqlx::query_as(
+        "SELECT p.source_kind::text, p.source_id, p.accretion_seq, et.name \
+           FROM kb_block_provenance p \
+           JOIN kb_events e ON e.id = p.contributed_by_event_id \
+           JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE p.block_id=$1 AND NOT p.is_corrected ORDER BY p.created DESC LIMIT 1",
+    )
+    .bind(block_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kind, "resource");
+    assert_eq!(sid, src);
+    assert_eq!(seq, 0);
+    assert_eq!(
+        ev_type, "block_provenance_annotated",
+        "the row is attributed to the annotate event, not a block_mutated revise"
+    );
+
+    // NO body revise: hash, revision count, and chunk rows (+ embeddings) are byte-for-byte unchanged.
+    let hash_after: String = sqlx::query_scalar(
+        "SELECT block_body_hash FROM kb_block_revisions WHERE block_id=$1 ORDER BY created DESC LIMIT 1",
+    )
+    .bind(block_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let revisions_after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_block_revisions WHERE block_id=$1")
+            .bind(block_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let chunks_after: Vec<(uuid::Uuid, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, version, embedding::text FROM kb_chunks WHERE block_id=$1 ORDER BY id",
+    )
+    .bind(block_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        hash_before, hash_after,
+        "block_body_hash unchanged by annotate"
+    );
+    assert_eq!(
+        revisions_before, revisions_after,
+        "annotate writes NO new kb_block_revisions row"
+    );
+    assert_eq!(
+        chunks_before, chunks_after,
+        "chunk rows + embeddings unchanged (no re-chunk / no re-embed)"
+    );
+
+    // Replay symmetry: the annotate reprojects byte-identically through `_project_block_annotated`.
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((table_a, a), (table_b, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(table_a, table_b);
+        assert_eq!(
+            a, b,
+            "projection table {table_a} diverged under replay after annotate"
+        );
+    }
+    temper_substrate::payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("ledger payload roundtrip after annotate");
+}
+
+/// issue #355 (span locators): annotate with a REMOTE URL carrying a `#L<start>-L<end>` fragment. The
+/// locator rides the URL verbatim — `normalize_remote_uri` preserves the fragment, so the read fn
+/// surfaces the exact `…#L120-L180` URL. Zero schema change; the fragment IS the locator.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn annotate_with_remote_locator_round_trips(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+    use temper_substrate::writes::{self, AnnotateParams, CreateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+    let resource = writes::create_resource_deferred_with(
+        &pool,
+        CreateParams {
+            title: "chapter 11",
+            origin_uri: "temper://prov/locator",
+            body: "part eleven of a sixteen chunk series about staged rollout",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create");
+
+    let located = "https://example.com/long-source.md#L120-L180";
+    writes::annotate_block_sources_with(
+        &pool,
+        AnnotateParams {
+            resource,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Remote(located.to_owned()),
+                seq: 0,
+            }],
+            content_block: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("annotate with a located remote source");
+
+    let (kind, uri): (String, Option<String>) = sqlx::query_as(
+        "SELECT source_kind, source_uri FROM resource_block_provenance($1, 'profile', $2) LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .bind(owner)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kind, "remote");
+    assert_eq!(
+        uri.as_deref(),
+        Some(located),
+        "the span-locator fragment survives verbatim into --provenance / get_block_provenance"
+    );
+}
+
+/// issue #355: annotate with no sources is rejected — an annotate that attaches nothing is a caller
+/// error, not a silent no-op. The guard lives in `block_annotate` (any surface is protected).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn annotate_with_empty_sources_is_rejected(pool: sqlx::PgPool) {
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::AnchorRef;
+    use temper_substrate::writes::{self, AnnotateParams, CreateParams};
+
+    let (owner, emitter, home) = prov_fixture(&pool).await;
+    let resource = writes::create_resource_deferred_with(
+        &pool,
+        CreateParams {
+            title: "distilled",
+            origin_uri: "temper://prov/annotate-empty",
+            body: "deployment pipeline staging and rollout cadence",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("create");
+
+    let err = writes::annotate_block_sources_with(
+        &pool,
+        AnnotateParams {
+            resource,
+            sources: vec![],
+            content_block: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect_err("an annotate with no sources must be rejected");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("source"),
+        "error should explain there are no sources to attach, got: {msg}"
+    );
+}
+
 /// T7c Task 9: a create carrying a REMOTE (URL) source mints a `kb_remote_sources` row, writes a
 /// provenance row (`source_kind='remote'`, `source_id` = the minted id), the read fn surfaces the raw
 /// URL, and two normalization-equivalent URLs (case / default-port) collapse to a single row.

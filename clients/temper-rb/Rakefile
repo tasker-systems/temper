@@ -1,37 +1,22 @@
 # frozen_string_literal: true
 
-require 'json'
 require 'rspec/core/rake_task'
 require 'rubocop/rake_task'
 
 REPO_ROOT = File.expand_path('../..', __dir__)
-SPEC_PATH = File.join(REPO_ROOT, 'openapi.json')
 
-# Pinned deliberately. `latest` resolves to 7.24.0-SNAPSHOT -- an unreleased,
-# moving build. A moving generator makes `rake drift` fail on days when nothing
-# in this repo changed.
-GENERATOR_IMAGE = 'openapitools/openapi-generator-cli:v7.23.0'
+# The generator pin + parameters (and gemVersion derivation) live in one shared
+# script, so the CI ruby job (`rake drift`), `cargo make openapi`, and
+# `cargo make openapi-rb-drift` all regenerate byte-identically. Keeping the
+# docker invocation here too would be a second copy of the pin, free to drift.
+GENERATE_SCRIPT = File.join(REPO_ROOT, '.github', 'scripts', 'generate-temper-rb.sh')
 
 RSpec::Core::RakeTask.new(:spec)
 RuboCop::RakeTask.new(:lint)
 
 desc 'Regenerate lib/temper/generated/** from the repo-root openapi.json'
 task :generate do
-  contract_version = JSON.parse(File.read(SPEC_PATH)).fetch('info').fetch('version')
-
-  # --user keeps the emitted files owned by the invoking user. Without it the
-  # container writes as root on Linux (CI), and the drift gate cannot read them.
-  sh 'docker', 'run', '--rm',
-     '--user', "#{Process.uid}:#{Process.gid}",
-     '-v', "#{REPO_ROOT}:/local",
-     GENERATOR_IMAGE,
-     'generate',
-     '-i', '/local/openapi.json',
-     '-g', 'ruby',
-     '--library=faraday',
-     '-o', '/local/clients/temper-rb',
-     '--additional-properties=' \
-     "gemName=temper/generated,moduleName=Temper::Generated,gemVersion=#{contract_version}"
+  sh 'bash', GENERATE_SCRIPT
 end
 
 desc 'Fail if the committed generated core drifts from the contract'

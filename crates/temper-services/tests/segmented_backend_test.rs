@@ -166,6 +166,7 @@ async fn server_chunks_an_append_with_no_packed_chunks_and_carries_the_breadcrum
                 content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
                 content: text.to_string(),
                 chunks_packed: None,
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )
@@ -205,6 +206,7 @@ async fn append_with_no_chunks_and_empty_content_is_rejected(pool: PgPool) {
                 content: String::new(),
                 content_hash: temper_core::hash::sha256_hex(b""),
                 chunks_packed: None,
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )
@@ -285,6 +287,7 @@ async fn an_mcp_append_is_attributed_to_the_mcp_emitter(pool: PgPool) {
                 content: text.to_string(),
                 content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
                 chunks_packed: Some(one_chunk_packed(text, "bb")),
+                sources: Vec::new(),
             },
             Surface::Mcp,
         )
@@ -323,6 +326,7 @@ async fn append_rejects_a_content_hash_that_does_not_match_content(pool: PgPool)
                 content: "second segment".to_string(),
                 content_hash: "deadbeef".to_string(), // not sha256("second segment")
                 chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )
@@ -360,6 +364,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
                 content: text.to_string(),
                 content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
                 chunks_packed: Some(one_chunk_packed(text, "bb")),
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )
@@ -428,6 +433,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 content: "second segment".to_string(),
                 content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )
@@ -451,6 +457,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
                 content: "second segment".to_string(),
                 content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )
@@ -545,6 +552,7 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
                 content: "second segment".to_string(),
                 content_hash: temper_core::hash::sha256_hex(b"second segment"),
                 chunks_packed: Some(one_chunk_packed("second segment", "dd")),
+                sources: Vec::new(),
             },
             Surface::ApiHttp,
         )

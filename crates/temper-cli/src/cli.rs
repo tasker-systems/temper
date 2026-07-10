@@ -570,6 +570,32 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Attach provenance sources to a resource's block — WITHOUT a body revise (issue #355).
+    ///
+    /// The annotate-only backfill: records block-provenance rows on the addressed block without
+    /// re-chunking or re-embedding (body_hash and embeddings are unchanged), so a corpus imported
+    /// without sources can be made citation-grade cheaply. Verify with `resource show --provenance`.
+    ///
+    /// Span locators ride the source URL verbatim via a URL-fragment convention — e.g.
+    /// `--sources 'https://example.com/doc.md#L120-L180'` records the line range and surfaces it in
+    /// `--provenance` output (no schema change; the fragment is preserved end-to-end).
+    Annotate {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Provenance sources to attach — comma-separated resource refs (UUID or decorated) or
+        /// http(s) URLs (optionally with a `#L<start>-L<end>` locator fragment). At least one
+        /// required. Each becomes a block-provenance record on the addressed block.
+        #[arg(long, value_delimiter = ',', required = true)]
+        sources: Vec<String>,
+        /// Which content block to annotate (a block UUID). Omit to address the resource's sole body
+        /// block (the default); required for a resource that has more than one block. The block must
+        /// belong to the resource and be non-folded.
+        #[arg(long)]
+        content_block: Option<uuid::Uuid>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
     /// Delete a resource (soft-delete via the API).
     ///
     /// Sets `is_active = false` server-side; the row is preserved. Removing a
