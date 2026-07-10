@@ -499,6 +499,13 @@ pub struct BlockMutated {
 /// `block_body_hash` recompute. `incorporated` is non-empty by construction (the `block_annotate`
 /// write path rejects an empty list — an annotate with nothing to attribute is a caller error, not a
 /// silent no-op).
+///
+/// Registered **permissive** (NULL `payload_schema`), like `resource_updated`/`invocation_closed`:
+/// it is a post-canonical-seed event added by migration `20260710000001`, so it cannot join the
+/// bootseed-stamped typed registry (that set is pinned to the immutable canonical-seed vocabulary via
+/// `system.yaml`, and `TYPED_EVENT_NAMES` must equal it). The payload is instead validated Rust-side
+/// through `verify_ledger_roundtrip`. The `JsonSchema` derive stays for parity with the other payload
+/// structs even though no committed snapshot is stamped for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BlockProvenanceAnnotated {
@@ -563,8 +570,8 @@ pub struct InvocationClosed {
     pub outcome: serde_json::Value,
 }
 
-/// The 16 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 16] = [
+/// The 15 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 15] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -580,7 +587,6 @@ pub const TYPED_EVENT_NAMES: [&str; 16] = [
     "block_mutated",
     "block_folded",
     "block_provenance_corrected",
-    "block_provenance_annotated",
 ];
 
 /// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must
