@@ -25,6 +25,10 @@ module Temper
       call(idempotent: true) { |api| Generated::ProfileApi.new(api).get_profile }
     end
 
+    def resources
+      @resources ||= Resources.new(self)
+    end
+
     # The one seam every surface module goes through.
     #
     #   idempotent: true  => a safe method. 5xx and transport failures retry.
