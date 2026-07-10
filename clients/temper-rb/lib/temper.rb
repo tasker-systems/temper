@@ -32,6 +32,8 @@ require 'temper/act'
 require 'temper/refs'
 require 'temper/client'
 require 'temper/resources'
+require 'temper/contexts'
+require 'temper/cognitive_maps'
 
 # The contract this gem was generated against. `rake generate` passes
 # openapi.json's info.version to the generator as `gemVersion`, so the generated

@@ -33,6 +33,21 @@ module Fixtures
   end
 
   def resource_row_json(...) = JSON.generate(resource_row(...))
+
+  def context_row(id: '00000000-0000-0000-0003-000000000001', **overrides)
+    {
+      id: id,
+      name: 'incidents',
+      kb_owner_table: 'kb_profiles',
+      kb_owner_id: '019d4add-f49d-7c43-a87d-dda470e5dd9c',
+      created: '2026-07-10T12:00:00Z',
+      updated: '2026-07-10T12:00:00Z',
+      slug: 'incidents',
+      owner_ref: '@j-cole-taylor'
+    }.merge(overrides)
+  end
+
+  def context_row_json(...) = JSON.generate(context_row(...))
 end
 
 RSpec.configure do |config|

@@ -29,6 +29,24 @@ module Temper
       @resources ||= Resources.new(self)
     end
 
+    def contexts
+      @contexts ||= Contexts.new(self)
+    end
+
+    def cognitive_maps
+      @cognitive_maps ||= CognitiveMaps.new(self)
+    end
+
+    # SearchParams names the field `query`, not `q`.
+    def search(query, **opts)
+      params = Generated::SearchParams.new({ query: query }.merge(opts))
+      call(idempotent: true) { |api| Generated::SearchApi.new(api).search(params) }
+    end
+
+    def graph
+      Generated::GraphApi.new(Temper.api_client)
+    end
+
     # The one seam every surface module goes through.
     #
     #   idempotent: true  => a safe method. 5xx and transport failures retry.
