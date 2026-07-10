@@ -1257,6 +1257,23 @@ mod tests {
             Some("uuid"),
             "invocation_id inlines as a uuid-format string: {invocation}"
         );
+
+        // correlation_id: same contract. A caller-minted act-grain thread is useless if the tool
+        // layer sees `null` where a uuid should be.
+        let correlation = &schema["properties"]["correlation_id"];
+        assert!(
+            correlation.get("$ref").is_none(),
+            "correlation_id must inline, not $ref: {correlation}"
+        );
+        assert_eq!(
+            correlation.get("format").and_then(|f| f.as_str()),
+            Some("uuid"),
+            "correlation_id inlines as a uuid-format string: {correlation}"
+        );
+        assert!(
+            !schema.to_string().contains("CorrelationId"),
+            "CorrelationId must not survive as a named $defs entry: {schema}"
+        );
     }
 
     /// Gap 1: the generated JsonSchema must describe `managed_meta` as the
