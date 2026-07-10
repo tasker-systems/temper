@@ -94,6 +94,7 @@ async fn authored_create_under_invocation_stamps_metadata_and_invocation(pool: P
 
     let act = ActContext {
         invocation: Some(inv),
+        correlation: None,
         authorship: Some(sample_authorship()),
     };
     backend
@@ -157,6 +158,7 @@ async fn authored_assert_under_invocation_stamps_the_edge_act(pool: PgPool) {
             weight: 1.0,
             act: ActContext {
                 invocation: Some(inv),
+                correlation: None,
                 authorship: Some(sample_authorship()),
             },
             origin: Surface::ApiHttp,
@@ -186,6 +188,7 @@ async fn act_claiming_unknown_invocation_is_not_found(pool: PgPool) {
     // A random invocation id the caller cannot read (it does not exist) → uniform 404, no oracle.
     let act = ActContext {
         invocation: Some(InvocationId::from(Uuid::now_v7())),
+        correlation: None,
         authorship: None,
     };
     let result = backend
@@ -213,6 +216,7 @@ async fn act_on_closed_invocation_is_conflict(pool: PgPool) {
 
     let act = ActContext {
         invocation: Some(inv),
+        correlation: None,
         authorship: None,
     };
     let result = backend

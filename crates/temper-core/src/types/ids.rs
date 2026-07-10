@@ -193,6 +193,22 @@ define_id!(
     InvocationId
 );
 
+define_id!(
+    /// A `kb_events.correlation_id` value — the **act** grain: the thread stitching the writes of
+    /// one logical act, possibly spanning processes and credentials.
+    ///
+    /// Distinct from [`InvocationId`], which is *run*-grain and agent-shaped (trigger kind,
+    /// originating cogmap, delegated launch) — it models an agent working-session envelope. A web
+    /// request is not an agent run, but "publish this postmortem" spanning a request and the
+    /// background job it enqueued is one act. This is a bare UUID minted by the caller, so it
+    /// serializes into job arguments and outlives any credential.
+    ///
+    /// Correlation is a correlation aid, **never** authorization — nothing gates on it. Unlike the
+    /// other ids here it names no row of its own: an event with no supplied correlation self-roots
+    /// (`correlation_id` = its own event id), per `_event_append`'s root-event convention.
+    CorrelationId
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

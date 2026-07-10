@@ -105,6 +105,7 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
             "act-api",
             ActInput {
                 invocation_id: Some(InvocationId::from(invocation_id)),
+                correlation_id: None,
                 reasoning: Some("api create act".to_string()),
                 confidence: Some(ConfidenceBand::Probable),
                 ..Default::default()
@@ -136,6 +137,7 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
             weight: 1.0,
             act: ActInput {
                 invocation_id: Some(InvocationId::from(invocation_id)),
+                correlation_id: None,
                 reasoning: Some("api assert act".to_string()),
                 confidence: Some(ConfidenceBand::Confident),
                 ..Default::default()

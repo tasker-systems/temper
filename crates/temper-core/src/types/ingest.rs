@@ -106,10 +106,12 @@ pub struct SegmentInfo {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct SegmentedBeginResponse {
     pub resource_id: uuid::Uuid,
-    /// Client-side ingest-session id (written into the `.temper/` resume manifest). Not yet
-    /// threaded onto the server's event ledger as a shared `kb_events.correlation_id` — Beat 1
-    /// left per-event correlation at the root-event default; grouping the session's events by a
-    /// single correlation id is deferred to the reaper work (design §12).
+    /// Client-side ingest-session id (written into the `.temper/` resume manifest). Despite the
+    /// name it is **not** the ledger's `kb_events.correlation_id`: this value is minted server-side
+    /// and never reaches an event. Since P3 a caller *can* supply an act-grain correlation
+    /// (`ActContext::correlation`), so threading a segmented session's `block_created` +
+    /// `resource_finalized` events onto one correlation is now possible — but it needs a precedence
+    /// rule against a caller-supplied value, and is deliberately left unbuilt (task 019f4a19).
     pub correlation_id: uuid::Uuid,
     pub blocks: Vec<SegmentInfo>,
     /// The live `body_hash` after block 0 — see [`BlocksResponse::body_hash`]. Present here too so a

@@ -1,9 +1,10 @@
 //! Typed payloads for the `relationship_*` event family — the structured
 //! shape the edge-projection builder reads out of `kb_events.payload`.
 //!
-//! `relationship_asserted` is the lifecycle root: its event id becomes the
-//! `correlation_id` shared by every later event for that edge. The projection
-//! builder keys on `correlation_id`, not on ledger `references`.
+//! `relationship_asserted` is the lifecycle root. The projection builder keys on the payload's
+//! `edge_id` (see `_project_relationship_asserted`), not on ledger `references` and not on
+//! `kb_events.correlation_id` — correlation is an act-grain provenance thread supplied by the
+//! caller (`ActContext::correlation`), never an edge-lifecycle key.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

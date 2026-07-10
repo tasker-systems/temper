@@ -1,20 +1,20 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT block_mutate($1,$2,$3,$4,$5)",
+  "query": "SELECT resource_update($1,$2,$3,$4,$5)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "block_mutate",
+        "name": "resource_update",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
         "Jsonb",
-        "Jsonb",
         "Uuid",
         "Jsonb",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "4238a4ba8ec9278e3c8a3958460cc097b13ab48bb37a643d6fc3b75c0dca209e"
+  "hash": "f1dd767d99eab6cd427cae9790d7725a4aafda34cef0731e9115fc3fd475e919"
 }

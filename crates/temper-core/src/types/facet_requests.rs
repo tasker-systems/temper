@@ -76,6 +76,7 @@ mod tests {
             weight: 0.5,
             act: ActInput {
                 invocation_id: None,
+                correlation_id: None,
                 reasoning: Some("because X".into()),
                 confidence: Some(ConfidenceBand::Probable),
                 rationale: None,

@@ -400,6 +400,22 @@
             }
           },
           {
+            "name": "correlation_id",
+            "in": "query",
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CorrelationId"
+                }
+              ]
+            }
+          },
+          {
             "name": "reasoning",
             "in": "query",
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
@@ -3455,6 +3471,22 @@
             }
           },
           {
+            "name": "correlation_id",
+            "in": "query",
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CorrelationId"
+                }
+              ]
+            }
+          },
+          {
             "name": "reasoning",
             "in": "query",
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
@@ -5413,6 +5445,17 @@
               }
             ]
           },
+          "correlation_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CorrelationId",
+                "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship."
+              }
+            ]
+          },
           "invocation_id": {
             "oneOf": [
               {
@@ -6439,6 +6482,11 @@
             "format": "date-time"
           }
         }
+      },
+      "CorrelationId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_events.correlation_id` value — the **act** grain: the thread stitching the writes of\none logical act, possibly spanning processes and credentials.\n\nDistinct from [`InvocationId`], which is *run*-grain and agent-shaped (trigger kind,\noriginating cogmap, delegated launch) — it models an agent working-session envelope. A web\nrequest is not an agent run, but \"publish this postmortem\" spanning a request and the\nbackground job it enqueued is one act. This is a bare UUID minted by the caller, so it\nserializes into job arguments and outlives any credential.\n\nCorrelation is a correlation aid, **never** authorization — nothing gates on it. Unlike the\nother ids here it names no row of its own: an event with no supplied correlation self-roots\n(`correlation_id` = its own event id), per `_event_append`'s root-event convention."
       },
       "CreateCogmapOutcome": {
         "type": "object",
@@ -9201,7 +9249,7 @@
           "correlation_id": {
             "type": "string",
             "format": "uuid",
-            "description": "Client-side ingest-session id (written into the `.temper/` resume manifest). Not yet\nthreaded onto the server's event ledger as a shared `kb_events.correlation_id` — Beat 1\nleft per-event correlation at the root-event default; grouping the session's events by a\nsingle correlation id is deferred to the reaper work (design §12)."
+            "description": "Client-side ingest-session id (written into the `.temper/` resume manifest). Despite the\nname it is **not** the ledger's `kb_events.correlation_id`: this value is minted server-side\nand never reaches an event. Since P3 a caller *can* supply an act-grain correlation\n(`ActContext::correlation`), so threading a segmented session's `block_created` +\n`resource_finalized` events onto one correlation is now possible — but it needs a precedence\nrule against a caller-supplied value, and is deliberately left unbuilt (task 019f4a19)."
           },
           "resource_id": {
             "type": "string",
