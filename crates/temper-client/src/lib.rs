@@ -17,6 +17,7 @@ pub mod http;
 pub mod ingest;
 pub mod invocations;
 pub mod login;
+pub mod machine;
 pub mod profile;
 pub mod relationships;
 pub mod resources;
@@ -160,6 +161,11 @@ impl TemperClient {
     /// Admin / system-settings sub-client (settings, promote, request review).
     pub fn admin(&self) -> admin::AdminClient<'_> {
         admin::AdminClient::new(&self.http)
+    }
+
+    /// Operator-only machine-principal registration.
+    pub fn machine_clients(&self) -> machine::MachineClientsClient<'_> {
+        machine::MachineClientsClient::new(&self.http)
     }
 
     /// Team lifecycle sub-client (create / add-member / list).
