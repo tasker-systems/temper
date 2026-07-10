@@ -47,6 +47,8 @@ RSpec/DescribeClass:
     # parse_ref is a module function on Temper, and spec/temper_spec.rb already
     # describes the configuration surface.
     - 'spec/temper/refs_spec.rb'
+    # Fork safety is a property of the process, not of one class.
+    - 'spec/temper/fork_safety_spec.rb'
 
 RSpec/ExampleLength:
   Enabled: false

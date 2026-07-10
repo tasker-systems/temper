@@ -34,4 +34,10 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'faraday-multipart', '~> 1.0'
   spec.add_dependency 'faraday-net_http_persistent', '~> 2.0'
   spec.add_dependency 'marcel', '~> 1.0'
+  # Transitive via net-http-persistent, but pinned explicitly because we DEPEND on
+  # its behaviour: connection_pool >= 2.4 defaults `auto_reload_after_fork: true`
+  # and drops pooled sockets from a Process._fork hook. That, not
+  # Temper.reset_connection!, is what stops a forked Puma/Sidekiq worker from
+  # riding its parent's socket. Proven in spec/temper/fork_safety_spec.rb.
+  spec.add_dependency 'connection_pool', '>= 2.4'
 end
