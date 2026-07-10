@@ -11,14 +11,18 @@ use temper_services::error::ApiError;
 
 use crate::service::TemperMcpService;
 
-/// Map a context-service error onto an MCP error. `Forbidden` (the admin gate on
-/// share/unshare) and `NotFound` (missing context or team) become invalid-params
+/// Map a context-service error onto an MCP error. `Forbidden` (the share/unshare
+/// authorization gate) and `NotFound` (missing context or team) become invalid-params
 /// so the agent sees an actionable message rather than an opaque internal error.
 fn map_api_error(context: &str, err: ApiError) -> rmcp::ErrorData {
     match err {
-        ApiError::Forbidden => {
-            rmcp::ErrorData::invalid_params(format!("{context} requires system-admin"), None)
-        }
+        ApiError::Forbidden => rmcp::ErrorData::invalid_params(
+            format!(
+                "{context} requires that you administer the context and manage the target team \
+                 (owner/maintainer), or that you are an instance administrator"
+            ),
+            None,
+        ),
         ApiError::NotFound => {
             rmcp::ErrorData::invalid_params(format!("{context}: context or team not found"), None)
         }
@@ -109,8 +113,9 @@ pub async fn create_context(
     )]))
 }
 
-/// Share a context into a team's read-reach. SERVICE-DIRECT, admin-gated (see
-/// `context_service::share`, which enforces `is_system_admin` before the write).
+/// Share a context into a team's read-reach. SERVICE-DIRECT, authorized by
+/// `context_service::share` (its two-sided `can_share` gate: system-admin, OR the caller
+/// administers the context AND manages the target team) before the write.
 /// Idempotent — `shared: false` when the share already existed.
 pub async fn share_context(
     svc: &TemperMcpService,
@@ -135,8 +140,8 @@ pub async fn share_context(
     )]))
 }
 
-/// Unshare a context from a team. SERVICE-DIRECT, admin-gated (see [`share_context`]).
-/// No-op safe — `unshared: false` when there was no share to remove.
+/// Unshare a context from a team. SERVICE-DIRECT, same `can_share` authorization as
+/// [`share_context`]. No-op safe — `unshared: false` when there was no share to remove.
 pub async fn unshare_context(
     svc: &TemperMcpService,
     input: ShareContextInput,
@@ -174,10 +179,13 @@ mod tests {
 
     #[test]
     fn map_api_error_distinguishes_forbidden_and_notfound() {
-        // Forbidden (admin gate) and NotFound both surface as actionable
-        // invalid-params, not opaque internal errors.
+        // Forbidden (the share authorization gate) and NotFound both surface as
+        // actionable invalid-params, not opaque internal errors.
         let forbidden = map_api_error("share_context", ApiError::Forbidden);
-        assert!(forbidden.message.contains("system-admin"), "{forbidden:?}");
+        assert!(
+            forbidden.message.contains("administer the context"),
+            "{forbidden:?}"
+        );
         let not_found = map_api_error("share_context", ApiError::NotFound);
         assert!(not_found.message.contains("not found"), "{not_found:?}");
     }

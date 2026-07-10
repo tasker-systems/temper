@@ -198,7 +198,26 @@ pub async fn resolve_context_id(
         })
 }
 
-/// `temper context share <context_ref> <team>` — share a context into a team (admin-only).
+/// Map a `context share`/`unshare` client error to a CLI error, enriching the bare
+/// `Forbidden` (the server returns a message-less 403) with the actual authorization
+/// requirement and the escalation path — instead of the opaque "forbidden" that reads as a
+/// permissions bug (issue #367). The word "instance administrator" is spelled out so it is
+/// never confused with the per-team `admin`/`owner` roles.
+fn map_share_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
+    match e {
+        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+            "not authorized: `context {action}` requires that you administer the context \
+             (own it, or manage its owning team) AND manage the target team \
+             (owner/maintainer) — or that you are an instance administrator. Ask an instance \
+             administrator, or use `context create --owner +<team>` to create a new \
+             team-owned context instead."
+        )),
+        other => crate::commands::client_err(other),
+    }
+}
+
+/// `temper context share <context_ref> <team>` — share a context into a team's read-reach.
+/// Authorized by the server's `can_share` gate (context-admin + team-manager, or instance-admin).
 pub async fn share_remote(
     client: &temper_client::TemperClient,
     context: &str,
@@ -211,13 +230,14 @@ pub async fn share_remote(
         .contexts()
         .share_team(context_id, &ShareContextRequest { team_id })
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(|e| map_share_err("share", e))?;
     let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
     Ok(())
 }
 
-/// `temper context unshare <context_ref> <team>` — unshare a context from a team (admin-only).
+/// `temper context unshare <context_ref> <team>` — unshare a context from a team
+/// (same authority as `share`).
 pub async fn unshare_remote(
     client: &temper_client::TemperClient,
     context: &str,
@@ -230,7 +250,7 @@ pub async fn unshare_remote(
         .contexts()
         .unshare_team(context_id, team_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(|e| map_share_err("unshare", e))?;
     let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
     Ok(())

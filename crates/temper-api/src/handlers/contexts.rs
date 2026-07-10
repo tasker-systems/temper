@@ -90,7 +90,7 @@ pub async fn get(
     request_body = ShareContextRequest,
     responses(
         (status = 200, description = "Context shared (or idempotent no-op)", body = ShareContextOutcome),
-        (status = 403, description = "Caller is not a system admin"),
+        (status = 403, description = "Caller may not share this context into this team"),
     )
 )]
 pub async fn share_team(
@@ -120,7 +120,7 @@ pub async fn share_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Context unshared (or no-op)", body = UnshareContextOutcome),
-        (status = 403, description = "Caller is not a system admin"),
+        (status = 403, description = "Caller may not unshare this context from this team"),
     )
 )]
 pub async fn unshare_team(
