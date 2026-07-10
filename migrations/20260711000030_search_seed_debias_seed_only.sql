@@ -10,6 +10,8 @@
 --   • Option 1 (de-bias): `search_graph_expand` no longer emits the hop-0 self-score — only
 --     genuine ≥1-hop proximity to a seed contributes. Seeds get no bonus for being seeds.
 --     Same signature, so CREATE OR REPLACE with no DROP (additive, deploy-skew-safe).
+--     Explicit seeds still enter the candidate set (unified_search's `seed_cand`) so a resource
+--     you searched *from* surfaces under its own context — it just earns graph_score 0, not +0.5.
 --   • Option 2 (--seed-only): `unified_search` gains `p_seed_only boolean DEFAULT false`. When
 --     true AND explicit seeds are present, the auto-seed union is suppressed so the caller's
 --     seeds alone define the graph neighborhood. seed_only with no explicit seeds falls back to
@@ -96,7 +98,22 @@ LANGUAGE sql STABLE AS $$
       CASE WHEN p_graph_expand THEN ARRAY(SELECT id FROM seeds) ELSE ARRAY[]::uuid[] END,
       p_depth, p_edge_types, (SELECT gamma FROM k))
   ),
-  cand AS (SELECT id FROM blend0 UNION SELECT resource_id FROM graph),
+  -- Explicit seeds stay CANDIDATES even though hop-0 no longer self-scores (issue #357): a resource
+  -- you searched *from* must still surface under its own context/scope. It earns graph_score 0 (no
+  -- +0.5 self-bonus) and ranks on its own FTS/vector signal — de-bias without vanishing. Visibility-
+  -- gated (mirrors search_graph_expand's `visible` seed filter) so a seed the principal cannot see
+  -- never leaks into the candidate set. Gated on p_graph_expand: seeds anchor graph expansion.
+  seed_cand AS (
+    SELECT s.id
+      FROM unnest(COALESCE(p_seed_ids, ARRAY[]::uuid[])) AS s(id)
+      JOIN resources_visible_to(p_principal) v ON v.resource_id = s.id
+     WHERE p_graph_expand
+  ),
+  cand AS (
+    SELECT id FROM blend0
+    UNION SELECT resource_id FROM graph
+    UNION SELECT id FROM seed_cand
+  ),
   corpus AS (   -- context/doc_type/scope candidate-corpus filter
     SELECT c.id FROM cand c
      WHERE (p_context_id IS NULL OR EXISTS (

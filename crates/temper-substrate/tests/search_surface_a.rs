@@ -982,3 +982,52 @@ async fn seed_only_suppresses_auto_seed_union(pool: sqlx::PgPool) {
         "seed_only=true: the auto-seed union is suppressed, so other's neighbor is absent"
     );
 }
+
+/// Issue #357 regression (e2e `search_context_ref_scopes_and_unknown_errors`): removing the hop-0
+/// self-score must NOT make an explicit seed vanish. A seed with NO FTS/vector signal (query and
+/// embedding both absent) still surfaces because it stays a candidate — but with graph_score 0, so it
+/// gets no +0.5 self-bonus (the whole point of the de-bias). Old behavior gave it graph_score 1.0.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn explicit_seed_surfaces_without_hop0_self_score(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "es").await;
+    // A lone resource, edged to nothing. It matches no query and has no embedding query below.
+    let anchor = mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "anchor",
+        "anchor body",
+        "temper://es/anchor",
+    )
+    .await;
+    let seeds = [ResourceId::from(anchor)];
+
+    let hits = readback::unified_search(
+        &pool,
+        UnifiedSearchQuery {
+            query: None,     // no FTS signal
+            embedding: None, // no vector signal
+            seed_ids: &seeds,
+            graph_expand: true,
+            ..q(owner)
+        },
+    )
+    .await
+    .unwrap();
+
+    let hit = hits
+        .iter()
+        .find(|h| h.resource_id.uuid() == anchor)
+        .expect("the explicit seed still surfaces (candidate), even with no FTS/vector signal");
+    assert_eq!(
+        hit.graph_score, 0.0,
+        "the seed earns NO hop-0 self-score (was 1.0 before #357) — de-bias without vanishing"
+    );
+    assert_eq!(
+        hit.combined_score, 0.0,
+        "no signal at all ⇒ combined 0; present but unboosted"
+    );
+}
