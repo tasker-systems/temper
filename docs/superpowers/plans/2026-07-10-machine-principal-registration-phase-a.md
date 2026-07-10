@@ -178,7 +178,7 @@ mod tests {
         profile_id
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn backfill_registers_existing_m2m_links_and_is_idempotent(pool: PgPool) {
         let profile_id = seed_agent_link(&pool, "steward-client-1").await;
 
@@ -364,7 +364,7 @@ Replace the `mod tests` block in `crates/temper-services/src/services/machine_cl
         id
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn lookup_finds_registered_and_misses_unregistered(pool: PgPool) {
         seed_registered(&pool, "known").await;
 
@@ -376,7 +376,7 @@ Replace the `mod tests` block in `crates/temper-services/src/services/machine_cl
         assert!(miss.is_none(), "unregistered client must not resolve");
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn touch_last_seen_is_coarse(pool: PgPool) {
         let id = seed_registered(&pool, "coarse").await;
 
@@ -401,7 +401,7 @@ Replace the `mod tests` block in `crates/temper-services/src/services/machine_cl
         assert!(svc::touch_last_seen(&pool, id).await.expect("touch 3"));
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn revoke_marks_dead_and_list_hides_by_default(pool: PgPool) {
         let id = seed_registered(&pool, "doomed").await;
         let admin = seed_agent_link(&pool, "admin-actor").await;
@@ -570,7 +570,7 @@ Append to the existing `#[cfg(all(test, feature = "test-db"))] mod tests` in `cr
 
 ```rust
     /// The bite test. Under the old code this FAILS by finding a newly created profile.
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn unregistered_machine_is_rejected_and_creates_no_profile(pool: PgPool) {
         let before = sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
             .fetch_one(&pool)
@@ -601,7 +601,7 @@ Append to the existing `#[cfg(all(test, feature = "test-db"))] mod tests` in `cr
         assert_eq!(before, after, "authentication must not create a profile (D3)");
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn revoked_machine_is_rejected_distinguishably(pool: PgPool) {
         // Seed a profile + registration, then revoke it.
         let profile_id = Uuid::now_v7();
@@ -638,7 +638,7 @@ Append to the existing `#[cfg(all(test, feature = "test-db"))] mod tests` in `cr
         }
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn registered_machine_resolves_to_its_profile(pool: PgPool) {
         let profile_id = Uuid::now_v7();
         sqlx::query!(
@@ -861,7 +861,7 @@ Its two existing callers must adapt. In `resolve_human_from_claims` at `:94` and
 `machine_first_sight_provisions_agent_profile` (`:710`) and `machine_resolution_is_idempotent` (`:732`) both assert the deleted behavior. `machine_first_sight_provisions_agent_profile` is **superseded** by `unregistered_machine_is_rejected_and_creates_no_profile` — delete it. Rewrite `machine_resolution_is_idempotent` to seed a registration first:
 
 ```rust
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn machine_resolution_is_idempotent(pool: PgPool) {
         let profile_id = Uuid::now_v7();
         sqlx::query!(
@@ -893,7 +893,7 @@ Its two existing callers must adapt. In `resolve_human_from_claims` at `:94` and
 `tests/e2e/tests/auth_seam_m2m_e2e.rs` asserts, through the real MCP gate, that a machine token provisions an agent profile. That is now false. Replace the test body (keep `build_mcp_service` and `machine_parts` exactly as they are):
 
 ```rust
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[sqlx::test(migrator = "crate::MIGRATOR")]
 async fn unregistered_machine_token_is_rejected_by_the_mcp_gate(pool: sqlx::PgPool) {
     let _app = common::setup(pool.clone()).await;
     let svc = build_mcp_service(&pool).await;
@@ -917,7 +917,7 @@ async fn unregistered_machine_token_is_rejected_by_the_mcp_gate(pool: sqlx::PgPo
     assert_eq!(links, Some(0), "rejection creates no auth link");
 }
 
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[sqlx::test(migrator = "crate::MIGRATOR")]
 async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool) {
     let _app = common::setup(pool.clone()).await;
     let svc = build_mcp_service(&pool).await;
@@ -1123,7 +1123,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provision_creates_profile_link_emitters_and_registration(pool: PgPool) {
         let admin = seed_admin(&pool).await;
 
@@ -1155,7 +1155,7 @@ mod tests {
 
     /// D14: the trigger auto-joins only while access_mode='open'. provision must not
     /// depend on it, or every machine 403s the day the instance flips to invite_only.
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provision_enrolls_the_agent_in_the_gating_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         sqlx::query!("UPDATE kb_system_settings SET access_mode = 'invite_only'")
@@ -1176,7 +1176,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provision_applies_explicit_team_and_cogmap_reach(pool: PgPool) {
         let admin = seed_admin(&pool).await;
 
@@ -1233,7 +1233,7 @@ mod tests {
     }
 
     /// The regression test for the silent identity fork (D8).
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rebind_preserves_the_agent_profile_and_revokes_the_old_client(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         let old = svc::provision(&pool, admin, &req("old-client")).await.expect("provision");
@@ -1262,7 +1262,7 @@ mod tests {
         assert!(old_row.revoked_at.is_some(), "the old client is revoked in the same transaction");
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rebind_with_keep_old_active_leaves_an_overlap_window(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         let old = svc::provision(&pool, admin, &req("overlap-old")).await.expect("provision");
@@ -1286,7 +1286,7 @@ mod tests {
         assert!(old_row.revoked_at.is_none(), "--no-revoke-old keeps both credentials live");
     }
 
-    #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provisioning_a_duplicate_client_id_is_a_conflict(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         svc::provision(&pool, admin, &req("dupe")).await.expect("first");
