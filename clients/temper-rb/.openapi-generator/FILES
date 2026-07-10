@@ -147,8 +147,11 @@ lib/temper/generated/models/resource_update_request.rb
 lib/temper/generated/models/retype_relationship_request.rb
 lib/temper/generated/models/revoke_outcome.rb
 lib/temper/generated/models/reweight_relationship_request.rb
+lib/temper/generated/models/search_diagnostics.rb
 lib/temper/generated/models/search_params.rb
+lib/temper/generated/models/search_reason.rb
 lib/temper/generated/models/search_result_row.rb
+lib/temper/generated/models/search_scope.rb
 lib/temper/generated/models/segment_info.rb
 lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb

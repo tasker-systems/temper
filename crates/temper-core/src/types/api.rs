@@ -165,6 +165,89 @@ pub struct UnifiedSearchResultRow {
     pub context_owner_ref: Option<String>,
 }
 
+/// Which scope selector produced the search corpus. Mirrors the mutually-exclusive
+/// `{context_ref, cogmap_id, wayfind}` triple in [`SearchParams`] (plus `Global` for the
+/// unrestricted default). Lets an agent branch on *why* a result set is shaped as it is
+/// (issue #360).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SearchScope {
+    /// No scope selector — the whole corpus visible to the principal.
+    Global,
+    /// `context_ref` was set.
+    Context,
+    /// `cogmap_id` was set (single-map scope).
+    Cogmap,
+    /// `wayfind` region-salience funnel.
+    Wayfind,
+}
+
+/// Why a search result set is shaped as it is — the load-bearing signal for agents, which
+/// otherwise cannot tell "rephrase the query" from "this tool can never see that content"
+/// (issue #360). `Ok` ⇒ at least one hit. `NoMatch` ⇒ a non-empty scope with zero hits
+/// (rephrase / broaden). `OutOfScope` ⇒ the scope selector resolved to zero candidates —
+/// structurally unreachable content (e.g. `wayfind` over content that is context-homed in no
+/// cogmap); a different query phrasing will never help.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SearchReason {
+    /// At least one result was returned.
+    Ok,
+    /// Scope was non-empty (or global) but nothing matched the query.
+    NoMatch,
+    /// The scope selector resolved to zero candidate resources.
+    OutOfScope,
+}
+
+/// Scope-stage diagnostics accompanying every search response (issue #360). Machine-readable so
+/// agent harnesses can branch programmatically; `hint` is the human/agent-facing one-liner the
+/// CLI renders to stderr on a non-`Ok` reason.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct SearchDiagnostics {
+    /// Which selector produced the corpus.
+    pub scope: SearchScope,
+    /// Number of candidate resources the scope selector admitted, when it is cheaply knowable:
+    /// the resolved id-set size for `wayfind`/`cogmap`. `None` for `global` and `context`, whose
+    /// corpus is not a bounded id-set at scope-resolution time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_size: Option<i64>,
+    /// Number of results returned (post-ranking, post-limit).
+    pub matched: i64,
+    /// Why the result set is shaped as it is.
+    pub reason: SearchReason,
+    /// True when a ranking signal degraded silently — currently: server-side query embedding
+    /// failed and the blend fell back to FTS + graph only. Results are still returned.
+    pub degraded: bool,
+    /// One-liner explaining a non-`Ok` reason (or a degraded signal) and suggesting a next step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+/// Ranked hits plus scope-stage [`SearchDiagnostics`] (issue #360). This is **not** the
+/// `POST /api/search` wire body — that stays a bare `Vec<UnifiedSearchResultRow>` for backward
+/// compatibility, and the diagnostics ride an additive `x-temper-search-diagnostics` response
+/// header. This struct is the in-process shape (`search_select`) and the client's reassembled view
+/// (body + header). `diagnostics` is `None` only when a client talks to a server old enough not to
+/// emit the header — a graceful degrade, never a hard failure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<UnifiedSearchResultRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<SearchDiagnostics>,
+}
+
 /// Request body for updating a profile.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]

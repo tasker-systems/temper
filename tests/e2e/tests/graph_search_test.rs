@@ -141,7 +141,8 @@ async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
         .search()
         .search_with_params(&params_with_graph)
         .await
-        .expect("graph search");
+        .expect("graph search")
+        .results;
 
     let b_hit = results
         .iter()
@@ -184,7 +185,8 @@ async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
         .search()
         .search_with_params(&params_no_graph)
         .await
-        .expect("non-graph search");
+        .expect("non-graph search")
+        .results;
     let no_graph_ids: Vec<uuid::Uuid> = results_no_graph.iter().map(|r| r.resource_id).collect();
     assert!(
         !no_graph_ids.contains(&resource_b.id.into()),
@@ -299,7 +301,8 @@ async fn search_no_graph_flag_disables_expansion(pool: sqlx::PgPool) {
         .search()
         .search_with_params(&params_graph)
         .await
-        .expect("graph search");
+        .expect("graph search")
+        .results;
     let graph_ids: Vec<uuid::Uuid> = results_graph.iter().map(|r| r.resource_id).collect();
     assert!(
         graph_ids.contains(&resource_b.id.into()),
@@ -315,7 +318,8 @@ async fn search_no_graph_flag_disables_expansion(pool: sqlx::PgPool) {
         .search()
         .search_with_params(&params_no_graph)
         .await
-        .expect("no-graph search");
+        .expect("no-graph search")
+        .results;
     let no_graph_ids: Vec<uuid::Uuid> = results_no_graph.iter().map(|r| r.resource_id).collect();
     assert!(
         !no_graph_ids.contains(&resource_b.id.into()),
@@ -383,6 +387,7 @@ async fn search_context_ref_scopes_and_unknown_errors(pool: sqlx::PgPool) {
         .search_with_params(&unscoped)
         .await
         .expect("unscoped search")
+        .results
         .iter()
         .map(|r| r.resource_id)
         .collect();
@@ -402,6 +407,7 @@ async fn search_context_ref_scopes_and_unknown_errors(pool: sqlx::PgPool) {
         .search_with_params(&scoped)
         .await
         .expect("scoped search")
+        .results
         .iter()
         .map(|r| r.resource_id)
         .collect();
