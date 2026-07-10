@@ -14,7 +14,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::team::TeamMemberRow;
 
 use crate::middleware::auth::AuthUser;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::access_service;
 use temper_services::state::AppState;
 
@@ -22,7 +22,7 @@ use temper_services::state::AppState;
 // Request body types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateRequestBody {
     pub message: Option<String>,
     pub source: String,
@@ -40,6 +40,18 @@ pub struct ReviewRequestBody {
 // ---------------------------------------------------------------------------
 
 /// POST /api/access/requests — submit a join request for the gating team.
+#[utoipa::path(
+    post,
+    path = "/api/access/requests",
+    tag = "Access",
+    request_body = CreateRequestBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 201, description = "Join request created", body = JoinRequest),
+        (status = 400, description = "System is in open mode — no request needed", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
 pub async fn create_request(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -57,6 +69,16 @@ pub async fn create_request(
 }
 
 /// GET /api/access/requests/me — check own join request status.
+#[utoipa::path(
+    get,
+    path = "/api/access/requests/me",
+    tag = "Access",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Own join request, or null if none exists", body = Option<JoinRequest>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
 pub async fn get_own_request(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -67,6 +89,17 @@ pub async fn get_own_request(
 }
 
 /// DELETE /api/access/requests/me — withdraw a pending join request.
+#[utoipa::path(
+    delete,
+    path = "/api/access/requests/me",
+    tag = "Access",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Pending join request withdrawn"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "No pending join request to withdraw", body = ErrorBody),
+    )
+)]
 pub async fn withdraw_request(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -76,6 +109,16 @@ pub async fn withdraw_request(
 }
 
 /// GET /api/access/settings — read public system settings.
+#[utoipa::path(
+    get,
+    path = "/api/access/settings",
+    tag = "Access",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Public system settings", body = PublicSystemSettings),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
 pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<PublicSystemSettings>> {
     access_service::get_public_settings(&state.pool)
         .await
@@ -84,6 +127,13 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
 
 // ---------------------------------------------------------------------------
 // Admin endpoints (gated router, handler-level admin check)
+//
+// These five handlers (`list_pending`, `review_request`, `get_admin_settings`,
+// `update_settings`, `promote_admin`) are DELIBERATELY left without
+// `#[utoipa::path]` annotations: they are an operator-only surface, not part of
+// the documented client API. A library caller requesting access to their own
+// instance uses the four self-service handlers above; the operator surface is
+// intentionally excluded from the OpenAPI spec.
 // ---------------------------------------------------------------------------
 
 /// GET /api/access/admin/requests — list pending join requests (admin only).

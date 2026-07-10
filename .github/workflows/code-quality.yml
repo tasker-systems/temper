@@ -61,6 +61,12 @@ jobs:
       - name: Run Clippy lints
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Check OpenAPI spec is up to date with the router
+        run: bash .github/scripts/check-openapi-spec.sh
+
+      - name: Check every route is documented (OpenAPI route allowlist)
+        run: bash .github/scripts/check-openapi-routes.sh
+
       - name: Check documentation builds
         run: cargo doc --workspace --no-deps --document-private-items
         env:

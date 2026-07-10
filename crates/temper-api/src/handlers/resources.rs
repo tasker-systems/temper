@@ -320,7 +320,10 @@ pub async fn update(
     delete,
     path = "/api/resources/{id}",
     tag = "Resources",
-    params(("id" = Uuid, Path, description = "Resource ID")),
+    params(
+        ("id" = Uuid, Path, description = "Resource ID"),
+        temper_core::types::authorship::ActInput
+    ),
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Resource deleted", body = DeleteResponse),

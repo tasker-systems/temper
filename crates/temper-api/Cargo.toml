@@ -8,6 +8,10 @@ description = "Axum HTTP server implementing the temper cloud API"
 name = "temper-api"
 path = "src/main.rs"
 
+[[bin]]
+name = "emit-openapi"
+path = "src/bin/emit-openapi.rs"
+
 [dependencies]
 temper-core = { path = "../temper-core", features = ["web-api"] }
 temper-services = { path = "../temper-services" }
@@ -27,6 +31,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-axum = "0.2"
 
 [features]
 test-db = []

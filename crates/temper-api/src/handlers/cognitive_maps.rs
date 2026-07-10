@@ -41,7 +41,10 @@ pub struct ShapeQuery {
     put,
     path = "/api/cognitive-maps/{id}",
     tag = "Cognitive Maps",
-    params(("id" = Uuid, Path, description = "Cognitive map ID")),
+    params(
+        ("id" = Uuid, Path, description = "Cognitive map ID"),
+        temper_core::types::authorship::ActInput
+    ),
     security(("bearer_auth" = [])),
     request_body = ReconcileCogmapRequest,
     responses(

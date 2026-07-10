@@ -16,64 +16,13 @@ use temper_workflow::types::resource::{
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
 };
 
+// NOTE: no `paths(...)` list here. The set of documented paths is derived from the
+// axum router in `routes::openapi_spec()`, which seeds itself with this `ApiDoc`
+// (for info/tags/security/component-schemas) and then collects paths from every
+// `.routes(routes!(…))` registration. The router is the single source of truth;
+// this struct supplies only the ambient document metadata.
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        crate::handlers::health::health_check,
-        crate::handlers::resources::list,
-        crate::handlers::resources::get,
-        crate::handlers::resources::get_content,
-        crate::handlers::resources::create,
-        crate::handlers::resources::update,
-        crate::handlers::resources::delete,
-        crate::handlers::resources::grant,
-        crate::handlers::resources::revoke,
-        crate::handlers::contexts::share_team,
-        crate::handlers::contexts::unshare_team,
-        crate::handlers::profiles::get,
-        crate::handlers::profiles::update,
-        crate::handlers::profiles::list_auth_links,
-        crate::handlers::events::cursor,
-        crate::handlers::search::search,
-        crate::handlers::meta::get_meta,
-        crate::handlers::meta::update_meta,
-        crate::handlers::edges::list,
-        crate::handlers::edges::assert,
-        crate::handlers::edges::retype,
-        crate::handlers::edges::reweight,
-        crate::handlers::edges::fold,
-        crate::handlers::facets::set_facet,
-        crate::handlers::graph::context_panorama,
-        crate::handlers::graph::context_composition,
-        crate::handlers::cognitive_maps::genesis,
-        crate::handlers::cognitive_maps::reconcile,
-        crate::handlers::cognitive_maps::shape,
-        crate::handlers::cognitive_maps::materialize_delta,
-        crate::handlers::cognitive_maps::materialize,
-        crate::handlers::cognitive_maps::region_metrics,
-        crate::handlers::cognitive_maps::analytics,
-        crate::handlers::cognitive_maps::bind_team,
-        crate::handlers::cognitive_maps::unbind_team,
-        crate::handlers::cognitive_maps::grant,
-        crate::handlers::cognitive_maps::revoke,
-        crate::handlers::invocations::open,
-        crate::handlers::invocations::close,
-        crate::handlers::invocations::show,
-        crate::handlers::invocations::list,
-        crate::handlers::steward::delta,
-        crate::handlers::steward::advance,
-        crate::handlers::steward::sweep,
-        crate::handlers::steward::candidates,
-        crate::handlers::steward::dispatch,
-        crate::handlers::embed::dispatch,
-        crate::handlers::invitations::create,
-        crate::handlers::invitations::list,
-        crate::handlers::invitations::list_mine,
-        crate::handlers::invitations::accept,
-        crate::handlers::invitations::decline,
-        crate::handlers::reassign::reassign_resource,
-        crate::handlers::reassign::reassign_team,
-    ),
     components(schemas(
         HealthResponse,
         ResourceRow,
@@ -168,6 +117,10 @@ use temper_workflow::types::resource::{
         temper_core::types::reassign::ReassignAck,
         temper_core::types::reassign::BulkReassignRequest,
         temper_core::types::reassign::BulkReassignAck,
+        temper_core::types::access_gate::JoinRequest,
+        temper_core::types::access_gate::JoinRequestStatus,
+        temper_core::types::access_gate::PublicSystemSettings,
+        crate::handlers::access::CreateRequestBody,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -185,6 +138,7 @@ use temper_workflow::types::resource::{
         (name = "Invitations", description = "Team invitations (invite/list/accept/decline)"),
         (name = "Reassign", description = "Resource ownership reassignment (single + bulk team-scoped)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
+        (name = "Access", description = "System access gate — self-service join requests and public settings"),
     ),
     info(
         title = "Temper Cloud API",
@@ -214,11 +168,12 @@ impl Modify for SecurityAddon {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn openapi_spec_is_valid() {
-        let spec = ApiDoc::openapi();
+        // Drive the router-derived spec, not `ApiDoc::openapi()` directly: `ApiDoc`
+        // no longer carries a `paths(...)` list, so the paths only exist once the
+        // router registrations are collected by `openapi_spec()`.
+        let spec = crate::routes::openapi_spec();
         let json = spec.to_pretty_json().expect("spec serializes to JSON");
 
         // Verify basic structure
@@ -253,6 +208,43 @@ mod tests {
         assert!(json.contains("/api/invitations/{token}/decline"));
         assert!(json.contains("/api/resources/{id}/reassign"));
         assert!(json.contains("/api/teams/{id}/reassign"));
+
+        // Verify previously-orphaned paths are now present (they gained documentation
+        // only by being derived from the router — they were never in `paths(...)`).
+        assert!(json.contains("/api/teams"));
+        assert!(json.contains("/api/teams/{id}/members"));
+        assert!(json.contains("/api/ingest"));
+        assert!(json.contains("/api/ingest/{id}"));
+        assert!(json.contains("/api/contexts"));
+        assert!(json.contains("/api/contexts/{id}"));
+        assert!(json.contains("/api/resources/{id}/blocks"));
+        assert!(json.contains("/api/resources/{id}/finalize"));
+        assert!(json.contains("/api/resources/{id}/provenance"));
+        assert!(json.contains("/api/graph/home"));
+        assert!(json.contains("/api/graph/regions/composition"));
+        assert!(json.contains("/api/graph/cogmaps/{id}/panorama"));
+        assert!(json.contains("/api/cogmaps/{id}/graph/slice"));
+        assert!(json.contains("/api/graph/elements/{kind}/{id}/trail"));
+
+        // Verify the operator / internal surfaces are ABSENT from the contract.
+        // These are mounted with plain `.route()` (admin) or on sub-routers that
+        // `openapi_spec()` deliberately does not merge (internal, embed drain).
+        // Check the actual path keys, not a raw-JSON substring: `/api/embed/dispatch`
+        // appears verbatim inside a component schema's doc-comment description, so a
+        // `json.contains` check would spuriously match it.
+        for absent in [
+            "/api/access/admin/promote",
+            "/api/access/admin/requests",
+            "/api/access/admin/requests/{id}",
+            "/api/access/admin/settings",
+            "/internal/saml/reconcile",
+            "/api/embed/dispatch",
+        ] {
+            assert!(
+                !spec.paths.paths.contains_key(absent),
+                "operator/internal path {absent} must not be in the contract",
+            );
+        }
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));
