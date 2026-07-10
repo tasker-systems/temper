@@ -646,3 +646,166 @@ async fn writes_open_then_close_round_trips(pool: sqlx::PgPool) {
     assert_eq!(status, "completed");
     assert!(closed, "closed_at set");
 }
+
+// ── Steward tick correlation (task 019f4be3) ─────────────────────────────────
+//
+// One steward tick is one dispatch act plus N run-grain sessions. The tick id reaches the data layer
+// by being stamped on each claimed job; `invocation_open` inherits it server-side, so nothing is asked
+// of the agent. These tests pin that inheritance, its absence, and its replay-stability.
+
+/// Stand in for `workflow_job_claim(…, p_correlation)`: an ACTIVE job for `cog`, stamped by a tick.
+async fn claimed_job(pool: &sqlx::PgPool, cog: CogmapId, correlation: Option<Uuid>) {
+    sqlx::query(
+        "INSERT INTO kb_workflow_jobs (cogmap_id, persona, dispatch_type, status, leased_at, correlation_id)
+         VALUES ($1, 'steward', 'steward', 'in_progress', now(), $2)",
+    )
+    .bind(cog.uuid())
+    .bind(correlation)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn open_invocation(pool: &sqlx::PgPool, cog: CogmapId, emitter: EntityId) -> Uuid {
+    let inv = temper_substrate::ids::InvocationId::from(Uuid::now_v7());
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::InvocationOpen {
+            invocation: inv,
+            trigger_kind: "delegated",
+            originating: cog,
+            parent: None,
+            scoped_entity: emitter,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    inv.uuid()
+}
+
+async fn invocation_correlation(pool: &sqlx::PgPool, inv: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar("SELECT correlation_id FROM kb_invocations WHERE id = $1")
+        .bind(inv)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn invocation_open_inherits_the_tick_from_its_active_claimed_job(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-tick").await;
+
+    // The cron's id is a v4 UUID (crypto.randomUUID), deliberately not v7 — the column has no
+    // sortability requirement, and the NULLIF-vs-self-root logic must not depend on version.
+    let tick = Uuid::parse_str("6f1e5a2c-9d3b-4c7e-8a10-2b4d6e8f0a12").unwrap();
+    claimed_job(&pool, cog, Some(tick)).await;
+
+    let inv = open_invocation(&pool, cog, emitter).await;
+
+    assert_eq!(
+        invocation_correlation(&pool, inv).await,
+        Some(tick),
+        "the run inherits the tick that claimed its job — no model involvement"
+    );
+
+    // …and the opening event carries it too, so the ledger alone can rebuild the projection.
+    let event_correlation: Option<Uuid> = sqlx::query_scalar(
+        "SELECT e.correlation_id FROM kb_events e
+           JOIN kb_event_types t ON t.id = e.event_type_id
+          WHERE t.name = 'delegated_launch' AND e.invocation_id = $1",
+    )
+    .bind(inv)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event_correlation, Some(tick));
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn manual_invocation_open_with_no_active_job_gets_no_correlation(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-manual").await;
+
+    // No job at all: a human opening an envelope by hand. There is no tick to correlate to.
+    let inv = open_invocation(&pool, cog, emitter).await;
+    assert_eq!(invocation_correlation(&pool, inv).await, None);
+
+    // The delegated_launch event still self-roots (correlation_id = its own id), exactly as before
+    // this migration — which is precisely what the projection's NULLIF maps back to NULL.
+    let self_rooted: bool = sqlx::query_scalar(
+        "SELECT e.correlation_id = e.id FROM kb_events e
+           JOIN kb_event_types t ON t.id = e.event_type_id
+          WHERE t.name = 'delegated_launch' AND e.invocation_id = $1",
+    )
+    .bind(inv)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(self_rooted, "an uncorrelated event roots at itself");
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_job_that_is_no_longer_active_is_not_inherited(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-stale").await;
+
+    // A finished job from an EARLIER tick must not leak its id into a later, manually opened run.
+    let stale = Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap();
+    claimed_job(&pool, cog, Some(stale)).await;
+    sqlx::query("UPDATE kb_workflow_jobs SET status = 'done', completed_at = now()")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let inv = open_invocation(&pool, cog, emitter).await;
+    assert_eq!(
+        invocation_correlation(&pool, inv).await,
+        None,
+        "only an in_progress job is inherited from"
+    );
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn tick_correlation_survives_replay_without_the_job_table(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-tick-replay").await;
+
+    let tick = Uuid::parse_str("6f1e5a2c-9d3b-4c7e-8a10-2b4d6e8f0a12").unwrap();
+    claimed_job(&pool, cog, Some(tick)).await;
+    let inv = open_invocation(&pool, cog, emitter).await;
+    assert_eq!(invocation_correlation(&pool, inv).await, Some(tick));
+
+    // Differential: rebuild the projections from the ledger alone. `reset_schema` wipes
+    // kb_workflow_jobs too, so a projection that re-read the job table (rather than the event's own
+    // correlation_id) would silently rebuild this run as uncorrelated. Replay must be ledger-pure.
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+
+    let pick = |d: &Vec<(String, serde_json::Value)>| {
+        d.iter()
+            .find(|(t, _)| t == "kb_invocations")
+            .map(|(_, v)| v.clone())
+            .expect("kb_invocations must be in the projection dump set")
+    };
+    assert_eq!(
+        pick(&before),
+        pick(&after),
+        "kb_invocations (correlation_id included) must replay byte-identically from the ledger"
+    );
+    assert_eq!(
+        invocation_correlation(&pool, inv).await,
+        Some(tick),
+        "the rebuilt run still names its tick, with no job row in existence"
+    );
+}
