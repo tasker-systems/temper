@@ -4,7 +4,8 @@
     "title": "Temper Cloud API",
     "description": "Knowledge base management API for temper cloud",
     "license": {
-      "name": ""
+      "name": "MIT",
+      "identifier": "MIT"
     },
     "version": "0.1.0"
   },

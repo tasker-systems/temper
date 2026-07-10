@@ -148,6 +148,13 @@ use temper_workflow::types::resource::{
         title = "Temper Cloud API",
         version = "0.1.0",
         description = "Knowledge base management API for temper cloud",
+        // Declared explicitly rather than inherited from `CARGO_PKG_LICENSE`: no crate in this
+        // workspace sets `license` in its Cargo.toml, so utoipa fabricates `{"name": ""}` — an
+        // empty license name is invalid OpenAPI, and `openapi-generator validate` rejects the
+        // document outright ("attribute info.license.identifier is missing"), which blocks every
+        // generated client. `identifier` is the SPDX expression and is mutually exclusive with
+        // `url`. Asserted by `openapi_spec_is_valid`.
+        license(name = "MIT", identifier = "MIT"),
     )
 )]
 pub struct ApiDoc;
@@ -229,6 +236,20 @@ mod tests {
         // Verify basic structure
         assert!(json.contains("\"title\": \"Temper Cloud API\""));
         assert!(json.contains("\"version\": \"0.1.0\""));
+
+        // An empty `info.license.name` is invalid OpenAPI and makes `openapi-generator validate`
+        // reject the whole document, so no client can be generated. utoipa fabricates exactly that
+        // when no crate declares `license` in Cargo.toml — hence the explicit `license(...)`.
+        let license = &spec
+            .info
+            .license
+            .as_ref()
+            .expect("info.license is declared");
+        assert!(
+            !license.name.is_empty(),
+            "info.license.name must not be empty"
+        );
+        assert_eq!(license.identifier.as_deref(), Some("MIT"));
 
         // Verify all paths present
         assert!(json.contains("/api/health"));
