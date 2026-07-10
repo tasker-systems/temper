@@ -15,7 +15,7 @@ use temper_services::error::{ErrorBody, ErrorDetail};
 use temper_workflow::types::managed_meta::ResourceMetaListResponse;
 use temper_workflow::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceDetail, ResourceFacets,
-    ResourceListResponse, ResourceRow, ResourceUpdateRequest,
+    ResourceListResponse, ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
 };
 
 // NOTE: no `paths(...)` list here. The set of documented paths is derived from the
@@ -33,6 +33,8 @@ use temper_workflow::types::resource::{
         ResourceMetaListResponse,
         ListResourcesResponse,
         ResourceFacets,
+        ResourceSortField,
+        SortOrder,
         ResourceCreateRequest,
         ResourceUpdateRequest,
         ContentResponse,
@@ -354,5 +356,62 @@ mod tests {
         // with `==` rather than `assert_eq!` (which needs `Debug` to format a mismatch).
         assert!(param.required == Required::False);
         assert!(param.parameter_in == ParameterIn::Header);
+    }
+
+    /// Walk the serialized spec and collect every `#/components/schemas/<Name>` reference.
+    fn collect_schema_refs(
+        value: &serde_json::Value,
+        out: &mut std::collections::BTreeSet<String>,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(reference)) = map.get("$ref") {
+                    if let Some(name) = reference.strip_prefix("#/components/schemas/") {
+                        out.insert(name.to_owned());
+                    }
+                }
+                for nested in map.values() {
+                    collect_schema_refs(nested, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for nested in items {
+                    collect_schema_refs(nested, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A `$ref` to a component that does not exist makes the document invalid OpenAPI.
+    /// `openapi-generator`'s 3.1 dereferencer throws on it and emits zero files, so this is
+    /// the difference between a generatable contract and an unusable one.
+    ///
+    /// Enums reachable only through an `IntoParams` query struct are NOT auto-collected by
+    /// `.routes()` — they must be named in `components(schemas(...))` by hand. `CorrelationId`
+    /// is the control case: it is `$ref`'d from query params too, yet resolves, because it also
+    /// hangs off `ActInput`, a request *body* schema.
+    #[test]
+    fn every_schema_ref_resolves() {
+        use std::collections::BTreeSet;
+
+        let spec = crate::routes::openapi_spec();
+        let json = serde_json::to_value(&spec).expect("spec serializes to JSON");
+
+        let defined: BTreeSet<String> = json["components"]["schemas"]
+            .as_object()
+            .expect("components.schemas is an object")
+            .keys()
+            .cloned()
+            .collect();
+
+        let mut referenced = BTreeSet::new();
+        collect_schema_refs(&json, &mut referenced);
+
+        let dangling: Vec<&String> = referenced.difference(&defined).collect();
+        assert!(
+            dangling.is_empty(),
+            "spec $refs component schemas that are not defined: {dangling:?}",
+        );
     }
 }

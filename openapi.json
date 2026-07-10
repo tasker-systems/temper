@@ -8850,6 +8850,19 @@
           }
         }
       },
+      "ResourceSortField": {
+        "type": "string",
+        "description": "Sort field for resource listing.",
+        "enum": [
+          "updated",
+          "created",
+          "title",
+          "stage",
+          "seq",
+          "context_name",
+          "doc_type_name"
+        ]
+      },
       "ResourceUpdateRequest": {
         "allOf": [
           {
@@ -9324,6 +9337,14 @@
             "description": "Focus resource ids. Must be non-empty — R4 is always drilled in around a focus."
           }
         }
+      },
+      "SortOrder": {
+        "type": "string",
+        "description": "Sort direction.",
+        "enum": [
+          "desc",
+          "asc"
+        ]
       },
       "Subscription": {
         "type": "object",
