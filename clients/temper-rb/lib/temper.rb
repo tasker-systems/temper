@@ -27,6 +27,7 @@ require 'temper/generated'
 require 'temper/version'
 require 'temper/errors'
 require 'temper/credentials'
+require 'temper/connection'
 
 # The contract this gem was generated against. `rake generate` passes
 # openapi.json's info.version to the generator as `gemVersion`, so the generated

@@ -25,5 +25,13 @@ Metrics/BlockLength:
 RSpec/MultipleExpectations:
   Enabled: false
 
+# connection_spec exercises module-level behaviour spread across Temper and
+# Temper::Generated (memoization, fiber-local token scoping, adapter install).
+# There is no single class to name, and naming Temper would demand the file sit
+# at spec/temper_spec.rb, which already describes the configuration surface.
+RSpec/DescribeClass:
+  Exclude:
+    - 'spec/temper/connection_spec.rb'
+
 RSpec/ExampleLength:
   Enabled: false
