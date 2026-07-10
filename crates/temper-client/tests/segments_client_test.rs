@@ -22,6 +22,7 @@ fn test_client(base_url: &str) -> TemperClient {
     TemperClient::with_token(
         base_url,
         None,
+        temper_workflow::operations::Surface::CliCloud,
         "test-token".to_string(),
         Arc::new(MemoryTokenStore::empty()),
     )

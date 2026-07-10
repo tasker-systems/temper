@@ -13,6 +13,8 @@ use serde_json::Value;
 
 use tracing::Instrument;
 
+use temper_workflow::operations::{Surface, SURFACE_HEADER};
+
 use crate::auth::TokenStore;
 use crate::error::{ClientError, Result};
 
@@ -58,7 +60,8 @@ fn should_retry(method: &reqwest::Method, err: &ClientError) -> bool {
 
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
 ///
-/// All request methods prepend `base_url` to the given path and inject the
+/// All request methods prepend `base_url` to the given path, inject the
+/// `X-Temper-Surface` header naming this client's surface, and inject the
 /// `X-Temper-Device-Id` header when a device ID has been set.
 ///
 /// Bearer tokens are resolved through [`TokenStore`] — cloud sessions use
@@ -70,6 +73,7 @@ pub struct HttpClient {
     inner: Client,
     base_url: String,
     device_id: Option<String>,
+    surface: Surface,
     token_override: Option<String>,
     token_store: Option<Arc<dyn TokenStore>>,
 }
@@ -79,6 +83,7 @@ impl fmt::Debug for HttpClient {
         f.debug_struct("HttpClient")
             .field("base_url", &self.base_url)
             .field("device_id", &self.device_id)
+            .field("surface", &self.surface)
             .field("has_token_override", &self.token_override.is_some())
             .field("has_token_store", &self.token_store.is_some())
             .finish()
@@ -106,9 +111,14 @@ impl HttpClient {
     /// resolution. Cloud sessions pass an `Arc<MemoryTokenStore>`; local
     /// sessions pass an `Arc<DiskTokenStore>`. Tests that don't care about
     /// auth can pass `None` and use [`HttpClient::with_token_override`] instead.
+    ///
+    /// `surface` is construction state, not a per-call argument — a client *is* a
+    /// surface for its whole life. There is deliberately no default: a defaulted
+    /// surface would silently attribute every write to `@web`.
     pub fn new(
         base_url: &str,
         device_id: Option<String>,
+        surface: Surface,
         token_store: Option<Arc<dyn TokenStore>>,
     ) -> Self {
         let inner = Client::builder()
@@ -120,6 +130,7 @@ impl HttpClient {
             inner,
             base_url: base_url.trim_end_matches('/').to_owned(),
             device_id,
+            surface,
             token_override: None,
             token_store,
         }
@@ -130,10 +141,15 @@ impl HttpClient {
     /// Intended for testing and scripting contexts, or for client
     /// construction where the token was already resolved upstream (e.g.
     /// `build_client_from` after a successful `store.load()`).
-    pub fn with_token_override(base_url: &str, device_id: Option<String>, token: String) -> Self {
+    pub fn with_token_override(
+        base_url: &str,
+        device_id: Option<String>,
+        surface: Surface,
+        token: String,
+    ) -> Self {
         Self {
             token_override: Some(token),
-            ..Self::new(base_url, device_id, None)
+            ..Self::new(base_url, device_id, surface, None)
         }
     }
 
@@ -163,7 +179,11 @@ impl HttpClient {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
-    fn apply_device_header(&self, req: RequestBuilder) -> RequestBuilder {
+    /// Attach the client-identity headers: device id (when set) and the calling surface
+    /// (always). Both ride every request, including GETs — they describe the caller, not
+    /// the operation.
+    fn apply_identity_headers(&self, req: RequestBuilder) -> RequestBuilder {
+        let req = req.header(SURFACE_HEADER, self.surface.marker());
         if let Some(id) = &self.device_id {
             req.header("X-Temper-Device-Id", id.as_str())
         } else {
@@ -172,23 +192,23 @@ impl HttpClient {
     }
 
     pub fn get(&self, path: &str) -> RequestBuilder {
-        self.apply_device_header(self.inner.get(self.url(path)))
+        self.apply_identity_headers(self.inner.get(self.url(path)))
     }
 
     pub fn post(&self, path: &str) -> RequestBuilder {
-        self.apply_device_header(self.inner.post(self.url(path)))
+        self.apply_identity_headers(self.inner.post(self.url(path)))
     }
 
     pub fn patch(&self, path: &str) -> RequestBuilder {
-        self.apply_device_header(self.inner.patch(self.url(path)))
+        self.apply_identity_headers(self.inner.patch(self.url(path)))
     }
 
     pub fn delete(&self, path: &str) -> RequestBuilder {
-        self.apply_device_header(self.inner.delete(self.url(path)))
+        self.apply_identity_headers(self.inner.delete(self.url(path)))
     }
 
     pub fn put(&self, path: &str) -> RequestBuilder {
-        self.apply_device_header(self.inner.put(self.url(path)))
+        self.apply_identity_headers(self.inner.put(self.url(path)))
     }
 
     /// Send a request, injecting `Bearer` auth if `token` is provided.
@@ -410,6 +430,8 @@ fn parse_error_field(body: &str, field: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    const TEST_SURFACE: Surface = Surface::CliCloud;
+
     fn status(code: u16) -> StatusCode {
         StatusCode::from_u16(code).unwrap()
     }
@@ -512,7 +534,7 @@ mod tests {
 
     #[test]
     fn url_building_strips_trailing_and_leading_slashes() {
-        let client = HttpClient::new("https://api.example.com/", None, None);
+        let client = HttpClient::new("https://api.example.com/", None, TEST_SURFACE, None);
         let url = client.url("/v1/tasks");
         assert_eq!(url, "https://api.example.com/v1/tasks");
     }
@@ -520,8 +542,12 @@ mod tests {
     #[test]
     fn resolve_token_returns_override_when_set() {
         let token = "test-token-abc123".to_owned();
-        let client =
-            HttpClient::with_token_override("https://api.example.com", None, token.clone());
+        let client = HttpClient::with_token_override(
+            "https://api.example.com",
+            None,
+            TEST_SURFACE,
+            token.clone(),
+        );
         let result = client.resolve_token();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), token);
@@ -551,7 +577,7 @@ mod tests {
     async fn empty_base_url_returns_not_configured() {
         // Regression: an unconfigured cloud (empty api_url) must surface an
         // actionable "run `temper init`" error, not reqwest's opaque builder error.
-        let client = HttpClient::new("", None, None);
+        let client = HttpClient::new("", None, TEST_SURFACE, None);
         let req = client.get("/api/resources");
         let err = client
             .send(&reqwest::Method::GET, "/api/resources", req, None)
@@ -567,7 +593,7 @@ mod tests {
 
     #[test]
     fn resolve_token_errors_when_no_override_and_no_store() {
-        let client = HttpClient::new("https://api.example.com", None, None);
+        let client = HttpClient::new("https://api.example.com", None, TEST_SURFACE, None);
         let err = client
             .resolve_token()
             .expect_err("no override, no store → NotAuthenticated");
@@ -647,7 +673,12 @@ mod tests {
                 device_id: None,
             })
             .unwrap();
-        let client = HttpClient::new("https://api.example.com", None, Some(Arc::new(store)));
+        let client = HttpClient::new(
+            "https://api.example.com",
+            None,
+            TEST_SURFACE,
+            Some(Arc::new(store)),
+        );
         assert_eq!(client.resolve_token().unwrap(), "at_from_store");
     }
 }

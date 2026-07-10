@@ -324,10 +324,11 @@ mod embed_impl {
             })
         }
 
-        // `origin` is unused here: this backend forwards over HTTP, and the server attributes the
-        // event to the surface it actually received (`Surface::ApiHttp`). Carrying the CLI's origin
-        // across the wire would need a header or payload field — a separate concern from making the
-        // parameter honest for in-process callers (MCP, API).
+        // `origin` is unused *here* because the surface is carried by the client, not the
+        // command: `HttpClient` was constructed with `Surface::CliCloud` and sends
+        // `X-Temper-Surface: cli` on every request. The server parses that header and
+        // attributes the event to `<handle>@cli`. The parameter stays for in-process
+        // callers (MCP, API), whose backend reads `cmd.origin` directly.
         async fn append_block(
             &self,
             resource: temper_core::types::ids::ResourceId,

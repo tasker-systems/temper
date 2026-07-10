@@ -58,15 +58,17 @@ impl TemperClient {
     /// Create a new client targeting `base_url`.
     ///
     /// `device_id` is sent as `X-Temper-Device-Id` on every request for
-    /// per-device manifest tracking. `store` is the source of truth for
-    /// token resolution.
+    /// per-device manifest tracking. `surface` is sent as `X-Temper-Surface`
+    /// and determines which `<handle>@<marker>` emitter the server attributes
+    /// this client's writes to. `store` is the source of truth for token resolution.
     pub fn new(
         base_url: &str,
         device_id: Option<String>,
+        surface: temper_workflow::operations::Surface,
         store: Arc<dyn auth::TokenStore>,
     ) -> Self {
         Self {
-            http: http::HttpClient::new(base_url, device_id, Some(store.clone())),
+            http: http::HttpClient::new(base_url, device_id, surface, Some(store.clone())),
             oauth_config: None,
             store,
         }
@@ -81,11 +83,12 @@ impl TemperClient {
     pub fn with_token(
         base_url: &str,
         device_id: Option<String>,
+        surface: temper_workflow::operations::Surface,
         token: String,
         store: Arc<dyn auth::TokenStore>,
     ) -> Self {
         Self {
-            http: http::HttpClient::with_token_override(base_url, device_id, token),
+            http: http::HttpClient::with_token_override(base_url, device_id, surface, token),
             oauth_config: None,
             store,
         }

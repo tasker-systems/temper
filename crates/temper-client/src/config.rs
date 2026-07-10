@@ -91,6 +91,7 @@ pub fn oauth_config(config: &TemperConfig) -> crate::error::Result<crate::login:
 pub fn build_client_from(
     config: &TemperConfig,
     store: std::sync::Arc<dyn crate::auth::TokenStore>,
+    surface: temper_workflow::operations::Surface,
 ) -> crate::error::Result<crate::TemperClient> {
     let url = api_url(config);
     let auth = store.load()?;
@@ -100,11 +101,12 @@ pub fn build_client_from(
         crate::TemperClient::with_token(
             &url,
             device_id,
+            surface,
             secrecy::ExposeSecret::expose_secret(&auth.access_token).to_string(),
             store,
         )
     } else {
-        crate::TemperClient::new(&url, device_id, store)
+        crate::TemperClient::new(&url, device_id, surface, store)
     };
 
     let client = match oauth_config(config) {
@@ -127,9 +129,10 @@ pub fn build_client_from(
 /// point, not the client builder.
 pub fn build_client(
     store: std::sync::Arc<dyn crate::auth::TokenStore>,
+    surface: temper_workflow::operations::Surface,
 ) -> crate::error::Result<crate::TemperClient> {
     let config = load_cloud_config()?;
-    build_client_from(&config, store)
+    build_client_from(&config, store, surface)
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +406,7 @@ scopes        = ["openid", "profile"]
                 ("TEMPER_GLOBAL_CONFIG", Some(nonexistent.to_str().unwrap())),
                 ("TEMPER_API_URL", None),
             ],
-            || build_client(store),
+            || build_client(store, temper_workflow::operations::Surface::CliCloud),
         );
         assert!(result.is_ok(), "build_client failed: {:?}", result.err());
     }
@@ -428,7 +431,12 @@ scopes        = ["openid", "profile"]
         };
         let store: std::sync::Arc<dyn crate::auth::TokenStore> =
             std::sync::Arc::new(crate::auth::MemoryTokenStore::with_auth(auth));
-        let client = build_client_from(&config, store).unwrap();
+        let client = build_client_from(
+            &config,
+            store,
+            temper_workflow::operations::Surface::CliCloud,
+        )
+        .unwrap();
         // Client was constructed without reading disk — verify it exists
         assert!(format!("{:?}", client).contains("test.example.com"));
     }

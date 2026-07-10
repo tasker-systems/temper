@@ -118,8 +118,12 @@ pub(crate) fn build_config_store_and_client() -> Result<(
 )> {
     let config = load_cloud_config().map_err(|e| TemperError::Api(e.to_string()))?;
     let store = resolve_token_store(&config)?;
-    let client =
-        build_client_from(&config, store.clone()).map_err(|e| TemperError::Api(e.to_string()))?;
+    let client = build_client_from(
+        &config,
+        store.clone(),
+        temper_workflow::operations::Surface::CliCloud,
+    )
+    .map_err(|e| TemperError::Api(e.to_string()))?;
     Ok((config, store, client))
 }
 
