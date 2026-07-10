@@ -126,11 +126,15 @@ pub fn resolve_provenance_source(value: &str) -> Result<ProvenanceSource, Temper
     }
 }
 
-/// A source value is remote iff it carries an http/https scheme. Scheme-only + conservative, so a bare
-/// UUID or decorated ref can never be mistaken for a URL (and a non-web scheme like `ftp://` is not a
-/// provenance source — it falls through to `parse_ref` and errors).
-fn is_remote_url(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
+/// A value is a remote URL iff it carries an http/https scheme (case-insensitive). Scheme-only +
+/// conservative, so a bare UUID or decorated ref can never be mistaken for a URL (and a non-web
+/// scheme like `ftp://` is not a provenance source — it falls through to `parse_ref` and errors).
+///
+/// The one canonical external-URL classifier, shared by the `--sources` resolver, the CLI `--from`
+/// URL/path split, and the server-side origin-URI provenance default (issue #352) so all three
+/// classify identically.
+pub fn is_remote_url(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 

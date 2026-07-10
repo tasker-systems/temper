@@ -169,7 +169,7 @@ async fn resolve_from_input(
         ));
     }
 
-    let extracted = if from.starts_with("http://") || from.starts_with("https://") {
+    let extracted = if temper_workflow::operations::is_remote_url(from) {
         let (tmp, _name) = crate::actions::ingest::fetch_url_to_tempfile(from).await?;
         crate::extract::extract_to_markdown(tmp.as_ref()).await?
     } else {
@@ -218,6 +218,11 @@ pub struct CreateResourceArgs<'a> {
     /// source, in addition to the block-provenance record. Gated on `sources` by clap
     /// (`requires = "sources"`).
     pub sources_as_edges: bool,
+    /// `--no-source` — suppress the `--from <url>` provenance default (issue #352). When a URL
+    /// `--from` is given without explicit `--sources`, the resource's `origin_uri` is set to that
+    /// URL and the server seeds a Remote block-provenance record from it; this opt-out preserves
+    /// the pre-#352 behavior (empty `origin_uri`, no provenance). Clap-exclusive with `sources`.
+    pub no_source: bool,
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
@@ -254,6 +259,19 @@ fn source_edge_targets(
         .collect()
 }
 
+/// Derive the created resource's `origin_uri` from `--from` (issue #352). A remote (http/https)
+/// `--from` URL becomes the resource's origin — server-side this seeds a Remote block-provenance
+/// record when no explicit `--sources` are given, making `create --from <url>` citation-grade by
+/// default. A local `--from` path has no external origin (returns `None`), and `--no-source` opts
+/// out entirely (preserving the pre-#352 empty-`origin_uri`, no-provenance behavior).
+fn origin_uri_from_source(from: Option<&str>, no_source: bool) -> Option<String> {
+    if no_source {
+        return None;
+    }
+    from.filter(|f| temper_workflow::operations::is_remote_url(f))
+        .map(str::to_owned)
+}
+
 /// Create a new resource.
 pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     let CreateResourceArgs {
@@ -270,6 +288,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         from,
         sources,
         sources_as_edges,
+        no_source,
         format,
         act,
     } = args;
@@ -390,7 +409,10 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         },
         open_meta: open_meta_value,
         goal: goal_resolved,
-        origin_uri: None,
+        // A URL `--from` becomes the resource's origin (issue #352); the server seeds a Remote
+        // block-provenance record from it when no explicit `--sources` were given. `--no-source`
+        // and a local-path `--from` leave this `None`.
+        origin_uri: origin_uri_from_source(from.as_deref(), no_source),
         chunks_packed: None,
         content_hash: None,
         act: act.into_act_context()?,
@@ -1665,6 +1687,41 @@ mod build_helpers_tests {
     fn build_move_spec_returns_none_when_both_flags_unset() {
         let params = empty_update_params("foo");
         assert!(build_move_spec_from_args(&params).is_none());
+    }
+
+    #[test]
+    fn origin_uri_from_url_source() {
+        // A URL `--from` becomes the resource's origin (verbatim — casing preserved for the
+        // display URL; the server normalizes only the dedup key).
+        assert_eq!(
+            origin_uri_from_source(Some("https://Example.com/issue/42"), false),
+            Some("https://Example.com/issue/42".to_owned())
+        );
+        assert_eq!(
+            origin_uri_from_source(Some("http://a.test/x"), false),
+            Some("http://a.test/x".to_owned())
+        );
+    }
+
+    #[test]
+    fn origin_uri_none_for_local_path_source() {
+        // A local `--from` path has no external origin.
+        assert_eq!(origin_uri_from_source(Some("./notes/doc.pdf"), false), None);
+        assert_eq!(origin_uri_from_source(Some("/abs/path.md"), false), None);
+    }
+
+    #[test]
+    fn origin_uri_suppressed_by_no_source() {
+        // `--no-source` opts out entirely, preserving the pre-#352 empty-origin behavior.
+        assert_eq!(
+            origin_uri_from_source(Some("https://example.com/x"), true),
+            None
+        );
+    }
+
+    #[test]
+    fn origin_uri_none_when_no_from() {
+        assert_eq!(origin_uri_from_source(None, false), None);
     }
 
     /// context_to goes via `context_ref` in `UpdateResource`, not through

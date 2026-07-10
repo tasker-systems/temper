@@ -406,6 +406,12 @@ pub enum ResourceAction {
         /// re-asserting is safe, while re-running a create is not.
         #[arg(long, requires = "sources")]
         sources_as_edges: bool,
+        /// Suppress the `--from <url>` provenance default. By default a URL `--from` sets the
+        /// resource's origin and seeds a Remote block-provenance record from it (so `create
+        /// --from <url>` is citation-grade with no extra flags); `--no-source` opts out, leaving
+        /// the origin empty and recording no provenance. Mutually exclusive with `--sources`.
+        #[arg(long, conflicts_with = "sources")]
+        no_source: bool,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,

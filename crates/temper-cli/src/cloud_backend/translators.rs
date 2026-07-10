@@ -54,7 +54,9 @@ fn resolve_create_body(
 /// identity keys. Slug is §7-dissolved and NOT sent — the server derives it from
 /// the title (issue #307).
 ///
-/// **`origin_uri`:** empty string today — the server owns URI construction.
+/// **`origin_uri`:** forwarded from `cmd.origin_uri` (a URL `--from` populates it; issue #352),
+/// empty when unset. When non-empty and the body declares no explicit sources, the server seeds a
+/// Remote block-provenance record from it.
 #[cfg(feature = "embed")]
 pub(crate) fn cmd_to_ingest_payload(
     cmd: &CreateResource,
@@ -151,7 +153,10 @@ fn cmd_to_ingest_payload_base(
     Ok(IngestPayload {
         segmented: None,
         title: cmd.title.clone(),
-        origin_uri: String::new(),
+        // Forward the command's origin URI (issue #352). A URL `--from` populates it (see
+        // `origin_uri_from_source`); the server seeds a Remote block-provenance record from it when
+        // the body declares no explicit `--sources`. Absent/local-path/`--no-source` sends empty.
+        origin_uri: cmd.origin_uri.clone().unwrap_or_default(),
         context_ref,
         home_cogmap_id,
         doc_type_name: cmd.doctype.clone(),

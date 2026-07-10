@@ -137,6 +137,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create should succeed")
@@ -925,6 +926,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create for dedup test")
@@ -1185,6 +1187,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create should succeed")
@@ -1285,6 +1288,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create should succeed")
@@ -1442,6 +1446,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                     act: Default::default(),
                     sources: Vec::new(),
                     sources_as_edges: false,
+                    no_source: false,
                 },
             )
             .expect("cloud create should succeed")

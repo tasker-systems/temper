@@ -148,6 +148,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     from,
                     sources,
                     sources_as_edges,
+                    no_source,
                     act,
                 } => {
                     if show_template {
@@ -177,6 +178,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             from,
                             sources,
                             sources_as_edges,
+                            no_source,
                             format: output_format,
                             act: act.into_act_input()?,
                         },
