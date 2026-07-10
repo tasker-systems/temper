@@ -341,6 +341,7 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path(pool: sqlx::PgPool) 
                 model: None,
             }),
             invocation: Some(inv),
+            correlation: None,
         },
     )
     .await
@@ -405,6 +406,7 @@ async fn invocation_and_authorship_survive_replay(pool: sqlx::PgPool) {
                 model: None,
             }),
             invocation: Some(inv),
+            correlation: None,
         },
     )
     .await
@@ -506,6 +508,7 @@ async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
         EventContext {
             authorship: Some(authorship.clone()),
             invocation: Some(inv),
+            correlation: None,
         },
     )
     .await
@@ -530,6 +533,7 @@ async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
         EventContext {
             authorship: Some(authorship.clone()),
             invocation: Some(inv),
+            correlation: None,
         },
     )
     .await
@@ -552,6 +556,7 @@ async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
         EventContext {
             authorship: Some(authorship.clone()),
             invocation: Some(inv),
+            correlation: None,
         },
     )
     .await

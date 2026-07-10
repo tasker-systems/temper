@@ -13,7 +13,7 @@
 use serde_json::json;
 use sqlx::PgPool;
 use temper_substrate::events::{fire, fire_with, EventContext, SeedAction};
-use temper_substrate::ids::{CogmapId, EntityId, ResourceId};
+use temper_substrate::ids::{CogmapId, CorrelationId, EntityId, ResourceId};
 use temper_substrate::payloads::{AgentAuthorship, ConfidenceBand};
 use temper_substrate::writes::{self, OpenParams};
 use uuid::Uuid;
@@ -38,6 +38,19 @@ async fn system_entity(pool: &PgPool) -> Uuid {
 async fn latest_event(pool: &PgPool, type_name: &str) -> (Option<Uuid>, serde_json::Value) {
     sqlx::query_as(
         "SELECT e.invocation_id, e.metadata \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = $1 ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1",
+    )
+    .bind(type_name)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|e| panic!("no `{type_name}` event found: {e}"))
+}
+
+/// The latest event of `type_name` as `(id, correlation_id)` — for the P3 correlation passthrough.
+async fn latest_event_correlation(pool: &PgPool, type_name: &str) -> (Uuid, Option<Uuid>) {
+    sqlx::query_as(
+        "SELECT e.id, e.correlation_id \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
           WHERE et.name = $1 ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1",
     )
@@ -73,9 +86,13 @@ async fn nonauthored_arms_stamp_invocation_and_metadata(pool: PgPool) {
         persona: None,
         model: None,
     };
+    // P3: the same context also carries a caller-minted act-grain correlation. One `corr` across
+    // both stamped fires below proves the thread is shared, not merely present.
+    let corr = CorrelationId::new();
     let stamped = || EventContext {
         authorship: Some(authorship.clone()),
         invocation: Some(inv),
+        correlation: Some(corr),
     };
 
     // STAMPED resource_update — the headline non-authored act.
@@ -104,6 +121,12 @@ async fn nonauthored_arms_stamp_invocation_and_metadata(pool: PgPool) {
         meta["confidence"],
         json!("confident"),
         "metadata carries authorship: {meta}"
+    );
+    let (_, corr_id) = latest_event_correlation(&pool, "resource_updated").await;
+    assert_eq!(
+        corr_id,
+        Some(corr.uuid()),
+        "resource_updated carries the caller's correlation_id"
     );
 
     // STAMPED property_set — a sub-event of the update fan-out (also fired standalone by the reconciler).
@@ -135,6 +158,13 @@ async fn nonauthored_arms_stamp_invocation_and_metadata(pool: PgPool) {
         json!("retitled per the new charter"),
         "metadata carries authorship reasoning: {meta}"
     );
+    // The SAME correlation as the resource_update above: two distinct mutation fns, one act thread.
+    let (_, corr_id) = latest_event_correlation(&pool, "property_set").await;
+    assert_eq!(
+        corr_id,
+        Some(corr.uuid()),
+        "property_set shares the resource_update's correlation_id — one act, two fires"
+    );
 
     // DEFAULT path (regression): a plain `fire()` leaves invocation_id NULL + metadata '{}' — byte-identical
     // to pre-task behavior.
@@ -155,4 +185,11 @@ async fn nonauthored_arms_stamp_invocation_and_metadata(pool: PgPool) {
     let (inv_id, meta) = latest_event(&pool, "resource_updated").await;
     assert_eq!(inv_id, None, "default fire() leaves invocation_id NULL");
     assert_eq!(meta, json!({}), "default fire() leaves metadata empty");
+    // …and self-roots: `_event_append`'s `COALESCE(p_correlation, v_ev)` with p_correlation NULL.
+    let (ev_id, corr_id) = latest_event_correlation(&pool, "resource_updated").await;
+    assert_eq!(
+        corr_id,
+        Some(ev_id),
+        "default fire() self-roots correlation_id to the event's own id"
+    );
 }

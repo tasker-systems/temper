@@ -122,6 +122,7 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
         open_meta: None,
         act: ActInput {
             invocation_id: Some(InvocationId::from(invocation_id)),
+            correlation_id: None,
             reasoning: Some("seeding the demo corpus".to_string()),
             confidence: Some(ConfidenceBand::Probable),
             persona: Some("steward".to_string()),

@@ -21,7 +21,34 @@
 
 	let pathname = $derived($page.url.pathname as string);
 	let isAllActive = $derived(pathname === '/vault/all' || pathname === '/vault');
+	// The whole-vault graph home (`/graph/@me`). A context-scoped graph
+	// (`/graph/[owner]?context=<slug>`) belongs to its context's own Graph
+	// sub-link, so exclude it here to keep exactly one nav item lit.
+	let isGraphActive = $derived(
+		pathname.startsWith('/graph/') && !$page.url.searchParams.get('context')
+	);
 </script>
+
+{#snippet graphGlyph()}
+	<!-- Three connected nodes — a minimal graph mark matching the ⌂ Home glyph's weight. -->
+	<svg
+		width="15"
+		height="15"
+		viewBox="0 0 16 16"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.3"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<path d="M4.6 6.1 7 3.6M4.4 8.9 7 12M9.2 4.4l1.6 1.4M9.1 11.4l1.7-3.6" />
+		<circle cx="3.2" cy="8" r="1.7" fill="currentColor" stroke="none" />
+		<circle cx="8" cy="2.7" r="1.7" fill="currentColor" stroke="none" />
+		<circle cx="12.4" cy="6.6" r="1.7" fill="currentColor" stroke="none" />
+		<circle cx="8" cy="12.9" r="1.7" fill="currentColor" stroke="none" />
+	</svg>
+{/snippet}
 
 <aside
 	class="flex flex-col {collapsed
@@ -39,11 +66,23 @@
 	{#if collapsed}
 		<a
 			href="/vault/all"
-			class="block px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 text-center"
-			title="Home"
-			aria-label="Home"
+			class="block px-3 py-2 text-sm {isAllActive
+				? 'text-zinc-100'
+				: 'text-zinc-400 hover:text-zinc-200'} text-center"
+			title="All resources"
+			aria-label="All resources"
 		>
 			⌂
+		</a>
+		<a
+			href="/graph/@me"
+			class="flex justify-center px-3 py-2 {isGraphActive
+				? 'text-zinc-100'
+				: 'text-zinc-400 hover:text-zinc-200'}"
+			title="Graph"
+			aria-label="Graph"
+		>
+			{@render graphGlyph()}
 		</a>
 	{/if}
 	{#if !collapsed}
@@ -61,6 +100,17 @@
 				<span class="w-1.5 h-1.5 rounded-sm {isAllActive ? 'bg-quiet-accent' : 'bg-zinc-600'}"
 				></span>
 				All resources
+			</a>
+			<a
+				href="/graph/@me"
+				class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
+				       {isGraphActive
+					? 'border-l-2 border-quiet-accent bg-zinc-800/50 text-zinc-100 pl-[calc(0.75rem-2px)]'
+					: 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30'}"
+			>
+				<span class="w-1.5 h-1.5 rounded-sm {isGraphActive ? 'bg-quiet-accent' : 'bg-zinc-600'}"
+				></span>
+				Graph
 			</a>
 
 			{#if myContexts.length > 0}

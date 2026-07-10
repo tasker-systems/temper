@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT property_set($1,$2,$3,$4)",
+  "query": "SELECT resource_reassign($1,$2,$3,$4,$5)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "property_set",
+        "name": "resource_reassign",
         "type_info": "Uuid"
       }
     ],
@@ -14,6 +14,7 @@
         "Jsonb",
         "Uuid",
         "Jsonb",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -21,5 +22,5 @@
       null
     ]
   },
-  "hash": "76960ca706ea69a62bfda7292d2dd01070b5aa75290cc12bd72deda788b5e69e"
+  "hash": "e0e5d2efa2826a3c0ae10d0dbd4a14f57f1accf6de21cb893b6a595627b306b7"
 }

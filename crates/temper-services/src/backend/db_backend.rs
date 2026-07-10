@@ -1155,6 +1155,7 @@ impl Backend for DbBackend {
         // fired at creation stay un-stamped (out of the authored-act scope).
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         // Block-provenance: the body's declared sources, position → accretion `seq`.
@@ -1366,6 +1367,7 @@ impl Backend for DbBackend {
         // ActContext → EventContext: every sub-event of the update fan-out is correlated + authored.
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         // Defer embedding (issue #299) only when this revise re-blocks the body server-side: a
@@ -1460,6 +1462,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         writes::delete_resource_with(&self.pool, ResourceId::from(new_id), emitter, act_ctx)
@@ -1544,6 +1547,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
@@ -1585,6 +1589,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         writes::retype_relationship_with(
@@ -1618,6 +1623,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         writes::reweight_relationship_with(
@@ -1650,6 +1656,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         writes::fold_relationship_with(
@@ -1682,6 +1689,7 @@ impl Backend for DbBackend {
             .map_err(api_err)?;
         let act_ctx = EventContext {
             invocation: cmd.act.invocation,
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship,
         };
         let property_id = writes::set_facet_with(
@@ -1747,8 +1755,11 @@ impl Backend for DbBackend {
         // The run's authored-act context: every mutation reconcile_apply fires correlates to THIS
         // reconcile's own minted envelope (`inv`) and carries the caller's authorship. Any
         // caller-supplied `cmd.act.invocation` is ignored — the reconcile owns its envelope.
+        // The caller's `correlation` DOES pass through: it is act-grain, not run-grain, so a
+        // reconcile issued as one beat of a larger act stays stitched to it.
         let run_ctx = EventContext {
             invocation: Some(inv),
+            correlation: cmd.act.correlation,
             authorship: cmd.act.authorship.clone(),
         };
 

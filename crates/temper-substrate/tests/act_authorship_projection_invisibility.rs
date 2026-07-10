@@ -154,6 +154,7 @@ async fn authorship_is_invisible_to_affinity_projection(pool: PgPool) {
             model: None,
         }),
         invocation: None,
+        correlation: None,
     };
     let (a_src, a_tgt, a_edge) =
         build_edge_pair(&pool, home, owner, entity, "authored", authored_ctx).await;

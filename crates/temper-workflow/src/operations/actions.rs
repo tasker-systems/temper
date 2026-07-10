@@ -531,6 +531,7 @@ mod stamp_provenance_tests {
         let inv = InvocationId::from(uuid::Uuid::nil());
         let act = ActContext {
             invocation: Some(inv),
+            correlation: None,
             authorship: Some(authored(Some("claude-opus-4-8"))),
         };
         let mut meta = ManagedMeta::default();
@@ -561,6 +562,7 @@ mod stamp_provenance_tests {
     fn stamp_provenance_never_overwrites_caller_values() {
         let act = ActContext {
             invocation: Some(InvocationId::from(uuid::Uuid::nil())),
+            correlation: None,
             authorship: Some(authored(Some("claude-opus-4-8"))),
         };
         let mut meta = ManagedMeta {
@@ -583,6 +585,7 @@ mod stamp_provenance_tests {
         // invocation. Provenance must not claim llm-discovered.
         let act = ActContext {
             invocation: Some(InvocationId::from(uuid::Uuid::nil())),
+            correlation: None,
             authorship: Some(authored(None)),
         };
         let mut meta = ManagedMeta::default();
