@@ -122,9 +122,37 @@ cd - >/dev/null
 INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/temper"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
-mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+# Extract into a staging dir beside the final INSTALL_DIR (same filesystem, so
+# swapping it in is an atomic rename), then replace the live dir in one mv.
+# A failure mid-extract never touches the existing install — load-bearing for
+# `temper update`, which re-runs this exact script against a live binary.
+PARENT_DIR=$(dirname "$INSTALL_DIR")
+mkdir -p "$PARENT_DIR" "$BIN_DIR"
+STAGING="${INSTALL_DIR}.new-$$"
+OLD="${INSTALL_DIR}.old-$$"
+# Extend the cleanup trap to also drop the staging/backup dirs on any exit.
+trap 'rm -rf "$TMPDIR" "$STAGING" "$OLD"' EXIT
+
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
 echo "  Extracting to ${INSTALL_DIR}..."
-tar -xzf "$TMPDIR/$ARCHIVE" -C "$INSTALL_DIR"
+tar -xzf "$TMPDIR/$ARCHIVE" -C "$STAGING"
+
+# Atomic-ish swap: move the current install aside, swing the new one in, then
+# drop the backup. The running binary's inode stays valid across the rename
+# (unix), so an in-place `temper update` keeps working until it exits. If the
+# swap-in fails, roll the previous install back so failure is never destructive.
+if [ -d "$INSTALL_DIR" ]; then
+    rm -rf "$OLD"
+    mv "$INSTALL_DIR" "$OLD"
+fi
+if mv "$STAGING" "$INSTALL_DIR"; then
+    rm -rf "$OLD"
+else
+    [ -d "$OLD" ] && mv "$OLD" "$INSTALL_DIR"
+    echo "error: failed to install to ${INSTALL_DIR}; restored previous install" >&2
+    exit 1
+fi
 
 ln -sf "$INSTALL_DIR/temper" "$BIN_DIR/temper"
 

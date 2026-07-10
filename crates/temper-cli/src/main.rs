@@ -857,5 +857,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         Commands::Version { checksum } => {
             temper_cli::commands::version::run(checksum, output_format)
         }
+        Commands::Update {
+            check,
+            version,
+            force,
+        } => temper_cli::commands::update::run(check, version, force, output_format),
     }
 }
