@@ -350,11 +350,18 @@ async fn provision_profile_entities(
     // Driven off `Surface::ALL` so a new surface variant provisions its emitter here by
     // construction. Existing profiles still need an additive backfill migration — see
     // `20260709000030_backfill_sdk_emitter_entities.sql` for the shape.
+    //
+    // Each emitter is still its own auto-commit statement, so two concurrent first-authenticated
+    // requests for the same new profile both run this loop. `ON CONFLICT DO NOTHING` — inferring
+    // the unique index added by `20260709000040_kb_entities_unique_profile_name.sql` — is what
+    // makes that a no-op rather than a duplicate. It also makes provisioning re-runnable, so a
+    // profile left half-provisioned by a failed request is repaired by calling this again.
     for surface in Surface::ALL {
         sqlx::query!(
             r#"
             INSERT INTO kb_entities (profile_id, name, metadata)
             VALUES ($1, $2, '{}'::jsonb)
+            ON CONFLICT (profile_id, name) DO NOTHING
             "#,
             profile_id,
             format!("{handle}@{}", surface.marker()),
@@ -736,5 +743,66 @@ mod tests {
         .await
         .expect("count");
         assert_eq!(n, Some(1), "exactly one link, no duplicate");
+    }
+
+    async fn seed_bare_profile(pool: &PgPool, handle: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .expect("seed profile")
+    }
+
+    async fn emitter_count(pool: &PgPool, profile_id: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM kb_entities WHERE profile_id = $1")
+            .bind(profile_id)
+            .fetch_one(pool)
+            .await
+            .expect("count emitters")
+    }
+
+    /// Two first-authenticated requests for the same new profile can run concurrently. Each
+    /// emitter is its own auto-commit statement, so before the unique constraint on
+    /// `(profile_id, name)` both writers observed no row and both inserted — silently splitting
+    /// one logical emitter across two `entity_id`s.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn provision_profile_entities_is_safe_under_concurrent_invocation(pool: PgPool) {
+        let handle = "concurrent-provision";
+        let profile_id = seed_bare_profile(&pool, handle).await;
+
+        let (a, b) = tokio::join!(
+            provision_profile_entities(&pool, profile_id, handle),
+            provision_profile_entities(&pool, profile_id, handle),
+        );
+        a.expect("first concurrent provision");
+        b.expect("second concurrent provision");
+
+        assert_eq!(
+            emitter_count(&pool, profile_id).await,
+            Surface::ALL.len() as i64,
+            "concurrent provisioning must yield exactly one emitter per surface",
+        );
+    }
+
+    /// The sequential case the constraint also unlocks: provisioning is now safe to re-run, so a
+    /// profile left half-provisioned by a failed request can be repaired by calling it again.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn provision_profile_entities_is_idempotent(pool: PgPool) {
+        let handle = "repeat-provision";
+        let profile_id = seed_bare_profile(&pool, handle).await;
+
+        provision_profile_entities(&pool, profile_id, handle)
+            .await
+            .expect("first provision");
+        provision_profile_entities(&pool, profile_id, handle)
+            .await
+            .expect("second provision");
+
+        assert_eq!(
+            emitter_count(&pool, profile_id).await,
+            Surface::ALL.len() as i64,
+        );
     }
 }
