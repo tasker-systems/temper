@@ -1,0 +1,29 @@
+plugins:
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 3.1
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    # `rake generate` is the only writer of the generated tree. Linting it would
+    # mean hand-editing it.
+    - 'lib/temper/generated/**/*'
+    - 'lib/temper/generated.rb'
+    - 'vendor/**/*'
+
+Style/Documentation:
+  Enabled: false
+
+Layout/LineLength:
+  Max: 120
+
+Metrics/BlockLength:
+  Exclude:
+    - 'spec/**/*'
+
+RSpec/MultipleExpectations:
+  Enabled: false
+
+RSpec/ExampleLength:
+  Enabled: false
