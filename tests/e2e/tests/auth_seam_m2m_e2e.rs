@@ -62,6 +62,15 @@ async fn unregistered_machine_token_is_rejected_by_the_mcp_gate(pool: sqlx::PgPo
         rendered.contains("not registered"),
         "the mcp surface inherits the services-layer gate (D4): {rendered}"
     );
+    // The rejection must be TERMINAL, not a retryable internal error: a permanent auth
+    // denial that a Sidekiq worker would otherwise retry forever (temper-rb contract). The
+    // terminal INVALID_REQUEST arm is the only one that emits "should not be retried" — the
+    // retryable internal_error arm says "Failed to resolve profile" instead — so this
+    // substring distinguishes the two without an rmcp dependency here.
+    assert!(
+        rendered.contains("should not be retried"),
+        "a gate rejection must be terminal, not a transient internal_error: {rendered}"
+    );
 
     let links = sqlx::query_scalar!(
         "SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider = 'auth0-m2m'",

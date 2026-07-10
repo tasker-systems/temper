@@ -56,9 +56,20 @@ pub async fn provision_remote(
         let cogmap_id = temper_workflow::operations::parse_ref(&cogmap_ref)
             .map_err(|e| TemperError::Api(format!("invalid cogmap ref '{cogmap_ref}': {e}")))?
             .0;
+        // Fail loudly on a typo'd suffix rather than silently granting write: only the
+        // explicit `:ro` narrows to read-only; `:rw` / no suffix is read+write.
+        let can_write = match mode.as_deref() {
+            None | Some("rw") => true,
+            Some("ro") => false,
+            Some(other) => {
+                return Err(TemperError::Api(format!(
+                    "invalid --cogmap mode ':{other}' for '{cogmap_ref}' (expected 'ro' or 'rw')"
+                )))
+            }
+        };
         grant_specs.push(GrantSpec {
             cogmap_id,
-            can_write: mode.as_deref() != Some("ro"),
+            can_write,
         });
     }
 

@@ -74,6 +74,11 @@ async fn apply_reach(
     }
 
     for grant in &req.grants {
+        // Deliberately uses the low-level `insert_grant`, NOT `grant_capability`: the sole
+        // authorization here is the handler's `is_system_admin` gate (D5/D12 — Phase A
+        // registration is system-admin-only). A system admin may grant a machine write on
+        // any cogmap, so the per-subject `can_administer_grant` check is intentionally not
+        // applied. Do not "tighten" this to `grant_capability` without revisiting D5.
         insert_grant(
             &mut *conn,
             &InsertGrantParams {
