@@ -48,6 +48,13 @@
 - `Generated::ApiClient#call_api` rescues `Faraday::TimeoutError` and `Faraday::ConnectionFailed` and re-raises them as `ApiError.new('Connection timed out')` / `ApiError.new('Connection failed')` (`api_client.rb:76–79`). Those carry **`code == nil`**. The error classifier must map a nil-code `ApiError` to `Temper::ConnectionError`, or every timeout becomes an unclassified `Temper::Error`.
 - `Generated::ApiError` exposes `#code` (the HTTP status, Integer), `#response_headers`, `#response_body`, and `#message`.
 
+**Two more facts, from building the surfaces (Tasks 8–9):**
+
+- **The generated models validate on deserialize, not just on send.** A non-nullable attribute arriving `nil` raises `ArgumentError` from its setter. `ResourceDetail` is `allOf: [ResourceRow, {…}]`, and the generator flattens `ResourceRow`'s **ten** required fields onto it — so a WebMock stub returning `{}` fails *inside the client*, not in the assertion. Stub with a real row (a shared `Fixtures.resource_row` lives in `spec_helper`). The models also raise on an *unknown* attribute, so a skin typo fails at construction — worth one test per surface.
+- **`AssertRelationshipRequest` requires six fields** — `source`, `target`, `edge_kind`, **`polarity`, `label`, `weight`** — not three. `edge_kind` ∈ `{express, contains, leads_to, near}`; `polarity` ∈ `{forward, inverse}` (default `forward`). And **`CreateCogmapRequest` requires `telos_title`** even when `telos` is absent: charter-less is not title-less. `FacetSetRequest` uses `values` (plural). `ContextCreateRequest` requires only `name`.
+
+**Fork safety (Task 12) — the design's premise was wrong.** The hazard is handled one layer down: `net-http-persistent`'s pool subclasses `ConnectionPool`, and `connection_pool >= 2.4` defaults `auto_reload_after_fork: true`, dropping pooled sockets from a `Process._fork` hook. A forked child never rides its parent's socket. Assert this via the **server's accept count** (a child request causes a fresh accept), *not* by counting started `Net::HTTP` objects — the hook's `connection.close if respond_to?(:close)` is a no-op for this adapter (its `Connection` exposes `finish`/`reset`, not `close`), so ObjectSpace visibility is GC-dependent. `connection_pool` is now an explicit dependency (`>= 2.4, < 4.0`). `reset_connection!` stays the documented hook because it clears *our* memo.
+
 **Contract facts:**
 
 - The server speaks one error envelope: `{"error": {"code": String, "message": String, "details": Any}}` (`ErrorBody` → `ErrorDetail`). `details` is untyped.
