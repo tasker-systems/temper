@@ -262,12 +262,19 @@ pub fn create_app(state: AppState) -> Router {
 /// (`internal_routes`) and embed-drain (`embed_internal_routes`) surfaces are
 /// deliberately NOT merged, so they never enter the spec.
 pub fn openapi_spec() -> utoipa::openapi::OpenApi {
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
+    use utoipa::Modify;
+
+    let mut spec = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(public_routes())
         .merge(auth_only_routes())
         .merge(gated_routes())
         .split_for_parts()
-        .1
+        .1;
+
+    // Applied here, not via `ApiDoc`'s `modifiers(...)`: those run against the seed spec, whose
+    // `paths` map is empty until the merges above populate it.
+    crate::openapi::SurfaceHeaderAddon.modify(&mut spec);
+    spec
 }
 
 async fn fallback_handler(req: axum::extract::Request) -> axum::response::Response {

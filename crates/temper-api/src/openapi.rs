@@ -1,4 +1,6 @@
+use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::openapi::{ObjectBuilder, Required, Type};
 use utoipa::{Modify, OpenApi};
 
 use crate::handlers::resources::ListResourcesResponse;
@@ -166,6 +168,52 @@ impl Modify for SecurityAddon {
     }
 }
 
+/// The `X-Temper-Surface` parameter, as documented on every path.
+fn surface_header_parameter() -> Parameter {
+    ParameterBuilder::new()
+        .name(temper_workflow::operations::SURFACE_HEADER)
+        .parameter_in(ParameterIn::Header)
+        .required(Required::False)
+        .description(Some(
+            "The calling surface, for event-ledger attribution. Accepted values are `cli` \
+             and `sdk`; an absent or unrecognized value attributes the write to `web`. This \
+             is provenance, never authorization — an unrecognized value degrades, it never \
+             rejects.",
+        ))
+        .schema(Some(
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                .enum_values(Some(["cli", "sdk"]))
+                .build(),
+        ))
+        .build()
+}
+
+/// Documents `X-Temper-Surface` once, on every path item.
+///
+/// **Not registered in `ApiDoc`'s `modifiers(...)`.** `ApiDoc::openapi()` runs its modifiers at
+/// the moment `routes::openapi_spec()` seeds the `OpenApiRouter` — before the routers merge, when
+/// `paths` is still empty. `SecurityAddon` survives that only because it edits `components`.
+/// This addon edits `paths`, so `openapi_spec()` applies it *after* `split_for_parts()`.
+///
+/// Attaching at path-item level (rather than per-operation) matches the OpenAPI semantics of
+/// "parameters common to all operations in this path item," which is exactly what a
+/// client-identity header is. It also means a newly registered route cannot forget the header.
+pub(crate) struct SurfaceHeaderAddon;
+
+impl Modify for SurfaceHeaderAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let name = temper_workflow::operations::SURFACE_HEADER;
+        for item in openapi.paths.paths.values_mut() {
+            let params = item.parameters.get_or_insert_with(Vec::new);
+            // Idempotent: `modify` must not double-insert if ever applied twice.
+            if !params.iter().any(|p| p.name == name) {
+                params.push(surface_header_parameter());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -259,5 +307,52 @@ mod tests {
         assert!(json.contains("\"name\": \"Health\""));
         assert!(json.contains("\"name\": \"Relationships\""));
         assert!(json.contains("\"name\": \"Facets\""));
+    }
+
+    /// Every documented path carries the client-identity header, so a generated client can
+    /// learn the header exists from the contract alone — which is the whole point of P0.
+    ///
+    /// Asserted against the *structure*, not the serialized string: a doc comment containing
+    /// the header's name would make a `json.contains(..)` assertion pass vacuously.
+    #[test]
+    fn every_path_documents_the_surface_header() {
+        use temper_workflow::operations::SURFACE_HEADER;
+
+        let spec = crate::routes::openapi_spec();
+        assert!(!spec.paths.paths.is_empty(), "spec has no paths to check");
+
+        for (path, item) in spec.paths.paths.iter() {
+            let params = item
+                .parameters
+                .as_ref()
+                .unwrap_or_else(|| panic!("{path} has no path-level parameters"));
+            assert!(
+                params.iter().any(|p| p.name == SURFACE_HEADER),
+                "{path} does not document {SURFACE_HEADER}",
+            );
+        }
+    }
+
+    /// The header is optional and never required: a browser omits it, and the server degrades.
+    /// A `required: true` here would make every generated client demand it.
+    #[test]
+    fn the_surface_header_is_optional() {
+        use temper_workflow::operations::SURFACE_HEADER;
+        use utoipa::openapi::{path::ParameterIn, Required};
+
+        let spec = crate::routes::openapi_spec();
+        let (_, item) = spec.paths.paths.iter().next().expect("at least one path");
+        let param = item
+            .parameters
+            .as_ref()
+            .expect("path-level parameters")
+            .iter()
+            .find(|p| p.name == SURFACE_HEADER)
+            .expect("surface header parameter");
+
+        // `Required` and `ParameterIn` implement `PartialEq` but not `Debug`, so use `assert!`
+        // with `==` rather than `assert_eq!` (which needs `Debug` to format a mismatch).
+        assert!(param.required == Required::False);
+        assert!(param.parameter_in == ParameterIn::Header);
     }
 }
