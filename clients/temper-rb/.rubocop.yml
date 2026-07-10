@@ -28,6 +28,12 @@ Metrics/BlockLength:
 Metrics/ParameterLists:
   CountKeywordArgs: false
 
+# 10 is tight for a begin/rescue/retry block, and `retry` cannot be extracted
+# from its rescue clause -- Client#call's re-mint and backoff paths must stay
+# lexically inside it. 15 is the smallest bound that fits. (tasker-rb uses 70.)
+Metrics/MethodLength:
+  Max: 15
+
 RSpec/MultipleExpectations:
   Enabled: false
 
