@@ -268,6 +268,55 @@ pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
     .expect("enable invite_only mode");
 }
 
+/// Configure the gating team and make `profile_id` its OWNER — i.e. a system admin.
+///
+/// Deliberately does NOT flip `access_mode`: production runs `'open'`, and the machine-client
+/// authorization check is load-bearing precisely because the router's `require_system_access`
+/// gate admits everyone under `'open'`. Testing under `'open'` is testing what prod does.
+/// (Contrast [`enable_invite_only`], which also flips the mode.)
+pub async fn make_system_admin(pool: &PgPool, profile_id: uuid::Uuid) {
+    add_to_gating_team(pool, profile_id, "owner").await;
+}
+
+/// Ensure the `temper-system` gating team exists, is configured as the gating team, and holds
+/// `profile_id` at `role`. Roles other than `owner` do NOT confer system-adminhood —
+/// `is_system_admin` requires `owner` — which is what the D4a escalation test turns on.
+///
+/// `temper-system` already EXISTS in a migrated database (the L0 kernel migration creates it),
+/// and the auto-join generalization means a freshly provisioned profile may ALREADY hold a
+/// `watcher` row on it. Both writes are therefore upserts: a plain INSERT would conflict, and a
+/// `DO NOTHING` would silently leave the profile a watcher.
+pub async fn add_to_gating_team(pool: &PgPool, profile_id: uuid::Uuid, role: &str) {
+    let team_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name)
+         VALUES ('temper-system', 'Temper System')
+         ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("ensure temper-system gating team");
+
+    sqlx::query(
+        "UPDATE kb_system_settings SET gating_team_slug = 'temper-system', updated = now()",
+    )
+    .execute(pool)
+    .await
+    .expect("configure gating team slug");
+
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role)
+         VALUES ($1, $2, $3::text::team_role)
+         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(team_id)
+    .bind(profile_id)
+    .bind(role)
+    .execute(pool)
+    .await
+    .expect("add profile to gating team");
+}
+
 /// Grant a profile explicit `can_write` on a cognitive map — the post-Q-A authoring capability
 /// (`cogmap_authorable_by_profile` = an explicit `kb_access_grants` write row; root-team membership
 /// confers READ, not write). Needed where a principal must AUTHOR a map it can otherwise only read —

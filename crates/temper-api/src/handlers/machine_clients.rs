@@ -1,10 +1,12 @@
-//! Operator-only machine-client registration. Out of the OpenAPI contract (plain
+//! Machine-client registration (G3 Phase A/B1/B2). Out of the OpenAPI contract (plain
 //! `.route()` mounting), like `/api/access/admin/*`.
 //!
-//! **The `is_system_admin` check here is load-bearing, not defense-in-depth.** Production
-//! runs `access_mode = 'open'`, under which `has_system_access` is true for every profile,
-//! so `require_system_access` on the gated router admits everyone. This check is the only
-//! thing protecting these endpoints (D12).
+//! **Authorization lives in the services, not here** (Phase B2) — the same shape
+//! `team_service` and `access_service` already use. It is `is_system_admin OR owner of the
+//! machine's owning team`, and it is load-bearing rather than defense-in-depth: production
+//! runs `access_mode = 'open'`, under which `has_system_access` is true for every profile, so
+//! `require_system_access` on the gated router admits everyone. The service-side check is the
+//! only thing protecting these endpoints (Phase A D12).
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -16,11 +18,8 @@ use temper_core::types::machine::{
     IssueMachineRequest, IssuedMachineCredential, MachineClient, ProvisionMachineRequest,
     RebindMachineRequest, RotateSecretRequest,
 };
-use temper_core::types::AuthenticatedProfile;
-use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::{
-    access_service, machine_client_service, machine_registration_service,
-};
+use temper_services::error::ApiResult;
+use temper_services::services::{machine_client_service, machine_registration_service};
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
@@ -32,21 +31,12 @@ pub struct ListQuery {
     pub include_revoked: bool,
 }
 
-/// Auth before writes: reject a non-admin before any mutation runs.
-async fn require_admin(state: &AppState, authed: &AuthenticatedProfile) -> ApiResult<ProfileId> {
-    let caller = ProfileId::from(authed.profile.id);
-    if !access_service::is_system_admin(&state.pool, caller).await? {
-        return Err(ApiError::Forbidden);
-    }
-    Ok(caller)
-}
-
 pub async fn provision(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<ProvisionMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = require_admin(&state, &auth.0).await?;
+    let caller = ProfileId::from(auth.0.profile.id);
     let client = machine_registration_service::provision(&state.pool, caller, &body).await?;
     Ok(Json(client))
 }
@@ -57,7 +47,7 @@ pub async fn rebind(
     Path(id): Path<Uuid>,
     Json(mut body): Json<RebindMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = require_admin(&state, &auth.0).await?;
+    let caller = ProfileId::from(auth.0.profile.id);
     // The path segment is authoritative for which client is being rotated away from.
     body.from_machine_client_id = id;
     let client = machine_registration_service::rebind(&state.pool, caller, &body).await?;
@@ -69,9 +59,9 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<MachineClient>>> {
-    require_admin(&state, &auth.0).await?;
+    let caller = ProfileId::from(auth.0.profile.id);
     Ok(Json(
-        machine_client_service::list(&state.pool, q.include_revoked).await?,
+        machine_client_service::list(&state.pool, caller, q.include_revoked).await?,
     ))
 }
 
@@ -80,8 +70,10 @@ pub async fn get(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MachineClient>> {
-    require_admin(&state, &auth.0).await?;
-    Ok(Json(machine_client_service::get(&state.pool, id).await?))
+    let caller = ProfileId::from(auth.0.profile.id);
+    Ok(Json(
+        machine_client_service::get_for_caller(&state.pool, caller, id).await?,
+    ))
 }
 
 pub async fn revoke(
@@ -89,7 +81,7 @@ pub async fn revoke(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = require_admin(&state, &auth.0).await?;
+    let caller = ProfileId::from(auth.0.profile.id);
     Ok(Json(
         machine_client_service::revoke(&state.pool, id, caller).await?,
     ))
@@ -100,7 +92,7 @@ pub async fn issue(
     auth: AuthUser,
     Json(body): Json<IssueMachineRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let caller = require_admin(&state, &auth.0).await?;
+    let caller = ProfileId::from(auth.0.profile.id);
     let cred = machine_registration_service::issue(&state.pool, caller, &body).await?;
     Ok(Json(cred))
 }
@@ -111,7 +103,8 @@ pub async fn rotate_secret(
     Path(id): Path<Uuid>,
     Json(body): Json<RotateSecretRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    require_admin(&state, &auth.0).await?;
-    let cred = machine_client_service::rotate_secret(&state.pool, id, body.grace_seconds).await?;
+    let caller = ProfileId::from(auth.0.profile.id);
+    let cred =
+        machine_client_service::rotate_secret(&state.pool, caller, id, body.grace_seconds).await?;
     Ok(Json(cred))
 }

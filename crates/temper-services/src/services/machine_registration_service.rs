@@ -4,9 +4,11 @@
 //! emitter entities, its gating-team membership, its explicit reach, and the
 //! `kb_machine_clients` row — all in ONE transaction, ahead of the machine's first call.
 //!
-//! Authorization is the caller's job. Handlers gate on `is_system_admin` before calling
-//! (auth before writes); these functions record the authorized caller as
-//! `registered_by_profile_id`.
+//! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
+//! caller's authority through `machine_authz` before opening the transaction, so a rejected
+//! registration leaves the database completely unchanged. They record the authorized caller as
+//! `registered_by_profile_id`. `rebind` is the exception: it is **system-admin-only** (it
+//! transplants an existing profile's reach, which team ownership cannot bound — see its doc).
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -15,7 +17,8 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service::{insert_grant, InsertGrantParams};
+use crate::services::access_service::{self, insert_grant, InsertGrantParams};
+use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
 
@@ -54,14 +57,22 @@ async fn enroll_in_gating_team(conn: &mut sqlx::PgConnection, profile_id: Uuid) 
 
 /// Apply the explicit reach: team memberships and cogmap grants. Reach is plural and
 /// never inferred from `owner_team_id` (D10, D6).
+///
+/// Takes an [`AuthorizedReach`] — which only `machine_authz` can construct — so reach can
+/// never be applied without having been authorized against the caller's own authority
+/// (spec D3).
+///
+/// The raw `insert_grant` / raw team INSERT below remain deliberately unchecked: for a system
+/// admin that is Phase A's D5 bypass, and for a team owner `machine_authz::contain_reach` has
+/// already proven the reach is a subset of what the caller could confer on a human. The
+/// authorization is in the TYPE now, not in a comment asking you not to widen this.
 async fn apply_reach(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     profile_id: Uuid,
-    teams: &[temper_core::types::machine::TeamSpec],
-    grants: &[temper_core::types::machine::GrantSpec],
+    reach: AuthorizedReach<'_>,
 ) -> ApiResult<()> {
-    for team in teams {
+    for team in reach.teams() {
         sqlx::query!(
             r#"INSERT INTO kb_team_members (team_id, profile_id, role)
                VALUES ($1, $2, $3::text::team_role)
@@ -74,12 +85,7 @@ async fn apply_reach(
         .await?;
     }
 
-    for grant in grants {
-        // Deliberately uses the low-level `insert_grant`, NOT `grant_capability`: the sole
-        // authorization here is the handler's `is_system_admin` gate (D5/D12 — Phase A
-        // registration is system-admin-only). A system admin may grant a machine write on
-        // any cogmap, so the per-subject `can_administer_grant` check is intentionally not
-        // applied. Do not "tighten" this to `grant_capability` without revisiting D5.
+    for grant in reach.grants() {
         insert_grant(
             &mut *conn,
             &InsertGrantParams {
@@ -145,14 +151,26 @@ pub async fn provision(
     caller: ProfileId,
     req: &ProvisionMachineRequest,
 ) -> ApiResult<MachineClient> {
+    // Auth before writes: a rejected registration must leave the DB completely unchanged —
+    // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
+    // what makes that assertable.
+    let reach = machine_authz::authorize_registration(
+        pool,
+        caller,
+        req.owner_team_id,
+        &req.teams,
+        &req.grants,
+    )
+    .await?;
+
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
-    // Auth before writes is the handler's job; this is the friendly-conflict check. It is
-    // NOT the race guard — two concurrent provisions both pass it. The unique constraints
-    // are the guard, and `map_duplicate` turns either one into a 409 naming the client id.
+    // The friendly-conflict check. It is NOT the race guard — two concurrent provisions both
+    // pass it. The unique constraints are the guard, and `map_duplicate` turns either one into
+    // a 409 naming the client id.
     if machine_client_service::lookup_by_client_id(pool, &req.client_id)
         .await?
         .is_some()
@@ -170,7 +188,7 @@ pub async fn provision(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
+    apply_reach(&mut tx, caller, profile_id, reach).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -203,6 +221,17 @@ pub async fn issue(
     caller: ProfileId,
     req: &temper_core::types::machine::IssueMachineRequest,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    // Auth before writes — same reasoning as `provision`: nothing is minted, and no profile
+    // is created, unless the caller may confer this reach.
+    let reach = machine_authz::authorize_registration(
+        pool,
+        caller,
+        req.owner_team_id,
+        &req.teams,
+        &req.grants,
+    )
+    .await?;
+
     let client_id = crate::auth::secret::mint_client_id();
     let secret = crate::auth::secret::mint_secret();
 
@@ -217,7 +246,7 @@ pub async fn issue(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
+    apply_reach(&mut tx, caller, profile_id, reach).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -249,15 +278,37 @@ pub async fn issue(
 /// Point a fresh `client_id` at an EXISTING agent profile, revoking the old row in the
 /// same transaction unless an overlap window was requested (D8).
 ///
-/// Binding is only ever to an agent profile already reached through a machine auth link —
-/// never to a human's profile. That narrow case is the whole reason `rebind` is safe; see
-/// the spec's Rejected section.
+/// **`rebind` is system-admin-only, unlike the rest of the machine-client lifecycle (B2).**
+/// Every other endpoint merely operates on a row and can be keyed on its owning team; `rebind`
+/// is the one that *transplants* an existing profile's identity — and with it, whatever reach
+/// that profile already holds — onto a caller-supplied `client_id`. That reach may have been
+/// conferred by an admin and can exceed a team owner's own authority, so ownership of the
+/// machine's team is NOT a sufficient bar (it would let an owner inherit reach they could never
+/// confer themselves, defeating B2's containment). Rebind is also the external-IdP-app-rotation
+/// path (`auth0-m2m`); a team owner rotating a temper-issued credential uses `rotate_secret`.
 pub async fn rebind(
     pool: &PgPool,
     caller: ProfileId,
     req: &RebindMachineRequest,
 ) -> ApiResult<MachineClient> {
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
+
+    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a
+    // rebind inherits.
+    if !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // A revoked credential is dead; it must be re-created by a fresh `provision`, never
+    // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
+    // memberships (revoke leaves them, D11), silently undoing a deliberate revocation. Mirrors
+    // `rotate_secret`'s revoked-source guard.
+    if old.revoked_at.is_some() {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' is revoked; issue a new credential instead",
+            old.client_id
+        )));
+    }
 
     let mut tx = pool
         .begin()
@@ -324,6 +375,16 @@ mod tests {
 
     use crate::services::machine_registration_service as svc;
 
+    /// Seed a caller who is genuinely a system admin.
+    ///
+    /// B2 D3 moved authorization out of the handler and into `provision`/`issue`, so these
+    /// tests can no longer stand in a bare profile and rely on an upstream gate: the service
+    /// itself now resolves the caller's authority. `is_system_admin` IS ownership of the
+    /// gating team, so being an admin means being seeded as one — configure the gating team
+    /// and join this profile to it as `owner`.
+    ///
+    /// The `temper-system` root team already exists in a migrated database (the L0 kernel
+    /// migration creates it), so the team write is an upsert, not an insert.
     async fn seed_admin(pool: &PgPool) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -334,6 +395,32 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed admin");
+
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') \
+             ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name \
+             RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("gating team");
+
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(pool)
+            .await
+            .expect("configure gating team");
+
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'owner'::team_role) \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+            team,
+            id,
+        )
+        .execute(pool)
+        .await
+        .expect("join gating team as owner");
+
         ProfileId::from(id)
     }
 
@@ -472,7 +559,7 @@ mod tests {
         assert_eq!(member, Some(1));
 
         let grant = sqlx::query!(
-            "SELECT can_read, can_write FROM kb_access_grants \
+            "SELECT can_read, can_write, can_grant, can_delete FROM kb_access_grants \
               WHERE subject_table = 'kb_cogmaps' AND subject_id = $1 \
                 AND principal_table = 'kb_profiles' AND principal_id = $2",
             cogmap_id,
@@ -484,6 +571,15 @@ mod tests {
         assert!(
             grant.can_read && grant.can_write,
             "write implies read (DB coherence CHECK)"
+        );
+        // D6: a machine never receives re-delegation or deletion, regardless of who minted it.
+        assert!(
+            !grant.can_grant,
+            "a machine grant must never carry can_grant (D6)"
+        );
+        assert!(
+            !grant.can_delete,
+            "a machine grant must never carry can_delete"
         );
     }
 
@@ -548,6 +644,95 @@ mod tests {
         assert!(
             old_row.revoked_at.is_none(),
             "--no-revoke-old keeps both credentials live"
+        );
+    }
+
+    /// Rebind is system-admin-only (B2). A team owner — who may provision/issue/revoke/rotate
+    /// their own team's machines — must NOT be able to rebind, because rebind inherits the old
+    /// profile's full reach, which the owner's authority cannot bound.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rebind_is_refused_for_a_non_admin_team_owner(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+
+        // A team, and Alice who owns it but is not a system admin.
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ('acme', 'Acme') RETURNING id"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("team");
+        let alice = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, 'alice', 'Alice')",
+            alice,
+        )
+        .execute(&pool)
+        .await
+        .expect("alice");
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner'::team_role)",
+            team,
+            alice,
+        )
+        .execute(&pool)
+        .await
+        .expect("alice owns acme");
+
+        // Admin provisions a machine owned by Alice's team.
+        let mut provision_req = req("acme-agent-rb");
+        provision_req.owner_team_id = Some(team);
+        let old = svc::provision(&pool, admin, &provision_req)
+            .await
+            .expect("provision");
+
+        // Alice owns the machine's team — she can revoke it (tested elsewhere) — but she may NOT
+        // rebind it onto a client_id she controls and inherit its identity.
+        let err = svc::rebind(
+            &pool,
+            ProfileId::from(alice),
+            &RebindMachineRequest {
+                client_id: "alice-controls-this".to_string(),
+                from_machine_client_id: old.id,
+                label: "hijack".to_string(),
+                keep_old_active: false,
+            },
+        )
+        .await
+        .expect_err("a non-admin team owner must not rebind");
+        assert!(
+            matches!(err, crate::error::ApiError::Forbidden),
+            "got {err:?}"
+        );
+    }
+
+    /// A revoked credential is dead: rebind must refuse to resurrect it (revoke leaves the
+    /// profile's grants/memberships live, so a rebind would silently revive that reach).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rebind_refuses_a_revoked_source(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let old = svc::provision(&pool, admin, &req("to-be-revoked"))
+            .await
+            .expect("provision");
+
+        crate::services::machine_client_service::revoke(&pool, old.id, admin)
+            .await
+            .expect("revoke");
+
+        let err = svc::rebind(
+            &pool,
+            admin,
+            &RebindMachineRequest {
+                client_id: "resurrected".to_string(),
+                from_machine_client_id: old.id,
+                label: "back from the dead".to_string(),
+                keep_old_active: false,
+            },
+        )
+        .await
+        .expect_err("a revoked source must not be rebindable");
+        assert!(
+            matches!(err, crate::error::ApiError::BadRequest(_)),
+            "got {err:?}"
         );
     }
 

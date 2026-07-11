@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5ab03956a1de9015b3b4eaafcaf1dfe5eeb9a673b6cde2e69f816ecdb6a46044"
+}
