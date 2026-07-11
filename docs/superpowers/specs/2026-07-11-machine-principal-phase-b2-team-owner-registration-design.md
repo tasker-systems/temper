@@ -220,6 +220,26 @@ Access-semantics changes are the case where a green `test-db` run is a false sig
 The "DB is unchanged" assertions are the auth-before-writes proof and are the reason authorization is
 not folded into the transaction.
 
+### 6. Consequence — machine RBAC for free, including in no-HITL sessions
+
+The reason this phase is worth more than the operator convenience it was scoped for: once a machine
+credential is **team-bound at mint time** and its reach is provably a subset of its minter's authority,
+a machine principal is governed by the *ordinary* team RBAC patterns — the same `role_on_team`,
+`resources_visible_to`, and `can_modify_resource` predicates that govern humans. Nothing about the
+authorization path is machine-specific.
+
+That matters most where there is no human in the loop. The steward today leans on cogmap↔team
+intersection mechanics to work out what it is safe to learn and link. Those mechanics remain available
+and useful, but under B2 they stop being *load-bearing for safety*: a team-bound machine simply cannot
+see or write outside its team, because the credential itself is scoped, and the scope was authorized
+against a real human's authority at the moment it was minted. Managed-agent and fully autonomous
+sessions inherit RBAC from the credential rather than having to reconstruct it from graph topology at
+reasoning time.
+
+The containment invariant (§2) is what buys this. A credential whose reach could exceed its minter's
+authority would make the machine's team binding decorative, and every downstream consumer would be
+back to deriving safety from topology.
+
 ## Decisions
 
 - **D1 — Registration authority is team ownership; system-adminhood is its root case.** The predicate
