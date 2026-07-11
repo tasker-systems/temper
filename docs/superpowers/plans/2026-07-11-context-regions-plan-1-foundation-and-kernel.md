@@ -736,7 +736,32 @@ pub async fn formation_touched_count_since(
 
 - [ ] **Step 7: SQL functions — anchor the event, fix the centrality home-filter (bug §3.9.2)**
 
-Create `migrations/20260712000040_region_anchor_functions.sql`:
+Create `migrations/20260712000040_region_anchor_functions.sql`.
+
+> **⚠️ Open this migration with a catch-up backfill — it is not optional.**
+>
+> T2 shipped and deployed; its backfill anchored every row that existed **at migration time**. But the
+> producer only starts dual-writing the anchor pair in *this* task — so every region and component
+> materialized in the **T2 → T3 window** lands with `home_anchor_id IS NULL`, and T2's one-shot
+> backfill has already run and will never catch them.
+>
+> That breaks the fold below. `fold_live_regions` / `fold_live_components` now find live rows **by
+> anchor**; a NULL-anchor row does not match, so it is never folded and **survives as a live region
+> alongside the freshly-created ones** — duplicate live regions, inflated member counts, stale rows in
+> every region read.
+>
+> ```sql
+> -- Catch-up backfill for rows materialized in the T2→T3 window (see above).
+> UPDATE kb_cogmap_regions    SET home_anchor_table = 'kb_cogmaps', home_anchor_id = cogmap_id
+>     WHERE home_anchor_id IS NULL AND cogmap_id IS NOT NULL;
+> UPDATE kb_cogmap_components SET home_anchor_table = 'kb_cogmaps', home_anchor_id = cogmap_id
+>     WHERE home_anchor_id IS NULL AND cogmap_id IS NOT NULL;
+> ```
+>
+> Verify `SELECT count(*) FILTER (WHERE home_anchor_id IS NULL) FROM kb_cogmap_regions;` is **0**
+> afterwards. Cheap insurance whether or not rows have accumulated.
+
+Then:
 
 ```sql
 -- Producer-side SQL for the anchor-generalized region tier (spec §3.6 M2, §3.9).
