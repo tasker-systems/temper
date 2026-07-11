@@ -689,7 +689,7 @@ pub struct ListParams<'a> {
     pub all: bool,
     /// `--offset`: skip the first N matching rows (pagination).
     pub offset: Option<usize>,
-    /// `--sort <field>[:asc|desc]`. Parsed by [`parse_sort_arg`]; `None` keeps
+    /// `--sort <field>[:asc|desc]`. Parsed by `parse_sort_arg`; `None` keeps
     /// the default `updated:desc`.
     pub sort: Option<&'a str>,
     /// `--title-contains`: case-insensitive title substring filter (the list
