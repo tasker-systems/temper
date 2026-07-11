@@ -953,6 +953,30 @@ pub enum AdminMachineAction {
         #[arg(long = "no-revoke-old")]
         no_revoke_old: bool,
     },
+    /// Issue a temper-minted machine credential (client_credentials on temper's own AS).
+    /// temper mints the client id and a secret; the secret is printed once.
+    Issue {
+        /// Human-facing label
+        #[arg(long)]
+        label: String,
+        /// Team recorded as this machine's OWNER. Not its reach.
+        #[arg(long = "owner-team")]
+        owner_team: Option<String>,
+        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (role defaults to `member`). Repeatable.
+        #[arg(long = "team")]
+        teams: Vec<String>,
+        /// Cogmap to grant, as `<ref>` or `<ref>:ro` (defaults to read+write). Repeatable.
+        #[arg(long = "cogmap")]
+        cogmaps: Vec<String>,
+    },
+    /// Rotate a temper-issued secret. The previous secret stays valid for a grace window.
+    RotateSecret {
+        /// The machine client to rotate (its `id`, from `list`)
+        id: String,
+        /// Seconds the previous secret stays valid after rotation (default 86400 = 24h).
+        #[arg(long = "grace", default_value_t = 86_400)]
+        grace_seconds: i64,
+    },
     /// List registered machine clients
     List {
         /// Include revoked clients

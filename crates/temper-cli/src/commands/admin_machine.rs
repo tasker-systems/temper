@@ -5,7 +5,8 @@
 //! `--owner-team`, which records only the machine's owner.
 
 use temper_core::types::machine::{
-    GrantSpec, ProvisionMachineRequest, RebindMachineRequest, TeamSpec,
+    GrantSpec, IssueMachineRequest, IssuedMachineCredential, ProvisionMachineRequest,
+    RebindMachineRequest, RotateSecretRequest, TeamSpec,
 };
 
 use crate::error::{Result, TemperError};
@@ -24,16 +25,14 @@ fn parse_uuid(what: &str, raw: &str) -> Result<uuid::Uuid> {
     uuid::Uuid::parse_str(raw).map_err(|e| TemperError::Api(format!("invalid {what} '{raw}': {e}")))
 }
 
-/// Register a machine principal.
-pub async fn provision_remote(
+/// Resolve `--owner-team`, repeatable `--team`, and repeatable `--cogmap` refs into ids/specs.
+/// Reach is plural and never inferred from `--owner-team` (D6/D10).
+async fn resolve_reach(
     client: &temper_client::TemperClient,
-    client_id: &str,
-    label: &str,
     owner_team: Option<&str>,
     teams: &[String],
     cogmaps: &[String],
-    fmt: OutputFormat,
-) -> Result<()> {
+) -> Result<(Option<uuid::Uuid>, Vec<TeamSpec>, Vec<GrantSpec>)> {
     let owner_team_id = match owner_team {
         Some(t) => Some(crate::actions::cogmap::resolve_team_id(client, t).await?),
         None => None,
@@ -73,6 +72,22 @@ pub async fn provision_remote(
         });
     }
 
+    Ok((owner_team_id, team_specs, grant_specs))
+}
+
+/// Register a machine principal.
+pub async fn provision_remote(
+    client: &temper_client::TemperClient,
+    client_id: &str,
+    label: &str,
+    owner_team: Option<&str>,
+    teams: &[String],
+    cogmaps: &[String],
+    fmt: OutputFormat,
+) -> Result<()> {
+    let (owner_team_id, team_specs, grant_specs) =
+        resolve_reach(client, owner_team, teams, cogmaps).await?;
+
     let req = ProvisionMachineRequest {
         client_id: client_id.to_string(),
         label: label.to_string(),
@@ -87,6 +102,61 @@ pub async fn provision_remote(
         .map_err(crate::commands::client_err)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
+    Ok(())
+}
+
+/// Issue a temper-minted machine credential. Prints the one-time secret.
+pub async fn issue_remote(
+    client: &temper_client::TemperClient,
+    label: &str,
+    owner_team: Option<&str>,
+    teams: &[String],
+    cogmaps: &[String],
+    fmt: OutputFormat,
+) -> Result<()> {
+    let (owner_team_id, team_specs, grant_specs) =
+        resolve_reach(client, owner_team, teams, cogmaps).await?;
+
+    let req = IssueMachineRequest {
+        label: label.to_string(),
+        owner_team_id,
+        teams: team_specs,
+        grants: grant_specs,
+    };
+    let cred: IssuedMachineCredential = client
+        .machine_clients()
+        .issue(&req)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // Render the whole credential (JSON by default) so an agent capturing stdout gets the
+    // secret; warn on stderr for a human at a TTY.
+    println!("{}", crate::format::render(&cred, fmt)?);
+    crate::output::warning(
+        "client_secret is shown ONCE and never stored — capture it now; it cannot be retrieved later.",
+    );
+    Ok(())
+}
+
+/// Rotate a temper-issued secret. Prints the new one-time secret.
+pub async fn rotate_secret_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    grace_seconds: i64,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let machine_id = parse_uuid("machine client id", id)?;
+    let req = RotateSecretRequest { grace_seconds };
+    let cred: IssuedMachineCredential = client
+        .machine_clients()
+        .rotate_secret(machine_id, &req)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    println!("{}", crate::format::render(&cred, fmt)?);
+    crate::output::warning(
+        "New client_secret is shown ONCE. The previous secret stays valid until the grace window expires.",
+    );
     Ok(())
 }
 
