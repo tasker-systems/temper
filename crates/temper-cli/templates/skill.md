@@ -144,6 +144,22 @@ User-created guidance files. Read and apply any files found here.
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, wayfind) | Read `cognitive-maps.md` |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
+## Listing Is Truncated — Enumerate Before Asserting
+
+> **Never claim a goal/task/session is absent, or that a set is complete, from a
+> default `temper resource list`.** The list returns a capped page (20 rows; 50
+> with `--meta-only`), so a resource you "don't see" may just be past the cap —
+> this has repeatedly led agents to assert wrong backlog/status.
+
+Every list response carries `total` (all matching rows), `returned` (this page),
+and `truncated`. When `truncated` is `true`, there is more than you can see.
+Before asserting absence or completeness:
+
+- **Narrow**: `--title-contains <substr>`, `--stage <s>`, `--status <s>`, or `--sort <field>[:asc|desc]`.
+- **Enumerate fully**: `--all` (or a larger `--limit`/`--offset`).
+
+See `reference.md` → *Listing: truncation, sort, and filters* for the full flag set.
+
 ## Cheap Orientation (read-side projection)
 
 When you need to peek at a resource or scan a list without paying for the full

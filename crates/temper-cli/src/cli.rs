@@ -428,9 +428,27 @@ pub enum ResourceAction {
         /// Filter by context ref (UUID or @owner/slug, e.g. @me/temper or +team/general)
         #[arg(long)]
         context: Option<String>,
-        /// Maximum results
-        #[arg(long)]
+        /// Maximum results (default 20; 50 with --meta-only). The response always
+        /// carries `total` (the full match count) and `truncated`, so a capped
+        /// page is self-evident. Conflicts with --all.
+        #[arg(long, conflicts_with = "all")]
         limit: Option<usize>,
+        /// Return ALL matching results (no page cap). Reach for this before
+        /// asserting a set is complete or a resource is absent. Conflicts with --limit.
+        #[arg(long)]
+        all: bool,
+        /// Skip the first N matching results (pagination).
+        #[arg(long)]
+        offset: Option<usize>,
+        /// Sort as `<field>[:asc|desc]`. Fields: updated, created, title, stage,
+        /// seq, context, doctype. Direction defaults per field (time/seq → desc,
+        /// text → asc). Omit for the default `updated:desc`.
+        #[arg(long)]
+        sort: Option<String>,
+        /// Filter to titles containing this substring (case-insensitive). A cheap
+        /// way to narrow a large set instead of paging blind.
+        #[arg(long)]
+        title_contains: Option<String>,
         /// Filter by stage (task only)
         #[arg(long)]
         stage: Option<String>,

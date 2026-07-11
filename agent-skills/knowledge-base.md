@@ -60,7 +60,10 @@ Resources return structured data that clients can display and inject directly:
 
 - `list_resources` — paginated list with optional `context_name` and `doc_type_name`
   filters. Use when you need programmatic filtering (limit, offset) beyond what resource
-  browsing provides.
+  browsing provides. The response is a **capped page** — it carries `total` (all matching
+  rows) alongside `rows`. If `rows.len() < total`, the list is truncated: **do not conclude
+  a resource is absent, or that a set is complete, from a truncated page.** Raise `limit`
+  (up to 200), page with `offset`, or narrow the filters (`doc_type_name`, `stage`) first.
 - `get_resource` — single resource by ID or slug (with `context_name`). Pass
   `include_content: true` to include the full markdown body.
 - `search` — semantic search using a 768-dimensional embedding vector. Returns
@@ -159,6 +162,8 @@ Contexts are workspaces that group resources. The typical flow:
 - **Search supports text queries** — the `search` tool accepts a plain text
   `query` parameter for full-text search. No embedding vector needed.
 - **Pagination** — `list_resources` and `list_events` support `limit` and
-  `offset`. Resources listing is capped at 200 items.
+  `offset`. Resources listing is capped at 200 items. Compare `rows.len()`
+  against the response's `total` before asserting a set is complete or a
+  resource is absent — a short page means there is more to fetch.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.
