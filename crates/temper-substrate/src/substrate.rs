@@ -1,7 +1,8 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
-use crate::ids::{CogmapId, LensId, ResourceId};
+use crate::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use temper_core::types::home::HomeAnchor;
 
 #[derive(Debug)]
 pub struct Substrate {
@@ -28,11 +29,32 @@ pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<CogmapId> {
     Ok(CogmapId::from(id))
 }
 
-pub async fn load(pool: &PgPool, cogmap: CogmapId, lens_name: &str) -> Result<Substrate> {
-    // concept-resources homed in the cogmap
+/// A context is addressed by (owner, slug) — the slug is unique per owner, not globally, so this is
+/// the peer of [`cogmap_by_name`] and not a drop-in shape.
+pub async fn context_by_slug(pool: &PgPool, owner: ProfileId, slug: &str) -> Result<ContextId> {
+    let id = sqlx::query_scalar!(
+        "SELECT id FROM kb_contexts WHERE owner_table='kb_profiles' AND owner_id=$1 AND slug=$2",
+        owner.uuid(),
+        slug,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(ContextId::from(id))
+}
+
+/// Load the substrate homed in `anchor` — a context OR a cognitive map. The anchor kind is a bound
+/// value, not a hard-wired literal, so the same producer addresses both regimes; which regime it is
+/// then *in* is decided entirely by the lens it resolves (`w_cos = 0` ⇒ the declared-graph-only
+/// cogmap regime).
+pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<Substrate> {
+    let anchor_table = anchor.table();
+    let anchor_id = anchor.uuid();
+
+    // resources homed in the anchor
     let nodes: Vec<ResourceId> = sqlx::query_scalar!(
-        "SELECT resource_id FROM kb_resource_homes WHERE anchor_table='kb_cogmaps' AND anchor_id=$1",
-        cogmap.uuid(),
+        "SELECT resource_id FROM kb_resource_homes WHERE anchor_table=$1 AND anchor_id=$2",
+        anchor_table,
+        anchor_id,
     )
     .fetch_all(pool)
     .await?
@@ -40,12 +62,13 @@ pub async fn load(pool: &PgPool, cogmap: CogmapId, lens_name: &str) -> Result<Su
     .map(ResourceId::from)
     .collect();
 
-    // declared edges homed in the cogmap, both endpoints resources
+    // declared edges homed in the anchor, both endpoints resources
     let edge_rows = sqlx::query!(
         "SELECT source_id, target_id, edge_kind::text AS \"kind!\", label, weight \
-         FROM kb_edges WHERE home_anchor_table='kb_cogmaps' AND home_anchor_id=$1 \
+         FROM kb_edges WHERE home_anchor_table=$1 AND home_anchor_id=$2 \
            AND source_table='kb_resources' AND target_table='kb_resources' AND NOT is_folded",
-        cogmap.uuid(),
+        anchor_table,
+        anchor_id,
     )
     .fetch_all(pool)
     .await?;
@@ -78,14 +101,20 @@ pub async fn load(pool: &PgPool, cogmap: CogmapId, lens_name: &str) -> Result<Su
         .flat_map(|r| expand_facets(ResourceId::from(r.owner_id), &r.property_value, r.weight))
         .collect();
 
-    // the named lens for this cogmap (or the global default). The name is bound (Plan 3 Step 0) so
-    // the same producer materializes different lenses (e.g. telos-default vs telos-default-propheavy)
-    // over one substrate — S6f plurality.
+    // the named lens for this anchor, else the global default (home_anchor_table IS NULL — how
+    // telos-default and telos-default-propheavy are seeded). The name is bound (Plan 3 Step 0) so the
+    // same producer materializes different lenses over one substrate — S6f plurality.
+    //
+    // `NULLS LAST` keeps an anchor-specific lens winning over the global default, exactly as
+    // `ORDER BY cogmap_id NULLS LAST` did. (T4 extends this SELECT with w_cos / knn_k / cos_floor —
+    // the columns exist as of T2 but nothing reads them until the kernel lands.)
     let lr = sqlx::query!(
         "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution \
-         FROM kb_cogmap_lenses WHERE name=$2 AND (cogmap_id=$1 OR cogmap_id IS NULL) \
-         ORDER BY cogmap_id NULLS LAST LIMIT 1",
-        cogmap.uuid(),
+         FROM kb_cogmap_lenses \
+         WHERE name=$3 AND (home_anchor_table IS NULL OR (home_anchor_table=$1 AND home_anchor_id=$2)) \
+         ORDER BY home_anchor_table NULLS LAST LIMIT 1",
+        anchor_table,
+        anchor_id,
         lens_name,
     )
     .fetch_one(pool)

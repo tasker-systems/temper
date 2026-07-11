@@ -27,6 +27,7 @@ use crate::ids::{
 use crate::payloads;
 use crate::scenario::model::LensDef;
 use anyhow::{Context, Result};
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 /// The seeding event taxonomy (mirrors the `kb_event_types` seeding names registered in
@@ -223,7 +224,8 @@ pub enum SeedAction<'a> {
         emitter: EntityId,
     },
     Materialize {
-        cogmap: CogmapId,
+        /// The anchor the regions were formed over — a context OR a cognitive map.
+        anchor: HomeAnchor,
         lens: LensId,
         /// Max event id over the substrate at load time — the point-in-time the projection saw.
         watermark: EventId,
@@ -725,7 +727,7 @@ pub async fn fire_with(
         }
 
         SeedAction::Materialize {
-            cogmap,
+            anchor,
             lens,
             watermark,
             membership_fingerprint,
@@ -734,10 +736,13 @@ pub async fn fire_with(
         } => {
             // The emitter is the actor on whose behalf materialization runs — passed explicitly, never
             // derived from "latest event" (NULL on an empty log, arbitrary on occurred_at ties). The
-            // payload records the act's full identity (lens, watermark, fingerprint, region ids);
-            // region ROWS stay Rust-side derived compute (write.rs).
+            // payload records the act's full identity (anchor, lens, watermark, fingerprint, region
+            // ids); region ROWS stay Rust-side derived compute (write.rs).
             let payload = payloads::RegionMaterialized {
-                cogmap_id: cogmap,
+                home_anchor_table: anchor.into(),
+                home_anchor_id: anchor.uuid(),
+                // dual-written through the expand window; None for a context act.
+                cogmap_id: anchor.cogmap_id(),
                 lens_id: lens,
                 watermark_event_id: watermark,
                 membership_fingerprint: membership_fingerprint.to_owned(),
@@ -1099,7 +1104,7 @@ mod tests {
         );
         assert_eq!(
             SeedAction::Materialize {
-                cogmap: CogmapId::from(Uuid::nil()),
+                anchor: HomeAnchor::Cogmap(CogmapId::from(Uuid::nil())),
                 lens: LensId::from(Uuid::nil()),
                 watermark: EventId::from(Uuid::nil()),
                 membership_fingerprint: "",

@@ -16,6 +16,7 @@
 mod common;
 
 use std::path::Path;
+use temper_core::types::home::HomeAnchor;
 use temper_substrate::scenario::model::{Scenario, Seed, SeedRef, Step};
 use temper_substrate::scenario::{bootseed, loader, runner};
 use temper_substrate::{embed, replay, substrate, write};
@@ -34,9 +35,9 @@ async fn seed_standalone_and_via_scenario_memberships_match(pool: sqlx::PgPool) 
     let seed: Seed = serde_yaml::from_str(&std::fs::read_to_string(SEED_PATH).unwrap()).unwrap();
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(
+    write::materialize(
         &pool,
-        loaded.cogmap.into(),
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
         "telos-default",
         loaded.emitter.into(),
     )

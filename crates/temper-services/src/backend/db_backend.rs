@@ -2346,7 +2346,7 @@ impl Backend for DbBackend {
 
         let formation_events = temper_substrate::replay::formation_touched_count_since(
             &self.pool,
-            cmd.cogmap.uuid(),
+            HomeAnchor::Cogmap(cmd.cogmap),
             row.watermark,
         )
         .await
@@ -2381,9 +2381,11 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
 
-        let outcome = temper_substrate::write::incremental_materialize_cogmap(
+        // The MCP/HTTP materialize surface is cogmap-addressed today; the producer beneath it now
+        // takes any anchor (spec §3.6 M2). Exposing contexts on this command is T7's business.
+        let outcome = temper_substrate::write::incremental_materialize(
             &self.pool,
-            cmd.cogmap,
+            HomeAnchor::Cogmap(cmd.cogmap),
             DEFAULT_MATERIALIZE_LENS,
             EntityId::from(emitter),
         )

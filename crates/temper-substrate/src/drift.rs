@@ -11,6 +11,7 @@ use crate::substrate::Substrate;
 use anyhow::Result;
 use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 /// The tier of refresh a (cogmap, lens) needs (decision §1). Ordered cheap → expensive.
@@ -92,14 +93,15 @@ pub fn tier(has_structural_change: bool, touched_since_materialize: bool) -> Dri
 /// diff basis shared by drift detection and incremental materialization.
 pub(crate) async fn live_components(
     pool: &PgPool,
-    cogmap: Uuid,
+    anchor: HomeAnchor,
     lens_id: Uuid,
 ) -> Result<Vec<(Uuid, Vec<Uuid>, String)>> {
     let rows = sqlx::query(
         "SELECT id, member_ids, fingerprint FROM kb_cogmap_components \
-         WHERE cogmap_id=$1 AND lens_id=$2 AND NOT is_folded",
+         WHERE home_anchor_table=$1 AND home_anchor_id=$2 AND lens_id=$3 AND NOT is_folded",
     )
-    .bind(cogmap)
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(lens_id)
     .fetch_all(pool)
     .await?;
@@ -131,28 +133,20 @@ pub(crate) fn current_component_fingerprints(s: &Substrate) -> Vec<(Vec<Uuid>, S
         .collect()
 }
 
-/// True iff any formation-or-content event touched the cogmap since this lens last materialized — the
+/// True iff any formation-or-content event touched the anchor since this lens last materialized — the
 /// readout-tier gate. (Structural changes also touch, so callers check structural drift FIRST.) Always
 /// false before the first materialize, where structural drift dominates anyway.
 async fn touched_since_last_materialize(
     pool: &PgPool,
-    cogmap: Uuid,
+    anchor: HomeAnchor,
     lens_id: Uuid,
 ) -> Result<bool> {
-    // uuidv7 is time-ordered; PG has no max(uuid) aggregate, so take the latest by ORDER BY DESC.
-    let last: Option<Uuid> = sqlx::query_scalar(
-        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-         WHERE et.name = 'region_materialized' \
-           AND (e.payload->>'cogmap_id')::uuid = $1 AND (e.payload->>'lens_id')::uuid = $2 \
-         ORDER BY e.id DESC LIMIT 1",
-    )
-    .bind(cogmap)
-    .bind(lens_id)
-    .fetch_optional(pool)
-    .await?;
+    // The payload probe (and its pre-T3 `cogmap_id` fallback) is shared with write.rs's copy — see
+    // `replay::last_materialize_event`. `None` bound: drift wants the latest act, full stop.
+    let last = crate::replay::last_materialize_event(pool, anchor, lens_id, None).await?;
     match last {
         None => Ok(false),
-        Some(watermark) => crate::replay::formation_touched_since(pool, cogmap, watermark).await,
+        Some(watermark) => crate::replay::formation_touched_since(pool, anchor, watermark).await,
     }
 }
 
@@ -162,14 +156,14 @@ async fn touched_since_last_materialize(
 /// instead of the whole map (the over-trigger binary staleness suffered).
 pub async fn lens_drift(
     pool: &PgPool,
-    cogmap: Uuid,
+    anchor: HomeAnchor,
     lens_name: &str,
 ) -> Result<(DriftTier, ComponentDiff)> {
-    let s = crate::substrate::load(pool, crate::ids::CogmapId::from(cogmap), lens_name).await?;
+    let s = crate::substrate::load(pool, anchor, lens_name).await?;
     let current = current_component_fingerprints(&s);
-    let priors = live_components(pool, cogmap, s.lens_id.uuid()).await?;
+    let priors = live_components(pool, anchor, s.lens_id.uuid()).await?;
     let diff = classify(&current, &priors);
-    let touched = touched_since_last_materialize(pool, cogmap, s.lens_id.uuid()).await?;
+    let touched = touched_since_last_materialize(pool, anchor, s.lens_id.uuid()).await?;
     Ok((tier(diff.has_structural_change(), touched), diff))
 }
 

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use temper_substrate::{embed::embed_chunks, substrate, write::materialize_cogmap};
+use temper_core::types::home::HomeAnchor;
+use temper_substrate::{embed::embed_chunks, substrate, write::materialize};
 
 /// `temper-substrate` harness binary over the shared substrate.
 #[derive(Parser)]
@@ -37,7 +38,8 @@ async fn main() -> Result<()> {
             .bind(cogmap)
             .fetch_one(&pool)
             .await?;
-            let outcome = materialize_cogmap(&pool, cogmap, &lens, emitter.into()).await?;
+            let outcome =
+                materialize(&pool, HomeAnchor::Cogmap(cogmap), &lens, emitter.into()).await?;
             println!(
                 "materialized {} region(s) for '{}' (lens '{}')\nmembership: {}",
                 outcome.regions, name, lens, outcome.membership_fingerprint
