@@ -57,21 +57,41 @@ impl TemperMcpService {
         }
     }
 
-    /// Normalize decoded JWT claims into `AuthClaims`. A machine
+    /// Classify decoded JWT claims into `AuthClaims`. A machine
     /// (`client_credentials`) token resolves via the shared seam; a human MCP
     /// token may omit email (resolved from cached auth links downstream).
-    fn claims_from(&self, raw: &RawJwtClaims) -> AuthClaims {
-        if let Some(machine) = temper_services::auth::normalize_machine(raw) {
-            return machine;
-        }
-        AuthClaims {
-            principal_kind: temper_core::types::PrincipalKind::Human,
-            provider: self.api_state.config.auth_provider_name.clone(),
-            external_user_id: raw.sub.clone(),
-            email: String::new(),
-            email_verified: None,
-            exp: raw.exp,
-            iat: raw.iat,
+    ///
+    /// Fallible because [`temper_services::auth::Principal`] is a closed sum: a
+    /// machine-shaped token we cannot coherently classify is a `Refuse`, not a
+    /// human. This surface is the one that made that distinction load-bearing —
+    /// it has no email-resolution step (`email` below is unconditionally empty),
+    /// so before the closed sum a `Refuse`-shaped token fell into the human arm
+    /// and auto-provisioned a profile, bypassing the `kb_machine_clients`
+    /// registration gate that temper-api's email step happened to block by luck.
+    fn claims_from(&self, raw: &RawJwtClaims) -> Result<AuthClaims, rmcp::ErrorData> {
+        match temper_services::auth::classify(raw) {
+            temper_services::auth::Principal::Machine(machine) => Ok(machine),
+            // Terminal, like the machine-gate denial in `map_authz_error`: the token
+            // is structurally incoherent, so retrying it changes nothing.
+            temper_services::auth::Principal::Refuse(why) => {
+                tracing::warn!(sub = %raw.sub, why, "rejected: unclassifiable machine-shaped token");
+                Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_REQUEST,
+                    "This token is machine-shaped but does not declare a valid \
+                     client_credentials grant. This error is terminal and should not be retried."
+                        .to_string(),
+                    None,
+                ))
+            }
+            temper_services::auth::Principal::Human => Ok(AuthClaims {
+                principal_kind: temper_core::types::PrincipalKind::Human,
+                provider: self.api_state.config.auth_provider_name.clone(),
+                external_user_id: raw.sub.clone(),
+                email: String::new(),
+                email_verified: None,
+                exp: raw.exp,
+                iat: raw.iat,
+            }),
         }
     }
 
@@ -89,7 +109,7 @@ impl TemperMcpService {
             rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
         })?;
 
-        let auth_claims = self.claims_from(claims);
+        let auth_claims = self.claims_from(claims)?;
 
         // Level 1: resolve + deactivation gate (shared seam).
         let authed = temper_services::auth::authenticate(&self.api_state.pool, &auth_claims)
@@ -770,7 +790,11 @@ impl rmcp::ServerHandler for TemperMcpService {
         // StreamableHttpService transport.
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
             if let Some(claims) = parts.extensions.get::<RawJwtClaims>() {
-                let auth_claims = self.claims_from(claims);
+                // A `Refuse` propagates rather than being warned past: profile
+                // resolution here is best-effort caching, but *classification* is an
+                // authentication decision, and an unclassifiable machine-shaped token
+                // has no business opening a session.
+                let auth_claims = self.claims_from(claims)?;
                 match profile_service::resolve_from_claims(&self.api_state.pool, &auth_claims).await
                 {
                     Ok(profile) => {

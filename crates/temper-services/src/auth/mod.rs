@@ -18,7 +18,7 @@ use temper_core::types::{AuthClaims, AuthenticatedProfile};
 
 mod normalize;
 pub mod secret;
-pub use normalize::{normalize_machine, RawJwtClaims, MACHINE_PROVIDER_TAG};
+pub use normalize::{classify, Principal, RawJwtClaims, MACHINE_PROVIDER_TAG};
 
 use crate::error::ApiError;
 use crate::services::profile_service;

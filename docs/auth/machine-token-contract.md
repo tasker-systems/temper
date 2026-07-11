@@ -4,8 +4,8 @@ This document is the **canonical home** for the single machine-token claim contr
 Temper's two token issuers conform to and the Rust seam normalizes. It is the unifying
 artifact for M2M (machine-to-machine) agent principals — the auth-seam plan's Stage 4.
 
-> **Status:** **shipped (Stage 4a + 4b, 2026-07-02).** The Rust normalizer
-> (`temper-services::auth::normalize_machine`) and the Auth0 `client_credentials`
+> **Status:** **shipped (Stage 4a + 4b, 2026-07-02).** The Rust classifier
+> (`temper-services::auth::classify`) and the Auth0 `client_credentials`
 > advertisement are live; the contract below was validated against a real Auth0 M2M token
 > (see [the flow](#end-to-end-flow-a-machine-token-becomes-an-agent-profile)). **4c** — the
 > self-hosted Temper AS minting machine tokens — remains deferred until an instance wants it.
@@ -44,17 +44,20 @@ machine shape regardless of issuer:
 | `email` | *(absent)* | a machine has no verified human email |
 | `aud` | the target API/MCP audience | passed in by the validating surface |
 
-The normalizer (`normalize_machine`, in `temper-services::auth`) **detects** this shape and,
-for a machine, stamps a typed discriminant onto `AuthClaims` — `principal_kind:
+The classifier (`classify`, in `temper-services::auth`) **detects** this shape and, for a
+machine, stamps a typed discriminant onto `AuthClaims` — `principal_kind:
 PrincipalKind::Machine` plus the provider tag `auth0-m2m` as the link namespace.
 `resolve_from_claims` then **branches on `principal_kind`** (a typed match, not a
 provider-string compare):
 
 - **`Human`** → the existing email-reconcile path
   ([jwt-verification.md](./jwt-verification.md) ladder).
-- **`Machine`** → a `(auth0-m2m, client_id)` link lookup; on first sight, provision a
-  **dedicated agent profile** (a `kb_profile_auth_links` row under the `auth0-m2m` provider,
-  NULL email). It **never** enters `reconcile_by_email` — there is no verified email.
+- **`Machine`** → a `(auth0-m2m, client_id)` link lookup that is **lookup-or-reject**. Since
+  G3 Phase A a machine principal must be **registered ahead of its first call**
+  (`kb_machine_clients`; `temper admin machine provision`) — there is no just-in-time create
+  branch, and an unregistered or revoked `client_id` is a 401. The agent profile is created by
+  the *registration*, not by the token. It **never** enters `reconcile_by_email` — there is no
+  verified email.
 
 > **Decisions locked in Stage 4 (validated against a real token):**
 > - Detection keys on **`gty == "client-credentials"`**, *not* `azp` presence — a human Auth0
@@ -67,6 +70,21 @@ provider-string compare):
 > Confirmed against a live token minted from the `Temper Steward M2M` app on
 > `temperkb.us.auth0.com` (2026-07-02) and pinned as a KAT in
 > `normalize.rs::real_auth0_m2m_token_shape_is_detected`.
+
+> **Hardened (2026-07-11): classification is total — there is no default arm.**
+> `classify` returns a **closed sum**, `Principal::{Machine, Human, Refuse}`, rather than the
+> `Option<AuthClaims>` it began as. The `Option` shape meant every surface wrote
+> `if let Some(machine) = … else { …human… }` — so an **unrecognized token silently became a
+> human**, and the human path auto-provisions. Two tokens fell through it: one whose `sub` is
+> `@clients`-suffixed but which lacks the `gty` marker, and one that *declares*
+> `gty=client-credentials` but carries no derivable client_id. Both are now `Refuse`.
+>
+> Because the arms are a closed enum, every surface must `match` exhaustively — no surface,
+> including a future one, can spell "unrecognized ⇒ human". The invariant is held by the type,
+> not by a convention. Defense in depth: `resolve_human_from_claims` **independently refuses**
+> a machine-shaped identity (`@clients` sub, or the `auth0-m2m` provider tag), so even a caller
+> that bypasses classification cannot walk a machine past the registration gate by dressing it
+> as a human.
 
 ## Agent principals ride the ordinary rails
 
@@ -84,15 +102,22 @@ special-casing:
 Stage 4b moved **claim-shape detection** into the seam — the one thing that would drift into
 two divergent copies. Each surface still owns its own JWKS `decode()` (the `JwksKeyStore` was
 already shared; the audience legitimately differs per surface), decoding into the shared
-`temper_services::auth::RawJwtClaims`. It then calls `normalize_machine(&raw)` — the single
-place that decides machine vs. human and, for a machine, stamps the normalized `AuthClaims`.
+`temper_services::auth::RawJwtClaims`. It then calls `classify(&raw)` — the single place that
+decides machine vs. human vs. refuse and, for a machine, stamps the normalized `AuthClaims`.
 
-This is a **thin normalizer**, chosen deliberately over moving full JWT verification into the
+This is a **thin classifier**, chosen deliberately over moving full JWT verification into the
 seam: the human email-resolution ladder (token → cached link → OIDC `/userinfo`) is genuinely
 per-surface (temper-api has it, temper-mcp does not), so dragging it behind a shared
 `verify_and_normalize` would trade a real drift risk (claim-shape) for speculative
-abstraction. "Detection lives once" is the load-bearing win, and the thin normalizer delivers
+abstraction. "Detection lives once" is the load-bearing win, and the thin classifier delivers
 it in full.
+
+The per-surface human ladder is exactly *why* classification must be total. temper-api's ladder
+ends in an Auth0 `/userinfo` call that 401s for a machine token, so a misrouted machine failed
+closed **there** — but only by accident of that call. temper-mcp has no ladder (it tolerates an
+absent email), so the same misrouted token would have been **auto-provisioned as a human**. One
+seam, two surfaces, and only one of them coincidentally safe: that asymmetry is the drift the
+closed sum removes. Security that holds because of a downstream side effect is not security.
 
 ## End-to-end flow: a machine token becomes an agent profile
 
@@ -107,13 +132,16 @@ it in full.
       → injects RawJwtClaims into request extensions.
 
 3. ensure_profile_from_parts → claims_from(&raw):
-      normalize_machine(&raw) sees gty=client-credentials
-      → AuthClaims { principal_kind: Machine, provider: "auth0-m2m",
-                     external_user_id: azp, email: "" }.
+      classify(&raw) sees gty=client-credentials
+      → Principal::Machine(AuthClaims { principal_kind: Machine, provider: "auth0-m2m",
+                                        external_user_id: azp, email: "" }).
+      (A machine-SHAPED token without the gty marker → Principal::Refuse → 401.
+       There is no "unrecognized ⇒ human" arm to fall through.)
 
 4. authenticate → resolve_from_claims branches on principal_kind == Machine:
-      lookup (auth0-m2m, <client_id>); on first sight, create a dedicated agent
-      profile + link (NULL email) + emitters + default context. Never reconcile_by_email.
+      lookup (auth0-m2m, <client_id>) in kb_machine_clients — LOOKUP-OR-REJECT.
+      Unregistered or revoked ⇒ 401. The agent profile + link + emitters were created
+      by `temper admin machine provision`, ahead of this call. Never reconcile_by_email.
 
 5. require_system_access gates the agent on the ordinary rails: open mode admits;
       a gated instance (temperkb.io) denies until the agent profile is granted team

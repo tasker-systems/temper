@@ -107,7 +107,7 @@ Vercel Connect connector (`TEMPER_CONNECT_CONNECTOR`), else a static `TEMPER_TOK
 
 ### Status (2026-07-03): `app` principal via direct M2M mint — the Connect app-path is a dead end here
 
-Auth-seam Stage 4 shipped (`normalize_machine` + agent-profile provisioning + the
+Auth-seam Stage 4 shipped (`classify` + agent-profile provisioning + the
 `client_credentials` advertisement). But on the **Auth0-fronted** instance the Vercel Connect
 `app` path **cannot** mint a token: Auth0 issues `client_credentials` only for a registered
 **M2M application**, and the Connect connector has no Auth0 M2M app behind it — its dynamic

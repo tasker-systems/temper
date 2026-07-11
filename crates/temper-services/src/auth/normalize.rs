@@ -1,8 +1,23 @@
-//! Shared machine-token claim normalization. The single place that decides
-//! whether a decoded JWT is a machine (M2M `client_credentials`) principal and,
-//! if so, produces normalized `AuthClaims`. Both surfaces decode into
-//! `RawJwtClaims` and call `normalize_machine`; the human branch stays
-//! per-surface (email resolution differs by surface).
+//! Shared JWT claim classification. The single place that decides *what kind of
+//! principal* a decoded JWT is. Both surfaces decode into `RawJwtClaims` and call
+//! [`classify`]; the human branch's email resolution stays per-surface (it differs
+//! by surface), but the routing decision does not.
+//!
+//! The return type is a **closed sum** — [`Principal`] — precisely so that no
+//! surface can express "unrecognized ⇒ human". An `Option<AuthClaims>` return let
+//! each caller write `if let Some(machine) { … } else { …human… }`, and that `else`
+//! is a *default arm*: every token the classifier failed to recognize — including a
+//! token that declares itself a machine but whose client id we cannot derive, and a
+//! machine-shaped `…@clients` token with no `gty` — silently became a human. On
+//! temper-api that fell closed only by accident (the human path must resolve an
+//! email, which an M2M token cannot supply); on temper-mcp there is no email step,
+//! so the same token auto-provisioned a human profile and walked straight past the
+//! `kb_machine_clients` registration gate. Same seam, opposite outcomes: exactly the
+//! cross-surface drift a default arm produces.
+//!
+//! With a three-variant enum there is no default arm to fall into. Refusal is a
+//! value the compiler forces every surface — including surfaces not yet written —
+//! to handle, and each maps it to its own transport's unauthorized.
 
 use serde::Deserialize;
 
@@ -13,6 +28,15 @@ use temper_core::types::{AuthClaims, PrincipalKind};
 /// human `(auth0, sub)` under the `UNIQUE(auth_provider, auth_provider_user_id)`
 /// constraint.
 pub const MACHINE_PROVIDER_TAG: &str = "auth0-m2m";
+
+/// The `sub` suffix Auth0 (and our own minting path) puts on `client_credentials`
+/// subjects: `<client_id>@clients`. A *shape*, never the definitive signal — `gty`
+/// is that — but a token wearing this shape without the signal is not something we
+/// are willing to guess about.
+const CLIENTS_SUB_SUFFIX: &str = "@clients";
+
+/// The definitive machine grant-type marker.
+const CLIENT_CREDENTIALS_GTY: &str = "client-credentials";
 
 /// Superset of JWT claims both surfaces decode into. Optional fields absorb the
 /// human/machine shape difference in one struct.
@@ -35,28 +59,68 @@ pub struct RawJwtClaims {
     pub iat: i64,
 }
 
-/// If `raw` is a machine (`client_credentials`) token, return normalized machine
-/// `AuthClaims`; otherwise `None` (caller handles the human branch).
+/// What kind of principal a verified token names. Total over `RawJwtClaims`: every
+/// token is exactly one of these, and there is no "other" — see the module doc for
+/// why that closure is the whole point.
+#[derive(Debug, Clone)]
+pub enum Principal {
+    /// A registered-or-not machine (`client_credentials`) principal, normalized.
+    /// Registration is checked downstream by the machine gate; classification only
+    /// says *which* gate the token must face.
+    Machine(AuthClaims),
+    /// An ordinary human token. The surface completes the claims (email resolution
+    /// differs per surface) and runs the human path.
+    Human,
+    /// The token is machine-shaped but not coherently so, and guessing either way
+    /// would be a security decision. Carries the reason; each surface maps it to
+    /// its transport's unauthorized.
+    Refuse(&'static str),
+}
+
+/// Classify verified JWT claims into a [`Principal`].
 ///
-/// Detection is on `gty`, never `azp` presence. Client-id source: `azp` primary,
-/// `sub` `@clients`-suffix strip as fallback.
-pub fn normalize_machine(raw: &RawJwtClaims) -> Option<AuthClaims> {
-    if raw.gty.as_deref() != Some("client-credentials") {
-        return None;
+/// `gty == "client-credentials"` is the definitive machine signal — never `azp`
+/// presence, which human `authorization_code` tokens also carry. Client-id source:
+/// `azp` primary, the `@clients`-suffix strip of `sub` as fallback.
+///
+/// The two refusals are the fall-open paths this function exists to close:
+/// a token that *declares* itself a machine but from which no client id can be
+/// derived, and a token wearing the `@clients` subject shape without declaring the
+/// grant. Neither is mintable by Auth0 or by our own `mint.ts` today; both were
+/// silently reclassified as human before, so the defense was coincidental rather
+/// than designed.
+pub fn classify(raw: &RawJwtClaims) -> Principal {
+    let declares_machine_grant = raw.gty.as_deref() == Some(CLIENT_CREDENTIALS_GTY);
+    let machine_shaped_sub = raw.sub.ends_with(CLIENTS_SUB_SUFFIX);
+
+    if declares_machine_grant {
+        let Some(client_id) = raw
+            .azp
+            .clone()
+            .or_else(|| raw.sub.strip_suffix(CLIENTS_SUB_SUFFIX).map(str::to_string))
+        else {
+            return Principal::Refuse(
+                "client_credentials token carries no derivable client id (no azp, and sub is not @clients-suffixed)",
+            );
+        };
+        return Principal::Machine(AuthClaims {
+            principal_kind: PrincipalKind::Machine,
+            provider: MACHINE_PROVIDER_TAG.to_string(),
+            external_user_id: client_id,
+            email: String::new(),
+            email_verified: None,
+            exp: raw.exp,
+            iat: raw.iat,
+        });
     }
-    let client_id = raw
-        .azp
-        .clone()
-        .or_else(|| raw.sub.strip_suffix("@clients").map(str::to_string))?;
-    Some(AuthClaims {
-        principal_kind: PrincipalKind::Machine,
-        provider: MACHINE_PROVIDER_TAG.to_string(),
-        external_user_id: client_id,
-        email: String::new(),
-        email_verified: None,
-        exp: raw.exp,
-        iat: raw.iat,
-    })
+
+    if machine_shaped_sub {
+        return Principal::Refuse(
+            "token subject is machine-shaped (@clients) but does not declare the client_credentials grant",
+        );
+    }
+
+    Principal::Human
 }
 
 #[cfg(test)]
@@ -75,15 +139,22 @@ mod tests {
         }
     }
 
+    /// Unwrap a [`Principal::Machine`], panicking with the actual variant otherwise.
+    fn expect_machine(p: Principal) -> AuthClaims {
+        match p {
+            Principal::Machine(c) => c,
+            other => panic!("expected Machine, got {other:?}"),
+        }
+    }
+
     #[test]
     fn machine_token_via_azp() {
-        let c = normalize_machine(&raw(
+        let c = expect_machine(classify(&raw(
             Some("client-credentials"),
             Some("abc123"),
             "abc123@clients",
             None,
-        ))
-        .expect("should detect machine");
+        )));
         assert_eq!(c.principal_kind, PrincipalKind::Machine);
         assert_eq!(c.provider, "auth0-m2m");
         assert_eq!(c.external_user_id, "abc123"); // azp preferred
@@ -93,32 +164,73 @@ mod tests {
 
     #[test]
     fn machine_token_sub_strip_fallback_when_azp_absent() {
-        let c = normalize_machine(&raw(
+        let c = expect_machine(classify(&raw(
             Some("client-credentials"),
             None,
             "abc123@clients",
             None,
-        ))
-        .expect("should detect machine via sub strip");
+        )));
         assert_eq!(c.external_user_id, "abc123");
     }
 
     #[test]
     fn human_token_with_azp_is_not_machine() {
         // The critical guard: a human authorization_code token also carries azp.
-        assert!(normalize_machine(&raw(
+        let p = classify(&raw(
             Some("authorization_code"),
             Some("abc123"),
             "auth0|user",
             Some("u@example.test"),
-        ))
-        .is_none());
+        ));
+        assert!(
+            matches!(p, Principal::Human),
+            "a human authorization_code token carries azp too; it is not a machine, got {p:?}"
+        );
     }
 
     #[test]
-    fn human_token_without_gty_is_not_machine() {
+    fn human_token_without_gty_is_human() {
+        let p = classify(&raw(None, Some("abc123"), "auth0|user", Some("u@x.test")));
+        assert!(matches!(p, Principal::Human), "expected Human, got {p:?}");
+    }
+
+    /// Fall-open #1: machine-shaped subject, no grant declaration. Under the old
+    /// `Option` contract this returned `None` and the surfaces' `else` arm made it a
+    /// human — on temper-mcp, an auto-provisioned one.
+    #[test]
+    fn gty_less_clients_suffixed_sub_is_refused_not_human() {
+        let p = classify(&raw(None, None, "abc123@clients", None));
         assert!(
-            normalize_machine(&raw(None, Some("abc123"), "auth0|user", Some("u@x.test"))).is_none()
+            matches!(p, Principal::Refuse(why) if why.contains("machine-shaped")),
+            "a machine-shaped subject without the grant must be refused, got {p:?}"
+        );
+    }
+
+    /// The same shape with a *human* grant type is still a refusal: `gty` says
+    /// authorization_code, `sub` says machine. Incoherent — we do not pick a side.
+    #[test]
+    fn clients_suffixed_sub_with_human_gty_is_refused() {
+        let p = classify(&raw(
+            Some("authorization_code"),
+            Some("abc123"),
+            "abc123@clients",
+            None,
+        ));
+        assert!(
+            matches!(p, Principal::Refuse(_)),
+            "expected Refuse, got {p:?}"
+        );
+    }
+
+    /// Fall-open #2: the token *declares* the machine grant, but no client id can be
+    /// derived (no `azp`, and `sub` is not `@clients`-suffixed). It self-identifies as
+    /// a machine; treating it as a human was the sharpest edge of the old default arm.
+    #[test]
+    fn client_credentials_without_derivable_client_id_is_refused() {
+        let p = classify(&raw(Some("client-credentials"), None, "auth0|user", None));
+        assert!(
+            matches!(p, Principal::Refuse(why) if why.contains("client id")),
+            "a machine token with no derivable client id must be refused, got {p:?}"
         );
     }
 
@@ -138,7 +250,7 @@ mod tests {
             exp: 1_783_126_372,
             iat: 1_783_039_972,
         };
-        let c = normalize_machine(&raw).expect("real Auth0 M2M token must be detected as machine");
+        let c = expect_machine(classify(&raw));
         assert_eq!(c.principal_kind, PrincipalKind::Machine);
         assert_eq!(c.provider, "auth0-m2m");
         assert_eq!(c.external_user_id, "y23AQxuvzjYSb5n8lAUeuIgIXOftCWYu");

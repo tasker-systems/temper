@@ -22,15 +22,36 @@ use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
 
-/// Enroll `profile_id` in the configured gating team as `watcher`.
+/// Enroll `profile_id` in the configured gating team as `watcher` — **but only if `caller`,
+/// the minter, is a member of that gating team themselves.**
 ///
-/// D14: `trg_sync_system_membership` auto-joins new profiles ONLY while
-/// `access_mode = 'open'`, because `has_system_access` short-circuits true under that
-/// mode. Under `invite_only` it enrolls nothing, and an unenrolled machine authenticates
-/// and then 403s at `require_system_access`. So we enroll explicitly, exactly as
-/// `access_service::review_request` does for an approved human. Never depend on the
-/// trigger: its behavior is a function of a setting that is about to change.
-async fn enroll_in_gating_team(conn: &mut sqlx::PgConnection, profile_id: Uuid) -> ApiResult<()> {
+/// D14 is why the enrollment exists at all: `trg_sync_system_membership` auto-joins new profiles
+/// ONLY while `access_mode = 'open'`, because `has_system_access` short-circuits true under that
+/// mode. Under `invite_only` it enrolls nothing, and an unenrolled machine authenticates and then
+/// 403s at `require_system_access`. So we enroll explicitly, exactly as
+/// `access_service::review_request` does for an approved human. Never depend on the trigger: its
+/// behavior is a function of a setting that is about to change.
+///
+/// The caller check is why it is CONTAINED. This was the one piece of a machine's reach that
+/// escaped B2's containment rule — every other piece passes through `machine_authz`, which bounds
+/// a non-admin minter to reach they could confer on a human. Gating-team membership is system
+/// access, so an unconditional enrollment lets a minter confer access they may not hold.
+///
+/// Today that is unobservable and stays so: `temper-system` carries `auto_join_role = 'watcher'`
+/// and prod runs `open`, so the trigger has already made EVERY profile — every minter — a
+/// gating-team member, and every machine still enrolls. The check binds the day that stops
+/// (auto_join_role cleared, or the instance moved off open mode): from then on a machine can only
+/// hold system access if the human who minted it did. An admin is by definition an OWNER of the
+/// gating team (`is_system_admin` IS that ownership), so an admin-minted machine always enrolls
+/// and D14 is preserved on the path that matters most.
+///
+/// Note the predicate is MEMBERSHIP, not admin-ness: the ordinary minter is a plain human whom
+/// auto-join made a `watcher`, and their machines must keep enrolling.
+async fn enroll_in_gating_team(
+    conn: &mut sqlx::PgConnection,
+    caller: ProfileId,
+    profile_id: Uuid,
+) -> ApiResult<()> {
     let slug = sqlx::query_scalar!("SELECT gating_team_slug FROM kb_system_settings LIMIT 1")
         .fetch_optional(&mut *conn)
         .await?
@@ -41,6 +62,33 @@ async fn enroll_in_gating_team(conn: &mut sqlx::PgConnection, profile_id: Uuid) 
         // already rejects `invite_only` with an empty slug, so this is the open-mode case.
         return Ok(());
     };
+
+    // Auth before write. Read on the transaction's connection, so the membership we check is the
+    // membership the INSERT below acts under — a concurrent removal cannot slip between them.
+    let caller_is_member = sqlx::query_scalar!(
+        r#"SELECT EXISTS(
+             SELECT 1 FROM kb_team_members m
+               JOIN kb_teams t ON t.id = m.team_id
+              WHERE t.slug = $1 AND m.profile_id = $2 )"#,
+        slug,
+        *caller,
+    )
+    .fetch_one(&mut *conn)
+    .await?
+    .unwrap_or(false);
+
+    if !caller_is_member {
+        // Deliberate — and the only breadcrumb an operator gets. The machine registers cleanly
+        // and then 403s later at `require_system_access`; say why HERE, or that 403 is a mystery.
+        tracing::warn!(
+            gating_team = %slug,
+            caller = %*caller,
+            machine_profile_id = %profile_id,
+            "gating-team enrollment skipped: the minter is not a member of the gating team, so \
+             the machine cannot be conferred system access its minter does not itself hold"
+        );
+        return Ok(());
+    }
 
     sqlx::query!(
         r#"INSERT INTO kb_team_members (team_id, profile_id, role)
@@ -187,7 +235,7 @@ pub async fn provision(
             .map_err(|e| map_duplicate_from_conflict(e, &req.client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
-    enroll_in_gating_team(&mut tx, profile_id).await?;
+    enroll_in_gating_team(&mut tx, caller, profile_id).await?;
     apply_reach(&mut tx, caller, profile_id, reach).await?;
 
     let id = sqlx::query_scalar!(
@@ -245,7 +293,7 @@ pub async fn issue(
         .map_err(|e| map_duplicate_from_conflict(e, &client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
-    enroll_in_gating_team(&mut tx, profile_id).await?;
+    enroll_in_gating_team(&mut tx, caller, profile_id).await?;
     apply_reach(&mut tx, caller, profile_id, reach).await?;
 
     let id = sqlx::query_scalar!(
@@ -373,6 +421,7 @@ mod tests {
         GrantSpec, IssueMachineRequest, ProvisionMachineRequest, RebindMachineRequest, TeamSpec,
     };
 
+    use crate::services::access_service;
     use crate::services::machine_registration_service as svc;
 
     /// Seed a caller who is genuinely a system admin.
@@ -422,6 +471,187 @@ mod tests {
         .expect("join gating team as owner");
 
         ProfileId::from(id)
+    }
+
+    /// Seed a plain team owner who is NOT a system admin and holds NO gating-team membership,
+    /// with the instance in the `invite_only` shape the containment guard exists for.
+    ///
+    /// Two trigger facts shape this fixture, and they are the reason the hole is latent rather
+    /// than live. `temper-system` carries `auto_join_role = 'watcher'`, and
+    /// `trg_sync_system_membership` fires on profile INSERT — so under the default `open` mode
+    /// EVERY new profile is auto-joined to the gating team, minters included. That is exactly why
+    /// the enrollment is harmless in today's prod, and also why this scenario is **not
+    /// constructible** in open mode: the machine would be auto-joined too, and the assertion
+    /// would be about the trigger rather than about our enrollment.
+    ///
+    /// So we flip to `invite_only` FIRST (the trigger then enrolls nothing, and the explicit
+    /// enrollment is the ONLY path into the gating team — the same premise as the D14 test), and
+    /// then delete any gating membership anyway, so the fixture states its precondition rather
+    /// than leaning on trigger ordering.
+    ///
+    /// Returns the minter and the team they own — which is also the machine's owning team, the
+    /// authority `machine_authz::authorize` admits them under.
+    async fn seed_outsider_team_owner(
+        pool: &PgPool,
+        handle: &str,
+        team_slug: &str,
+    ) -> (ProfileId, Uuid) {
+        sqlx::query!(
+            "UPDATE kb_system_settings \
+                SET access_mode = 'invite_only', gating_team_slug = 'temper-system'"
+        )
+        .execute(pool)
+        .await
+        .expect("invite_only with a configured gating team");
+
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
+            id,
+            handle,
+        )
+        .execute(pool)
+        .await
+        .expect("seed minter");
+
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id",
+            team_slug,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("seed team");
+
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'owner'::team_role)",
+            team,
+            id,
+        )
+        .execute(pool)
+        .await
+        .expect("minter owns their own team");
+
+        sqlx::query!(
+            "DELETE FROM kb_team_members m USING kb_teams t \
+              WHERE m.team_id = t.id AND t.slug = 'temper-system' AND m.profile_id = $1",
+            id,
+        )
+        .execute(pool)
+        .await
+        .expect("the minter holds no gating-team membership");
+
+        (ProfileId::from(id), team)
+    }
+
+    /// How many rows the profile holds in the gating team (0 or 1).
+    async fn gating_memberships(pool: &PgPool, profile_id: Uuid) -> i64 {
+        sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id \
+              WHERE t.slug = 'temper-system' AND m.profile_id = $1",
+            profile_id,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("count gating membership")
+        .unwrap_or(0)
+    }
+
+    /// B2 containment, applied to the one piece of reach that escaped it. A minter must not be
+    /// able to confer system access they do not themselves hold.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn provision_does_not_enroll_a_machine_whose_minter_is_not_in_the_gating_team(
+        pool: PgPool,
+    ) {
+        let (alice, team) = seed_outsider_team_owner(&pool, "outsider", "acme-out").await;
+        assert!(
+            !access_service::is_system_admin(&pool, alice)
+                .await
+                .expect("is_system_admin"),
+            "precondition: the minter is a plain team owner, not an admin"
+        );
+        assert_eq!(
+            gating_memberships(&pool, *alice).await,
+            0,
+            "precondition: the minter holds no gating-team membership"
+        );
+
+        let mut request = req("outsider-agent");
+        request.owner_team_id = Some(team);
+        let client = svc::provision(&pool, alice, &request)
+            .await
+            .expect("a team owner may provision for their own team");
+
+        assert_eq!(
+            gating_memberships(&pool, client.profile_id).await,
+            0,
+            "a minter outside the gating team must not confer membership in it"
+        );
+        let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", client.profile_id)
+            .fetch_one(&pool)
+            .await
+            .expect("has_system_access");
+        assert_eq!(
+            has_access,
+            Some(false),
+            "the machine must not outrank its minter at the system gate"
+        );
+    }
+
+    /// The same containment on `issue` — the mint path must not be a way around it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn issue_does_not_enroll_a_machine_whose_minter_is_not_in_the_gating_team(pool: PgPool) {
+        let (alice, team) = seed_outsider_team_owner(&pool, "outsider-i", "acme-out-i").await;
+
+        let cred = svc::issue(
+            &pool,
+            alice,
+            &IssueMachineRequest {
+                label: "sidekiq".to_string(),
+                owner_team_id: Some(team),
+                teams: vec![],
+                grants: vec![],
+            },
+        )
+        .await
+        .expect("a team owner may issue for their own team");
+
+        assert_eq!(
+            gating_memberships(&pool, cred.client.profile_id).await,
+            0,
+            "issue must contain gating-team reach exactly as provision does"
+        );
+    }
+
+    /// The guard keys on MEMBERSHIP, not on admin-ness — which is what keeps it a no-op in
+    /// today's prod. The everyday minter there is a plain human whom open-mode auto-join has made
+    /// a gating-team `watcher`; their machines must still enroll, or D14 breaks for everyone but
+    /// admins.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn provision_enrolls_a_machine_whose_minter_is_a_mere_gating_team_watcher(pool: PgPool) {
+        let (alice, team) = seed_outsider_team_owner(&pool, "watcher-minter", "acme-w").await;
+
+        // Hand back exactly what open-mode auto-join hands every human today: `watcher`.
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             SELECT t.id, $1, 'watcher'::team_role FROM kb_teams t WHERE t.slug = 'temper-system'",
+            *alice,
+        )
+        .execute(&pool)
+        .await
+        .expect("join the gating team as watcher");
+
+        let mut request = req("watcher-minted-agent");
+        request.owner_team_id = Some(team);
+        let client = svc::provision(&pool, alice, &request)
+            .await
+            .expect("provision");
+
+        assert_eq!(
+            gating_memberships(&pool, client.profile_id).await,
+            1,
+            "a minter INSIDE the gating team still confers membership (D14)"
+        );
     }
 
     fn req(client_id: &str) -> ProvisionMachineRequest {

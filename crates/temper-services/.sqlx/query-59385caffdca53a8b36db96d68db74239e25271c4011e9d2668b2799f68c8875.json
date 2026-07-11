@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id WHERE t.slug = 'temper-system' AND m.profile_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "59385caffdca53a8b36db96d68db74239e25271c4011e9d2668b2799f68c8875"
+}
