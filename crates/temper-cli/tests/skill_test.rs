@@ -188,6 +188,34 @@ fn test_skill_generate_includes_task_commands() {
 }
 
 #[test]
+fn test_skill_generate_documents_list_truncation_and_sort_filter() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        // The reference must teach the truncation footgun + escape hatches so
+        // agents narrow/enumerate before asserting absence or completeness.
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(
+            content.contains("## Listing: truncation, sort, and filters"),
+            "reference.md should document the listing truncation/sort/filter mechanics"
+        );
+        assert!(
+            content.contains("truncated"),
+            "should explain the `truncated` signal"
+        );
+        assert!(
+            content.contains("Never conclude a resource is absent"),
+            "should instruct agents not to assert absence from a default list"
+        );
+        // The new flags should be named in the reference.
+        for flag in ["--all", "--sort", "--title-contains", "--offset"] {
+            assert!(content.contains(flag), "reference should mention {flag}");
+        }
+    });
+}
+
+#[test]
 fn test_skill_generate_includes_skill_only_commands() {
     let dir = TempDir::new().unwrap();
     let (config, env) = test_config_with_global(&dir);

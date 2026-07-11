@@ -684,12 +684,149 @@ pub struct ListParams<'a> {
     pub doc_type: &'a str,
     pub context: Option<&'a str>,
     pub limit: Option<usize>,
+    /// `--all`: return every matching row (no page cap). Overrides `limit`
+    /// (clap makes the two mutually exclusive, so both are never set together).
+    pub all: bool,
+    /// `--offset`: skip the first N matching rows (pagination).
+    pub offset: Option<usize>,
+    /// `--sort <field>[:asc|desc]`. Parsed by [`parse_sort_arg`]; `None` keeps
+    /// the default `updated:desc`.
+    pub sort: Option<&'a str>,
+    /// `--title-contains`: case-insensitive title substring filter (the list
+    /// `q`, a trivial `ILIKE` — full text/vector search is `temper search`).
+    pub title_contains: Option<&'a str>,
     pub stage: Option<&'a str>,
     pub goal: Option<&'a str>,
     pub status: Option<&'a str>,
     pub format: crate::format::OutputFormat,
     pub meta_only: bool,
     pub fields: &'a [String],
+}
+
+/// The default page cap for `list` when neither `--limit` nor `--all` is given.
+/// `--meta-only` uses [`DEFAULT_META_LIST_LIMIT`]. Kept small enough to be cheap,
+/// large enough that the common case fits — but the `total`/`truncated` signal
+/// makes any cap self-evident, so an agent never has to guess whether it saw
+/// the whole set.
+const DEFAULT_LIST_LIMIT: usize = 20;
+/// The default page cap for `list --meta-only` (meta rows are cheaper, so the
+/// default is larger).
+const DEFAULT_META_LIST_LIMIT: usize = 50;
+
+/// Parse a `--sort <field>[:asc|desc]` argument into an enum pair. The field
+/// half is matched against a small alias set; the direction half is optional
+/// and defaults per field (time/seq → desc, textual → asc) so a bare
+/// `--sort title` reads alphabetically without the caller spelling out `:asc`.
+///
+/// A bad field or direction is a hard error (escalate, never silently ignore) —
+/// silently mis-sorting a list is exactly the class of footgun this task fixes.
+fn parse_sort_arg(
+    raw: &str,
+) -> Result<(
+    temper_workflow::types::resource::ResourceSortField,
+    temper_workflow::types::resource::SortOrder,
+)> {
+    use temper_workflow::types::resource::{ResourceSortField, SortOrder};
+
+    let (field_str, dir_str) = match raw.split_once(':') {
+        Some((f, d)) => (f.trim(), Some(d.trim())),
+        None => (raw.trim(), None),
+    };
+
+    let field = match field_str.to_ascii_lowercase().as_str() {
+        "updated" | "updated-at" | "updated_at" => ResourceSortField::Updated,
+        "created" | "created-at" | "created_at" => ResourceSortField::Created,
+        "title" => ResourceSortField::Title,
+        "stage" => ResourceSortField::Stage,
+        "seq" => ResourceSortField::Seq,
+        "context" | "context-name" | "context_name" => ResourceSortField::ContextName,
+        "doctype" | "doc-type" | "doc_type" | "type" => ResourceSortField::DocTypeName,
+        other => {
+            return Err(TemperError::BadRequest(format!(
+                "--sort: unknown field '{other}' \
+                 (expected one of: updated, created, title, stage, seq, context, doctype)"
+            )));
+        }
+    };
+
+    let order = match dir_str {
+        None => match field {
+            // Time and sequence sort newest/highest-first by default.
+            ResourceSortField::Updated | ResourceSortField::Created | ResourceSortField::Seq => {
+                SortOrder::Desc
+            }
+            // Textual fields read most naturally in ascending (A→Z) order.
+            ResourceSortField::Title
+            | ResourceSortField::Stage
+            | ResourceSortField::ContextName
+            | ResourceSortField::DocTypeName => SortOrder::Asc,
+        },
+        Some(d) => match d.to_ascii_lowercase().as_str() {
+            "asc" | "ascending" => SortOrder::Asc,
+            "desc" | "descending" => SortOrder::Desc,
+            other => {
+                return Err(TemperError::BadRequest(format!(
+                    "--sort: unknown direction '{other}' (expected 'asc' or 'desc')"
+                )));
+            }
+        },
+    };
+
+    Ok((field, order))
+}
+
+/// Resolve the effective page limit for a list call. `--all` means "no cap"
+/// (`None` — the server returns every matching row); otherwise the explicit
+/// `--limit`, falling back to `default`.
+fn resolve_list_limit(all: bool, limit: Option<usize>, default: usize) -> Option<i64> {
+    if all {
+        None
+    } else {
+        Some(limit.unwrap_or(default) as i64)
+    }
+}
+
+/// Inject the truncation signal into a `list`/`list --meta-only` envelope and
+/// report whether the page was capped.
+///
+/// The server already returns `total` (the FILTERED match count, before
+/// limit/offset) alongside `rows`. Silent truncation — reasoning over a capped
+/// page as if it were the whole set — is the root footgun this task fixes, so
+/// we surface it two ways: a machine-readable `truncated` boolean on the
+/// envelope, and (via the returned bool) a stderr hint for humans. `truncated`
+/// is true iff there are matching rows beyond this page (`offset + returned <
+/// total`). Also injects `returned` (this page's row count) for symmetry with
+/// `total`.
+fn inject_truncation_signal(envelope: &mut serde_json::Value, offset: usize) -> bool {
+    let obj = match envelope.as_object_mut() {
+        Some(o) => o,
+        None => return false,
+    };
+    let returned = obj
+        .get("rows")
+        .and_then(|r| r.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let total = obj.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
+    let truncated = (offset as i64) + (returned as i64) < total;
+    obj.insert("returned".to_string(), serde_json::json!(returned));
+    obj.insert("truncated".to_string(), serde_json::json!(truncated));
+    truncated
+}
+
+/// Emit the stderr note shown when a `list` page is truncated. Routed through
+/// `output::warning` (stderr) — NOT `output::hint` (stdout) — so it never
+/// corrupts the JSON document an agent parses on stdout. Names the exact escape
+/// hatches (`--all`, a bigger `--limit`, `--offset`, or narrowing with
+/// `--sort`/filters) so an agent self-corrects instead of asserting a set is
+/// complete from a capped page.
+fn warn_truncated(total: i64, returned: usize) {
+    output::warning(format!(
+        "Showing {returned} of {total} matching results — the list is TRUNCATED. \
+         Do not conclude a resource is absent or a set is complete from this page. \
+         Re-run with --all (or a larger --limit/--offset), or narrow with \
+         --title-contains/--stage/--sort first."
+    ));
 }
 
 /// List resources of a given type (unified pipeline for all doc types).
@@ -725,12 +862,20 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     }
 
     use crate::actions::runtime;
-    use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+    use temper_workflow::types::resource::ResourceListParams;
 
     let fmt = params.format;
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
-    let limit = params.limit.unwrap_or(20);
+    let limit = resolve_list_limit(params.all, params.limit, DEFAULT_LIST_LIMIT);
+    let offset = params.offset.unwrap_or(0);
+    let (sort, order) = match params.sort {
+        Some(raw) => {
+            let (f, o) = parse_sort_arg(raw)?;
+            (Some(f), Some(o))
+        }
+        None => (None, None),
+    };
     let state_dir = config.state_dir.clone();
     let fields_owned: Vec<String> = params.fields.to_vec();
     // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
@@ -744,10 +889,12 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         doc_type_name: Some(doc_type.clone()),
         context_ref: context.clone(),
         stage: params.stage.map(str::to_string),
+        q: params.title_contains.map(str::to_string),
         goal: goal_id,
-        sort: Some(ResourceSortField::Updated),
-        order: Some(SortOrder::Desc),
-        limit: Some(limit as i64),
+        sort,
+        order,
+        limit,
+        offset: Some(offset as i64),
         ..Default::default()
     };
 
@@ -777,6 +924,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         }
     }
 
+    // Truncation signal — injected BEFORE the optional `--fields` projection so
+    // the `total`/`returned`/`truncated` envelope keys are always present (they
+    // survive the filter, which only prunes per-row keys, not envelope keys).
+    let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
+    let returned = envelope
+        .get("rows")
+        .and_then(|r| r.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let truncated = inject_truncation_signal(&mut envelope, offset);
+
     if !fields_owned.is_empty() {
         let rows = envelope
             .get_mut("rows")
@@ -790,6 +948,9 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
+    if truncated {
+        warn_truncated(total, returned);
+    }
     Ok(())
 }
 
@@ -800,9 +961,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 /// preserved untouched.
 fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
-    use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+    use temper_workflow::types::resource::ResourceListParams;
 
-    let limit = params.limit.unwrap_or(50);
+    let limit = resolve_list_limit(params.all, params.limit, DEFAULT_META_LIST_LIMIT);
+    let offset = params.offset.unwrap_or(0);
+    let (sort, order) = match params.sort {
+        Some(raw) => {
+            let (f, o) = parse_sort_arg(raw)?;
+            (Some(f), Some(o))
+        }
+        None => (None, None),
+    };
     let goal_id = params
         .goal
         .map(temper_workflow::operations::parse_ref)
@@ -812,10 +981,12 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
         doc_type_name: Some(params.doc_type.to_string()),
         context_ref: params.context.map(ToString::to_string),
         stage: params.stage.map(str::to_string),
+        q: params.title_contains.map(str::to_string),
         goal: goal_id,
-        sort: Some(ResourceSortField::Updated),
-        order: Some(SortOrder::Desc),
-        limit: Some(limit as i64),
+        sort,
+        order,
+        limit,
+        offset: Some(offset as i64),
         meta_only: Some(true),
         ..Default::default()
     };
@@ -840,6 +1011,15 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     let mut envelope = serde_json::to_value(&response)
         .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
 
+    // Truncation signal — parity with the full `list` path (see `inject_truncation_signal`).
+    let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
+    let returned = envelope
+        .get("rows")
+        .and_then(|r| r.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let truncated = inject_truncation_signal(&mut envelope, offset);
+
     if !fields_owned.is_empty() {
         let rows = envelope
             .get_mut("rows")
@@ -853,6 +1033,9 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
+    if truncated {
+        warn_truncated(total, returned);
+    }
     Ok(())
 }
 
@@ -1764,6 +1947,106 @@ fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod list_helpers_tests {
+    use super::*;
+    use temper_workflow::types::resource::{ResourceSortField, SortOrder};
+
+    #[test]
+    fn parse_sort_field_aliases() {
+        assert!(matches!(
+            parse_sort_arg("updated").unwrap().0,
+            ResourceSortField::Updated
+        ));
+        assert!(matches!(
+            parse_sort_arg("created_at").unwrap().0,
+            ResourceSortField::Created
+        ));
+        assert!(matches!(
+            parse_sort_arg("context").unwrap().0,
+            ResourceSortField::ContextName
+        ));
+        assert!(matches!(
+            parse_sort_arg("doc-type").unwrap().0,
+            ResourceSortField::DocTypeName
+        ));
+    }
+
+    #[test]
+    fn parse_sort_direction_defaults_per_field() {
+        // Time/seq fields default to descending (newest/highest first).
+        assert!(matches!(
+            parse_sort_arg("updated").unwrap().1,
+            SortOrder::Desc
+        ));
+        assert!(matches!(parse_sort_arg("seq").unwrap().1, SortOrder::Desc));
+        // Textual fields default to ascending (A→Z).
+        assert!(matches!(parse_sort_arg("title").unwrap().1, SortOrder::Asc));
+        assert!(matches!(parse_sort_arg("stage").unwrap().1, SortOrder::Asc));
+    }
+
+    #[test]
+    fn parse_sort_explicit_direction_overrides_default() {
+        let (f, o) = parse_sort_arg("title:desc").unwrap();
+        assert!(matches!(f, ResourceSortField::Title));
+        assert!(matches!(o, SortOrder::Desc));
+        let (_, o) = parse_sort_arg("updated:asc").unwrap();
+        assert!(matches!(o, SortOrder::Asc));
+    }
+
+    #[test]
+    fn parse_sort_rejects_unknown_field_and_direction() {
+        // A bad field or direction is a hard error, never a silent mis-sort.
+        assert!(parse_sort_arg("bogus").is_err());
+        assert!(parse_sort_arg("title:sideways").is_err());
+    }
+
+    #[test]
+    fn resolve_list_limit_all_means_no_cap() {
+        assert_eq!(resolve_list_limit(true, None, 20), None);
+        // `--all` wins over any (clap-excluded) limit.
+        assert_eq!(resolve_list_limit(true, Some(5), 20), None);
+    }
+
+    #[test]
+    fn resolve_list_limit_uses_explicit_then_default() {
+        assert_eq!(resolve_list_limit(false, Some(5), 20), Some(5));
+        assert_eq!(resolve_list_limit(false, None, 20), Some(20));
+        assert_eq!(resolve_list_limit(false, None, 50), Some(50));
+    }
+
+    #[test]
+    fn truncation_signal_flags_a_capped_page() {
+        // 2 of 5 shown from offset 0 → truncated.
+        let mut env = serde_json::json!({
+            "rows": [{"id": "a"}, {"id": "b"}],
+            "total": 5,
+        });
+        assert!(inject_truncation_signal(&mut env, 0));
+        assert_eq!(env["truncated"], serde_json::json!(true));
+        assert_eq!(env["returned"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn truncation_signal_clear_when_page_covers_the_tail() {
+        // offset 3 + 2 returned == total 5 → nothing beyond this page.
+        let mut env = serde_json::json!({
+            "rows": [{"id": "d"}, {"id": "e"}],
+            "total": 5,
+        });
+        assert!(!inject_truncation_signal(&mut env, 3));
+        assert_eq!(env["truncated"], serde_json::json!(false));
+
+        // Whole set on one page.
+        let mut whole = serde_json::json!({
+            "rows": [{"id": "a"}, {"id": "b"}],
+            "total": 2,
+        });
+        assert!(!inject_truncation_signal(&mut whole, 0));
+        assert_eq!(whole["truncated"], serde_json::json!(false));
+    }
 }
 
 #[cfg(test)]

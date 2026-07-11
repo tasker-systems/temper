@@ -85,6 +85,41 @@ carry a `slug` field. A slug placed in managed frontmatter is likewise inert.
 
 Search first, read second. Don't guess at file paths.
 
+## Listing: truncation, sort, and filters
+
+`temper resource list` returns a **capped page** — 20 rows by default (50 with
+`--meta-only`). **Never conclude a resource is absent, or that a set is
+complete, from a default `list`.** A goal/task/session you "don't see" may just
+be past the cap.
+
+Every list response carries the signal to catch this:
+
+| Envelope key | Meaning |
+|--------------|---------|
+| `total` | Count of ALL rows matching the filters (before the page cap). |
+| `returned` | Rows in THIS page. |
+| `truncated` | `true` when `total` exceeds what this page shows — there is more. |
+
+When `truncated` is `true`, the CLI also prints a stderr hint. Before asserting
+absence or completeness, **expand or narrow**:
+
+| Flag | Use |
+|------|-----|
+| `--all` | Return every matching row (no cap). Reach for this before claiming a set is complete. Conflicts with `--limit`. |
+| `--limit <n>` / `--offset <n>` | A bigger page, or page through the set. |
+| `--sort <field>[:asc\|desc]` | Order by `updated`, `created`, `title`, `stage`, `seq`, `context`, or `doctype`. Direction defaults per field (time/seq → desc, text → asc); default sort is `updated:desc`. |
+| `--title-contains <substr>` | Case-insensitive title filter — narrow instead of paging blind (for topical/semantic search use `temper search`). |
+| `--stage <s>` / `--goal <ref>` (task) · `--status <s>` (goal) | Type-specific filters. |
+
+```bash
+# WRONG: "no maintenance goal exists" — read off a 20-row default page.
+temper resource list --type goal --context @me/temper
+
+# RIGHT: narrow, or enumerate fully, before asserting absence.
+temper resource list --type goal --context @me/temper --title-contains maintenance
+temper resource list --type goal --context @me/temper --all
+```
+
 ## Orientation Projection (cheap reads)
 
 The read-side projection flags let you peek at structure without paying for
