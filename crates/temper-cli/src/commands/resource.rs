@@ -869,26 +869,28 @@ pub fn grant(
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let resource_id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r#ref)?);
-    // A team ref is a decorated ref (UUID or `slug-<uuid>`); parse_ref keeps the trailing
-    // UUID and ignores the slug half — no slug-uniqueness lookup needed.
-    let to_team_id = to_team
-        .as_deref()
-        .map(temper_workflow::operations::parse_ref)
-        .transpose()?
-        .map(uuid::Uuid::from);
-    let principal = crate::actions::cogmap::resolve_principal(to_profile, to_team_id)?;
-
-    let body = temper_core::types::resource_grant::ResourceGrantBody {
-        principal_table: principal.table,
-        principal_id: principal.id,
-        can_read: read || write || grant_cap,
-        can_write: write,
-        can_delete: false,
-        can_grant: grant_cap,
-    };
 
     let outcome = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
+            // A team is addressed by ref — a team UUID, a decorated `slug-<uuid>`, or a bare
+            // slug — the same resolution `team show`/`context share` use. It is NOT a resource
+            // ref, so it does not go through `parse_ref` (that yields a misleading
+            // "not a resource ref" error for a valid slug — issue #366).
+            let to_team_id = match to_team.as_deref() {
+                Some(team) => Some(crate::actions::cogmap::resolve_team_id(client, team).await?),
+                None => None,
+            };
+            let principal = crate::actions::cogmap::resolve_principal(to_profile, to_team_id)?;
+
+            let body = temper_core::types::resource_grant::ResourceGrantBody {
+                principal_table: principal.table,
+                principal_id: principal.id,
+                can_read: read || write || grant_cap,
+                can_write: write,
+                can_delete: false,
+                can_grant: grant_cap,
+            };
+
             client
                 .resources()
                 .grant(resource_id, &body)
@@ -910,20 +912,22 @@ pub fn revoke(
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let resource_id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r#ref)?);
-    let from_team_id = from_team
-        .as_deref()
-        .map(temper_workflow::operations::parse_ref)
-        .transpose()?
-        .map(uuid::Uuid::from);
-    let principal = crate::actions::cogmap::resolve_principal(from_profile, from_team_id)?;
-
-    let body = temper_core::types::resource_grant::ResourceRevokeBody {
-        principal_table: principal.table,
-        principal_id: principal.id,
-    };
 
     let outcome = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
+            // `--from-team` is a team ref (UUID / decorated / bare slug), resolved the same way
+            // as everywhere else on the team surface — not the resource-ref parser (issue #366).
+            let from_team_id = match from_team.as_deref() {
+                Some(team) => Some(crate::actions::cogmap::resolve_team_id(client, team).await?),
+                None => None,
+            };
+            let principal = crate::actions::cogmap::resolve_principal(from_profile, from_team_id)?;
+
+            let body = temper_core::types::resource_grant::ResourceRevokeBody {
+                principal_table: principal.table,
+                principal_id: principal.id,
+            };
+
             client
                 .resources()
                 .revoke(resource_id, &body)

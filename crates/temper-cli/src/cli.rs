@@ -634,8 +634,8 @@ pub enum ResourceAction {
         /// Grant to this profile (UUID). Mutually exclusive with `--to-team`.
         #[arg(long = "to-profile")]
         to_profile: Option<uuid::Uuid>,
-        /// Grant to this team (a UUID or decorated `slug-<uuid>` ref). Mutually exclusive
-        /// with `--to-profile`.
+        /// Grant to this team: a team slug (optionally `+`-prefixed), a decorated
+        /// `slug-<uuid>` ref, or a team UUID. Mutually exclusive with `--to-profile`.
         #[arg(long = "to-team")]
         to_team: Option<String>,
         /// Grant read.
@@ -655,8 +655,8 @@ pub enum ResourceAction {
         /// Revoke this profile's grant (UUID). Mutually exclusive with `--from-team`.
         #[arg(long = "from-profile")]
         from_profile: Option<uuid::Uuid>,
-        /// Revoke this team's grant (a UUID or decorated `slug-<uuid>` ref). Mutually
-        /// exclusive with `--from-profile`.
+        /// Revoke this team's grant: a team slug (optionally `+`-prefixed), a decorated
+        /// `slug-<uuid>` ref, or a team UUID. Mutually exclusive with `--from-profile`.
         #[arg(long = "from-team")]
         from_team: Option<String>,
     },
@@ -701,7 +701,9 @@ pub enum ContextAction {
     },
     /// List the contexts you can see on the server (with owner ref + resource counts)
     List,
-    /// Share a context into a team's read-reach (admin-only). The context ref is a UUID or the
+    /// Share a context into a team's read-reach. Requires that you administer the context
+    /// (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR
+    /// that you are an instance administrator. The context ref is a UUID or the
     /// `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted.
     Share {
         /// Context ref: a UUID or `@handle/slug` / `+team-slug/slug`.
@@ -709,7 +711,7 @@ pub enum ContextAction {
         /// Team to share into: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
-    /// Unshare a context from a team (admin-only).
+    /// Unshare a context from a team (same authority as `share`).
     Unshare {
         /// Context ref: a UUID or `@handle/slug` / `+team-slug/slug`.
         context: String,
@@ -1159,9 +1161,10 @@ pub enum CogmapCmd {
         /// Grant to this profile (UUID). Mutually exclusive with `--to-team`.
         #[arg(long = "to-profile")]
         to_profile: Option<uuid::Uuid>,
-        /// Grant to this team (UUID). Mutually exclusive with `--to-profile`.
+        /// Grant to this team: a team slug (optionally `+`-prefixed), a decorated
+        /// `slug-<uuid>` ref, or a team UUID. Mutually exclusive with `--to-profile`.
         #[arg(long = "to-team")]
-        to_team: Option<uuid::Uuid>,
+        to_team: Option<String>,
         /// Grant read.
         #[arg(long)]
         read: bool,
@@ -1179,9 +1182,10 @@ pub enum CogmapCmd {
         /// Revoke this profile's grant (UUID). Mutually exclusive with `--from-team`.
         #[arg(long = "from-profile")]
         from_profile: Option<uuid::Uuid>,
-        /// Revoke this team's grant (UUID). Mutually exclusive with `--from-profile`.
+        /// Revoke this team's grant: a team slug (optionally `+`-prefixed), a decorated
+        /// `slug-<uuid>` ref, or a team UUID. Mutually exclusive with `--from-profile`.
         #[arg(long = "from-team")]
-        from_team: Option<uuid::Uuid>,
+        from_team: Option<String>,
     },
 }
 
@@ -1550,7 +1554,9 @@ mod meta_only_flag_tests {
                         ..
                     },
             } => {
-                assert_eq!(from_team, Some(id));
+                // `--from-team` now accepts a slug/decorated/UUID ref (issue #366), carried
+                // verbatim as a String and resolved client-side against the caller's teams.
+                assert_eq!(from_team, Some(id.to_string()));
                 assert_eq!(from_profile, None);
             }
             _ => panic!("expected Cogmap::Revoke"),

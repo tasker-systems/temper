@@ -1296,7 +1296,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin"
+            "description": "Caller may not share this context into this team"
           }
         },
         "security": [
@@ -1361,7 +1361,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin"
+            "description": "Caller may not unshare this context from this team"
           }
         },
         "security": [

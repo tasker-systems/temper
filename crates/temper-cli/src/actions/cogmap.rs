@@ -98,18 +98,28 @@ fn strip_team_sigil(team: &str) -> &str {
     team.strip_prefix('+').unwrap_or(team)
 }
 
-/// Resolve a team ref (a slug, optionally `+`-prefixed, or a bare UUID) to its team id.
+/// Resolve a team ref to its team id — the single team resolver shared by every team-typed
+/// CLI argument (`team show`, `team invite`, `context share`, `cogmap bind`, `resource grant
+/// --to-team`, …). Accepts, in order:
 ///
-/// A UUID is used directly. Otherwise the slug is matched against the teams the caller is a
-/// member of (`TeamsClient::list`) — the admin who provisions a map is a member (owner) of
-/// the teams they bind it to. Returns a clear error when the slug does not resolve.
+/// 1. a team UUID, or the decorated `slug-<uuid>` form (trailing UUID extracted, slug half
+///    ignored — the same decorated addressing resources use). `parse_ref` covers both.
+/// 2. a bare team slug (unique across the instance), matched against the teams the caller is
+///    a member of (`TeamsClient::list`).
+///
+/// The error names the *team* argument and its accepted forms — never "resource ref" (issue
+/// #366): `--to-team`/`--from-team` are team-typed, so a bad value is a team error, not a
+/// resource-ref error.
 pub async fn resolve_team_id(
     client: &temper_client::TemperClient,
     team: &str,
 ) -> Result<uuid::Uuid> {
     let token = strip_team_sigil(team);
-    if let Ok(id) = uuid::Uuid::parse_str(token) {
-        return Ok(id);
+    // A bare UUID or a decorated `slug-<uuid>` ref both carry the id directly. On a bare slug
+    // `parse_ref` errors (its message is resource-oriented) — we swallow it and fall through to
+    // the slug lookup, so the only error a caller ever sees is the team-shaped one below.
+    if let Ok(id) = temper_workflow::operations::parse_ref(token) {
+        return Ok(uuid::Uuid::from(id));
     }
     let teams = client
         .teams()
@@ -122,9 +132,25 @@ pub async fn resolve_team_id(
         .map(|t| t.id)
         .ok_or_else(|| {
             TemperError::Api(format!(
-                "team '{token}' not found among the teams you are a member of"
+                "not a team: {token:?} (expected a team slug, a decorated `slug-<uuid>` ref, \
+                 or a team UUID; {token:?} matched no team you are a member of)"
             ))
         })
+}
+
+/// Map a `cogmap bind`/`unbind` client error, enriching the message-less 403 with the
+/// actual two-sided requirement + escalation path — symmetric with `context share` (issue
+/// #367). "instance administrator" is spelled out so it is never read as the per-team
+/// `admin`/`owner` role.
+fn map_bind_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
+    match e {
+        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+            "not authorized: `cogmap {action}` requires that you administer the map \
+             (hold a grant on it) AND manage the target team (owner/maintainer) — or that \
+             you are an instance administrator."
+        )),
+        other => crate::commands::client_err(other),
+    }
 }
 
 /// Bind the cogmap (already resolved to a UUID) to a team (resolved from `team`).
@@ -138,7 +164,7 @@ pub async fn bind_api(
         .cognitive_maps()
         .bind_team(cogmap_id, &BindTeamRequest { team_id })
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(|e| map_bind_err("bind", e))
 }
 
 /// Unbind the cogmap (already resolved to a UUID) from a team (resolved from `team`).
@@ -152,7 +178,7 @@ pub async fn unbind_api(
         .cognitive_maps()
         .unbind_team(cogmap_id, team_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(|e| map_bind_err("unbind", e))
 }
 
 /// Grant a capability on the cogmap. `read` is forced on when `write`/`grant` is set (coherence).
