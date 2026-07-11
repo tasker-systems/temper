@@ -82,6 +82,53 @@ async fn registered_machine_reaches_the_data_plane(pool: sqlx::PgPool) {
     );
 }
 
+/// Register a temper-ISSUED machine client (issuer='temper', with a secret hash), as Phase B1's
+/// `issue` path produces. The gate is issuer-agnostic, so this must authenticate exactly like an
+/// auth0-m2m row — proving B1 changed no verifier (D4).
+async fn register_temper_issued(pool: &sqlx::PgPool, client_id: &str) -> Uuid {
+    let profile_id = Uuid::now_v7();
+    sqlx::query!(
+        "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+         VALUES ($1, $2, $2, NULL, '{}')",
+        profile_id,
+        format!("agent-{client_id}"),
+    )
+    .execute(pool)
+    .await
+    .expect("seed profile");
+    sqlx::query!(
+        "INSERT INTO kb_machine_clients \
+           (client_id, issuer, label, profile_id, registered_by_profile_id, secret_hash) \
+         VALUES ($1, 'temper', 'e2e', $2, $2, 'deadbeef')",
+        client_id,
+        profile_id,
+    )
+    .execute(pool)
+    .await
+    .expect("seed temper-issued registration");
+    profile_id
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn temper_issued_machine_reaches_the_data_plane(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    register_temper_issued(&pool, "tmpr_live").await;
+    let token = common::generate_machine_jwt("tmpr_live");
+
+    let response = reqwest::Client::new()
+        .get(app.url("/api/resources"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(
+        response.status(),
+        200,
+        "a temper-issued machine authenticates through the unchanged gate (D4)"
+    );
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn revoked_machine_is_rejected_immediately(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;

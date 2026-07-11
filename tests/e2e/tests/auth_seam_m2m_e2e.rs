@@ -108,3 +108,34 @@ async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool
         .await
         .expect("mcp gate must admit a registered machine");
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
+    let _app = common::setup(pool.clone()).await;
+    let svc = build_mcp_service(&pool).await;
+
+    // A temper-ISSUED row (issuer='temper', with a secret hash), as Phase B1's `issue` path
+    // produces. The mcp gate is issuer-agnostic, so it resolves exactly like an auth0-m2m row.
+    let profile_id = uuid::Uuid::now_v7();
+    sqlx::query!(
+        "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+         VALUES ($1, 'agent-tmpr-mcp', 'agent-tmpr-mcp', NULL, '{}')",
+        profile_id,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed profile");
+    sqlx::query!(
+        "INSERT INTO kb_machine_clients \
+           (client_id, issuer, label, profile_id, registered_by_profile_id, secret_hash) \
+         VALUES ('tmpr_mcp', 'temper', 'e2e', $1, $1, 'deadbeef')",
+        profile_id,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed temper-issued registration");
+
+    svc.ensure_profile_from_parts(&machine_parts("tmpr_mcp"))
+        .await
+        .expect("a temper-issued machine resolves on the MCP surface too (D4)");
+}
