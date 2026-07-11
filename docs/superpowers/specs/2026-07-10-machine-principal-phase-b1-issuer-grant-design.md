@@ -82,8 +82,9 @@ over-specified against its own cited precedent; SHA-256 is the honest choice.
 
 ### 1. Schema — one additive migration
 
-`20260711000012_machine_client_secrets.sql` (next gap above Phase A's `...010`/`...011`). Adds to
-`kb_machine_clients`, **all nullable** so `auth0-m2m` rows are unaffected:
+`20260711000070_machine_client_secrets.sql` (above the current head `...050`, leaving a `...060`
+gap for a concurrent sibling session). Adds to `kb_machine_clients`, **all nullable** so `auth0-m2m`
+rows are unaffected:
 
 ```sql
 ALTER TABLE kb_machine_clients
