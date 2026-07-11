@@ -3,8 +3,24 @@
   "title": "RegionMaterialized",
   "type": "object",
   "properties": {
+    "home_anchor_table": {
+      "description": "The anchor the regions were formed over — a context OR a cognitive map (spec §3.6 M2).\nSupersedes `cogmap_id`.",
+      "$ref": "#/$defs/AnchorTable"
+    },
+    "home_anchor_id": {
+      "type": "string",
+      "format": "uuid"
+    },
     "cogmap_id": {
-      "$ref": "#/$defs/CogmapId"
+      "description": "VESTIGIAL, dual-written through the expand window. `kb_events` is APPEND-ONLY: every\n`region_materialized` event written before T3 carries this key and no anchor pair, and those\nrows are immortal. Keeping it written (and OPTIONAL, so a context act can omit it) is what lets\nthe ledger probe in `replay::last_materialize_event` read old and new acts with one query.\n`None` for a context anchor. Do not read this in new code.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CogmapId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "lens_id": {
       "$ref": "#/$defs/LensId"
@@ -25,13 +41,27 @@
     }
   },
   "required": [
-    "cogmap_id",
+    "home_anchor_table",
+    "home_anchor_id",
     "lens_id",
     "watermark_event_id",
     "membership_fingerprint",
     "region_ids"
   ],
   "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles"
+      ]
+    },
     "CogmapId": {
       "description": "A `kb_cogmaps.id` value — a cognitive map.",
       "type": "string",

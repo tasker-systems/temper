@@ -17,6 +17,7 @@ use crate::events::EventKind;
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 /// (table, dump-query) — canonical, deterministic row dumps. Masked tables subtract 'id' and order
@@ -405,11 +406,19 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
 }
 
 /// The recorded materialization acts (last per lens):
-/// (cogmap_id, lens_id, watermark_event_id, membership_fingerprint) — for the region re-proof.
-pub async fn recorded_materializations(pool: &PgPool) -> Result<Vec<(Uuid, Uuid, Uuid, String)>> {
+/// (anchor, lens_id, watermark_event_id, membership_fingerprint) — for the region re-proof.
+///
+/// The anchor is read from the pair, falling back to the pre-T3 `cogmap_id` key (`kb_events` is
+/// append-only, so acts written before the anchor pair existed are immortal — see
+/// `last_materialize_event`, which shares the dual-read).
+pub async fn recorded_materializations(
+    pool: &PgPool,
+) -> Result<Vec<(HomeAnchor, Uuid, Uuid, String)>> {
     let rows = sqlx::query(
         "SELECT DISTINCT ON (e.payload->>'lens_id') \
-                (e.payload->>'cogmap_id')::uuid, (e.payload->>'lens_id')::uuid, \
+                coalesce(e.payload->>'home_anchor_table', 'kb_cogmaps'), \
+                coalesce((e.payload->>'home_anchor_id')::uuid, (e.payload->>'cogmap_id')::uuid), \
+                (e.payload->>'lens_id')::uuid, \
                 (e.payload->>'watermark_event_id')::uuid, \
                 e.payload->>'membership_fingerprint' \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
@@ -418,10 +427,15 @@ pub async fn recorded_materializations(pool: &PgPool) -> Result<Vec<(Uuid, Uuid,
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
-        .collect())
+    rows.into_iter()
+        .map(|r| {
+            let table: String = r.get(0);
+            let id: Uuid = r.get(1);
+            let anchor = HomeAnchor::from_parts(&table, id)
+                .with_context(|| format!("region_materialized: unknown anchor table {table:?}"))?;
+            Ok((anchor, r.get(2), r.get(3), r.get(4)))
+        })
+        .collect()
 }
 
 /// The CONTENT events: a member's prose moved (new chunk embeddings) without changing any
@@ -445,23 +459,58 @@ const STRUCTURAL_EVENTS: &[&str] = &[
     "property_asserted",
 ];
 
-/// Did any event whose type is in `names` touch this cogmap after `watermark`? The shared body behind
+/// The most recent `region_materialized` act for `(anchor, lens)`, optionally bounded to events
+/// strictly before `before` — the point-in-time a prior projection was computed against.
+///
+/// **Reads the anchor out of the payload two ways, and that is deliberate.** `kb_events` is
+/// append-only: every `region_materialized` event written before T3 carries `cogmap_id` and no
+/// anchor pair, and those rows are immortal. Probing only the new key would silently find no prior
+/// act on the first pass after deploy — incremental would skip the moved-member readout refresh
+/// exactly once, with no error. The `cogmap_id` arm can never false-positive for a context anchor
+/// (uuids don't collide across tables), so the dual-read is safe for both regimes.
+///
+/// One body, two callers (`write::last_materialize_watermark`, `drift::touched_since_last_materialize`)
+/// — the probe is load-bearing and two copies would drift.
+pub(crate) async fn last_materialize_event<'e, E: sqlx::PgExecutor<'e>>(
+    conn: E,
+    anchor: HomeAnchor,
+    lens_id: Uuid,
+    before: Option<Uuid>,
+) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name = 'region_materialized' \
+           AND (e.payload->>'lens_id')::uuid = $2 \
+           AND ( (e.payload->>'home_anchor_id')::uuid = $1 \
+              OR (e.payload->>'cogmap_id')::uuid = $1 ) \
+           AND ($3::uuid IS NULL OR e.id < $3) \
+         ORDER BY e.id DESC LIMIT 1",
+    )
+    .bind(anchor.uuid())
+    .bind(lens_id)
+    .bind(before)
+    .fetch_optional(conn)
+    .await?)
+}
+
+/// Did any event whose type is in `names` touch this anchor after `watermark`? The shared body behind
 /// the formation and content gates — the anchor-scoping predicate is load-bearing and easy to get
 /// wrong, so it lives in exactly one place.
 async fn touched_since(
     pool: &PgPool,
-    cogmap: Uuid,
+    anchor: HomeAnchor,
     watermark: Uuid,
     names: &[&str],
 ) -> Result<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS ( \
             SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-             WHERE e.id > $2 \
-               AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
-               AND et.name = ANY($3))",
+             WHERE e.id > $3 \
+               AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
+               AND et.name = ANY($4))",
     )
-    .bind(cogmap)
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(watermark)
     .bind(names)
     .fetch_one(pool)
@@ -472,13 +521,17 @@ async fn touched_since(
 /// the cogmap after the given watermark. A recorded fingerprint is only re-provable when this is
 /// false — otherwise the recorded act is legitimately stale relative to the substrate (the
 /// drift-detection concept), and re-materialization is expected to differ.
-pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uuid) -> Result<bool> {
+pub async fn formation_touched_since(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    watermark: Uuid,
+) -> Result<bool> {
     let names: Vec<&str> = STRUCTURAL_EVENTS
         .iter()
         .chain(CONTENT_EVENTS)
         .copied()
         .collect();
-    touched_since(pool, cogmap, watermark, &names).await
+    touched_since(pool, anchor, watermark, &names).await
 }
 
 /// COUNT of formation-affecting events (structural ∪ content) that touched the cogmap after
@@ -492,7 +545,7 @@ pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uui
 /// materialize path without itself being as expensive as the load-and-cluster it guards (T4b).
 pub async fn formation_touched_count_since(
     pool: &PgPool,
-    cogmap: Uuid,
+    anchor: HomeAnchor,
     watermark: Option<Uuid>,
 ) -> Result<i64> {
     let names: Vec<&str> = STRUCTURAL_EVENTS
@@ -503,11 +556,12 @@ pub async fn formation_touched_count_since(
     Ok(sqlx::query_scalar(
         "SELECT count(*) \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE ($2::uuid IS NULL OR e.id > $2) \
-            AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
-            AND et.name = ANY($3)",
+          WHERE ($3::uuid IS NULL OR e.id > $3) \
+            AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
+            AND et.name = ANY($4)",
     )
-    .bind(cogmap)
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(watermark)
     .bind(&names)
     .fetch_one(pool)
@@ -524,7 +578,7 @@ pub async fn formation_touched_count_since(
 /// disagree on "what is a content touch". Empty ⇒ no readout-refresh work this pass.
 pub async fn content_touched_resources_since(
     pool: &PgPool,
-    cogmap: Uuid,
+    anchor: HomeAnchor,
     watermark: Uuid,
 ) -> Result<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
@@ -532,11 +586,12 @@ pub async fn content_touched_resources_since(
            FROM kb_events e \
            JOIN kb_event_types et ON et.id = e.event_type_id \
            JOIN kb_content_blocks b ON b.id = (e.payload->>'block_id')::uuid \
-          WHERE e.id > $2 \
-            AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
-            AND et.name = ANY($3)",
+          WHERE e.id > $3 \
+            AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
+            AND et.name = ANY($4)",
     )
-    .bind(cogmap)
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(watermark)
     .bind(CONTENT_EVENTS)
     .fetch_all(pool)

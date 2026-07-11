@@ -1,5 +1,5 @@
 use crate::events::{fire, SeedAction};
-use crate::ids::{CogmapId, EntityId, EventId, LensId, RegionId};
+use crate::ids::{EntityId, EventId, LensId, RegionId, ResourceId};
 use crate::{
     affinity::{affinity, Lens},
     cluster::{agglomerate, connected_components},
@@ -10,6 +10,7 @@ use crate::{
 use anyhow::{Context, Result};
 use sqlx::{PgConnection, PgPool};
 use std::collections::HashSet;
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -79,16 +80,20 @@ fn zero_centroid() -> String {
 /// Job B (drift §3.2/§4, spec §6a): read substrate -> nonzero-affinity components -> deterministic
 /// per-component clustering -> persist components + fold prior regions/components + assert new regions
 /// and members + readouts, under ONE materialization event. A FULL pass: every prior region and
-/// component for the lens is folded and recomputed. Cosine never enters formation; it enters only via
-/// the readouts. The persisted per-component fingerprints are what [`incremental_materialize_cogmap`]
-/// reuses on the next pass.
-pub async fn materialize_cogmap(
+/// component for the lens is folded and recomputed. The persisted per-component fingerprints are what
+/// [`incremental_materialize`] reuses on the next pass.
+///
+/// `anchor` is a context OR a cognitive map (spec §3.6 M2). The regime is the LENS's business, not
+/// this function's: with `w_cos = 0` (every lens seeded today) formation is declared-graph-only and a
+/// context — which carries no facets and a near-monotone edge graph — forms nothing useful. T4's
+/// kernel is what makes the context regime work.
+pub async fn materialize(
     pool: &PgPool,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     lens_name: &str,
     emitter: EntityId,
 ) -> Result<MaterializeOutcome> {
-    let s = substrate::load(pool, cogmap, lens_name).await?;
+    let s = substrate::load(pool, anchor, lens_name).await?;
     let comps = cluster_components(&s);
     let comp_refs: Vec<&ComponentWork> = comps.iter().collect();
 
@@ -105,7 +110,7 @@ pub async fn materialize_cogmap(
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
-            cogmap,
+            anchor,
             lens: s.lens_id,
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
@@ -117,14 +122,14 @@ pub async fn materialize_cogmap(
     .materialize_event()?;
 
     // a full pass folds every prior live region AND component for this lens, then recreates them.
-    fold_live_regions(&mut tx, cogmap, s.lens_id, ev).await?;
-    fold_live_components(&mut tx, cogmap, s.lens_id, ev).await?;
+    fold_live_regions(&mut tx, anchor, s.lens_id, ev).await?;
+    fold_live_components(&mut tx, anchor, s.lens_id, ev).await?;
 
     let zero = zero_centroid();
     let work: Vec<(&ComponentWork, &Vec<RegionId>)> =
         comp_refs.iter().copied().zip(&region_ids).collect();
-    assert_component_regions(&mut tx, cogmap, s.lens_id, &s.lens, &zero, ev, &work).await?;
-    // (the materialization watermark on kb_cogmaps is set by _project_region_materialized — the
+    assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
+    // (the materialization watermark on the anchor row is set by _project_region_materialized — the
     // event's projection half — not here.)
     tx.commit().await?;
 
@@ -141,20 +146,20 @@ pub async fn materialize_cogmap(
 /// changed components are recomputed by the same `agglomerate`. The returned membership fingerprint is
 /// over the FULL current clustering, so the `reproducible` / `fingerprint_differs` checks behave
 /// exactly as under a full pass. Self-bootstraps to a full pass when no prior components exist.
-pub async fn incremental_materialize_cogmap(
+pub async fn incremental_materialize(
     pool: &PgPool,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     lens_name: &str,
     emitter: EntityId,
 ) -> Result<MaterializeOutcome> {
-    let s = substrate::load(pool, cogmap, lens_name).await?;
+    let s = substrate::load(pool, anchor, lens_name).await?;
     let comps = cluster_components(&s);
 
     // `drift` keys on opaque component uuids (out of scope here) — bridge at the boundary.
-    let priors = drift::live_components(pool, cogmap.uuid(), s.lens_id.uuid()).await?;
+    let priors = drift::live_components(pool, anchor, s.lens_id.uuid()).await?;
     if priors.is_empty() {
         // nothing to diff against — the first materialize for this lens is a full pass.
-        return materialize_cogmap(pool, cogmap, lens_name, emitter).await;
+        return materialize(pool, anchor, lens_name, emitter).await;
     }
 
     // the same fingerprint comparison drift detection uses: which components are reused untouched,
@@ -182,7 +187,7 @@ pub async fn incremental_materialize_cogmap(
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
-            cogmap,
+            anchor,
             lens: s.lens_id,
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
@@ -199,9 +204,9 @@ pub async fn incremental_materialize_cogmap(
     let zero = zero_centroid();
     let work: Vec<(&ComponentWork, &Vec<RegionId>)> =
         changed.iter().copied().zip(&new_region_ids).collect();
-    assert_component_regions(&mut tx, cogmap, s.lens_id, &s.lens, &zero, ev, &work).await?;
+    assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
 
-    refresh_moved_region_readouts(pool, &mut tx, cogmap, &s, &zero, &diff.unchanged, ev).await?;
+    refresh_moved_region_readouts(pool, &mut tx, anchor, &s, &zero, &diff.unchanged, ev).await?;
 
     tx.commit().await?;
 
@@ -240,28 +245,29 @@ fn mint_region_ids(comps: &[&ComponentWork]) -> Vec<Vec<RegionId>> {
 
 /// Persist each component and assert its regions (members + readouts) in order, sharing the parent's
 /// transaction. `work` pairs each component with its pre-minted per-cluster region ids.
+///
+/// Takes the whole `Substrate` rather than `(lens_id, lens)`: `assert_region` now needs the edges and
+/// facets too, to score each member's affinity to its component peers.
 async fn assert_component_regions(
     tx: &mut PgConnection,
-    cogmap: CogmapId,
-    lens_id: LensId,
-    lens: &Lens,
+    anchor: HomeAnchor,
+    sub: &Substrate,
     zero_centroid: &str,
     ev: EventId,
     work: &[(&ComponentWork, &Vec<RegionId>)],
 ) -> Result<()> {
     for &(comp, comp_region_ids) in work {
-        let comp_id = create_component(&mut *tx, cogmap, lens_id, comp, ev).await?;
+        let comp_id = create_component(&mut *tx, anchor, sub.lens_id, comp, ev).await?;
         for (members, region_id) in comp.clusters.iter().zip(comp_region_ids) {
             assert_region(
                 &mut *tx,
                 AssertRegionCtx {
-                    cogmap,
-                    lens_id,
+                    anchor,
                     component_id: comp_id,
                     members,
                     region_id: region_id.uuid(),
                     ev,
-                    lens,
+                    sub,
                     zero_centroid,
                 },
             )
@@ -282,15 +288,15 @@ async fn assert_component_regions(
 async fn refresh_moved_region_readouts(
     pool: &PgPool,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     s: &Substrate,
     zero_centroid: &str,
     unchanged: &[Uuid],
     ev: EventId,
 ) -> Result<()> {
-    let prior_watermark = last_materialize_watermark(tx, cogmap, s.lens_id, ev).await?;
+    let prior_watermark = last_materialize_watermark(tx, anchor, s.lens_id, ev).await?;
     let touched_resources = match prior_watermark {
-        Some(w) => crate::replay::content_touched_resources_since(pool, cogmap.uuid(), w).await?,
+        Some(w) => crate::replay::content_touched_resources_since(pool, anchor, w).await?,
         None => Vec::new(),
     };
     if !touched_resources.is_empty() {
@@ -333,43 +339,45 @@ async fn current_watermark(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
         .context("materialize on an empty ledger (no events)")
 }
 
-/// The event id of the most recent region_materialized act for (cogmap, lens) BEFORE `current_ev`
+/// The event id of the most recent region_materialized act for (anchor, lens) BEFORE `current_ev`
 /// (this pass's own act, already appended) — the point-in-time the reused regions' readouts were last
-/// computed against. Excluding `current_ev` explicitly (`e.id < $3`) states the intent directly rather
-/// than relying on "my own event is the single latest" (an `OFFSET 1` would silently return the wrong
-/// watermark under a second act in the same txn or a concurrent materialize). `None` only if this is
-/// the very first materialize, where incremental never reaches the readout-refresh path.
+/// computed against. Excluding `current_ev` explicitly states the intent directly rather than relying
+/// on "my own event is the single latest" (an `OFFSET 1` would silently return the wrong watermark
+/// under a second act in the same txn or a concurrent materialize). `None` only if this is the very
+/// first materialize, where incremental never reaches the readout-refresh path.
+///
+/// The dual-read of the payload anchor (new pair, else the pre-T3 `cogmap_id`) lives in
+/// [`crate::replay::last_materialize_event`] — shared with drift's copy of this probe.
 async fn last_materialize_watermark(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     lens_id: LensId,
     current_ev: EventId,
 ) -> Result<Option<Uuid>> {
-    Ok(sqlx::query_scalar!(
-        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-         WHERE et.name='region_materialized' \
-           AND (e.payload->>'cogmap_id')::uuid=$1 AND (e.payload->>'lens_id')::uuid=$2 \
-           AND e.id < $3 \
-         ORDER BY e.id DESC LIMIT 1",
-        cogmap.uuid(),
+    crate::replay::last_materialize_event(
+        &mut **tx,
+        anchor,
         lens_id.uuid(),
-        current_ev.uuid(),
+        Some(current_ev.uuid()),
     )
-    .fetch_optional(&mut **tx)
-    .await?)
+    .await
 }
 
+/// Fold every live region for (anchor, lens). Keyed on the ANCHOR PAIR, not `cogmap_id` — which is
+/// why `20260712000040` opens with a catch-up backfill: a region written in the T2→T3 window has a
+/// NULL anchor, would not match this predicate, and would survive the fold as a duplicate live region.
 async fn fold_live_regions(
     tx: &mut PgConnection,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     lens_id: LensId,
     ev: EventId,
 ) -> Result<()> {
     sqlx::query!(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \
-         WHERE cogmap_id=$2 AND lens_id=$3 AND NOT is_folded",
+         WHERE home_anchor_table=$2 AND home_anchor_id=$3 AND lens_id=$4 AND NOT is_folded",
         ev.uuid(),
-        cogmap.uuid(),
+        anchor.table(),
+        anchor.uuid(),
         lens_id.uuid(),
     )
     .execute(tx)
@@ -377,17 +385,19 @@ async fn fold_live_regions(
     Ok(())
 }
 
+/// See [`fold_live_regions`] — same anchor-keyed predicate, same backfill dependency.
 async fn fold_live_components(
     tx: &mut PgConnection,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     lens_id: LensId,
     ev: EventId,
 ) -> Result<()> {
     sqlx::query!(
         "UPDATE kb_cogmap_components SET is_folded=true, last_event_id=$1 \
-         WHERE cogmap_id=$2 AND lens_id=$3 AND NOT is_folded",
+         WHERE home_anchor_table=$2 AND home_anchor_id=$3 AND lens_id=$4 AND NOT is_folded",
         ev.uuid(),
-        cogmap.uuid(),
+        anchor.table(),
+        anchor.uuid(),
         lens_id.uuid(),
     )
     .execute(tx)
@@ -419,18 +429,24 @@ async fn fold_components(tx: &mut PgConnection, component_ids: &[Uuid], ev: Even
 }
 
 /// Persist one component row (its fingerprint + member set), returning its id for the regions to link.
+///
+/// `cogmap_id` is DUAL-WRITTEN through the expand window (spec §3.6 M1) so the previous commit's code
+/// keeps reading these rows; it is NULL for a context component, which that code path never reads.
 async fn create_component(
     tx: &mut PgConnection,
-    cogmap: CogmapId,
+    anchor: HomeAnchor,
     lens_id: LensId,
     comp: &ComponentWork,
     ev: EventId,
 ) -> Result<Uuid> {
     let id = sqlx::query_scalar!(
         "INSERT INTO kb_cogmap_components \
-           (cogmap_id, lens_id, fingerprint, member_ids, asserted_by_event_id, last_event_id) \
-         VALUES ($1,$2,$3,$4,$5,$5) RETURNING id",
-        cogmap.uuid(),
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, fingerprint, member_ids, \
+            asserted_by_event_id, last_event_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$7) RETURNING id",
+        anchor.cogmap_id().map(|m| m.uuid()),
+        anchor.table(),
+        anchor.uuid(),
         lens_id.uuid(),
         &comp.fingerprint,
         &comp.members,
@@ -444,56 +460,93 @@ async fn create_component(
 /// Parameters for [`assert_region`]. The region id is pre-generated (identity-as-input) and already
 /// recorded in the materialization payload before this is called.
 struct AssertRegionCtx<'a> {
-    cogmap: CogmapId,
-    lens_id: LensId,
+    anchor: HomeAnchor,
     component_id: Uuid,
     members: &'a [Uuid],
     region_id: Uuid,
     ev: EventId,
-    lens: &'a Lens,
+    /// The whole substrate, not just the lens: `member_affinity` needs the edges and facets to score
+    /// each member against its peers.
+    sub: &'a Substrate,
     zero_centroid: &'a str,
 }
 
-/// Insert one region (linked to its component), its members, then populate the SQL readouts.
+/// How CORE a member is to its region: its average-link affinity to the region's other members.
+///
+/// **This column was never written.** `kb_cogmap_region_members.affinity` has existed since the region
+/// tier shipped, and four readers order by it — `graph_region_members`, `graph_region_territories`,
+/// `graph_cogmap_territories`, `atlas_search`, all `ORDER BY m.affinity DESC NULLS LAST` — but nothing
+/// ever populated it, so every "top member" and every derived region label in the product has been
+/// arbitrary (whatever order the planner happened to return). Spec §3.9.1.
+///
+/// Average-link is the same linkage the clustering itself uses, so a member's score is coherent with
+/// why it landed in this region. A singleton region yields 0.0 — there are no peers to be central to.
+fn member_affinity(m: Uuid, members: &[Uuid], sub: &Substrate) -> f64 {
+    let peers = members.iter().filter(|&&x| x != m).count();
+    if peers == 0 {
+        return 0.0;
+    }
+    let total: f64 = members
+        .iter()
+        .filter(|&&x| x != m)
+        .map(|&p| {
+            affinity(
+                ResourceId::from(m),
+                ResourceId::from(p),
+                &sub.edges,
+                &sub.facets,
+                &sub.lens,
+            )
+        })
+        .sum();
+    total / peers as f64
+}
+
+/// Insert one region (linked to its component), its members (each scored by [`member_affinity`]), then
+/// populate the SQL readouts. `cogmap_id` is dual-written through the expand window — NULL for a
+/// context region, which the pre-M2 code path never reads.
 async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Result<()> {
     use sqlx::Row;
     let AssertRegionCtx {
-        cogmap,
-        lens_id,
+        anchor,
         component_id,
         members,
         region_id,
         ev,
-        lens,
+        sub,
         zero_centroid,
     } = ctx;
     // centroid computed in SQL after members are inserted; insert a placeholder then UPDATE.
     let region: Uuid = sqlx::query(
         "INSERT INTO kb_cogmap_regions \
-           (id, cogmap_id, lens_id, component_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id) \
-         VALUES ($6, $1,$2,$7, $5::vector, 0.0, NULL, $3, $4, $4) RETURNING id",
+           (id, cogmap_id, home_anchor_table, home_anchor_id, lens_id, component_id, centroid, \
+            salience, label, member_count, asserted_by_event_id, last_event_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7::vector, 0.0, NULL, $8, $9, $9) RETURNING id",
     )
-    .bind(cogmap)
-    .bind(lens_id)
+    .bind(region_id)
+    .bind(anchor.cogmap_id().map(|m| m.uuid()))
+    .bind(anchor.table())
+    .bind(anchor.uuid())
+    .bind(sub.lens_id)
+    .bind(component_id)
+    .bind(zero_centroid)
     .bind(members.len() as i32)
     .bind(ev)
-    .bind(zero_centroid)
-    .bind(region_id)
-    .bind(component_id)
     .fetch_one(&mut *tx)
     .await?
     .get::<Uuid, _>("id");
     for m in members {
         sqlx::query(
-            "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id) \
-             VALUES ($1,'kb_resources',$2)",
+            "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+             VALUES ($1,'kb_resources',$2,$3)",
         )
         .bind(region)
         .bind(m)
+        .bind(member_affinity(*m, members, sub))
         .execute(&mut *tx)
         .await?;
     }
-    populate_readouts(tx, region, lens, zero_centroid).await
+    populate_readouts(tx, region, &sub.lens, zero_centroid).await
 }
 
 /// Re-derive a region's SQL readouts over its CURRENT members + embeddings: centroid (mean of

@@ -16,6 +16,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 /// Which materialize path the runner drives at each `materialize` step. `Full` recomputes every
@@ -54,24 +55,15 @@ pub async fn run_scenario_with(
             Step::Materialize { lens } => {
                 embed::embed_chunks(pool).await?;
                 // `loaded` is the scenario-loader DTO (bare uuids); lift to the typed materialize API.
+                // Scenarios seed cognitive maps, so the anchor is always a cogmap here.
+                let anchor = HomeAnchor::Cogmap(loaded.cogmap.into());
                 let out = match mode {
                     MaterializeMode::Full => {
-                        write::materialize_cogmap(
-                            pool,
-                            loaded.cogmap.into(),
-                            lens,
-                            loaded.emitter.into(),
-                        )
-                        .await
+                        write::materialize(pool, anchor, lens, loaded.emitter.into()).await
                     }
                     MaterializeMode::Incremental => {
-                        write::incremental_materialize_cogmap(
-                            pool,
-                            loaded.cogmap.into(),
-                            lens,
-                            loaded.emitter.into(),
-                        )
-                        .await
+                        write::incremental_materialize(pool, anchor, lens, loaded.emitter.into())
+                            .await
                     }
                 }
                 .with_context(|| format!("step {i}: materialize {lens}"))?;
@@ -493,7 +485,9 @@ async fn eval_expectation(
             }
         }
         Expectation::DriftTier { lens, tier } => {
-            let (got, _diff) = crate::drift::lens_drift(pool, loaded.cogmap, lens).await?;
+            let (got, _diff) =
+                crate::drift::lens_drift(pool, HomeAnchor::Cogmap(loaded.cogmap.into()), lens)
+                    .await?;
             let want = match tier {
                 DriftTierName::Fresh => crate::drift::DriftTier::Fresh,
                 DriftTierName::Readout => crate::drift::DriftTier::Readout,

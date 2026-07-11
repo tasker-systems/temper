@@ -397,11 +397,52 @@ table and column COMMENTs carry that honesty in the interim."
 
 ---
 
-## Task 3: Anchor-generalize the producer
+## Task 3: Anchor-generalize the producer — ✅ LANDED
 
 Spec §3.6 (M2), §3.9. **Depends on T2.**
 
 This is the mechanical widening — no behavior change. `w_cos` is still 0 everywhere, so at the end of this task the producer can *address* a context but forms nothing useful in one. That's expected; T4 is what makes it work. Two live bugs get fixed here because this work is what surfaced them.
+
+> **Corrected 2026-07-11 during execution.** Five defects in what this task said. **T4 comes from the
+> same architecture sweep — assume the same failure rate.**
+>
+> 1. **The `cogmap_region_centrality` body below is fiction.** The live function is a two-CTE form
+>    (`mem`, then `internal` summing `e.weight` where BOTH endpoints are in `mem`), times
+>    `count(*) FROM mem` — not the triple-JOIN `sum(e.weight) * max(r.member_count)` quoted here. The
+>    home-filter fix is real; it was written against the printed body. **Third SQL reconstruction in
+>    this arc to be wrong.**
+> 2. **The regression test as specified could never fail.** It asserts the membership fingerprint
+>    equals *itself* across two materializes. But `component_fingerprint` hashes member **UUIDs**, and
+>    the seed loader mints fresh UUIDs into every ephemeral `#[sqlx::test]` database — so that is a
+>    DETERMINISM check, not a BEHAVIOR-PRESERVATION check. It stays green even if the refactor
+>    reshuffles which resources cluster together, which is the one thing the floor exists to catch.
+>    (T1 shipped a test with the same "cannot fail" shape. Twice is a pattern.) **What shipped**
+>    instead: a UUID-free canonical signature — each live region as the sorted set of its member
+>    *titles*, regions sorted among themselves — captured as a golden from the CURRENT producer, then
+>    re-asserted against the anchor-keyed one.
+> 3. **Four surfaces the file list omits**, every one keyed on `cogmap_id`: `drift.rs`
+>    (`live_components` **and** a second `payload->>'cogmap_id'` probe in
+>    `touched_since_last_materialize`); `events.rs` + `payloads.rs` (`SeedAction::Materialize` and the
+>    `RegionMaterialized` struct — the event schema is a **Rust** change, not just SQL);
+>    `write.rs:last_materialize_watermark` (a third payload probe); and `temper-services`
+>    (`db_backend.rs` ×2, `materialize_service.rs`) — the production callers.
+> 4. **`replay()` re-projects historical `region_materialized` events** (`replay.rs:322`). The strict
+>    `RAISE EXCEPTION` on an unknown `home_anchor_table` specified below would therefore **raise on
+>    every pre-T3 payload and break ledger replay outright.** `kb_events` is append-only; those rows
+>    are immortal. Both SQL functions and the Rust ledger probes now **dual-read** — anchor pair, else
+>    the old `cogmap_id`.
+> 5. **The payload schema is generated, not hand-written.** `RegionMaterialized` → schemars →
+>    `tests/fixtures/payloads/region_materialized.v1.schema.json` → boot-seed → `kb_event_types`.
+>    Change the struct, run `UPDATE_SCHEMA=1 cargo test -p temper-substrate --features scenario-schema
+>    --test payload_schema`, and carry the *generated* JSON into the migration (fresh DBs get it from
+>    the boot-seed; the migration's `UPDATE` is what fixes an already-seeded prod).
+>
+> **The payload widened by dual-write, not swap** (decided during execution): `home_anchor_table` +
+> `home_anchor_id` become required, and `cogmap_id` **stays** as an optional property, written for
+> cogmap acts. A swap would have left `last_materialize_watermark` unable to find any prior act on the
+> first pass after deploy — incremental would silently skip the moved-member readout refresh, once,
+> with no error. `_event_append` does **not** validate payloads against `payload_schema` (verified), so
+> there is no deploy-ordering hazard either way.
 
 **Files:**
 - Modify: `crates/temper-core/src/types/home.rs`

@@ -4,6 +4,7 @@
 //! completeness invariant — now over the YAML onboarding seed on an ephemeral DB.
 mod common;
 
+use temper_core::types::home::HomeAnchor;
 use temper_substrate::scenario::{bootseed, loader, model::Seed};
 use temper_substrate::{embed, write};
 
@@ -21,17 +22,17 @@ async fn materialize_populates_finite_readouts_and_multiple_regions(pool: sqlx::
     bootseed::seed_system(&pool).await.unwrap();
     let loaded = loader::load_seed(&pool, &seed()).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
-    let first = write::materialize_cogmap(
+    let first = write::materialize(
         &pool,
-        loaded.cogmap.into(),
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
         "telos-default",
         loaded.emitter.into(),
     )
     .await
     .unwrap();
-    let second = write::materialize_cogmap(
+    let second = write::materialize(
         &pool,
-        loaded.cogmap.into(),
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
         "telos-default",
         loaded.emitter.into(),
     )
