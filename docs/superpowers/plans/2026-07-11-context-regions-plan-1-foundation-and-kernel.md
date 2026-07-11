@@ -147,6 +147,25 @@ Unlike the original task, `test-db`/`test-e2e` are **not** a pure widen-only che
 narrowing legitimately revokes privilege, so a test that newly denies a *write* may be correct. A test
 that newly denies a *read* is still a dropped branch.
 
+### Adversarial review + the one leak it found
+
+Because this task reworks the access substrate and revises a latent bug, a scenario-based adversarial
+security review ran over six heterogeneous team-DAG shapes (multi-parent/diamond, degenerate topology,
+lifecycle/soft-delete, roles/principals, grant interactions, container/interior/edges), each **probed
+empirically against the live DB** in rolled-back transactions, each finding refuted under three
+independent lenses. Two findings were refuted (a hoped-for multi-parent sideways leak — `team_ancestors`'
+`UNION` dedups and multi-parent reach is intended; and cycle non-termination — the recursive CTE
+terminates). **One survived:** `can_modify_resource` had no soft-delete write floor, a real leak that
+*committed* via the body-only PATCH path (see spec §3.9 item 3). Fixed in
+`20260712000020_can_modify_active_floor.sql`, bundled into the same PR (#378) as the same write-authz
+surface. Tests: `a_tombstone_is_unmodifiable_on_every_arm` + `the_write_floor_does_not_touch_live_resources`
+(predicate grain) and `body_only_update_of_a_deleted_resource_is_rejected` (surface grain, in
+`tests/e2e/tests/resource_crud_test.rs` — the body-only shape is what actually exercises the hole).
+
+The method is the takeaway: every real defect in this arc — the stale-header gap, the six flat copies,
+and this leak — was found by *running the predicate*, never by reading it. Adversarial + empirical is
+the pattern for authz work here.
+
 ---
 
 ## Task 2: M1 additive schema — polymorphic anchor + new lens columns

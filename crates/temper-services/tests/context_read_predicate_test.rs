@@ -189,6 +189,30 @@ async fn resource_in(
     Ok(resource)
 }
 
+/// A write-grant on a RESOURCE subject (the context `grant` helper is context-subject only).
+async fn grant_resource(
+    pool: &PgPool,
+    resource_id: Uuid,
+    principal_table: &str,
+    principal_id: Uuid,
+    granted_by: Uuid,
+    can_write: bool,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (id, subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
+         VALUES (uuid_generate_v7(), 'kb_resources', $1, $2, $3, true, $4, $5)",
+    )
+    .bind(resource_id)
+    .bind(principal_table)
+    .bind(principal_id)
+    .bind(can_write)
+    .bind(granted_by)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn can_read(pool: &PgPool, p: Uuid, c: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
         .bind(p)
@@ -590,6 +614,132 @@ async fn edges_homed_in_an_enclosing_teams_context_are_visible(pool: PgPool) -> 
     assert!(
         visible,
         "an edge homed in an enclosing team's context must be visible"
+    );
+
+    Ok(())
+}
+
+// =================================================================================================
+// The soft-delete WRITE floor (I6). A tombstone is unmodifiable on every axis — the write peer of
+// the read-side soft-delete floor. Surfaced by the adversarial review of the write axis.
+// =================================================================================================
+
+async fn can_modify(pool: &PgPool, p: Uuid, r: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
+        .bind(p)
+        .bind(r)
+        .fetch_one(pool)
+        .await
+}
+
+async fn soft_delete(pool: &PgPool, r: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(r)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The tombstone freeze. `can_modify_resource` reached a resource through four arms — author, direct
+/// write-grant, team write-grant, container-authorship — none of which checked `is_active`. So a
+/// soft-deleted resource was writable through EVERY arm while being read-invisible on every axis:
+/// `can_modify` said yes, `resources_visible_to` said no, on the same pair. And the write committed
+/// (a body-only PATCH gates solely on this predicate).
+///
+/// After the floor: every arm denies once the resource is a tombstone, and read/write agree.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_tombstone_is_unmodifiable_on_every_arm(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    // The four ways in. Each resource is homed in a team context Dana can author into (her own
+    // squad), so the container-cascade arm is live; then we attach the other three arms.
+    let ctx = team_context(&pool, o.squad_two, "sq2-ctx").await?;
+
+    // Arm 1 — author/originator (resource_in homes with originator = owner = the given profile).
+    let authored = resource_in(&pool, ctx, o.dana, "authored").await?;
+
+    // Arm 2 — direct profile write-grant to Dana on a resource she doesn't own.
+    let by_profile_grant = resource_in(&pool, ctx, o.outsider, "by-profile-grant").await?;
+    grant_resource(
+        &pool,
+        by_profile_grant,
+        "kb_profiles",
+        o.dana,
+        o.outsider,
+        true,
+    )
+    .await?;
+
+    // Arm 3 — team write-grant on Dana's own team.
+    let by_team_grant = resource_in(&pool, ctx, o.outsider, "by-team-grant").await?;
+    grant_resource(
+        &pool,
+        by_team_grant,
+        "kb_teams",
+        o.squad_two,
+        o.outsider,
+        true,
+    )
+    .await?;
+
+    // Arm 4 — container-authorship cascade (Dana authors her squad's context ⇒ may modify its nodes).
+    let by_container = resource_in(&pool, ctx, o.outsider, "by-container").await?;
+
+    let all = [authored, by_profile_grant, by_team_grant, by_container];
+
+    // Live: every arm permits.
+    for r in all {
+        assert!(
+            can_modify(&pool, o.dana, r).await?,
+            "a live resource is modifiable via its arm"
+        );
+    }
+
+    // Tombstone every one, then re-probe: every arm must now DENY, and read must agree.
+    for r in all {
+        soft_delete(&pool, r).await?;
+        assert!(
+            !can_modify(&pool, o.dana, r).await?,
+            "a soft-deleted resource must be unmodifiable — the write floor gates every arm"
+        );
+        let readable: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
+        )
+        .bind(o.dana)
+        .bind(r)
+        .fetch_one(&pool)
+        .await?;
+        assert!(
+            !readable,
+            "and read agrees — a tombstone is invisible; write and read no longer diverge"
+        );
+    }
+
+    Ok(())
+}
+
+/// The floor must not over-narrow: an ACTIVE resource stays modifiable. This guards that the
+/// wrapping `EXISTS(... is_active)` conjunct didn't break the live path, and re-checks that the
+/// floor composes with the role gate rather than masking it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_write_floor_does_not_touch_live_resources(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+    let ctx = team_context(&pool, o.squad_two, "sq2-ctx").await?;
+    let live = resource_in(&pool, ctx, o.dana, "live").await?;
+
+    assert!(
+        can_modify(&pool, o.dana, live).await?,
+        "an active authored resource is modifiable"
+    );
+
+    // A watcher of the owning team cannot modify via the container cascade even though the resource
+    // is live — the role gate denies, not the floor. (Confirms the two gates compose.)
+    let watcher = profile(&pool, "wr").await?;
+    join_team(&pool, o.squad_two, watcher, "watcher").await?;
+    let not_watchers = resource_in(&pool, ctx, o.outsider, "not-watchers").await?;
+    assert!(
+        !can_modify(&pool, watcher, not_watchers).await?,
+        "a watcher cannot author via the container cascade — role gate holds on a live resource"
     );
 
     Ok(())

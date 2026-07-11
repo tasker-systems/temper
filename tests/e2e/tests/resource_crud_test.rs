@@ -178,6 +178,69 @@ async fn resource_delete(pool: sqlx::PgPool) {
     );
 }
 
+/// A body-only PATCH of a soft-deleted resource must be REJECTED end-to-end — surface proof that the
+/// `can_modify_resource` soft-delete write floor closes the committed-side-effect path.
+///
+/// This is the exact leak the adversarial review found: `update_resource` gates only on
+/// `check_can_modify_next`, and a body-only PATCH (no title, no managed_meta) skips the
+/// visibility-gated readback prefetch — so before the floor, the write landed on the tombstone. A
+/// title/meta PATCH would go through the prefetch branch and mask the hole; the body-only shape is
+/// what actually exercises it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn body_only_update_of_a_deleted_resource_is_rejected(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    let context = app
+        .client
+        .contexts()
+        .create("e2e-tombstone-write", None)
+        .await
+        .expect("context create failed");
+
+    let created = app
+        .client
+        .resources()
+        .create(&ResourceCreateRequest {
+            kb_context_id: context.id.into(),
+            doc_type: "research".to_string(),
+            origin_uri: "test://e2e/tombstone-write".to_string(),
+            title: "Doomed".to_string(),
+            act: Default::default(),
+        })
+        .await
+        .expect("resource create failed");
+
+    app.client
+        .resources()
+        .delete(created.id.into(), &Default::default())
+        .await
+        .expect("resource delete failed");
+
+    // Body-only PATCH — no title, no managed_meta — the path that used to skip every visibility gate.
+    let result = app
+        .client
+        .resources()
+        .update(
+            created.id.into(),
+            &ResourceUpdateRequest {
+                content: Some("smuggled edit onto a tombstone".to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a body-only update of a soft-deleted resource must be rejected, not committed onto the tombstone; got {result:?}"
+    );
+}
+
 /// Timestamps are real and stable across reads (not read-time `now()`), and an
 /// update advances `updated` without moving `created`. Pre-shim-exit the backend
 /// stamped `Utc::now()` per read, so two reads of the same resource returned

@@ -427,6 +427,19 @@ rather than being extracted.
 2. **`cogmap_region_centrality` (`canonical_functions.sql:488`) sums `kb_edges.weight` with no
    `home_anchor` filter**, so it already counts edges asserted outside the map. Under a polymorphic
    anchor this would silently mix context and cogmap edges into one region's centrality.
+3. **`can_modify_resource` had no soft-delete WRITE floor** (found by the adversarial security review
+   of the T1 write axis, and confirmed live). The read side floors on `is_active` everywhere; the
+   write gate never did, so `can_modify_resource(author, tombstone)` returned true while
+   `resources_visible_to` excluded it — read said deny, write said permit on the identical pair. And
+   the write *committed*: `update_resource` (`db_backend.rs`) gates only on `check_can_modify_next`,
+   and a **body-only or open_meta-only PATCH** skips the visibility-gated readback prefetch (it sits
+   behind an `if managed_meta.is_some() || title.is_some()` guard), so the mutation landed on the
+   tombstone. A leak (over-permissive write, I6-violating), not the false-negatives everything else in
+   this arc turned out to be. Fixed additively in `20260712000020_can_modify_active_floor.sql` by
+   wrapping the existing four-arm body in a leading `EXISTS(… is_active)` conjunct — one floor, every
+   present and future arm inherits it. A NARROWING with negligible blast radius (it only ever denies
+   writes to already-invisible rows that have no undelete path), bundled here because it is the same
+   write-authz surface T1 reworks.
 
 ---
 
