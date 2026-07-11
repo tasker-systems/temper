@@ -170,6 +170,7 @@ pub async fn create_team(
 }
 
 /// Add (or update) a member on a team. The caller must be `owner`/`maintainer`.
+/// Cannot grant `owner` (ownership is transferred, not granted) — see `change_role`.
 pub async fn add_member(
     pool: &PgPool,
     caller: ProfileId,
@@ -180,6 +181,16 @@ pub async fn add_member(
     match role_on_team(pool, team_id, caller).await? {
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
+    }
+
+    // Same rule as `change_role`: `owner` is conferred by ownership transfer, never by a
+    // role grant. Without this, the `ON CONFLICT DO UPDATE SET role` below makes
+    // `add_member` a silent bypass of `change_role`'s guard — it would upgrade an
+    // existing member straight to `owner`.
+    if matches!(req.role, TeamRole::Owner) {
+        return Err(ApiError::BadRequest(
+            "cannot grant owner via add_member; use ownership transfer".to_string(),
+        ));
     }
 
     let row = sqlx::query_as!(
@@ -948,5 +959,83 @@ mod lifecycle_tests {
 
         // ...while the resource's own owner still sees it (unaffected by the team).
         assert!(is_visible(&pool, stranger, resource).await);
+    }
+
+    // --- `add_member` owner-guard (G3 Phase B2, spec D7) ---
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_refuses_to_grant_owner(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let newcomer = mk_profile(&pool, "newcomer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let denied = add_member(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            &AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Owner,
+            },
+        )
+        .await;
+        assert!(matches!(denied, Err(ApiError::BadRequest(_))));
+    }
+
+    /// The `ON CONFLICT DO UPDATE SET role` path is the sneaky one: it upgrades an
+    /// EXISTING member to owner, bypassing `change_role`'s guard entirely.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_cannot_upgrade_an_existing_member_to_owner(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        let denied = add_member(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            &AddMemberRequest {
+                profile_id: member,
+                role: TeamRole::Owner,
+            },
+        )
+        .await;
+        assert!(matches!(denied, Err(ApiError::BadRequest(_))));
+
+        // Auth before writes: the refusal leaves the existing row untouched.
+        let role: TeamRole = sqlx::query_scalar(
+            "SELECT role FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+        )
+        .bind(team)
+        .bind(member)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(role, TeamRole::Member), "got {role:?}");
+    }
+
+    /// The guard must not break the ordinary path.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_still_adds_a_maintainer(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let newcomer = mk_profile(&pool, "newcomer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let row = add_member(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            &AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Maintainer,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(row.role, TeamRole::Maintainer));
     }
 }

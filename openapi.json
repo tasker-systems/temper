@@ -5293,6 +5293,9 @@
               }
             }
           },
+          "400": {
+            "description": "Cannot grant owner via add_member; use ownership transfer"
+          },
           "403": {
             "description": "Forbidden (caller is not owner/maintainer)"
           }
