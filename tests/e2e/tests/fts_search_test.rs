@@ -262,6 +262,82 @@ async fn fts_finds_by_open_meta_descriptor(pool: sqlx::PgPool) {
     assert_eq!(results[0].title, "Section 4");
 }
 
+/// Receive-side symmetric-defense gate (Deliverable D): the server rejects a create whose open_meta
+/// carries a *recognized* key with the wrong shape (`descriptor: 42` — stored-but-not-indexed, the
+/// silent search miss the convention exists to catch). Exercised through the real Axum server + client,
+/// so it guards the shared DbBackend gate that every surface (api + mcp) dispatches through.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("fts-badmeta", None)
+        .await
+        .expect("context create");
+
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: "Bad Meta".to_string(),
+        heading_depth: 0,
+        content: "body".to_string(),
+        content_hash: format!("{:0>64x}", 4),
+        embedding: vec![0.1_f32; 768],
+    };
+    let payload = IngestPayload {
+        segmented: None,
+        goal: None,
+        title: "Bad Meta".to_string(),
+        origin_uri: "test://fts/bad-meta".to_string(),
+        context_ref: "@me/fts-badmeta".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: Some(format!("{:0>64x}", 8)),
+        content: "body".to_string(),
+        metadata: None,
+        managed_meta: None,
+        // `descriptor` is a recognized FTS-indexed key; a number is a shape violation.
+        open_meta: Some(serde_json::json!({"descriptor": 42})),
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+
+    let result = app.client.ingest().create(&payload).await;
+    assert!(
+        result.is_err(),
+        "server must reject a create with a mis-shaped recognized open_meta key"
+    );
+
+    // An unknown key with any shape must still pass (the tier stays open — version-skew tolerant).
+    let ok_chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: "Good Meta".to_string(),
+        heading_depth: 0,
+        content: "body".to_string(),
+        content_hash: format!("{:0>64x}", 5),
+        embedding: vec![0.1_f32; 768],
+    };
+    let ok_payload = IngestPayload {
+        title: "Good Meta".to_string(),
+        origin_uri: "test://fts/good-meta".to_string(),
+        content_hash: Some(format!("{:0>64x}", 9)),
+        // An unrecognized key of any shape is fine; `descriptor` here is well-shaped.
+        open_meta: Some(serde_json::json!({"some_future_key": 42, "descriptor": "ok"})),
+        chunks_packed: Some(pack_chunks(&[ok_chunk]).expect("pack chunks")),
+        ..payload
+    };
+    app.client
+        .ingest()
+        .create(&ok_payload)
+        .await
+        .expect("unknown open_meta keys must pass (open tier stays open)");
+}
+
 /// Search with no query and no embedding returns 400 Bad Request.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 #[ignore = "deferred: collapsed search_select returns Ok(empty) for no-query/no-embedding instead of rejecting (search input validation #7)"]

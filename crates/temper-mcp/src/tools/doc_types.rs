@@ -152,6 +152,26 @@ pub async fn describe_doc_type(
     )]))
 }
 
+/// Describe the recognized open_meta conventions — the self-describing schema (recognized keys, their
+/// shapes, FTS-indexing markers) plus discouraged keys. Mirrors the CLI `resource describe-open-meta`
+/// command; both render the shared `temper_workflow::schema::OpenMetaConvention`.
+pub async fn describe_open_meta(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
+    let _profile = svc.require_profile().await?;
+
+    let convention = temper_workflow::schema::describe_open_meta().map_err(|e| {
+        rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INTERNAL_ERROR,
+            format!("open_meta schema unavailable: {e}"),
+            None,
+        )
+    })?;
+
+    let text = serde_json::to_string_pretty(&convention).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

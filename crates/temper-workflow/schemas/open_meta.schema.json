@@ -13,9 +13,11 @@
       "description": "FTS-indexed at weight C (convention v1). Deliberately-attached topical tags that boost search ranking. A JSON array of strings (space-joined into the vector) or a bare JSON string. Synonymous with `tags` for ranking."
     },
     "tags": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`. A JSON array of strings."
+      "oneOf": [
+        { "type": "array", "items": { "type": "string" } },
+        { "type": "string" }
+      ],
+      "description": "FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string."
     },
     "descriptor": {
       "type": "string",

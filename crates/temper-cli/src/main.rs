@@ -207,6 +207,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         fields: &fields,
                     },
                 ),
+                ResourceAction::DescribeOpenMeta => {
+                    temper_cli::commands::resource::describe_open_meta(output_format)
+                }
                 ResourceAction::Show {
                     r#ref,
                     edges,

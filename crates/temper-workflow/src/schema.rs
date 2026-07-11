@@ -423,6 +423,61 @@ pub fn schema_value(doc_type: &str) -> Result<serde_json::Value> {
         .map_err(|e| TemperError::Config(format!("{doc_type} schema JSON parse error: {e}")))
 }
 
+/// Return the embedded open_meta recognized-conventions schema as a JSON value.
+///
+/// This is the self-describing dump behind `temper resource describe-open-meta` and the MCP
+/// `describe_open_meta` tool: the schema documents which open (caller-defined) keys temper
+/// recognizes, their shapes, and — via each property's `description` — whether the key is
+/// FTS-indexed (and at what weight) or shape-only. The tier stays open
+/// (`additionalProperties: true`), so this is guidance, not a closed vocabulary.
+///
+/// # Errors
+/// Returns [`TemperError::Config`] if the embedded schema fails to parse (a programming error —
+/// the schema ships with the binary).
+pub fn open_meta_schema_value() -> Result<serde_json::Value> {
+    serde_json::from_str(OPEN_META_SCHEMA)
+        .map_err(|e| TemperError::Config(format!("open_meta schema JSON parse error: {e}")))
+}
+
+/// A discouraged open_meta key and the managed field that supersedes it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscouragedOpenMetaKey {
+    pub key: String,
+    pub use_instead: String,
+}
+
+/// The self-describing open_meta convention, returned by [`describe_open_meta`] and rendered by the
+/// CLI `resource describe-open-meta` command + the MCP `describe_open_meta` tool. Both surfaces share
+/// this type so the guidance can never drift between them.
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenMetaConvention {
+    /// The recognized-conventions JSON Schema. Self-describing: each property's `description` states
+    /// whether the key is FTS-indexed (and at what weight) or shape-only, and the schema `title`
+    /// carries the convention version. The tier stays open (`additionalProperties: true`), so this is
+    /// guidance, not a closed vocabulary.
+    pub schema: serde_json::Value,
+    /// Discouraged bare keys — absent from `schema` because the tier is open, surfaced here so callers
+    /// can see them → the managed field that supersedes each.
+    pub discouraged_keys: Vec<DiscouragedOpenMetaKey>,
+}
+
+/// Build the self-describing open_meta convention (schema + discouraged keys).
+///
+/// # Errors
+/// Returns [`TemperError::Config`] if the embedded schema fails to parse (a programming error).
+pub fn describe_open_meta() -> Result<OpenMetaConvention> {
+    Ok(OpenMetaConvention {
+        schema: open_meta_schema_value()?,
+        discouraged_keys: DISCOURAGED_OPEN_META_KEYS
+            .iter()
+            .map(|(key, managed)| DiscouragedOpenMetaKey {
+                key: (*key).to_string(),
+                use_instead: (*managed).to_string(),
+            })
+            .collect(),
+    })
+}
+
 /// Return the `required` array from a doc type schema as `Vec<String>`.
 ///
 /// This only returns the doc-type-level required fields (not the base
@@ -550,14 +605,70 @@ mod tests {
     }
 
     #[test]
+    fn open_meta_tags_accepts_array_and_bare_string() {
+        // Convention v2: `tags` is the declared synonym of `keywords` and shares its shape rules —
+        // a JSON array of strings OR a bare string (both fold into the C-weight vector; the FTS
+        // parser tokenizes the string). Deliberately as permissive as `keywords`: since the
+        // receive-side gate (D) is the first server-side open_meta validation, hard-rejecting a
+        // bare-string tag the SQL indexes fine would break existing callers (wire-contract skew).
+        for value in [
+            serde_json::json!({ "tags": ["concept", "design"] }),
+            serde_json::json!({ "tags": "concept design" }),
+        ] {
+            let issues = validate_open_meta(&value).expect("schema compiles");
+            assert!(
+                issues.is_empty(),
+                "tags array or bare string should pass: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
     fn open_meta_misshaped_tags_is_flagged() {
-        // A comma-string where a list was meant would index as one lexeme.
-        let om = serde_json::json!({ "tags": "concept,design" });
+        // A non-string array element is a genuine shape violation (a tag must be text).
+        let om = serde_json::json!({ "tags": [1, 2] });
         let issues = validate_open_meta(&om).expect("schema compiles");
         assert!(
             issues.iter().any(|i| i.path.contains("tags")),
-            "string tags should be flagged (array required): {issues:?}"
+            "numeric tag elements should be flagged: {issues:?}"
         );
+    }
+
+    #[test]
+    fn describe_open_meta_surfaces_schema_and_discouraged_keys() {
+        let conv = describe_open_meta().expect("schema compiles");
+        // The schema is self-describing: recognized keys with descriptions.
+        let props = conv
+            .schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("open_meta schema has properties");
+        for key in ["keywords", "tags", "descriptor", "date"] {
+            assert!(
+                props.contains_key(key),
+                "recognized key {key} must be present"
+            );
+        }
+        // A recognized-key description marks its FTS-indexing (guidance is in the description).
+        assert!(
+            props["descriptor"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("FTS-indexed"),
+            "descriptor description should mark it FTS-indexed"
+        );
+        // The open tier stays open.
+        assert_eq!(
+            conv.schema.get("additionalProperties"),
+            Some(&serde_json::json!(true))
+        );
+        // Discouraged bare keys surface with their canonical replacement.
+        let slug = conv
+            .discouraged_keys
+            .iter()
+            .find(|d| d.key == "slug")
+            .expect("slug is a discouraged key");
+        assert_eq!(slug.use_instead, "temper-slug");
     }
 
     #[test]
