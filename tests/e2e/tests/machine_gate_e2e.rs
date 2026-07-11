@@ -130,6 +130,36 @@ async fn temper_issued_machine_reaches_the_data_plane(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn non_admin_cannot_issue_a_machine_credential(pool: sqlx::PgPool) {
+    // A registered machine authenticates and passes the (open-mode) system gate — but it is not
+    // the gating-team owner, so `is_system_admin` is false. That check is load-bearing on the new
+    // issuer routes (D9): the system-gated router admits everyone under access_mode='open', so
+    // only the explicit admin check protects `POST /issue`.
+    let app = common::setup(pool.clone()).await;
+    register(&pool, "not-admin").await;
+    let token = common::generate_machine_jwt("not-admin");
+
+    let response = reqwest::Client::new()
+        .post(app.url("/api/machine-clients/issue"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "label": "sneaky",
+            "owner_team_id": null,
+            "teams": [],
+            "grants": [],
+        }))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(
+        response.status(),
+        403,
+        "a non-admin must not be able to issue a machine credential (D9)"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn revoked_machine_is_rejected_immediately(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
     register(&pool, "doomed-client").await;

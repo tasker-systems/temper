@@ -166,14 +166,7 @@ pub async fn provision(
     let (profile_id, handle) =
         profile_service::create_agent_profile_and_link(&mut tx, &req.client_id)
             .await
-            .map_err(|e| match e {
-                // The auth-link unique constraint fires before the registration row's.
-                ApiError::Conflict(_) => ApiError::Conflict(format!(
-                    "machine client '{}' is already registered",
-                    req.client_id
-                )),
-                other => other,
-            })?;
+            .map_err(|e| map_duplicate_from_conflict(e, &req.client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;

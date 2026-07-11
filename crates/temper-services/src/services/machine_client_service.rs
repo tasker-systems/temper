@@ -96,25 +96,51 @@ pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Ma
     get(pool, id).await
 }
 
+/// The longest a rotated-away secret may remain valid. A rotation window is meant to be brief
+/// (issue new → deploy → old expires); an unbounded grace would keep a possibly-compromised old
+/// secret alive far past the rotation's intent, defeating D6's "two live secrets, briefly".
+const MAX_ROTATION_GRACE_SECONDS: i64 = 7 * 24 * 3_600;
+
 /// Rotate a temper-issued secret (Phase B1, D6). Moves the current secret to `previous` with a
 /// grace window, installs a fresh current, and returns the new plaintext once. Rejects a client
-/// that temper did not issue (its secret lives at its IdP) or one already revoked.
+/// that temper did not issue (its secret lives at its IdP), one already revoked, or a grace
+/// window outside `[0, MAX_ROTATION_GRACE_SECONDS]`.
 pub async fn rotate_secret(
     pool: &PgPool,
     id: Uuid,
     grace_seconds: i64,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
-    let existing = get(pool, id).await?;
-    if existing.issuer != "temper" {
+    if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
-            "machine client '{}' was not issued by temper (issuer '{}'); its secret is managed by its IdP",
-            existing.client_id, existing.issuer
+            "grace_seconds must be between 0 and {MAX_ROTATION_GRACE_SECONDS} (7 days); got {grace_seconds}"
         )));
     }
-    if existing.revoked_at.is_some() {
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    // FOR UPDATE locks the row so a concurrent revoke cannot land between these guards and the
+    // write — the issuer/revoked checks and the rotation see one consistent, pinned row.
+    let row = sqlx::query!(
+        "SELECT issuer, client_id, revoked_at FROM kb_machine_clients WHERE id = $1 FOR UPDATE",
+        id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    if row.issuer != "temper" {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' was not issued by temper (issuer '{}'); its secret is managed by its IdP",
+            row.client_id, row.issuer
+        )));
+    }
+    if row.revoked_at.is_some() {
         return Err(ApiError::BadRequest(format!(
             "machine client '{}' is revoked; issue a new credential instead",
-            existing.client_id
+            row.client_id
         )));
     }
 
@@ -130,8 +156,12 @@ pub async fn rotate_secret(
         grace_seconds as f64,
         secret.hash,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     let client = get(pool, id).await?;
     Ok(temper_core::types::machine::IssuedMachineCredential {
@@ -321,11 +351,40 @@ mod tests {
             Some(crate::auth::secret::sha256_hex("old-secret").as_str()),
             "previous is the old secret"
         );
+        // The grace expiry is now()+grace, computed by make_interval — assert the math, not just
+        // presence (a wrong unit or an `as f64` surprise would pass an is_some() check).
+        let expiry = row
+            .secret_previous_expires_at
+            .expect("previous has a grace expiry");
+        let delta = (expiry - chrono::Utc::now()).num_seconds();
         assert!(
-            row.secret_previous_expires_at.is_some(),
-            "previous has a grace expiry"
+            (3540..=3660).contains(&delta),
+            "previous expiry is ~now()+3600s, got {delta}s"
         );
         assert!(row.secret_rotated_at.is_some(), "rotation is stamped");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rotate_secret_rejects_out_of_range_grace(pool: PgPool) {
+        let id = seed_temper_issued(&pool, "tmpr_grace", "s").await;
+        assert!(
+            matches!(
+                svc::rotate_secret(&pool, id, -1)
+                    .await
+                    .expect_err("negative grace"),
+                crate::error::ApiError::BadRequest(_)
+            ),
+            "a negative grace is rejected"
+        );
+        assert!(
+            matches!(
+                svc::rotate_secret(&pool, id, 999_999_999)
+                    .await
+                    .expect_err("excessive grace"),
+                crate::error::ApiError::BadRequest(_)
+            ),
+            "a grace past the 7-day cap is rejected (keeps an old secret alive too long)"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
