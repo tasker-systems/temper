@@ -437,10 +437,33 @@ async fn reads_and_lifecycle_are_scoped_to_the_owning_team(pool: PgPool) {
     assert_eq!(
         resp.status(),
         403,
-        "Bob cannot rebind Alice's machine — rebind keys on the existing row's owning team"
+        "Bob cannot rebind Alice's machine — rebind is system-admin-only"
     );
 
-    // Alice can do all three — this is the point of the phase: no operator in the loop.
+    // Even ALICE, the owning-team owner, cannot rebind: rebind transplants the profile's full
+    // reach, which team ownership cannot bound, so it stayed system-admin-only (unlike the rest
+    // of the lifecycle she does control).
+    let resp = app
+        .reqwest_client
+        .post(app.url(&format!("/api/machine-clients/{machine_id}/rebind")))
+        .bearer_auth(&alice)
+        .json(&json!({
+            "client_id": "alice-rebinds-her-own",
+            "from_machine_client_id": machine_id,
+            "label": "rebind",
+            "keep_old_active": false
+        }))
+        .send()
+        .await
+        .expect("rebind as alice");
+    assert_eq!(
+        resp.status(),
+        403,
+        "a team owner cannot rebind even her own machine — rebind is admin-only"
+    );
+
+    // Alice CAN rotate and revoke — the owner lifecycle, no operator in the loop. (Rebind is the
+    // one exception, asserted above.)
     let resp = app
         .reqwest_client
         .post(app.url(&format!("/api/machine-clients/{machine_id}/rotate-secret")))

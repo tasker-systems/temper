@@ -7,8 +7,8 @@
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
 //! caller's authority through `machine_authz` before opening the transaction, so a rejected
 //! registration leaves the database completely unchanged. They record the authorized caller as
-//! `registered_by_profile_id`. `rebind` authorizes the same way, but keyed on the EXISTING row's
-//! owning team (B2 D5) — it never moves a machine between teams.
+//! `registered_by_profile_id`. `rebind` is the exception: it is **system-admin-only** (it
+//! transplants an existing profile's reach, which team ownership cannot bound — see its doc).
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -17,7 +17,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service::{insert_grant, InsertGrantParams};
+use crate::services::access_service::{self, insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
@@ -278,9 +278,14 @@ pub async fn issue(
 /// Point a fresh `client_id` at an EXISTING agent profile, revoking the old row in the
 /// same transaction unless an overlap window was requested (D8).
 ///
-/// Binding is only ever to an agent profile already reached through a machine auth link —
-/// never to a human's profile. That narrow case is the whole reason `rebind` is safe; see
-/// the spec's Rejected section.
+/// **`rebind` is system-admin-only, unlike the rest of the machine-client lifecycle (B2).**
+/// Every other endpoint merely operates on a row and can be keyed on its owning team; `rebind`
+/// is the one that *transplants* an existing profile's identity — and with it, whatever reach
+/// that profile already holds — onto a caller-supplied `client_id`. That reach may have been
+/// conferred by an admin and can exceed a team owner's own authority, so ownership of the
+/// machine's team is NOT a sufficient bar (it would let an owner inherit reach they could never
+/// confer themselves, defeating B2's containment). Rebind is also the external-IdP-app-rotation
+/// path (`auth0-m2m`); a team owner rotating a temper-issued credential uses `rotate_secret`.
 pub async fn rebind(
     pool: &PgPool,
     caller: ProfileId,
@@ -288,10 +293,22 @@ pub async fn rebind(
 ) -> ApiResult<MachineClient> {
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
 
-    // Auth before writes, keyed on the row being rebound (B2 D5). `rebind` copies `old.team_id`
-    // onto the new row, so the machine never changes hands — authorizing against the old row is
-    // authorizing against the new one.
-    machine_authz::authorize(pool, caller, old.team_id).await?;
+    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a
+    // rebind inherits.
+    if !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // A revoked credential is dead; it must be re-created by a fresh `provision`, never
+    // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
+    // memberships (revoke leaves them, D11), silently undoing a deliberate revocation. Mirrors
+    // `rotate_secret`'s revoked-source guard.
+    if old.revoked_at.is_some() {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' is revoked; issue a new credential instead",
+            old.client_id
+        )));
+    }
 
     let mut tx = pool
         .begin()
@@ -627,6 +644,95 @@ mod tests {
         assert!(
             old_row.revoked_at.is_none(),
             "--no-revoke-old keeps both credentials live"
+        );
+    }
+
+    /// Rebind is system-admin-only (B2). A team owner — who may provision/issue/revoke/rotate
+    /// their own team's machines — must NOT be able to rebind, because rebind inherits the old
+    /// profile's full reach, which the owner's authority cannot bound.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rebind_is_refused_for_a_non_admin_team_owner(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+
+        // A team, and Alice who owns it but is not a system admin.
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ('acme', 'Acme') RETURNING id"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("team");
+        let alice = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, 'alice', 'Alice')",
+            alice,
+        )
+        .execute(&pool)
+        .await
+        .expect("alice");
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner'::team_role)",
+            team,
+            alice,
+        )
+        .execute(&pool)
+        .await
+        .expect("alice owns acme");
+
+        // Admin provisions a machine owned by Alice's team.
+        let mut provision_req = req("acme-agent-rb");
+        provision_req.owner_team_id = Some(team);
+        let old = svc::provision(&pool, admin, &provision_req)
+            .await
+            .expect("provision");
+
+        // Alice owns the machine's team — she can revoke it (tested elsewhere) — but she may NOT
+        // rebind it onto a client_id she controls and inherit its identity.
+        let err = svc::rebind(
+            &pool,
+            ProfileId::from(alice),
+            &RebindMachineRequest {
+                client_id: "alice-controls-this".to_string(),
+                from_machine_client_id: old.id,
+                label: "hijack".to_string(),
+                keep_old_active: false,
+            },
+        )
+        .await
+        .expect_err("a non-admin team owner must not rebind");
+        assert!(
+            matches!(err, crate::error::ApiError::Forbidden),
+            "got {err:?}"
+        );
+    }
+
+    /// A revoked credential is dead: rebind must refuse to resurrect it (revoke leaves the
+    /// profile's grants/memberships live, so a rebind would silently revive that reach).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rebind_refuses_a_revoked_source(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let old = svc::provision(&pool, admin, &req("to-be-revoked"))
+            .await
+            .expect("provision");
+
+        crate::services::machine_client_service::revoke(&pool, old.id, admin)
+            .await
+            .expect("revoke");
+
+        let err = svc::rebind(
+            &pool,
+            admin,
+            &RebindMachineRequest {
+                client_id: "resurrected".to_string(),
+                from_machine_client_id: old.id,
+                label: "back from the dead".to_string(),
+                keep_old_active: false,
+            },
+        )
+        .await
+        .expect_err("a revoked source must not be rebindable");
+        assert!(
+            matches!(err, crate::error::ApiError::BadRequest(_)),
+            "got {err:?}"
         );
     }
 

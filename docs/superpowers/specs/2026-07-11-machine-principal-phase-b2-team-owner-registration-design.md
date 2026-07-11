@@ -53,8 +53,9 @@ is invented.
 - **`access_service::profile_can_grant(pool, caller, subject_table, subject_id)`** — the raw
   `can_grant` probe, built with *no* `is_system_admin` OR so that callers compose the admin case
   themselves. Exactly the primitive needed here.
-- **`rebind`** copies `old.team_id` onto the new row, so keying it on the *old* row's team is
-  coherent — a rebind never moves a machine between teams.
+- **`rebind`** copies `old.team_id` onto the new row (it never moves a machine between teams), but is
+  **system-admin-only** — it transplants a profile's inherited reach, which team ownership cannot
+  bound (see §1).
 - **Surface scope:** registration is **temper-api + temper-cli only**. `temper-mcp` touches machine
   principals solely on the *authentication* side (`normalize_machine`, the Phase A gate) and exposes
   no registration tools. This change does not fan out across both surfaces, and the verifier is
@@ -87,8 +88,22 @@ Each endpoint sources its team differently:
 | Endpoint | Team keyed on |
 |---|---|
 | `provision`, `issue` | `request.owner_team_id` |
-| `rebind`, `revoke`, `rotate_secret`, `get` | the existing row's `team_id`, loaded **before** any mutation |
+| `revoke`, `rotate_secret`, `get` | the existing row's `team_id`, loaded **before** any mutation |
 | `list` | filtered in SQL to rows whose `team_id` the caller owns; admins see all rows including teamless |
+| `rebind` | **system-admin-only** (see below) — *not* keyed on the owning team |
+
+**`rebind` is the exception: system-admin-only, not widened to team owners.** Every other endpoint
+merely *operates on* a row, so keying it on the owning team is sound. `rebind` is different in kind —
+it **transplants an existing agent profile's identity, and with it the full reach that profile already
+holds**, onto a caller-supplied `client_id`. That inherited reach may have been conferred by an admin
+and can exceed a team owner's own authority, so team ownership is not a sufficient bar: a widened
+`rebind` would let an owner inherit reach they could never confer themselves, defeating §2's
+containment (and, worse, rebinding a *revoked* row would resurrect its surviving grants — revoke
+leaves them, D11). `rebind` is also the external-IdP-app-rotation path (`auth0-m2m`); a team owner
+rotating a *temper-issued* credential uses `rotate_secret`, not `rebind`. So `rebind` keeps the
+Phase-A/B1 `is_system_admin` bar, and additionally **refuses a revoked source** (a dead credential is
+re-created by a fresh `provision`, never resurrected). *(This was caught by the secondary adversarial
+review after the first pass waved `rebind` through; see the retro note in Decisions.)*
 
 ### 2. Reach containment — `AuthorizedReach` makes the bypass unrepresentable
 
@@ -215,7 +230,9 @@ Access-semantics changes are the case where a green `test-db` run is a false sig
 | Non-admin registers with `owner_team_id: null` | `403` (fail-closed on NULL) |
 | System admin retains full, unchecked reach | `200` |
 | `list` as a team owner | only rows owned by their teams; no teamless rows |
-| `get`/`revoke`/`rotate_secret`/`rebind` on another team's machine | `403` |
+| `get`/`revoke`/`rotate_secret` on another team's machine | `403` |
+| `rebind` by a team owner (even of their **own** machine) | `403` — rebind is admin-only |
+| `rebind` of a revoked source (by an admin) | `400` — a dead credential is not resurrected |
 | `add_member` with `role = owner` | `400` (the adjacent fix) |
 | Phase A + B1 gate tests | still green — the verifier and the auth seam are untouched |
 
@@ -269,10 +286,13 @@ back to deriving safety from topology.
   through `add_member`, so D7 alone does not close this. See §2. **Any gate on granting a role must be
   checked against the role being granted, not merely against the grantor's access to the team.**
 
-- **D5 — Full lifecycle, keyed by the owning team.** `provision`/`issue` key on the request's
-  `owner_team_id`; `rebind`/`revoke`/`rotate_secret`/`get` key on the existing row's `team_id`; `list`
+- **D5 — Lifecycle keyed by the owning team, EXCEPT `rebind`.** `provision`/`issue` key on the
+  request's `owner_team_id`; `revoke`/`rotate_secret`/`get` key on the existing row's `team_id`; `list`
   is SQL-scoped. A team owner who mints a machine can operate it — rotate its secret, revoke it —
-  without an operator, which is the point of the phase.
+  without an operator, which is the point of the phase. **`rebind` is the deliberate exception: it
+  stays `is_system_admin`-only** and refuses a revoked source, because it transplants a profile's
+  inherited reach rather than merely operating on the row (see §1). This carve-out was added after the
+  secondary adversarial review; see D9.
 
 - **D6 — Machines never re-delegate.** The minted grant keeps `can_grant = false` (unchanged from
   Phase A). Reach containment bounds what a machine *receives*; this bounds what it can *pass on*.
@@ -284,6 +304,18 @@ back to deriving safety from topology.
 
 - **D8 — No migration.** `team_id` landed in Phase A; every predicate this needs already exists. This
   is the one part of the handed-off task's framing that survives intact.
+
+- **D9 — `rebind` stays system-admin-only, and refuses a revoked source.** Added after the secondary
+  adversarial review. The first review pass reasoned that `rebind` was safe because it "only ever
+  binds to an agent profile, never a human's" — a B1-era argument that assumed `rebind` was
+  admin-only. B2's uniform widening of *all* endpoints to team owners broke that assumption: a
+  non-admin team owner could `rebind` an admin-provisioned machine owned by their team onto a
+  `client_id` they control, inheriting reach (cogmap grants) they could never confer themselves —
+  and could `rebind` a *revoked* row to resurrect its surviving grants (D11). `rebind` is the only
+  endpoint that transplants inherited reach rather than operating on the row, so team ownership
+  cannot bound it; it keeps the `is_system_admin` bar and refuses revoked sources. The lesson,
+  generalized: **widening a gate uniformly across a family of endpoints is unsafe when one member of
+  the family confers more than it operates on.**
 
 ## Rejected
 
