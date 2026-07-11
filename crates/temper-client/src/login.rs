@@ -198,12 +198,6 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
     Ok(stored)
 }
 
-/// Success page shown in the browser tab once the authorization code arrives.
-const SUCCESS_HTML: &str = "<!DOCTYPE html><html><body>\
-    <h2>Authentication successful!</h2>\
-    <p>You can close this tab and return to the terminal.</p>\
-    </body></html>";
-
 /// Parsed outcome of an OAuth2 callback request's query string.
 enum CallbackOutcome {
     /// Authorization code present — login can proceed.
@@ -246,24 +240,19 @@ async fn wait_for_code(listener: &TcpListener) -> Result<String> {
 
         match extract_oauth_code(path)? {
             CallbackOutcome::Error { error, description } => {
-                let html = format!(
-                    "<!DOCTYPE html><html><body>\
-                    <h2>Authentication Failed</h2>\
-                    <p>{error}: {description}</p>\
-                    </body></html>"
-                );
+                let html = crate::login_page::failure(&error, &description);
                 write_html_response(&mut stream, &html).await;
                 return Err(ClientError::Other(format!(
                     "OAuth error: {error} — {description}"
                 )));
             }
             CallbackOutcome::Code(code) => {
-                write_html_response(&mut stream, SUCCESS_HTML).await;
+                write_html_response(&mut stream, &crate::login_page::success()).await;
                 return Ok(code);
             }
             CallbackOutcome::Pending => {
                 // No code in callback — keep waiting (might be favicon request etc.)
-                write_html_response(&mut stream, SUCCESS_HTML).await;
+                write_html_response(&mut stream, &crate::login_page::success()).await;
             }
         }
     }
