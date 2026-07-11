@@ -487,7 +487,7 @@ mod tests {
 - [ ] **Step 3: Run the tests to verify they fail**
 
 ```bash
-cargo nextest run -p temper-services --features test-db -E 'binary(machine_authz)' 2>&1 | tail -20
+cargo nextest run -p temper-services --features test-db -E 'test(machine_authz)' 2>&1 | tail -20
 ```
 
 Expected: FAIL to compile — `authorize`, `authorize_registration`, `MachineAuthority`, `AuthorizedReach` are not defined.
@@ -642,10 +642,10 @@ If `access_service::profile_can_grant` or `team_service::{role_on_team, can_mana
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-cargo nextest run -p temper-services --features test-db -E 'binary(machine_authz)'
+cargo nextest run -p temper-services --features test-db -E 'test(machine_authz)'
 ```
 
-Expected: all 10 tests PASS. (`-E 'binary(...)'` selects the file; `test(...)` matches test *names* — see the nextest filter gotcha.)
+Expected: all 11 tests PASS. (These are an inline `mod tests` in the **lib** target, not an integration-test file, so there is no `machine_authz` *binary* — `binary(...)` would match nothing. Nextest test names carry the module path, so `test(machine_authz)` is the right selector here.)
 
 - [ ] **Step 6: Commit**
 
@@ -754,7 +754,7 @@ and change its `apply_reach(...)` call to `apply_reach(&mut tx, caller, profile_
 
 ```bash
 cargo clippy -p temper-services --all-features -- -D warnings
-cargo nextest run -p temper-services --features test-db -E 'binary(machine_authz)'
+cargo nextest run -p temper-services --features test-db -E 'test(machine_authz)'
 ```
 
 Expected: clean compile; Task 2's tests still pass. A compile error of the form "expected `AuthorizedReach`, found `&[TeamSpec]`" anywhere else in the crate means a caller is trying to apply unauthorized reach — that is the type doing its job; route that caller through `authorize_registration`.
@@ -1038,7 +1038,7 @@ Append to `machine_authz.rs`'s `mod tests` (it already has the profile/team/join
 
 ```bash
 cargo clippy --workspace --all-features -- -D warnings
-cargo nextest run -p temper-services --features test-db -E 'binary(machine_authz)'
+cargo nextest run -p temper-services --features test-db -E 'test(machine_authz)'
 ```
 
 Expected: clean clippy across the workspace (service signatures and handler call sites moved together, so there is no red state), and all `machine_authz` tests pass including `list_is_scoped_to_owned_teams`.

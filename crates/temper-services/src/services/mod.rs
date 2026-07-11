@@ -7,6 +7,7 @@ pub mod embed_service;
 pub mod event_service;
 pub mod graph_service;
 pub mod invitation_service;
+pub(crate) mod machine_authz;
 pub mod machine_client_service;
 pub mod machine_registration_service;
 pub mod materialize_service;
