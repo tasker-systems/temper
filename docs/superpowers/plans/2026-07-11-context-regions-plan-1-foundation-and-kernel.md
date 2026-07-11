@@ -28,6 +28,7 @@ Copied verbatim from CLAUDE.md and the spec. **Every task's requirements implici
 - **`cargo make check` must pass before any commit.** It is the honest offline probe of the committed sqlx caches (it forces `SQLX_OFFLINE=true`).
 - **Every `#[sqlx::test]` file needs `#![cfg(feature = "test-db")]`** (or `artifact-tests` in temper-substrate) at the top, or the unit-test CI job fails to compile.
 - **Determinism is a hard requirement.** Region formation must be reproducible: same corpus + same lens → same `membership_fingerprint`. This forbids ANN/HNSW anywhere in the formation path.
+- **Print the object before you widen it — this plan's reconstructions are not trustworthy.** T1's execution found that every SQL body, column name, and comment this plan quotes came from an architecture sweep, and three of them were wrong: a "gap" that a later migration had already closed, a function reconstructed as plpgsql when it is `LANGUAGE sql`, and a column (`granted_by_event_id`) that does not exist. T2–T4 come from the same sweep. Before editing any function or writing any fixture: `cargo sqlx migrate run` (a dev DB one migration behind lies to you *and* breaks the `sqlx::query!` macros), then `psql "$DATABASE_URL" -c "\sf <fn>" -c "\d <table>"`. Widen the **printed** body.
 
 ## The One Test That Governs Everything
 
@@ -41,7 +42,7 @@ This is the regression floor for the entire arc. It is asserted in Task 3 Step 2
 
 | File | Responsibility | Task |
 |---|---|---|
-| `migrations/20260712000010_context_read_predicates.sql` | **Create.** `context_readable_by_profile`; `'context'` principal kind in `resources_readable_by`; context arm of `anchor_readable_by_profile` reaches `kb_access_grants`. | T1 |
+| `migrations/20260712000010_context_read_predicates.sql` | **Create.** `contexts_readable_by` as THE context read-set (fixing the flat team-owned arm); the five copies route through it; `context_authorable_by_profile` narrowed to direct-membership + role; `'context'` principal kind in `resources_readable_by`. | T1 |
 | `crates/temper-services/tests/context_read_predicate_test.rs` | **Create.** Integration tests for the above. | T1 |
 | `migrations/20260712000020_region_anchor_expand.sql` | **Create.** M1 additive schema: anchor pair on the 4 region tables, new lens columns, `kb_contexts` shape columns, transitional `COMMENT`s. | T2 |
 | `crates/temper-core/src/types/home.rs` | **Modify.** Add `HomeAnchor::{table, uuid, from_parts}` — the SQL-binding helpers the producer needs. | T3 |
@@ -55,283 +56,96 @@ This is the regression floor for the entire arc. It is asserted in Task 3 Step 2
 
 ---
 
-## Task 1: Context read predicates (authz prerequisites)
+## Task 1: Context access predicates (authz prerequisites) — ✅ LANDED
 
-Spec §3.8. **No dependencies.** Blocks T8, and nothing in the context read path is correct without it.
+Spec §3.8. **No dependencies.** Blocks T8.
 
-Two pre-existing gaps. The context arm of `anchor_readable_by_profile` is an inline `EXISTS` over `kb_team_contexts` that **ignores `kb_access_grants` entirely** — already flagged in the header of `20260630000002_access_grants_read_wiring.sql` as *"the one place a context read-grant does not yet reach."* And `resources_readable_by` dispatches only `'profile'` and `'cogmap'`.
+> **Rewritten 2026-07-11 mid-execution.** The original was built on a stale premise and contained a
+> test that could never fail. Both are recorded below, because the *reason* they were wrong applies
+> directly to T2–T4, which came out of the same architecture sweep.
 
-**Files:**
-- Create: `migrations/20260712000010_context_read_predicates.sql`
-- Create: `crates/temper-services/tests/context_read_predicate_test.rs`
+### What the original got wrong
 
-**Interfaces:**
-- Produces: `context_readable_by_profile(p_profile uuid, p_context uuid) RETURNS boolean`
-- Produces: `resources_readable_by('context', p_context_id)` → `SETOF uuid`
-- Consumes: `profile_explicit_grant(p_profile, p_action, p_subject_table, p_subject_id)`, `team_ancestors(...)`, `kb_team_contexts` — all existing.
+1. **"The context arm of `anchor_readable_by_profile` ignores `kb_access_grants` entirely."** False.
+   True on 2026-06-30, fixed on 2026-07-01 by `20260701000004_anchor_readable_context_grant.sql` —
+   the migration that quotes the very header the spec cited.
+2. **The `resources_readable_by` test asserted `count == 0` with the comment "today it raises."** It
+   does not raise: it is `LANGUAGE sql`, a `UNION` with `WHERE p_principal_kind = …` guards, so an
+   unknown kind silently returns zero rows. The test passed against the unmigrated schema.
+3. **The fixture used `kb_access_grants.granted_by_event_id`.** No such column — it is
+   `granted_by_profile_id`. (Likewise `kb_edges` has `edge_kind`, an enum, not `edge_type`;
+   `relates_to` is a `label`.)
 
-- [ ] **Step 1: Read the two functions being changed, and the model to mirror**
+**Every one of these came from trusting a reconstruction over the running database.** See the new
+Global Constraint: *print the object before you widen it.*
 
-```bash
-rg -n -A25 "CREATE OR REPLACE FUNCTION anchor_readable_by_profile" migrations/ | tail -40
-rg -n -A25 "CREATE OR REPLACE FUNCTION resources_readable_by" migrations/ | tail -40
-rg -n -A20 "CREATE OR REPLACE FUNCTION cogmap_readable_by_profile" migrations/20260701000002_cogmap_read_up_flip.sql
-```
+### The model (nowhere written down, which is how it rotted)
 
-`cogmap_readable_by_profile` is the shape to mirror: flat/up team membership `OR profile_explicit_grant(...)`. Note the **deliberate asymmetry** you must preserve: cogmap read is *ancestor-expanded* (a parent team reads a child's map), while a **team-owned context is flat, NOT ancestor-expanded** (branch 5 of `resources_visible_to`). Do not "fix" that — it is intentional. Only the *grant* arm is being added.
+The team DAG is an org enclosure hierarchy — `EPD ▸ engineering ▸ payroll-group ▸ squad-two`.
+Membership is transitive upward. Two axes, and they are **not** the same axis:
 
-- [ ] **Step 2: Write the failing test**
+- **READ inherits UP the chain**, never sideways. A squad-two member reads engineering's and EPD's
+  contexts; `security-it-ops` stays invisible.
+- **WRITE requires DIRECT membership** in the owning team, with an authoring role
+  (`owner`/`maintainer`/`member`; `watcher` is read-only).
 
-Create `crates/temper-services/tests/context_read_predicate_test.rs`:
+### The two defects verification actually found
 
-```rust
-#![cfg(feature = "test-db")]
+**Read was too narrow.** The context-read rule was written out **five times** — `context_visible_to`,
+`resources_visible_to` (branch 5), `edges_visible_to`, `graph_home_contexts`,
+`resources_in_team_scope` — and every copy gated the team-**owned** arm on *direct* membership. A
+squad-two member could read a context *shared to* engineering but not the one engineering *owns*.
+The copies had already drifted: `graph_home_contexts` had gone flat on the **share** arm too, and its
+`candidates` CTE calls itself "a proven superset (same branches)" of `context_visible_to` — true only
+while both were equally wrong. Widening the predicate alone would have made it a **subset** and
+dropped contexts out of the graph view.
 
-use sqlx::PgPool;
-use uuid::Uuid;
+**Write was too wide.** `context_authorable_by_profile` ancestor-expanded, producing a
+write-wider-than-read inversion on the same object: a squad-two member could **author into**
+engineering's context while unable to **read** it. And **0 of 15** access predicates consulted
+`kb_team_members.role`, so a `watcher` could author.
 
-/// A profile with no team membership and no grant cannot read a context.
-/// An explicit read grant in kb_access_grants makes it readable.
-/// This is the gap: today the grant is ignored entirely.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn explicit_grant_makes_a_context_readable(pool: PgPool) -> sqlx::Result<()> {
-    let profile: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), 'grantee', 'Grantee') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await?;
+### What shipped
 
-    let owner: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), 'ctx-owner', 'Owner') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await?;
+`migrations/20260712000010_context_read_predicates.sql`:
 
-    let context: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_profiles', $1, 'private', 'Private') RETURNING id",
-    )
-    .bind(owner)
-    .fetch_one(&pool)
-    .await?;
+- [x] **`contexts_readable_by(p_profile) → SETOF context_id`** — THE context read-set. Four arms:
+      personal; owned by an enclosing team (**the fix**); shared to an enclosing team; explicit
+      read-grant.
+- [x] **`context_readable_by_profile`** is its boolean grain; **`context_visible_to`** and
+      **`anchor_readable_by_profile`**'s `kb_contexts` arm delegate to that.
+- [x] **`resources_visible_to`, `edges_visible_to`, `graph_home_contexts`, `resources_in_team_scope`**
+      all route their context arms through the read-set. Five copies → one.
+- [x] **`context_authorable_by_profile` NARROWED** — direct membership + authoring role. The only
+      non-additive change in the arc; taken now because the deployment is a handful of alpha testers.
+      Explicit write-**grants** still reach through `team_ancestors` (delegation is deliberate).
+- [x] **`resources_readable_by` gains the `'context'` kind** — the context's own interior, under the
+      same soft-delete floor as `resources_accessible_to_cogmap`.
 
-    let before: bool = sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
-        .bind(profile)
-        .bind(context)
-        .fetch_one(&pool)
-        .await?;
-    assert!(!before, "a stranger must not read a private context");
+`crates/temper-services/tests/context_read_predicate_test.rs` — 10 tests, all on one EPD-shaped
+fixture: read inherits up; read never flows sideways or down; the pre-existing branches survive;
+write does *not* inherit up; a watcher cannot author; an explicit write-grant still reaches; the
+`'context'` kind returns the interior (asserted non-empty); other kinds unchanged; the graph view
+lists what the profile can read; edges homed in an enclosing team's context are visible.
 
-    sqlx::query(
-        "INSERT INTO kb_access_grants \
-           (id, subject_table, subject_id, principal_table, principal_id, can_read, granted_by_event_id) \
-         SELECT uuid_generate_v7(), 'kb_contexts', $1, 'kb_profiles', $2, true, e.id \
-         FROM kb_events e ORDER BY e.id LIMIT 1",
-    )
-    .bind(context)
-    .bind(profile)
-    .execute(&pool)
-    .await?;
+### Gotcha that cost a cycle
 
-    let after: bool = sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
-        .bind(profile)
-        .bind(context)
-        .fetch_one(&pool)
-        .await?;
-    assert!(after, "an explicit read grant must make the context readable");
-    Ok(())
-}
+`#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]` embeds the migration set at **compile time**.
+A new migration file does not bust the crate's build cache — tests fail with a phantom "function does
+not exist" until `cargo clean -p temper-substrate`.
 
-/// resources_readable_by dispatches a 'context' principal kind.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn resources_readable_by_accepts_a_context_principal(pool: PgPool) -> sqlx::Result<()> {
-    let owner: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), 'ctx2-owner', 'Owner2') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await?;
-    let context: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_profiles', $1, 'c2', 'C2') RETURNING id",
-    )
-    .bind(owner)
-    .fetch_one(&pool)
-    .await?;
-
-    // No resources homed yet → empty set, but the call must RESOLVE (today it raises).
-    let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM resources_readable_by('context', $1)",
-    )
-    .bind(context)
-    .fetch_one(&pool)
-    .await?;
-    assert_eq!(n, 0);
-    Ok(())
-}
-```
-
-**Before writing the fixture inserts, verify the exact column names against the live DB** — do not trust the origin migration:
+### Verification
 
 ```bash
-psql "$DATABASE_URL" -c '\d kb_access_grants' -c '\d kb_contexts' -c '\d kb_profiles'
-```
-
-Adjust the INSERTs to match. If `kb_access_grants` has no rows in `kb_events` to reference, seed one — check how existing tests in `crates/temper-services/tests/` obtain an event id and copy that pattern rather than inventing one.
-
-- [ ] **Step 3: Run the test to verify it fails**
-
-```bash
-cargo make docker-up
-export DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development
-cargo nextest run -p temper-services --features test-db --test context_read_predicate_test
-```
-
-Expected: FAIL — `function context_readable_by_profile(uuid, uuid) does not exist`.
-
-- [ ] **Step 4: Write the migration**
-
-Create `migrations/20260712000010_context_read_predicates.sql`:
-
-```sql
--- Context read predicates (spec §3.8).
---
--- Two pre-existing gaps, both blocking the context-region read surface:
---
---   1. There is no `context_readable_by_profile`. The context arm of
---      `anchor_readable_by_profile` is an inline EXISTS over kb_team_contexts that ignores
---      kb_access_grants entirely — flagged as a known gap in the header of
---      20260630000002_access_grants_read_wiring.sql. `cogmap_readable_by_profile` is the model.
---
---   2. `resources_readable_by` dispatches only 'profile' and 'cogmap'. The gated region reads
---      (cogmap_shape / cogmap_region_metrics) use a self-read pattern that needs a 'context' kind.
---
--- This migration is purely ADDITIVE: it only ever widens reach. A profile that could read a
--- context before can still read it. Note the deliberate asymmetry preserved here — a team-OWNED
--- context is FLAT (not ancestor-expanded), while a SHARED context reaches through team_ancestors.
--- That is intentional and is not changed.
-
-CREATE OR REPLACE FUNCTION context_readable_by_profile(p_profile uuid, p_context uuid)
-RETURNS boolean
-LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-        -- profile-owned
-        SELECT 1 FROM kb_contexts c
-         WHERE c.id = p_context AND c.owner_table = 'kb_profiles' AND c.owner_id = p_profile
-        UNION ALL
-        -- team-owned, FLAT (deliberately not ancestor-expanded — mirrors resources_visible_to §5)
-        SELECT 1 FROM kb_contexts c
-          JOIN kb_team_members tm ON tm.team_id = c.owner_id AND tm.profile_id = p_profile
-         WHERE c.id = p_context AND c.owner_table = 'kb_teams'
-        UNION ALL
-        -- shared to a reachable (self-or-ancestor) team
-        SELECT 1 FROM kb_team_contexts tc
-          JOIN kb_team_members tm ON tm.profile_id = p_profile
-          JOIN team_ancestors(tm.team_id) anc ON anc.team_id = tc.team_id
-         WHERE tc.context_id = p_context
-        UNION ALL
-        -- THE GAP: an explicit read grant on the context subject
-        SELECT 1 WHERE profile_explicit_grant(p_profile, 'read', 'kb_contexts', p_context)
-    );
-$$;
-
-COMMENT ON FUNCTION context_readable_by_profile(uuid, uuid) IS
-    'Context read predicate — the peer of cogmap_readable_by_profile. Team-owned contexts are FLAT '
-    '(not ancestor-expanded); shared contexts reach through team_ancestors; explicit kb_access_grants '
-    'read grants are honored (they previously were not).';
-```
-
-Then extend `resources_readable_by` and the context arm of `anchor_readable_by_profile`. **Copy the current bodies out of the live DB first** so you widen them rather than rewriting from memory:
-
-```bash
-psql "$DATABASE_URL" -c "\sf resources_readable_by" -c "\sf anchor_readable_by_profile"
-```
-
-Append to the same migration, taking the printed bodies and adding only the new branches:
-
-```sql
--- resources_readable_by gains a 'context' principal kind. The existing 'profile' and 'cogmap'
--- branches are reproduced VERBATIM from the live definition — this only adds a third branch.
-CREATE OR REPLACE FUNCTION resources_readable_by(p_principal_kind text, p_principal_id uuid)
-RETURNS SETOF uuid
-LANGUAGE plpgsql STABLE AS $$
-BEGIN
-    IF p_principal_kind = 'profile' THEN
-        RETURN QUERY SELECT resource_id FROM resources_visible_to(p_principal_id);
-    ELSIF p_principal_kind = 'cogmap' THEN
-        RETURN QUERY SELECT * FROM resources_accessible_to_cogmap(p_principal_id);
-    ELSIF p_principal_kind = 'context' THEN
-        RETURN QUERY
-            SELECT h.resource_id
-              FROM kb_resource_homes h
-              JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
-             WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = p_principal_id;
-    ELSE
-        RAISE EXCEPTION 'unknown principal kind: %', p_principal_kind;
-    END IF;
-END;
-$$;
-
--- anchor_readable_by_profile: route the context arm through the new predicate so a context
--- read-grant finally reaches context-homed edges.
-CREATE OR REPLACE FUNCTION anchor_readable_by_profile(
-    p_profile uuid, p_anchor_table varchar, p_anchor_id uuid
-) RETURNS boolean
-LANGUAGE sql STABLE AS $$
-    SELECT CASE p_anchor_table
-        WHEN 'kb_cogmaps'  THEN cogmap_readable_by_profile(p_profile, p_anchor_id)
-        WHEN 'kb_contexts' THEN context_readable_by_profile(p_profile, p_anchor_id)
-        ELSE false
-    END;
-$$;
-```
-
-> **Verify before you commit:** the `resources_readable_by` and `anchor_readable_by_profile` bodies above are reconstructions. Diff them against `\sf` output and preserve every branch the live version has. A dropped branch here silently *removes* read access — the one failure mode this migration must not have.
-
-- [ ] **Step 5: Run the test to verify it passes**
-
-```bash
-cargo nextest run -p temper-services --features test-db --test context_read_predicate_test
-```
-
-Expected: PASS, 2 tests.
-
-- [ ] **Step 6: Run the full visibility regression — this migration must only ever WIDEN reach**
-
-```bash
-cargo make test-db
-cargo make test-e2e
-```
-
-Expected: PASS. Any test that newly *denies* access is a bug in Step 4 (a dropped branch), not a stale test.
-
-- [ ] **Step 7: Regenerate sqlx caches and check**
-
-```bash
-cargo sqlx prepare --workspace -- --all-features
-cargo make prepare-services
-cargo make prepare-api
+cargo nextest run -p temper-services --features test-db --test context_read_predicate_test  # 10 passed
+cargo make test-db && cargo make test-e2e
+cargo sqlx prepare --workspace -- --all-features && cargo make prepare-services && cargo make prepare-api
 cargo make check
 ```
 
-- [ ] **Step 8: Commit**
-
-```bash
-git add migrations/20260712000010_context_read_predicates.sql \
-        crates/temper-services/tests/context_read_predicate_test.rs \
-        .sqlx crates/temper-services/.sqlx crates/temper-api/.sqlx
-git commit -m "feat(authz): context read predicates — context_readable_by_profile + 'context' principal kind
-
-Closes the two gaps that block the context-region read surface (spec §3.8):
-the context arm of anchor_readable_by_profile ignored kb_access_grants entirely
-(flagged as a known gap in 20260630000002's header), and resources_readable_by
-dispatched only 'profile' and 'cogmap'.
-
-Purely additive — only ever widens reach. The deliberate flat/team-owned vs
-ancestor-expanded/shared asymmetry is preserved."
-```
+Unlike the original task, `test-db`/`test-e2e` are **not** a pure widen-only check any more: the write
+narrowing legitimately revokes privilege, so a test that newly denies a *write* may be correct. A test
+that newly denies a *read* is still a dropped branch.
 
 ---
 
