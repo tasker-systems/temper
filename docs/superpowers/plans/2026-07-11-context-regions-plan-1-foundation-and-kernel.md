@@ -44,15 +44,15 @@ This is the regression floor for the entire arc. It is asserted in Task 3 Step 2
 |---|---|---|
 | `migrations/20260712000010_context_read_predicates.sql` | **Create.** `contexts_readable_by` as THE context read-set (fixing the flat team-owned arm); the five copies route through it; `context_authorable_by_profile` narrowed to direct-membership + role; `'context'` principal kind in `resources_readable_by`. | T1 |
 | `crates/temper-services/tests/context_read_predicate_test.rs` | **Create.** Integration tests for the above. | T1 |
-| `migrations/20260712000020_region_anchor_expand.sql` | **Create.** M1 additive schema: anchor pair on the 4 region tables, new lens columns, `kb_contexts` shape columns, transitional `COMMENT`s. | T2 |
+| `migrations/20260712000030_region_anchor_expand.sql` | **Create.** M1 additive schema: anchor pair on the 4 region tables, new lens columns, `kb_contexts` shape columns, transitional `COMMENT`s. | T2 |
 | `crates/temper-core/src/types/home.rs` | **Modify.** Add `HomeAnchor::{table, uuid, from_parts}` — the SQL-binding helpers the producer needs. | T3 |
 | `crates/temper-substrate/src/substrate.rs` | **Modify.** `load()` takes `HomeAnchor`; three hard-wired `'kb_cogmaps'` predicates widen; lens resolution becomes anchor-aware. | T3 |
 | `crates/temper-substrate/src/write.rs` | **Modify.** `materialize`/`incremental_materialize` take `HomeAnchor`; fold/create/assert widen; **persist member `affinity`**. | T3 |
 | `crates/temper-substrate/src/replay.rs` | **Modify.** `formation_touched_count_since` / `content_touched_resources_since` widen off `'kb_cogmaps'`. | T3 |
-| `migrations/20260712000030_region_anchor_functions.sql` | **Create.** `cogmap_region_centrality` home-filter fix; `region_materialize` + `_project_region_materialized` accept an anchor; `region_materialized` event schema widens. | T3 |
+| `migrations/20260712000040_region_anchor_functions.sql` | **Create.** `cogmap_region_centrality` home-filter fix; `region_materialize` + `_project_region_materialized` accept an anchor; `region_materialized` event schema widens. | T3 |
 | `crates/temper-substrate/src/affinity.rs` | **Modify.** `Lens` gains `w_cos`/`knn_k`/`cos_floor`; `affinity()` gains the `knn_sim` term; add `Lens::workflow_default()`. | T4 |
 | `crates/temper-substrate/src/knn.rs` | **Create.** The sparse exact-kNN builder. One responsibility: pooled embeddings → a symmetric sparse neighbour map. | T4 |
-| `migrations/20260712000040_workflow_default_lens.sql` | **Create.** Seed the `workflow-default` context lens. | T4 |
+| `migrations/20260712000050_workflow_default_lens.sql` | **Create.** Seed the `workflow-default` context lens. | T4 |
 
 ---
 
@@ -168,12 +168,30 @@ the pattern for authz work here.
 
 ---
 
-## Task 2: M1 additive schema — polymorphic anchor + new lens columns
+## Task 2: M1 additive schema — polymorphic anchor + new lens columns — ✅ LANDED
 
 Spec §3.6. **No dependencies.**
 
+> **Corrected 2026-07-11 during execution**, after printing every object against the live DB.
+> Three defects in what this task originally said — recorded because T3/T4 came from the same sweep:
+>
+> 1. **The filename collided.** `20260712000020` was taken by `can_modify_active_floor.sql` — the
+>    soft-delete write-floor fix the T1 adversarial review found, merged the same day. This plan was
+>    written before it existed. **Everything downstream shifted by one slot**: T2 → `…000030`,
+>    T3 → `…000040`, T4 → `…000050`. The tables above and below now reflect that.
+> 2. **The migration omitted `ALTER COLUMN cogmap_id DROP NOT NULL`.** `cogmap_id` is `NOT NULL` on
+>    `kb_cogmap_regions` *and* `kb_cogmap_components` (verified). Without the drop, T3's producer
+>    INSERT fails on every context region. The plan *did* flag this — but in **Task 3's** section as
+>    a back-reference, not in the SQL that executes it, which is precisely how it got missed. It is
+>    now in the Step-1 SQL below, where it runs.
+> 3. **"Contexts gain the shape columns kb_cogmaps already has" was half-true.** `kb_cogmaps` has
+>    `shape_materialized_event_id` but **no `telos_centroid`** — that column is new on both anchors.
+>    (Coherent: a cogmap's telos is a *declared* resource, `telos_resource_id NOT NULL`, whose
+>    embedding is read directly; a context's telos is *computed* from its goal census, so it must be
+>    snapshotted to be compared against. But the framing misled.)
+
 **Files:**
-- Create: `migrations/20260712000020_region_anchor_expand.sql`
+- Create: `migrations/20260712000030_region_anchor_expand.sql`
 
 **Interfaces:**
 - Produces: `kb_cogmap_{regions,components,lenses,region_members}.home_anchor_table` / `.home_anchor_id`
@@ -183,7 +201,7 @@ Spec §3.6. **No dependencies.**
 
 - [ ] **Step 1: Write the migration**
 
-Create `migrations/20260712000020_region_anchor_expand.sql`:
+Create `migrations/20260712000030_region_anchor_expand.sql`:
 
 ```sql
 -- M1 of expand → migrate → contract (spec §3.6). PURELY ADDITIVE: main stays auto-deployable.
@@ -217,6 +235,18 @@ ALTER TABLE kb_cogmap_lenses
         CHECK (home_anchor_table IN ('kb_contexts', 'kb_cogmaps')),
     ADD COLUMN home_anchor_id UUID;
 
+-- A context region has no cogmap. cogmap_id is NOT NULL on both tables today, so the T3 producer's
+-- INSERT would fail on every context region without this. Dropping NOT NULL only WIDENS what is
+-- accepted — the pre-M2 code path always supplies cogmap_id — so it is safe on auto-deploying main.
+--
+-- Note what this gives up: cogmap_id carries `REFERENCES kb_cogmaps(id) ON DELETE CASCADE`, which is
+-- what reaps a cogmap's regions today. A context region has cogmap_id IS NULL, so it inherits no
+-- cascade, and the anchor pair cannot carry an FK because it is polymorphic (the same trade
+-- kb_edges and kb_resource_homes already make). Reaping context regions on context delete is the
+-- producer's job, not the schema's.
+ALTER TABLE kb_cogmap_regions    ALTER COLUMN cogmap_id DROP NOT NULL;
+ALTER TABLE kb_cogmap_components ALTER COLUMN cogmap_id DROP NOT NULL;
+
 UPDATE kb_cogmap_regions    SET home_anchor_table = 'kb_cogmaps', home_anchor_id = cogmap_id;
 UPDATE kb_cogmap_components SET home_anchor_table = 'kb_cogmaps', home_anchor_id = cogmap_id;
 UPDATE kb_cogmap_lenses     SET home_anchor_table = 'kb_cogmaps', home_anchor_id = cogmap_id
@@ -236,7 +266,12 @@ ALTER TABLE kb_cogmap_region_members
         CHECK (member_table IN ('kb_resources', 'kb_cogmaps', 'kb_contexts'));
 
 -- ---------------------------------------------------------------------------
--- 2. Contexts gain the shape columns kb_cogmaps already has.
+-- 2. Contexts gain the shape columns.
+--
+-- shape_materialized_event_id mirrors kb_cogmaps. telos_centroid is NEW on both anchors — a cogmap
+-- does not carry one because its telos is a DECLARED resource (kb_cogmaps.telos_resource_id, NOT
+-- NULL), whose embedding can be read directly. A context has no declared telos: it is COMPUTED from
+-- the liveness-weighted goal census (spec §3.4), so it must be snapshotted to be compared against.
 -- ---------------------------------------------------------------------------
 ALTER TABLE kb_contexts
     ADD COLUMN shape_materialized_event_id UUID REFERENCES kb_events(id),
@@ -310,7 +345,7 @@ sqlx migrate run
 Expected: applies clean. Then grep your own migration for the portability trap:
 
 ```bash
-rg -n "uuidv7\(\)" migrations/20260712000020_region_anchor_expand.sql
+rg -n "uuidv7\(\)" migrations/20260712000030_region_anchor_expand.sql
 ```
 
 Expected: **no matches.** A hit means you used the PG18-native function, which passes here and breaks Neon PG17 in prod.
@@ -345,7 +380,7 @@ cargo make check
 - [ ] **Step 6: Commit**
 
 ```bash
-git add migrations/20260712000020_region_anchor_expand.sql .sqlx crates/*/.sqlx
+git add migrations/20260712000030_region_anchor_expand.sql .sqlx crates/*/.sqlx
 git commit -m "feat(schema): M1 — polymorphic anchor on the region tables + context-regime lens columns
 
 Additive expand phase (spec §3.6). The four region tables gain
@@ -373,7 +408,7 @@ This is the mechanical widening — no behavior change. `w_cos` is still 0 every
 - Modify: `crates/temper-substrate/src/substrate.rs`
 - Modify: `crates/temper-substrate/src/write.rs`
 - Modify: `crates/temper-substrate/src/replay.rs`
-- Create: `migrations/20260712000030_region_anchor_functions.sql`
+- Create: `migrations/20260712000040_region_anchor_functions.sql`
 
 **Interfaces:**
 - Consumes: `HomeAnchor` (`temper_core::types::home`), the anchor columns from T2.
@@ -626,12 +661,14 @@ let region: Uuid = sqlx::query(
 // ... binds ...
 ```
 
-> `cogmap_id` is `NOT NULL` in the shipped schema. **Check whether M1 must also drop that NOT NULL** — a context region has no cogmap. If it does (it does), add to `migrations/20260712000020_region_anchor_expand.sql`:
-> ```sql
-> ALTER TABLE kb_cogmap_regions    ALTER COLUMN cogmap_id DROP NOT NULL;
-> ALTER TABLE kb_cogmap_components ALTER COLUMN cogmap_id DROP NOT NULL;
-> ```
-> Dropping NOT NULL is additive (it only widens what's accepted), so this is safe on `main`. **Amend T2's migration rather than adding a new one** — T2 has not shipped.
+> ✅ **Already handled — T2 shipped the `DROP NOT NULL`.** `cogmap_id` was `NOT NULL` on both
+> `kb_cogmap_regions` and `kb_cogmap_components`; `20260712000030_region_anchor_expand.sql` drops it
+> on both, so the INSERT below can write `cogmap_id = NULL` for a context region.
+>
+> Note the consequence for this step: cogmap_id's `ON DELETE CASCADE` from `kb_cogmaps` is what reaps
+> a cogmap's regions today. A context region has `cogmap_id IS NULL` and the anchor pair carries no FK
+> (it's polymorphic), so **nothing reaps context regions on context delete** — that is now the
+> producer's job, not the schema's. Don't assume the cascade covers you.
 
 Then fix bug §3.9.1. `kb_cogmap_region_members.affinity` is never written, yet `graph_region_members`, `graph_region_territories`, `graph_cogmap_territories`, and `atlas_search` all `ORDER BY m.affinity DESC NULLS LAST` — so every derived region label in the product today is arbitrary. Define it as **the member's average-link affinity to the rest of its component** and persist it:
 
@@ -699,7 +736,7 @@ pub async fn formation_touched_count_since(
 
 - [ ] **Step 7: SQL functions — anchor the event, fix the centrality home-filter (bug §3.9.2)**
 
-Create `migrations/20260712000030_region_anchor_functions.sql`:
+Create `migrations/20260712000040_region_anchor_functions.sql`:
 
 ```sql
 -- Producer-side SQL for the anchor-generalized region tier (spec §3.6 M2, §3.9).
@@ -804,7 +841,7 @@ cargo make check
 git add crates/temper-core/src/types/home.rs \
         crates/temper-substrate/src/{substrate.rs,write.rs,replay.rs} \
         crates/temper-substrate/tests/anchor_refactor_regression.rs \
-        migrations/20260712000030_region_anchor_functions.sql \
+        migrations/20260712000040_region_anchor_functions.sql \
         .sqlx crates/*/.sqlx
 git commit -m "refactor(substrate): anchor-generalize the region producer
 
@@ -835,7 +872,7 @@ Spec §3.1, §3.2. **Depends on T3.** This is the heart of the arc.
 - Create: `crates/temper-substrate/src/knn.rs`
 - Modify: `crates/temper-substrate/src/affinity.rs`
 - Modify: `crates/temper-substrate/src/substrate.rs` (carry pooled embeddings into `Substrate`)
-- Create: `migrations/20260712000040_workflow_default_lens.sql`
+- Create: `migrations/20260712000050_workflow_default_lens.sql`
 
 **Interfaces:**
 - Consumes: `Lens` (T3), `Substrate` (T3), the lens columns (T2).
@@ -1243,7 +1280,7 @@ Expected: PASS.
 
 - [ ] **Step 7: Seed the `workflow-default` lens**
 
-Create `migrations/20260712000040_workflow_default_lens.sql`. Mirror how `telos-default` is seeded in `20260624000003_canonical_seed.sql:68` (it goes through `lens_create(...)` — print it with `\sf lens_create` and check whether that function needs widening for the new columns first; if it does, widen it here).
+Create `migrations/20260712000050_workflow_default_lens.sql`. Mirror how `telos-default` is seeded in `20260624000003_canonical_seed.sql:68` (it goes through `lens_create(...)` — print it with `\sf lens_create` and check whether that function needs widening for the new columns first; if it does, widen it here).
 
 ```sql
 -- The context regime lens (spec §3.2). Global (home_anchor_table IS NULL), so every context picks it
@@ -1344,7 +1381,7 @@ cargo make check
 ```bash
 git add crates/temper-substrate/src/{knn.rs,affinity.rs,substrate.rs,lib.rs} \
         crates/temper-substrate/tests/context_region_smoke.rs \
-        migrations/20260712000040_workflow_default_lens.sql \
+        migrations/20260712000050_workflow_default_lens.sql \
         .sqlx crates/*/.sqlx
 git commit -m "feat(substrate): the w_cos kernel — sparse exact-kNN affinity for the context regime
 
