@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT secret_hash, secret_hash_previous, secret_previous_expires_at, secret_rotated_at FROM kb_machine_clients WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "secret_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "secret_hash_previous",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "secret_previous_expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "secret_rotated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "41b2ebf0a58ad5a83b0d198ccf2a94ea0c9efa9f8955d54aa9f3324a08e2a761"
+}
