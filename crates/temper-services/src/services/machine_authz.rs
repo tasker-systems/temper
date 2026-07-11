@@ -414,4 +414,57 @@ mod tests {
         assert_eq!(reach.teams().len(), 1);
         assert_eq!(reach.grants().len(), 1);
     }
+
+    /// Spec D5 — `list` is scoped in SQL by the same authority `authorize` resolves. The teamless
+    /// row is the one that matters: it must be invisible to a team owner, not fall open.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn list_is_scoped_to_owned_teams(pool: PgPool) {
+        use crate::services::machine_client_service;
+
+        let gating = configure_gating_team(&pool).await;
+        let admin = mk_profile(&pool, "list-admin").await;
+        join(&pool, gating, admin, "owner").await;
+
+        let alice = mk_profile(&pool, "list-alice").await;
+        let alice_team = mk_team(&pool, "list-alice-team").await;
+        join(&pool, alice_team, alice, "owner").await;
+
+        let other_team = mk_team(&pool, "list-other-team").await;
+
+        // Three rows: one owned by Alice's team, one by another team, one teamless.
+        for (client_id, team) in [
+            ("list-mine", Some(alice_team)),
+            ("list-theirs", Some(other_team)),
+            ("list-teamless", None),
+        ] {
+            let agent = mk_profile(&pool, client_id).await;
+            sqlx::query(
+                "INSERT INTO kb_machine_clients
+                     (client_id, issuer, label, profile_id, team_id, registered_by_profile_id)
+                 VALUES ($1, 'temper', $1, $2, $3, $4)",
+            )
+            .bind(client_id)
+            .bind(agent)
+            .bind(team)
+            .bind(admin)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let mine = machine_client_service::list(&pool, ProfileId::from(alice), false)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = mine.iter().map(|c| c.client_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["list-mine"],
+            "a team owner sees only their team's machines"
+        );
+
+        let all = machine_client_service::list(&pool, ProfileId::from(admin), false)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3, "an admin sees every row, including teamless");
+    }
 }

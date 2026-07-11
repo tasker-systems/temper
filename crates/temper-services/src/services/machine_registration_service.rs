@@ -4,9 +4,11 @@
 //! emitter entities, its gating-team membership, its explicit reach, and the
 //! `kb_machine_clients` row — all in ONE transaction, ahead of the machine's first call.
 //!
-//! Authorization is the caller's job. Handlers gate on `is_system_admin` before calling
-//! (auth before writes); these functions record the authorized caller as
-//! `registered_by_profile_id`.
+//! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
+//! caller's authority through [`machine_authz`] before opening the transaction, so a rejected
+//! registration leaves the database completely unchanged. They record the authorized caller as
+//! `registered_by_profile_id`. `rebind` authorizes the same way, but keyed on the EXISTING row's
+//! owning team (B2 D5) — it never moves a machine between teams.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -16,6 +18,7 @@ use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, Rebind
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{insert_grant, InsertGrantParams};
+use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
 
@@ -54,14 +57,22 @@ async fn enroll_in_gating_team(conn: &mut sqlx::PgConnection, profile_id: Uuid) 
 
 /// Apply the explicit reach: team memberships and cogmap grants. Reach is plural and
 /// never inferred from `owner_team_id` (D10, D6).
+///
+/// Takes an [`AuthorizedReach`] — which only `machine_authz` can construct — so reach can
+/// never be applied without having been authorized against the caller's own authority
+/// (spec D3).
+///
+/// The raw `insert_grant` / raw team INSERT below remain deliberately unchecked: for a system
+/// admin that is Phase A's D5 bypass, and for a team owner `machine_authz::contain_reach` has
+/// already proven the reach is a subset of what the caller could confer on a human. The
+/// authorization is in the TYPE now, not in a comment asking you not to widen this.
 async fn apply_reach(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     profile_id: Uuid,
-    teams: &[temper_core::types::machine::TeamSpec],
-    grants: &[temper_core::types::machine::GrantSpec],
+    reach: AuthorizedReach<'_>,
 ) -> ApiResult<()> {
-    for team in teams {
+    for team in reach.teams() {
         sqlx::query!(
             r#"INSERT INTO kb_team_members (team_id, profile_id, role)
                VALUES ($1, $2, $3::text::team_role)
@@ -74,12 +85,7 @@ async fn apply_reach(
         .await?;
     }
 
-    for grant in grants {
-        // Deliberately uses the low-level `insert_grant`, NOT `grant_capability`: the sole
-        // authorization here is the handler's `is_system_admin` gate (D5/D12 — Phase A
-        // registration is system-admin-only). A system admin may grant a machine write on
-        // any cogmap, so the per-subject `can_administer_grant` check is intentionally not
-        // applied. Do not "tighten" this to `grant_capability` without revisiting D5.
+    for grant in reach.grants() {
         insert_grant(
             &mut *conn,
             &InsertGrantParams {
@@ -145,14 +151,26 @@ pub async fn provision(
     caller: ProfileId,
     req: &ProvisionMachineRequest,
 ) -> ApiResult<MachineClient> {
+    // Auth before writes: a rejected registration must leave the DB completely unchanged —
+    // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
+    // what makes that assertable.
+    let reach = machine_authz::authorize_registration(
+        pool,
+        caller,
+        req.owner_team_id,
+        &req.teams,
+        &req.grants,
+    )
+    .await?;
+
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
-    // Auth before writes is the handler's job; this is the friendly-conflict check. It is
-    // NOT the race guard — two concurrent provisions both pass it. The unique constraints
-    // are the guard, and `map_duplicate` turns either one into a 409 naming the client id.
+    // The friendly-conflict check. It is NOT the race guard — two concurrent provisions both
+    // pass it. The unique constraints are the guard, and `map_duplicate` turns either one into
+    // a 409 naming the client id.
     if machine_client_service::lookup_by_client_id(pool, &req.client_id)
         .await?
         .is_some()
@@ -170,7 +188,7 @@ pub async fn provision(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
+    apply_reach(&mut tx, caller, profile_id, reach).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -203,6 +221,17 @@ pub async fn issue(
     caller: ProfileId,
     req: &temper_core::types::machine::IssueMachineRequest,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    // Auth before writes — same reasoning as `provision`: nothing is minted, and no profile
+    // is created, unless the caller may confer this reach.
+    let reach = machine_authz::authorize_registration(
+        pool,
+        caller,
+        req.owner_team_id,
+        &req.teams,
+        &req.grants,
+    )
+    .await?;
+
     let client_id = crate::auth::secret::mint_client_id();
     let secret = crate::auth::secret::mint_secret();
 
@@ -217,7 +246,7 @@ pub async fn issue(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
+    apply_reach(&mut tx, caller, profile_id, reach).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -258,6 +287,11 @@ pub async fn rebind(
     req: &RebindMachineRequest,
 ) -> ApiResult<MachineClient> {
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
+
+    // Auth before writes, keyed on the row being rebound (B2 D5). `rebind` copies `old.team_id`
+    // onto the new row, so the machine never changes hands — authorizing against the old row is
+    // authorizing against the new one.
+    machine_authz::authorize(pool, caller, old.team_id).await?;
 
     let mut tx = pool
         .begin()
@@ -324,6 +358,16 @@ mod tests {
 
     use crate::services::machine_registration_service as svc;
 
+    /// Seed a caller who is genuinely a system admin.
+    ///
+    /// B2 D3 moved authorization out of the handler and into `provision`/`issue`, so these
+    /// tests can no longer stand in a bare profile and rely on an upstream gate: the service
+    /// itself now resolves the caller's authority. `is_system_admin` IS ownership of the
+    /// gating team, so being an admin means being seeded as one — configure the gating team
+    /// and join this profile to it as `owner`.
+    ///
+    /// The `temper-system` root team already exists in a migrated database (the L0 kernel
+    /// migration creates it), so the team write is an upsert, not an insert.
     async fn seed_admin(pool: &PgPool) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -334,6 +378,32 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed admin");
+
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') \
+             ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name \
+             RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("gating team");
+
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(pool)
+            .await
+            .expect("configure gating team");
+
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'owner'::team_role) \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+            team,
+            id,
+        )
+        .execute(pool)
+        .await
+        .expect("join gating team as owner");
+
         ProfileId::from(id)
     }
 

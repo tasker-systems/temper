@@ -1,7 +1,9 @@
 //! Persistence for `kb_machine_clients` — the machine-principal allowlist.
 //!
 //! Read path (`lookup_by_client_id`, `touch_last_seen`) is on the authentication
-//! hot path for every machine call. Write paths are admin-driven and rare.
+//! hot path for every machine call. Write paths are operator-driven and rare, and they
+//! authorize through [`machine_authz`] against the *existing row's* owning team (B2 D5):
+//! a system admin, or the owner of the team that owns the machine.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -10,6 +12,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::MachineClient;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::machine_authz;
 
 /// The authentication-path lookup. `None` ⇒ unregistered. A revoked row still
 /// resolves here; the caller distinguishes (the gate needs the timestamp to
@@ -63,17 +66,52 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<MachineClient> {
     .ok_or(ApiError::NotFound)
 }
 
-/// Enumerate registered clients, newest first. Revoked rows are hidden unless asked for.
-pub async fn list(pool: &PgPool, include_revoked: bool) -> ApiResult<Vec<MachineClient>> {
+/// [`get`], authorized for a surface caller (B2 D5). [`get`] itself stays unauthorized: it is the
+/// internal primitive the authentication path and the post-insert readbacks use, and gating it
+/// would break them.
+pub async fn get_for_caller(
+    pool: &PgPool,
+    caller: ProfileId,
+    id: Uuid,
+) -> ApiResult<MachineClient> {
+    let client = get(pool, id).await?;
+    machine_authz::authorize(pool, caller, client.team_id).await?;
+    Ok(client)
+}
+
+/// List machine clients visible to `caller` (B2 D5), newest first. Revoked rows are hidden
+/// unless asked for. A system admin sees every row, including teamless ones; a team owner sees
+/// only machines owned by a team they own.
+///
+/// `EXISTS`, not `array_agg` — an empty scope must DENY, and an aggregate over an empty scope
+/// yields NULL, which falls open.
+pub async fn list(
+    pool: &PgPool,
+    caller: ProfileId,
+    include_revoked: bool,
+) -> ApiResult<Vec<MachineClient>> {
+    let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
+
     let rows = sqlx::query_as!(
         MachineClient,
         r#"SELECT id, client_id, issuer, label, profile_id, team_id,
                   registered_by_profile_id, created, last_seen_at,
                   revoked_at, revoked_by_profile_id
-             FROM kb_machine_clients
-            WHERE $1 OR revoked_at IS NULL
+             FROM kb_machine_clients mc
+            WHERE ($1 OR mc.revoked_at IS NULL)
+              AND ( $2
+                    OR ( mc.team_id IS NOT NULL
+                         AND EXISTS (
+                             SELECT 1
+                               FROM kb_team_members tm
+                              WHERE tm.team_id = mc.team_id
+                                AND tm.profile_id = $3
+                                AND tm.role = 'owner'
+                         ) ) )
             ORDER BY created DESC"#,
         include_revoked,
+        is_admin,
+        *caller,
     )
     .fetch_all(pool)
     .await?;
@@ -84,6 +122,10 @@ pub async fn list(pool: &PgPool, include_revoked: bool) -> ApiResult<Vec<Machine
 /// already-revoked row is a no-op that returns the existing row (the first revoker and
 /// first timestamp are the truth). Grants and memberships are deliberately untouched (D11).
 pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<MachineClient> {
+    // Auth before writes, keyed on the existing row's owning team (B2 D5).
+    let existing = get(pool, id).await?;
+    machine_authz::authorize(pool, revoker, existing.team_id).await?;
+
     sqlx::query!(
         r#"UPDATE kb_machine_clients
               SET revoked_at = now(), revoked_by_profile_id = $2
@@ -107,9 +149,15 @@ const MAX_ROTATION_GRACE_SECONDS: i64 = 7 * 24 * 3_600;
 /// window outside `[0, MAX_ROTATION_GRACE_SECONDS]`.
 pub async fn rotate_secret(
     pool: &PgPool,
+    caller: ProfileId,
     id: Uuid,
     grace_seconds: i64,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
+    // transaction, so a rejected rotation never touches the row.
+    let existing = get(pool, id).await?;
+    machine_authz::authorize(pool, caller, existing.team_id).await?;
+
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
             "grace_seconds must be between 0 and {MAX_ROTATION_GRACE_SECONDS} (7 days); got {grace_seconds}"
@@ -180,6 +228,53 @@ mod tests {
 
     const BACKFILL: &str =
         include_str!("../../../../migrations/20260711000011_backfill_machine_clients.sql");
+
+    /// Seed a caller who is genuinely a system admin.
+    ///
+    /// B2 D5 authorizes the lifecycle inside the service against the row's owning team, and the
+    /// rows these tests seed are teamless — which is admin-only (D2). So the caller can no longer
+    /// be a bare profile: `is_system_admin` IS ownership of the gating team, so seed it that way.
+    /// The `temper-system` team already exists in a migrated database (the L0 kernel migration
+    /// creates it), hence the upsert.
+    async fn seed_admin(pool: &PgPool, handle: &str) -> ProfileId {
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, $2, $2, NULL, '{}')",
+            id,
+            handle,
+        )
+        .execute(pool)
+        .await
+        .expect("seed admin profile");
+
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') \
+             ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name \
+             RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("gating team");
+
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+            .execute(pool)
+            .await
+            .expect("configure gating team");
+
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'owner'::team_role) \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+            team,
+            id,
+        )
+        .execute(pool)
+        .await
+        .expect("join gating team as owner");
+
+        ProfileId::from(id)
+    }
 
     /// Seed a profile plus an `auth0-m2m` auth link, as prod carries for the steward.
     async fn seed_agent_link(pool: &PgPool, client_id: &str) -> Uuid {
@@ -328,9 +423,12 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rotate_secret_moves_current_to_previous_with_expiry(pool: PgPool) {
+        let admin = seed_admin(&pool, "rot-admin").await;
         let id = seed_temper_issued(&pool, "tmpr_rot", "old-secret").await;
 
-        let cred = svc::rotate_secret(&pool, id, 3600).await.expect("rotate");
+        let cred = svc::rotate_secret(&pool, admin, id, 3600)
+            .await
+            .expect("rotate");
 
         // A fresh plaintext is returned and its hash is the new current.
         let row = sqlx::query!(
@@ -366,10 +464,11 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rotate_secret_rejects_out_of_range_grace(pool: PgPool) {
+        let admin = seed_admin(&pool, "grace-admin").await;
         let id = seed_temper_issued(&pool, "tmpr_grace", "s").await;
         assert!(
             matches!(
-                svc::rotate_secret(&pool, id, -1)
+                svc::rotate_secret(&pool, admin, id, -1)
                     .await
                     .expect_err("negative grace"),
                 crate::error::ApiError::BadRequest(_)
@@ -378,7 +477,7 @@ mod tests {
         );
         assert!(
             matches!(
-                svc::rotate_secret(&pool, id, 999_999_999)
+                svc::rotate_secret(&pool, admin, id, 999_999_999)
                     .await
                     .expect_err("excessive grace"),
                 crate::error::ApiError::BadRequest(_)
@@ -389,10 +488,11 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rotate_secret_rejects_a_non_temper_issued_client(pool: PgPool) {
+        let admin = seed_admin(&pool, "issuer-admin").await;
         // A plain auth0-m2m registration (issuer default), no secret.
         let id = seed_registered(&pool, "auth0-client").await;
 
-        let err = svc::rotate_secret(&pool, id, 3600)
+        let err = svc::rotate_secret(&pool, admin, id, 3600)
             .await
             .expect_err("must reject");
         assert!(
@@ -404,18 +504,16 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn revoke_marks_dead_and_list_hides_by_default(pool: PgPool) {
         let id = seed_registered(&pool, "doomed").await;
-        let admin = seed_agent_link(&pool, "admin-actor").await;
+        let admin = seed_admin(&pool, "admin-actor").await;
 
-        let revoked = svc::revoke(&pool, id, ProfileId::from(admin))
-            .await
-            .expect("revoke");
+        let revoked = svc::revoke(&pool, id, admin).await.expect("revoke");
         assert!(revoked.revoked_at.is_some());
-        assert_eq!(revoked.revoked_by_profile_id, Some(admin));
+        assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
 
-        let active = svc::list(&pool, false).await.expect("list active");
+        let active = svc::list(&pool, admin, false).await.expect("list active");
         assert!(active.iter().all(|c| c.client_id != "doomed"));
 
-        let all = svc::list(&pool, true).await.expect("list all");
+        let all = svc::list(&pool, admin, true).await.expect("list all");
         assert!(all.iter().any(|c| c.client_id == "doomed"));
     }
 }
