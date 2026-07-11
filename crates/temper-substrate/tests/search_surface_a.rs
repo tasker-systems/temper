@@ -318,6 +318,107 @@ async fn vector_candidates_best_per_resource_normalized(pool: sqlx::PgPool) {
     );
 }
 
+/// The scope-aware 5-arg form (issue #358). `None`/`None` is the global path (== the 3-arg call
+/// via defaults); a `Some` context or scope routes through the exact within-scope branch.
+async fn vector_candidates_scoped(
+    pool: &sqlx::PgPool,
+    principal: Uuid,
+    emb: &[f32],
+    k: i32,
+    context_id: Option<ContextId>,
+    scope_ids: Option<&[Uuid]>,
+) -> Vec<(Uuid, f32)> {
+    use sqlx::Row;
+    sqlx::query(
+        "SELECT resource_id, vec_norm FROM search_vector_candidates($1, $2::vector, $3, $4, $5)",
+    )
+    .bind(principal)
+    .bind(vlit(emb))
+    .bind(k)
+    .bind(context_id)
+    .bind(scope_ids)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("vec_norm")))
+    .collect()
+}
+
+/// Issue #358: the global top-k ANN starves a context whose chunks aren't globally nearest, so a
+/// context-scoped search loses its vector arm. Scoping the ANN by context/scope recovers those
+/// candidates — perfect recall within scope, independent of the global k. `k = 1` is the sharpest
+/// form of the production `k = 100` starvation: the globally-nearest resource lives in another
+/// context, so the global top-1 excludes the target the scoped caller actually wants.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn vector_candidates_scope_beats_global_topk_starvation(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let query = unit(0);
+
+    // Target context: one resource, embedding FAR from the query (unit(5)) — never globally top-1.
+    let target_ctx = ctx(&pool, owner, "target").await;
+    let target = mk_embedded(
+        &pool,
+        target_ctx,
+        owner,
+        emitter,
+        "target",
+        "temper://t/target",
+        unit(5),
+    )
+    .await;
+
+    // Noise context: a resource whose embedding IS the query — globally nearest, wins any global top-k.
+    let noise_ctx = ctx(&pool, owner, "noise").await;
+    let noise = mk_embedded(
+        &pool,
+        noise_ctx,
+        owner,
+        emitter,
+        "noise",
+        "temper://t/noise",
+        unit(0),
+    )
+    .await;
+
+    // Global k=1 STARVES the target: only the globally-nearest (noise) survives (the #358 bug).
+    let global = vector_candidates(&pool, owner.uuid(), &query, 1).await;
+    assert!(
+        global.iter().any(|(id, _)| *id == noise.uuid()),
+        "global top-1 is the noise resource"
+    );
+    assert!(
+        !global.iter().any(|(id, _)| *id == target.uuid()),
+        "global top-1 starves the target context — the #358 bug this test pins"
+    );
+
+    // Scoped by context: same k=1, target recovered because the ANN is bounded to its context.
+    let by_context =
+        vector_candidates_scoped(&pool, owner.uuid(), &query, 1, Some(target_ctx), None).await;
+    assert!(
+        by_context.iter().any(|(id, _)| *id == target.uuid()),
+        "#358: context-scoped ANN returns the in-context resource despite the global top-k"
+    );
+    assert!(
+        !by_context.iter().any(|(id, _)| *id == noise.uuid()),
+        "context scoping excludes the other context's resource"
+    );
+
+    // Scoped by explicit resource-id allowlist: same recovery via p_scope_ids.
+    let by_scope =
+        vector_candidates_scoped(&pool, owner.uuid(), &query, 1, None, Some(&[target.uuid()]))
+            .await;
+    assert!(
+        by_scope.iter().any(|(id, _)| *id == target.uuid()),
+        "#358: scope-id-bounded ANN returns the allowlisted resource despite the global top-k"
+    );
+    assert!(
+        !by_scope.iter().any(|(id, _)| *id == noise.uuid()),
+        "scope-id allowlist excludes the non-listed resource"
+    );
+}
+
 /// The vector CTE MUST use idx_kb_chunks_embedding (the whole point of the over-fetch shape).
 /// EXPLAIN the inner ANN query and assert an Index Scan on the HNSW index — guards against silently
 /// sliding back to a seq-scan blend.
