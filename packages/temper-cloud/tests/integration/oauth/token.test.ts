@@ -146,7 +146,9 @@ describe("handleToken", () => {
   });
 
   it("rejects an unsupported grant_type", async () => {
-    const res = await handleToken(tokenRequest({ grant_type: "client_credentials" }), db);
+    // `password` is genuinely unsupported. (Not `client_credentials` — that grant is now
+    // implemented; with no credentials it returns `invalid_request`, not `unsupported_grant_type`.)
+    const res = await handleToken(tokenRequest({ grant_type: "password" }), db);
     expect(res.status).toBe(400);
     expect((await res.json()) as TokenErrorBody).toEqual({ error: "unsupported_grant_type" });
   });
