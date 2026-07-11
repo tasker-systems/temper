@@ -172,6 +172,14 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/machine-clients/{id}/rebind",
             post(handlers::machine_clients::rebind),
         )
+        .route(
+            "/api/machine-clients/issue",
+            post(handlers::machine_clients::issue),
+        )
+        .route(
+            "/api/machine-clients/{id}/rotate-secret",
+            post(handlers::machine_clients::rotate_secret),
+        )
 }
 
 /// Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.
