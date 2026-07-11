@@ -635,6 +635,55 @@ mod tests {
     }
 
     #[test]
+    fn open_meta_schema_recognized_key_set_is_pinned() {
+        // A hand-authored-schema "snapshot": pin the exact recognized-key set and the FTS-indexed
+        // subset, so a stray add/remove or a lost FTS-indexed marker trips this test instead of
+        // silently changing the convention. The migrations (v1/v2) and this schema must agree.
+        let schema = open_meta_schema_value().expect("schema compiles");
+        let props = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("open_meta schema has properties");
+
+        let mut recognized: Vec<&str> = props.keys().map(String::as_str).collect();
+        recognized.sort_unstable();
+        assert_eq!(
+            recognized,
+            [
+                "date",
+                "depends_on",
+                "derived_from",
+                "descriptor",
+                "keywords",
+                "preceded_by",
+                "references",
+                "relates_to",
+                "tags",
+            ],
+            "recognized open_meta key set drifted — update the schema, the docs, and this pin together"
+        );
+
+        // The FTS-indexed keys are exactly keywords/tags/descriptor (each description says so). This is
+        // the classification the migrations enforce; keep them in lockstep.
+        let indexed: Vec<&str> = props
+            .iter()
+            .filter(|(_, v)| {
+                v.get("description")
+                    .and_then(|d| d.as_str())
+                    .is_some_and(|d| d.contains("FTS-indexed at weight"))
+            })
+            .map(|(k, _)| k.as_str())
+            .collect();
+        let mut indexed_sorted = indexed;
+        indexed_sorted.sort_unstable();
+        assert_eq!(
+            indexed_sorted,
+            ["descriptor", "keywords", "tags"],
+            "the FTS-indexed key set drifted from keywords/tags/descriptor"
+        );
+    }
+
+    #[test]
     fn describe_open_meta_surfaces_schema_and_discouraged_keys() {
         let conv = describe_open_meta().expect("schema compiles");
         // The schema is self-describing: recognized keys with descriptions.
