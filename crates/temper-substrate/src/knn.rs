@@ -1,10 +1,25 @@
 //! The sparse exact-kNN affinity graph — the context regime's primary signal (spec §3.1).
 //!
 //! Cosine is DENSE: every pair of resources has a nonzero similarity. Dropping a raw cosine into
-//! [`crate::affinity::affinity`] would make the affinity graph COMPLETE — `connected_components`
-//! returns one blob, the pre-pass that makes agglomeration tractable stops doing anything, and cost
-//! goes Θ(n²) in the agglomerator too. So the embedding term contributes a *sparsified* graph: each
-//! node's top-k neighbours above a similarity floor, and nothing else.
+//! [`crate::affinity::affinity`] would make the affinity graph COMPLETE, and agglomeration would
+//! enumerate Θ(n²) affinity edges. So the embedding term contributes a *sparsified* graph: each
+//! node's top-k neighbours above a similarity floor, and nothing else — Θ(n·k) retained pairs
+//! (measured: 9,838 pairs at n=1,012 / k=12, against 511,566 possible).
+//!
+//! ## What sparsity does NOT buy: component decomposition
+//!
+//! Be precise about this, because an earlier draft of this comment was wrong. A k-NN graph is
+//! CONNECTED — mutual-OR symmetrization only adds edges — so `connected_components` returns **one
+//! component** over a context, not many. (Measured: 23 nodes / 174 pairs ⇒ 1 component of 23.)
+//! Sparsity bounds the agglomerator's *edge enumeration*; it does not restore the component pre-pass,
+//! which is effectively INERT in the context regime.
+//!
+//! That has a live consequence for [`crate::write::incremental_materialize`], which is
+//! component-scoped: with a single component, any content edit anywhere in the context busts that
+//! component and re-mints every region in it (new ids), even when membership is unchanged. Correct,
+//! but maximally coarse. No production path materializes a context yet (`db_backend` hardcodes
+//! `HomeAnchor::Cogmap`), so this is a T5/T7 problem, and it is tracked — do not build context
+//! materialization on top of this without addressing it.
 //!
 //! Computed EXACTLY, never via HNSW. Two reasons, and the second is the binding one:
 //!   1. A scoped corpus is small enough to scan (the same reasoning as the #358 scoped-search fix).
@@ -60,7 +75,7 @@ impl KnnGraph {
             .filter(|((a, b), _)| a < b)
             .map(|((a, b), s)| (*a, *b, *s))
             .collect();
-        out.sort_by(|x, y| (x.0, x.1).cmp(&(y.0, y.1)));
+        out.sort_by_key(|p| (p.0, p.1));
         out
     }
 
@@ -103,6 +118,13 @@ fn dot(a: &[f32], b: &[f32]) -> f64 {
 
 /// L2-normalize, or `None` for a zero vector (no direction ⇒ no meaningful cosine ⇒ excluded from
 /// the graph entirely rather than silently scoring 0.0 against everything).
+///
+/// **This is also what keeps the top-k comparator in [`build`] a total order.** A NaN or ±Inf
+/// component makes the L2 norm non-finite, so the vector is dropped HERE and can never reach `dot`.
+/// That matters: the comparator falls back to `Ordering::Equal` on an incomparable pair, which would
+/// be intransitive under NaN (NaN reads Equal against both 0.5 and 0.9, while 0.5 < 0.9), and Rust's
+/// sort is documented as *may panic* on a non-total comparator. The guarantee lives in this function,
+/// not in the comparator — if you ever relax the `is_finite` check, the sort becomes unsound.
 fn normalize(v: &[f32]) -> Option<Vec<f32>> {
     let norm: f64 = v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
     if norm == 0.0 || !norm.is_finite() {
@@ -136,13 +158,20 @@ pub fn build(embeddings: &HashMap<ResourceId, Vec<f32>>, k: usize, floor: f64) -
         .filter_map(|id| normalize(&embeddings[&id]).map(|v| (id, v)))
         .collect();
 
-    // Upper triangle only — cosine is symmetric, so each pair is scored ONCE and offered to both
-    // endpoints' candidate lists.
+    // Upper triangle only — cosine is symmetric, so each pair is scored ONCE and offered to BOTH
+    // endpoints' candidate lists. Node i's list is therefore filled from its own row (j > i) *and*
+    // from every earlier row (i' < i, at j == i): no node gets a truncated candidate set.
     let mut cands: Vec<Vec<(ResourceId, f64)>> = vec![Vec::new(); unit.len()];
     for i in 0..unit.len() {
         for j in (i + 1)..unit.len() {
             let s = dot(&unit[i].1, &unit[j].1);
-            if s >= floor {
+            // `s > 0.0` is not redundant with the floor: `-0.0 >= 0.0` is TRUE in IEEE-754, so a
+            // floor of 0.0 or below would otherwise retain an exactly-antipodal-or-orthogonal pair at
+            // sim -0.0. That pair contributes `w_cos * -0.0` = -0.0 affinity, which `agglomerate` and
+            // `connected_components` both read as UNBOUND (`aff != 0.0` is false for -0.0) — so it
+            // would sit in the graph, and in the fingerprint, while binding nothing. A similarity of
+            // zero is not a neighbour; say so once, here.
+            if s > 0.0 && s >= floor {
                 cands[i].push((unit[j].0, s));
                 cands[j].push((unit[i].0, s));
             }
@@ -203,25 +232,36 @@ mod tests {
     }
 
     #[test]
-    fn k_bounds_the_neighbour_count() {
-        // 5 mutually-similar nodes, k=2 => each node SELECTS at most 2, but OR-symmetrization means
-        // it may also be selected BY others, so degree is bounded by ~2k, not k.
-        let ids: Vec<ResourceId> = (1..=5).map(rid).collect();
+    fn k_bounds_the_retained_pair_count_not_the_degree() {
+        // THE HONEST SPARSITY INVARIANT. Each node SELECTS at most k neighbours, so the graph holds at
+        // most n·k undirected pairs — that Θ(n·k) bound, against Θ(n²) for a dense cosine, is the whole
+        // reason the term is sparsified, and it is what bounds the agglomerator's edge enumeration.
+        //
+        // What is NOT true (an earlier version of this test implied it): that any individual node's
+        // DEGREE is bounded by ~2k. Under mutual-OR a popular node is selected by arbitrarily many
+        // others — that is the hub property `a_hub_keeps_all_its_spokes` exists to protect — so degree
+        // is bounded only by n-1. Measured at n=1,012 / k=12: max degree 232.
+        const N: usize = 40;
+        const K: usize = 3;
+        let ids: Vec<ResourceId> = (1..=(N as u128)).map(rid).collect();
         let embs: HashMap<_, _> = ids
             .iter()
             .enumerate()
-            .map(|(i, &id)| (id, vec![1.0, i as f32 * 0.01]))
+            .map(|(i, &id)| (id, vec![(i as f32).sin(), (i as f32).cos(), 1.0]))
             .collect();
-        let g = build(&embs, 2, 0.0);
-        for &id in &ids {
-            assert!(
-                g.neighbours(id).len() <= 4,
-                "symmetrized degree stays bounded by ~2k, not the full n-1"
-            );
-        }
-        // Sparsity is the POINT: a complete graph on 5 nodes would give every node degree 4.
-        let total: usize = ids.iter().map(|&i| g.neighbours(i).len()).sum();
-        assert!(total < 5 * 4, "the graph must be sparser than complete");
+        let g = build(&embs, K, 0.0);
+
+        let pairs = g.pairs().len();
+        assert!(
+            pairs <= N * K,
+            "at most n·k retained pairs: got {pairs} > {}",
+            N * K
+        );
+        let complete = N * (N - 1) / 2;
+        assert!(
+            pairs < complete,
+            "the graph must be strictly sparser than complete ({pairs} vs {complete})"
+        );
     }
 
     #[test]

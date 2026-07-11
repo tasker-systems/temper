@@ -19,18 +19,34 @@
 -- pre-kernel `lens_created` events are immortal and carry no `weights.cos`). Defaults here mirror
 -- both the column defaults and the serde defaults on `payloads::LensCreated` — one value, declared in
 -- three places that must agree.
+--
+-- T2 added TWO groups of columns to kb_cogmap_lenses, and this function was missing BOTH. The second
+-- is the anchor pair (home_anchor_table, home_anchor_id), which is projected here for the first time.
+-- Left NULL it would be a real, if latent, bug: `substrate::load` resolves a lens with
+--   WHERE name=$3 AND (home_anchor_table IS NULL OR (home_anchor_table=$1 AND home_anchor_id=$2))
+-- so a NULL anchor reads as GLOBAL. A lens scoped to cogmap A would silently become loadable by
+-- cogmap B and by every context — and replaying its lens_created event would diverge from the row T2's
+-- backfill anchored. Derived from cogmap_id (the same rule `lens_create` uses for the event's own
+-- producing anchor), so a global lens stays global and a per-cogmap lens is scoped to its map.
+--
+-- NOTE: a CONTEXT-anchored lens cannot be expressed through this path — `payloads::LensCreated`
+-- carries no anchor field, only `cogmap_id`. Nothing needs one yet (workflow-default is global). When
+-- something does, the payload gains an anchor and this CASE becomes a straight read.
 CREATE OR REPLACE FUNCTION _project_lens_created(p_event uuid, p_payload jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_lens uuid := (p_payload->>'lens_id')::uuid;
+        v_cogmap uuid := (p_payload->>'cogmap_id')::uuid;   -- NULL for a global lens
         v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
 BEGIN
     INSERT INTO kb_cogmap_lenses
-        (id, cogmap_id, name, selection_kind,
+        (id, cogmap_id, home_anchor_table, home_anchor_id, name, selection_kind,
          w_express, w_contains, w_leads_to, w_near, w_prop,
          w_cos, knn_k, cos_floor,
          s_telos, s_ref, s_central, resolution, asserted_by_event_id, created)
     VALUES (v_lens,
-            (p_payload->>'cogmap_id')::uuid,             -- NULL for a global lens
+            v_cogmap,
+            CASE WHEN v_cogmap IS NULL THEN NULL ELSE 'kb_cogmaps' END,
+            v_cogmap,
             p_payload->>'name', p_payload->>'selection_kind',
             (p_payload#>>'{weights,express}')::double precision,
             (p_payload#>>'{weights,contains}')::double precision,
@@ -68,7 +84,11 @@ $$;
 DO $$
 DECLARE v_system uuid;
 BEGIN
-    IF EXISTS (SELECT 1 FROM kb_cogmap_lenses WHERE name = 'workflow-default') THEN
+    -- `cogmap_id IS NULL` is load-bearing: the guard must look for the GLOBAL workflow-default. A
+    -- per-cogmap lens that merely shares the name must not suppress the global seed.
+    IF EXISTS (
+        SELECT 1 FROM kb_cogmap_lenses WHERE name = 'workflow-default' AND cogmap_id IS NULL
+    ) THEN
         RETURN;
     END IF;
 
