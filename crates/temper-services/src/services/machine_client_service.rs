@@ -96,6 +96,50 @@ pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Ma
     get(pool, id).await
 }
 
+/// Rotate a temper-issued secret (Phase B1, D6). Moves the current secret to `previous` with a
+/// grace window, installs a fresh current, and returns the new plaintext once. Rejects a client
+/// that temper did not issue (its secret lives at its IdP) or one already revoked.
+pub async fn rotate_secret(
+    pool: &PgPool,
+    id: Uuid,
+    grace_seconds: i64,
+) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    let existing = get(pool, id).await?;
+    if existing.issuer != "temper" {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' was not issued by temper (issuer '{}'); its secret is managed by its IdP",
+            existing.client_id, existing.issuer
+        )));
+    }
+    if existing.revoked_at.is_some() {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' is revoked; issue a new credential instead",
+            existing.client_id
+        )));
+    }
+
+    let secret = crate::auth::secret::mint_secret();
+    sqlx::query!(
+        r#"UPDATE kb_machine_clients
+              SET secret_hash_previous       = secret_hash,
+                  secret_previous_expires_at = now() + make_interval(secs => $2),
+                  secret_hash                = $3,
+                  secret_rotated_at          = now()
+            WHERE id = $1"#,
+        id,
+        grace_seconds as f64,
+        secret.hash,
+    )
+    .execute(pool)
+    .await?;
+
+    let client = get(pool, id).await?;
+    Ok(temper_core::types::machine::IssuedMachineCredential {
+        client,
+        client_secret: secret.plaintext,
+    })
+}
+
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use sqlx::PgPool;
@@ -231,6 +275,71 @@ mod tests {
         .await
         .expect("age row");
         assert!(svc::touch_last_seen(&pool, id).await.expect("touch 3"));
+    }
+
+    /// Seed a temper-issued client with a known secret hash. Returns the machine_client id.
+    async fn seed_temper_issued(pool: &PgPool, client_id: &str, secret: &str) -> Uuid {
+        let profile_id = seed_agent_link(pool, client_id).await;
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients \
+               (id, client_id, issuer, label, profile_id, registered_by_profile_id, secret_hash) \
+             VALUES ($1, $2, 'temper', 'test', $3, $3, $4)",
+            id,
+            client_id,
+            profile_id,
+            crate::auth::secret::sha256_hex(secret),
+        )
+        .execute(pool)
+        .await
+        .expect("seed temper-issued");
+        id
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rotate_secret_moves_current_to_previous_with_expiry(pool: PgPool) {
+        let id = seed_temper_issued(&pool, "tmpr_rot", "old-secret").await;
+
+        let cred = svc::rotate_secret(&pool, id, 3600).await.expect("rotate");
+
+        // A fresh plaintext is returned and its hash is the new current.
+        let row = sqlx::query!(
+            "SELECT secret_hash, secret_hash_previous, secret_previous_expires_at, secret_rotated_at \
+               FROM kb_machine_clients WHERE id = $1",
+            id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+        assert_eq!(
+            row.secret_hash.as_deref(),
+            Some(crate::auth::secret::sha256_hex(&cred.client_secret).as_str()),
+            "current is the new secret"
+        );
+        assert_eq!(
+            row.secret_hash_previous.as_deref(),
+            Some(crate::auth::secret::sha256_hex("old-secret").as_str()),
+            "previous is the old secret"
+        );
+        assert!(
+            row.secret_previous_expires_at.is_some(),
+            "previous has a grace expiry"
+        );
+        assert!(row.secret_rotated_at.is_some(), "rotation is stamped");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn rotate_secret_rejects_a_non_temper_issued_client(pool: PgPool) {
+        // A plain auth0-m2m registration (issuer default), no secret.
+        let id = seed_registered(&pool, "auth0-client").await;
+
+        let err = svc::rotate_secret(&pool, id, 3600)
+            .await
+            .expect_err("must reject");
+        assert!(
+            matches!(err, crate::error::ApiError::BadRequest(_)),
+            "auth0-m2m secrets are managed by the IdP, not temper; got {err:?}"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
