@@ -82,7 +82,7 @@ next rebuild.
 
 The convention is versioned by migration — the migration *is* the schema version. v1 (`keywords`@C,
 `descriptor`@D) was introduced by `migrations/20260711000040_index_open_meta_into_fts.sql`; v2 (`tags`@C)
-by `migrations/20260711000050_index_open_meta_tags_into_fts.sql`. Adding or reweighting a field is a new
+by `migrations/20260711000060_index_open_meta_tags_into_fts.sql`. Adding or reweighting a field is a new
 additive migration that `CREATE OR REPLACE`s `_rebuild_resource_search_vector`, extends the
 `_project_property_set` rebuild gate, and backfills the affected resources; it bumps this convention to
 the next version. Do not edit an introducing migration in place (shipped migrations are

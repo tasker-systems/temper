@@ -167,7 +167,7 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
 }
 
 /// open_meta convention v2: a term present ONLY in `tags` (not title or body) is still findable,
-/// because tags fold into the FTS vector at weight C (migration 20260711000050). This is the ranking
+/// because tags fold into the FTS vector at weight C (migration 20260711000060). This is the ranking
 /// win #359 aimed for, made reachable by the key the corpus actually uses.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn fts_finds_by_open_meta_tags(pool: sqlx::PgPool) {
