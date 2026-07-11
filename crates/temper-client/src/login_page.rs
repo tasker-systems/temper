@@ -161,7 +161,7 @@ pub fn failure(error: &str, description: &str) -> String {
     };
     let body = format!(
         "<p class=\"body\">Something interrupted the sign-in. Return to your terminal and run \
-         <code>temper login</code> to try again.</p>\
+         <code>temper auth login</code> to try again.</p>\
          <p class=\"detail\">{detail}</p>"
     );
     render("Temper CLI", "Authentication <em>interrupted</em>.", &body)
