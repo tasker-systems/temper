@@ -23,6 +23,21 @@ const BASE_SCHEMA: &str = include_str!("../schemas/base.schema.json");
 /// schemas reference via `{ "$ref": "base.schema.json" }`.
 const BASE_SCHEMA_URI: &str = "https://temperkb.io/schemas/base.schema.json";
 
+/// The open_meta recognized-conventions schema. Constrains the shape of
+/// recognized open (caller-defined) keys — the FTS-indexed pair
+/// (`keywords`/`tags`@C, `descriptor`@D) plus shape-only conventions
+/// (`date`, relationship refs) — while leaving the tier open
+/// (`additionalProperties: true`). The indexed set is versioned by migration;
+/// see `docs/search-open-meta-indexing.md`.
+const OPEN_META_SCHEMA: &str = include_str!("../schemas/open_meta.schema.json");
+
+/// Discouraged open_meta keys → the managed field that supersedes each.
+/// A bare `slug`/`title` in the open tier is almost always a mistake: the
+/// canonical identity lives in `temper-slug`/`temper-title` (managed), and a
+/// bare copy drifts silently. Surfaced as a warning, never a hard error.
+const DISCOURAGED_OPEN_META_KEYS: &[(&str, &str)] =
+    &[("slug", "temper-slug"), ("title", "temper-title")];
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -191,6 +206,83 @@ pub fn check_unknown_temper_fields(frontmatter: &serde_yaml::Value) -> Vec<Valid
         }
     }
     issues
+}
+
+// ---------------------------------------------------------------------------
+// open_meta recognized-conventions validation
+// ---------------------------------------------------------------------------
+
+/// Compile a validator for the open_meta recognized-conventions schema.
+///
+/// The schema is self-contained (no `$ref`), so no external resource needs
+/// registering — unlike [`load_schema`].
+///
+/// # Errors
+/// Returns [`TemperError::Config`] if the embedded schema fails to parse or
+/// compile (a programming error — the schema ships with the binary).
+pub fn load_open_meta_schema() -> Result<Validator> {
+    let schema_json: serde_json::Value = serde_json::from_str(OPEN_META_SCHEMA)
+        .map_err(|e| TemperError::Config(format!("open_meta schema JSON parse error: {e}")))?;
+
+    jsonschema::options()
+        .build(&schema_json)
+        .map_err(|e| TemperError::Config(format!("open_meta schema compilation error: {e}")))
+}
+
+/// Validate an `open_meta` object against the recognized-conventions schema.
+///
+/// Returns the **shape** issues only: a recognized key carrying a wrong shape
+/// (e.g. `descriptor: 42`, `keywords: "a,b"` where a list was meant, a
+/// malformed `date`). Because the schema is `additionalProperties: true`, an
+/// unrecognized key never produces an issue — the open tier stays open, and
+/// version skew (a newer convention key reaching an older validator) never
+/// hard-fails. An empty list means every recognized key is well-shaped.
+///
+/// Discouraged-key *warnings* are deliberately not folded in here — call
+/// [`check_discouraged_open_meta_keys`] for those, so callers can treat shape
+/// errors (hard) and discouraged keys (soft) with different severities.
+///
+/// A non-object `open_meta` (array, string, …) is itself a shape violation and
+/// surfaces as one issue at the root path.
+///
+/// # Errors
+/// Propagates a [`TemperError::Config`] if the embedded schema cannot compile.
+pub fn validate_open_meta(open_meta: &serde_json::Value) -> Result<Vec<ValidationIssue>> {
+    let validator = load_open_meta_schema()?;
+
+    let issues = validator
+        .iter_errors(open_meta)
+        .map(|err| ValidationIssue {
+            path: err.instance_path().to_string(),
+            message: err.to_string(),
+            auto_fixable: false,
+        })
+        .collect();
+
+    Ok(issues)
+}
+
+/// Find discouraged open_meta keys (bare `slug`/`title`) that duplicate a
+/// managed identity field. Returned as non-auto-fixable warnings — the caller
+/// decides whether to block or merely surface them. A non-object value yields
+/// no issues (shape is [`validate_open_meta`]'s job).
+pub fn check_discouraged_open_meta_keys(open_meta: &serde_json::Value) -> Vec<ValidationIssue> {
+    let Some(map) = open_meta.as_object() else {
+        return vec![];
+    };
+
+    DISCOURAGED_OPEN_META_KEYS
+        .iter()
+        .filter(|(key, _)| map.contains_key(*key))
+        .map(|(key, managed)| ValidationIssue {
+            path: (*key).to_string(),
+            message: format!(
+                "open_meta key '{key}' is discouraged — canonical identity lives in the managed \
+                 field '{managed}'; a bare '{key}' in open_meta drifts silently"
+            ),
+            auto_fixable: false,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +506,115 @@ fn extract_enum_fields(schema: &serde_json::Value) -> BTreeMap<String, Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -------------------------------------------------------------------------
+    // open_meta recognized-conventions tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn open_meta_well_shaped_recognized_keys_pass() {
+        let om = serde_json::json!({
+            "keywords": ["thermocline", "stratification"],
+            "descriptor": "Vertical temperature structure of the open ocean",
+            "tags": ["concept"],
+            "date": "2026-07-11",
+            "relates_to": ["temper"]
+        });
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            issues.is_empty(),
+            "well-shaped open_meta should pass: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn open_meta_keywords_accepts_bare_string() {
+        // Convention v1 blesses a bare string as well as an array.
+        let om = serde_json::json!({ "keywords": "thermocline stratification" });
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            issues.is_empty(),
+            "bare-string keywords should pass: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn open_meta_misshaped_descriptor_is_flagged() {
+        // descriptor: 42 is stored-but-not-indexed — the exact silent footgun.
+        let om = serde_json::json!({ "descriptor": 42 });
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            issues.iter().any(|i| i.path.contains("descriptor")),
+            "numeric descriptor should be flagged: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn open_meta_misshaped_tags_is_flagged() {
+        // A comma-string where a list was meant would index as one lexeme.
+        let om = serde_json::json!({ "tags": "concept,design" });
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            issues.iter().any(|i| i.path.contains("tags")),
+            "string tags should be flagged (array required): {issues:?}"
+        );
+    }
+
+    #[test]
+    fn open_meta_malformed_date_is_flagged() {
+        let om = serde_json::json!({ "date": "July 11, 2026" });
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            issues.iter().any(|i| i.path.contains("date")),
+            "non-ISO date should be flagged: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn open_meta_unknown_key_passes_open_tier() {
+        // additionalProperties: true — the open tier stays open, and version
+        // skew (an unknown future key) never hard-fails.
+        let om = serde_json::json!({ "some-future-key": { "nested": [1, 2, 3] } });
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            issues.is_empty(),
+            "unknown key should pass untouched: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn open_meta_non_object_is_a_shape_violation() {
+        let om = serde_json::json!(["not", "an", "object"]);
+        let issues = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            !issues.is_empty(),
+            "a non-object open_meta should be flagged"
+        );
+    }
+
+    #[test]
+    fn open_meta_discouraged_keys_warn_but_are_separate_from_shape() {
+        let om = serde_json::json!({ "slug": "path-to-alpha", "title": "Path to Alpha" });
+        // Shape-clean (strings are valid), so no shape issues …
+        let shape = validate_open_meta(&om).expect("schema compiles");
+        assert!(
+            shape.is_empty(),
+            "bare slug/title are shape-valid strings: {shape:?}"
+        );
+        // … but flagged as discouraged.
+        let discouraged = check_discouraged_open_meta_keys(&om);
+        assert_eq!(
+            discouraged.len(),
+            2,
+            "both slug and title should warn: {discouraged:?}"
+        );
+        assert!(discouraged
+            .iter()
+            .any(|i| i.message.contains("temper-slug")));
+        assert!(discouraged
+            .iter()
+            .any(|i| i.message.contains("temper-title")));
+    }
 
     // -------------------------------------------------------------------------
     // validate_field_value tests
