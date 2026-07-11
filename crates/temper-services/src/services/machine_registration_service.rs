@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(member, Some(1));
 
         let grant = sqlx::query!(
-            "SELECT can_read, can_write FROM kb_access_grants \
+            "SELECT can_read, can_write, can_grant, can_delete FROM kb_access_grants \
               WHERE subject_table = 'kb_cogmaps' AND subject_id = $1 \
                 AND principal_table = 'kb_profiles' AND principal_id = $2",
             cogmap_id,
@@ -554,6 +554,15 @@ mod tests {
         assert!(
             grant.can_read && grant.can_write,
             "write implies read (DB coherence CHECK)"
+        );
+        // D6: a machine never receives re-delegation or deletion, regardless of who minted it.
+        assert!(
+            !grant.can_grant,
+            "a machine grant must never carry can_grant (D6)"
+        );
+        assert!(
+            !grant.can_delete,
+            "a machine grant must never carry can_delete"
         );
     }
 

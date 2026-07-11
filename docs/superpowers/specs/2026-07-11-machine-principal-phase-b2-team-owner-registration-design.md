@@ -178,8 +178,10 @@ WHERE (mc.revoked_at IS NULL OR $include_revoked)
 
 `EXISTS` (not `array_agg`) so an empty scope denies rather than falling open. `get` and the
 row-addressed lifecycle operations load the row, then apply `authorize(caller, row.team_id)` — a
-non-owner receives `403 Forbidden`, indistinguishable from a non-existent row to a caller without
-authority.
+non-owner receives `403 Forbidden`. (A genuinely missing id returns `404`, so the pair is a weak
+existence oracle: a non-owner can tell a real machine-client id from an unused one. This is
+accepted — ids are unguessable UUIDv7, only existence leaks, no secret material — and matches
+conventional REST; the operations carry no data a non-owner could read regardless.)
 
 ### 4. The adjacent fix — `add_member`'s missing owner-guard
 

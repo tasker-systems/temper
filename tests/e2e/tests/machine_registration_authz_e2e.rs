@@ -418,6 +418,28 @@ async fn reads_and_lifecycle_are_scoped_to_the_owning_team(pool: PgPool) {
         .expect("revoke as bob");
     assert_eq!(resp.status(), 403, "Bob cannot revoke Alice's machine");
 
+    let resp = app
+        .reqwest_client
+        .post(app.url(&format!("/api/machine-clients/{machine_id}/rebind")))
+        .bearer_auth(&bob)
+        // `from_machine_client_id` is authoritative from the path, but the body type still
+        // requires the field to deserialize — send it so the request reaches the auth gate
+        // (a malformed body would 422 before authorization even runs).
+        .json(&json!({
+            "client_id": "bob-steals-alices-agent",
+            "from_machine_client_id": machine_id,
+            "label": "hijack",
+            "keep_old_active": false
+        }))
+        .send()
+        .await
+        .expect("rebind as bob");
+    assert_eq!(
+        resp.status(),
+        403,
+        "Bob cannot rebind Alice's machine — rebind keys on the existing row's owning team"
+    );
+
     // Alice can do all three — this is the point of the phase: no operator in the loop.
     let resp = app
         .reqwest_client

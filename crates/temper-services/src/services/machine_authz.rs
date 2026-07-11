@@ -90,7 +90,18 @@ pub(crate) async fn authorize_registration<'a>(
     teams: &'a [TeamSpec],
     grants: &'a [GrantSpec],
 ) -> ApiResult<AuthorizedReach<'a>> {
-    match authorize(pool, caller, team).await? {
+    let authority = authorize(pool, caller, team).await?;
+
+    // The caller is authorized; now the payload must be well-formed. An unknown role would
+    // otherwise fail the `::team_role` enum cast deep inside `apply_reach`'s transaction and
+    // surface as a 500 — a malformed request is a 400. Runs on both paths (an admin's bad role
+    // is a 400 too). Validating AFTER authorize means an unauthorized caller still gets 403,
+    // not a hint about their payload.
+    for spec in teams {
+        parse_team_role(&spec.role)?;
+    }
+
+    match authority {
         // Phase A D5: a system admin may confer any reach on a machine.
         MachineAuthority::SystemAdmin => Ok(AuthorizedReach { teams, grants }),
         MachineAuthority::TeamOwner => {
@@ -98,6 +109,13 @@ pub(crate) async fn authorize_registration<'a>(
             Ok(AuthorizedReach { teams, grants })
         }
     }
+}
+
+/// Parse a wire role string into a `TeamRole`, the enum's own serde as the single source of
+/// truth. Unknown roles are a 400 here rather than a 500 from the downstream enum cast.
+fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
+    serde_json::from_value::<TeamRole>(serde_json::Value::String(role.to_string()))
+        .map_err(|_| ApiError::BadRequest(format!("unknown team role '{role}'")))
 }
 
 /// The non-admin containment bar. Every check calls an existing human-surface predicate.
@@ -413,6 +431,43 @@ mod tests {
             .expect("a system admin may grant any reach (Phase A D5)");
         assert_eq!(reach.teams().len(), 1);
         assert_eq!(reach.grants().len(), 1);
+    }
+
+    /// An unknown role is a 400 (BadRequest), not a 500 from the downstream enum cast — and it
+    /// is rejected on the TEAM-OWNER path.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn unknown_role_is_a_bad_request_for_a_team_owner(pool: PgPool) {
+        let alice = mk_profile(&pool, "role-alice").await;
+        let owned = mk_team(&pool, "role-owned").await;
+        join(&pool, owned, alice, "owner").await;
+
+        let teams = vec![TeamSpec {
+            team_id: owned,
+            role: "membr".to_string(), // typo — not a real role
+        }];
+        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
+            .await
+            .expect_err("an unknown role must not reach the enum cast");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+    }
+
+    /// The same 400 holds on the ADMIN path — a malformed payload is malformed regardless of
+    /// who sends it (the D5 bypass is about authority, not input validation).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn unknown_role_is_a_bad_request_for_an_admin(pool: PgPool) {
+        let gating = configure_gating_team(&pool).await;
+        let admin = mk_profile(&pool, "role-admin").await;
+        join(&pool, gating, admin, "owner").await;
+        let target = mk_team(&pool, "role-target").await;
+
+        let teams = vec![TeamSpec {
+            team_id: target,
+            role: "MEMBER".to_string(), // wrong case — the enum is snake_case
+        }];
+        let err = authorize_registration(&pool, ProfileId::from(admin), None, &teams, &[])
+            .await
+            .expect_err("an admin's unknown role is still a 400");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
     }
 
     /// Spec D5 — `list` is scoped in SQL by the same authority `authorize` resolves. The teamless

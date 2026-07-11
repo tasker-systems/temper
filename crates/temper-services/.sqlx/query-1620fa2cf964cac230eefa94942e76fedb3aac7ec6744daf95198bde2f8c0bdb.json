@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT can_read, can_write, can_grant, can_delete FROM kb_access_grants WHERE subject_table = 'kb_cogmaps' AND subject_id = $1 AND principal_table = 'kb_profiles' AND principal_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "can_read",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "can_write",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "can_grant",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "can_delete",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1620fa2cf964cac230eefa94942e76fedb3aac7ec6744daf95198bde2f8c0bdb"
+}
