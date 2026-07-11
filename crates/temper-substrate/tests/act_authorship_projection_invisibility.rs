@@ -12,6 +12,7 @@ use sqlx::{PgPool, Row};
 use temper_substrate::affinity::{affinity, Edge, EdgeKind, Lens};
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
+use temper_substrate::knn::KnnGraph;
 use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, EdgePolarity};
 use temper_substrate::writes::{self, AssertParams, CreateParams};
 use uuid::Uuid;
@@ -128,7 +129,15 @@ async fn project_and_affinity(
         weight,
         label: row.get("label"),
     };
-    let aff = affinity(src, tgt, &[edge], &[], &Lens::telos_default());
+    // declared-only lens (w_cos = 0): the kNN graph is never consulted.
+    let aff = affinity(
+        src,
+        tgt,
+        &[edge],
+        &[],
+        &KnnGraph::default(),
+        &Lens::telos_default(),
+    );
     (aff, metadata, kind_text, weight)
 }
 

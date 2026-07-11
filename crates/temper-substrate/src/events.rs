@@ -707,7 +707,10 @@ pub async fn fire_with(
                     leads_to: lens.w_leads_to,
                     near: lens.w_near,
                     prop: lens.w_prop,
+                    cos: lens.w_cos,
                 },
+                knn_k: lens.knn_k,
+                cos_floor: lens.cos_floor,
                 salience: payloads::SalienceWeights {
                     telos: lens.s_telos,
                     reference: lens.s_ref,

@@ -31,6 +31,17 @@
     "resolution": {
       "type": "number",
       "format": "double"
+    },
+    "knn_k": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 12
+    },
+    "cos_floor": {
+      "type": "number",
+      "format": "double",
+      "default": 0.55
     }
   },
   "required": [
@@ -74,6 +85,12 @@
         "prop": {
           "type": "number",
           "format": "double"
+        },
+        "cos": {
+          "description": "The sparse exact-kNN cosine weight — the regime switch (spec §3.1). **Defaulted, not required:**\n`kb_events` is append-only, so the `lens_created` events for the pre-kernel lenses are immortal\nand carry no `cos` key. A required field would break `replay`'s round-trip through this struct\non every one of them. The default (0.0) is exactly what those lenses ARE — declared-only.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
         }
       },
       "required": [

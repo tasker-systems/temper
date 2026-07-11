@@ -1,7 +1,9 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
 use crate::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
+use crate::knn::{self, KnnGraph};
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use temper_core::types::home::HomeAnchor;
 
 #[derive(Debug)]
@@ -9,6 +11,10 @@ pub struct Substrate {
     pub nodes: Vec<ResourceId>,
     pub edges: Vec<Edge>,
     pub facets: Vec<Facet>,
+    /// The inferred half of the affinity kernel — the sparse exact-kNN graph over the members'
+    /// pooled embeddings. **Empty in the declared-only (cogmap) regime**, where `load` never even
+    /// runs the embedding query: a cogmap must not pay for a signal its lens ignores.
+    pub knn: KnnGraph,
     pub lens: Lens,
     pub lens_id: LensId,
 }
@@ -106,10 +112,10 @@ pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<
     // same producer materializes different lenses over one substrate — S6f plurality.
     //
     // `NULLS LAST` keeps an anchor-specific lens winning over the global default, exactly as
-    // `ORDER BY cogmap_id NULLS LAST` did. (T4 extends this SELECT with w_cos / knn_k / cos_floor —
-    // the columns exist as of T2 but nothing reads them until the kernel lands.)
+    // `ORDER BY cogmap_id NULLS LAST` did.
     let lr = sqlx::query!(
-        "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution \
+        "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, w_cos, knn_k, cos_floor, \
+                s_telos, s_ref, s_central, resolution \
          FROM kb_cogmap_lenses \
          WHERE name=$3 AND (home_anchor_table IS NULL OR (home_anchor_table=$1 AND home_anchor_id=$2)) \
          ORDER BY home_anchor_table NULLS LAST LIMIT 1",
@@ -125,18 +131,79 @@ pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<
         w_leads_to: lr.w_leads_to,
         w_near: lr.w_near,
         w_prop: lr.w_prop,
+        w_cos: lr.w_cos,
+        // SQL INT → Rust usize at the boundary. A negative k is meaningless; clamp rather than panic.
+        knn_k: lr.knn_k.max(0) as usize,
+        cos_floor: lr.cos_floor,
         s_telos: lr.s_telos,
         s_ref: lr.s_ref,
         s_central: lr.s_central,
         resolution: lr.resolution,
     };
+
+    let knn = load_knn(pool, &nodes, &lens).await?;
+
     Ok(Substrate {
         nodes,
         edges,
         facets,
+        knn,
         lens,
         lens_id: LensId::from(lr.id),
     })
+}
+
+/// Pool each node's chunk embeddings into one per-resource vector and build the sparse kNN graph.
+///
+/// **Skipped entirely when `w_cos == 0.0`** — the declared-only regime multiplies the whole term by
+/// zero, so a cogmap must not pay for the embedding scan, and its `Substrate` carries an empty graph.
+/// That is the same predicate the fingerprint and the affinity kernel key on; all three agree that at
+/// `w_cos = 0` the kNN is simply not an input.
+///
+/// The pooling — `avg(chunk.embedding)` over current, unfolded blocks — is deliberately the SAME pool
+/// `populate_readouts` uses for region centroids (`write.rs`), so formation and readout agree on what
+/// a resource's vector IS. Two different poolings would mean a region whose centroid is not the mean
+/// of the thing that formed it.
+async fn load_knn(pool: &PgPool, nodes: &[ResourceId], lens: &Lens) -> Result<KnnGraph> {
+    if lens.w_cos == 0.0 {
+        return Ok(KnnGraph::default());
+    }
+
+    // pgvector has no native sqlx decode here, and the codebase's established round-trip is a `::text`
+    // cast parsed back on the Rust side (cf. `replay.rs`'s `c.embedding::text`). Do not introduce a
+    // third convention.
+    let rows = sqlx::query!(
+        "SELECT ch.resource_id, avg(ch.embedding)::text AS \"vec?\" \
+           FROM kb_chunks ch \
+           JOIN kb_content_blocks b ON b.id = ch.block_id AND NOT b.is_folded \
+          WHERE ch.is_current AND ch.embedding IS NOT NULL AND ch.resource_id = ANY($1) \
+          GROUP BY ch.resource_id",
+        &nodes.iter().map(|n| n.uuid()).collect::<Vec<_>>()[..],
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let embeddings: HashMap<ResourceId, Vec<f32>> = rows
+        .into_iter()
+        .filter_map(|r| {
+            let v = parse_pgvector(r.vec.as_deref()?)?;
+            Some((ResourceId::from(r.resource_id), v))
+        })
+        .collect();
+
+    Ok(knn::build(&embeddings, lens.knn_k, lens.cos_floor))
+}
+
+/// Parse pgvector's text form — `[0.1,-0.2,…]` — into floats. `None` for anything unparseable, which
+/// drops that resource from the kNN graph rather than admitting a corrupt vector into formation.
+fn parse_pgvector(s: &str) -> Option<Vec<f32>> {
+    let body = s.trim().strip_prefix('[')?.strip_suffix(']')?;
+    if body.is_empty() {
+        return None;
+    }
+    body.split(',')
+        .map(|x| x.trim().parse::<f32>().ok())
+        .collect()
 }
 
 /// Expand one `property_key='facet'` row's JSONB object into the `(path, value)` facet entries the

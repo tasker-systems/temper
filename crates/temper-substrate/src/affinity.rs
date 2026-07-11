@@ -1,4 +1,5 @@
 use crate::ids::ResourceId;
+use crate::knn::KnnGraph;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,6 +62,19 @@ pub struct Lens {
     pub w_leads_to: f64,
     pub w_near: f64,
     pub w_prop: f64,
+    /// Weight on the sparse exact-kNN cosine term. `0.0` = the **cogmap regime**: the declared graph
+    /// is the whole signal and formation is byte-identical to its pre-kernel behavior. `> 0` = the
+    /// **context regime**, where the embedding is the PRIMARY evidence of regionality rather than a
+    /// second-order readout. Spec §3.1.
+    ///
+    /// This field is the regime switch, and a lot hangs off it being exactly zero on a cogmap: the
+    /// [`crate::knn::KnnGraph`] is never even built (`substrate::load`), and the kNN pairs are
+    /// excluded from the component fingerprint ([`crate::fingerprint::component_fingerprint`]).
+    pub w_cos: f64,
+    /// Neighbours each node may retain in the kNN graph. Only read when `w_cos != 0.0`.
+    pub knn_k: usize,
+    /// Similarity floor below which a pair never enters the kNN graph. Only read when `w_cos != 0.0`.
+    pub cos_floor: f64,
     pub s_telos: f64,
     pub s_ref: f64,
     pub s_central: f64,
@@ -76,9 +90,41 @@ impl Lens {
             w_leads_to: 0.6,
             w_near: 0.3,
             w_prop: 0.4,
+            w_cos: 0.0, // the cogmap regime: declared graph only
+            knn_k: 12,
+            cos_floor: 0.55,
             s_telos: 0.5,
             s_ref: 0.3,
             s_central: 0.2,
+            resolution: 0.5,
+        }
+    }
+
+    /// The context regime (spec §3.2). MUST mirror the seeded `workflow-default` row.
+    ///
+    /// Note what is NOT zeroed: `w_express`, `w_contains`, and `w_prop` are held at **cogmap parity**
+    /// even though contexts carry zero facets and almost no express/contains edges today. A lens
+    /// weight is a rate of exchange — what a signal is WORTH when present — not a prior on how often
+    /// it appears. Sparsity already handles itself: a pair with no express edge contributes zero from
+    /// that term whatever the weight. And an express edge asserted mid-session is *more* evidential
+    /// than one a steward asserts as its job, because the rarity is what makes it informative.
+    ///
+    /// The binding reason is a feedback loop: a weight of 0.0 makes the discipline provably
+    /// unrewarded, and an information system that returns no signal for signal provided gets routed
+    /// around — which forecloses the only mechanism by which contexts ever BECOME better-structured.
+    pub fn workflow_default() -> Self {
+        Lens {
+            w_express: 1.0,  // parity — deliberate, rare, high-information
+            w_contains: 1.0, // parity
+            w_prop: 0.4,     // parity
+            w_leads_to: 0.9, // `advances` — cheap to create, but it IS the hub topology (§3.3)
+            w_near: 0.35,    // `relates_to` — cheapest, most abundant. Real but weak.
+            w_cos: 1.0,      // the regime switch: inferred similarity is PRIMARY here
+            knn_k: 12,
+            cos_floor: 0.55,
+            s_telos: 0.6,
+            s_ref: 0.15, // contexts have shallower provenance depth than distilled nodes
+            s_central: 0.25,
             resolution: 0.5,
         }
     }
@@ -108,24 +154,35 @@ fn facet_overlap(a: ResourceId, b: ResourceId, facets: &[Facet]) -> f64 {
     sum
 }
 
-/// Declared-only symmetric affinity (spec §2a). Cosine is ABSENT — it enters only as a downstream
-/// readout (Plan 1 SQL), never here.
+/// Symmetric affinity (spec §3.1). Three ADDITIVE terms — the two regimes differ only in `w_cos`:
+///
+/// ```text
+/// affinity(a,b) =  Σ_edges  w_kind · weight        (declared: weak supervision in a context)
+///               +  w_prop · facet_overlap(a,b)     (declared: weak supervision in a context)
+///               +  w_cos  · knn_sim(a,b)           (inferred: sparse by construction; 0 in a cogmap)
+/// ```
+///
+/// `knn` is a SPARSE graph, not a dense cosine — `knn.sim(a,b)` is 0.0 for any pair outside the
+/// top-k-above-floor construction, however similar the raw vectors are. That sparsity is load-bearing:
+/// see [`crate::knn`].
+///
+/// Labels are not reserved (spec §2a): every label is ordinary positive relatedness, so contradiction
+/// BINDS (shared frame), never separates.
 pub fn affinity(
     a: ResourceId,
     b: ResourceId,
     edges: &[Edge],
     facets: &[Facet],
+    knn: &KnnGraph,
     lens: &Lens,
 ) -> f64 {
-    // Labels are not reserved (spec §2a): every label is ordinary positive relatedness, so
-    // contradiction BINDS (shared frame), never separates. No label factor until a lens overrides.
     let edge_sum: f64 = edges
         .iter()
         .filter(|e| (e.src == a && e.tgt == b) || (e.src == b && e.tgt == a))
         .filter(|e| !e.weight.is_nan())
         .map(|e| lens.w_kind(e.kind) * e.weight)
         .sum();
-    edge_sum + lens.w_prop * facet_overlap(a, b, facets)
+    edge_sum + lens.w_prop * facet_overlap(a, b, facets) + lens.w_cos * knn.sim(a, b)
 }
 
 #[cfg(test)]
@@ -138,6 +195,12 @@ mod tests {
             ResourceId::from(Uuid::from_u128(1)),
             ResourceId::from(Uuid::from_u128(2)),
         )
+    }
+
+    /// The declared-only regime's graph: empty. This is what `substrate::load` hands the producer
+    /// whenever `w_cos == 0.0` — it never even runs the embedding query.
+    fn no_knn() -> KnnGraph {
+        KnnGraph::default()
     }
 
     #[test]
@@ -156,13 +219,94 @@ mod tests {
             label: None,
         }];
         // 0.6 * 0.8 * label_factor(None)=1.0 = 0.48
-        assert!((affinity(a, b, &edges, &[], &lens) - 0.48).abs() < 1e-9);
+        assert!((affinity(a, b, &edges, &[], &no_knn(), &lens) - 0.48).abs() < 1e-9);
     }
 
     #[test]
     fn no_declared_edge_no_facet_means_zero_affinity() {
         let (a, b) = ids();
-        assert_eq!(affinity(a, b, &[], &[], &Lens::telos_default()), 0.0);
+        assert_eq!(
+            affinity(a, b, &[], &[], &no_knn(), &Lens::telos_default()),
+            0.0
+        );
+    }
+
+    #[test]
+    fn w_cos_zero_reproduces_the_declared_only_kernel() {
+        // THE REGRESSION FLOOR, at unit grain. A cogmap lens must be BLIND to the embedding term —
+        // even for a pair the kNN graph rates as near-identical. If this goes red, the kernel has
+        // leaked into the declared-only path and every cogmap in production re-clusters.
+        let (a, b) = ids();
+        let lens = Lens::telos_default(); // w_cos == 0.0
+        let knn = KnnGraph::from_pairs(&[(a, b, 0.99)]); // maximal similarity
+        assert_eq!(
+            affinity(a, b, &[], &[], &knn, &lens),
+            0.0,
+            "with w_cos=0 a near-identical pair must still have zero affinity"
+        );
+    }
+
+    #[test]
+    fn w_cos_contributes_the_knn_similarity_when_the_pair_is_a_neighbour() {
+        let (a, b) = ids();
+        let lens = Lens {
+            w_cos: 1.0,
+            ..Lens::telos_default()
+        };
+        let knn = KnnGraph::from_pairs(&[(a, b, 0.8)]);
+        assert!((affinity(a, b, &[], &[], &knn, &lens) - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_pair_outside_the_knn_graph_contributes_nothing_however_similar() {
+        // Sparsity is the whole point: cosine is DENSE, so only the top-k above the floor may
+        // contribute. Otherwise the affinity graph is complete and connected_components is useless.
+        let (a, b) = ids();
+        let lens = Lens {
+            w_cos: 1.0,
+            ..Lens::telos_default()
+        };
+        let knn = KnnGraph::from_pairs(&[]); // b is not among a's neighbours
+        assert_eq!(affinity(a, b, &[], &[], &knn, &lens), 0.0);
+    }
+
+    #[test]
+    fn declared_edges_and_cosine_are_additive_not_exclusive() {
+        // The context regime: cosine is primary, the declared graph is weak supervision ON TOP —
+        // they compose, they do not compete.
+        let (a, b) = ids();
+        let lens = Lens {
+            w_cos: 1.0,
+            w_near: 0.35,
+            ..Lens::telos_default()
+        };
+        let knn = KnnGraph::from_pairs(&[(a, b, 0.6)]);
+        let edges = vec![Edge {
+            src: a,
+            tgt: b,
+            kind: EdgeKind::Near,
+            weight: 1.0,
+            label: None,
+        }];
+        // 0.35*1.0 (declared) + 1.0*0.6 (inferred) = 0.95
+        assert!((affinity(a, b, &edges, &[], &knn, &lens) - 0.95).abs() < 1e-9);
+    }
+
+    #[test]
+    fn workflow_default_holds_the_deliberate_signals_at_cogmap_parity() {
+        // Spec §3.2. A weight is meaning-when-present, not a frequency prior. Contexts carry zero
+        // facets TODAY — that is a fact about the corpus, not about what a facet is WORTH. Zeroing
+        // these would make the discipline provably unrewarded, and an information system that returns
+        // no signal for signal provided gets routed around. If someone ever asserts an express edge or
+        // a facet in a context, it MUST count.
+        let ctx = Lens::workflow_default();
+        let map = Lens::telos_default();
+        assert_eq!(ctx.w_express, map.w_express);
+        assert_eq!(ctx.w_contains, map.w_contains);
+        assert_eq!(ctx.w_prop, map.w_prop);
+        // ...and the regime switch is the ONLY thing that flips the kernel on.
+        assert_eq!(ctx.w_cos, 1.0);
+        assert_eq!(map.w_cos, 0.0);
     }
 
     #[test]
@@ -193,7 +337,7 @@ mod tests {
             ..Lens::telos_default()
         };
         // shared ("topic","deployment"): min(0.9,0.5)=0.5; "phase" not shared. w_prop*0.5 = 0.5
-        assert!((affinity(a, b, &[], &facets, &lens) - 0.5).abs() < 1e-9);
+        assert!((affinity(a, b, &[], &facets, &no_knn(), &lens) - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -211,7 +355,7 @@ mod tests {
             label: Some("contradicts".into()),
         }];
         // contradiction BINDS: a labelled edge contributes its full kind-weighted affinity (no label factor)
-        assert!((affinity(a, b, &edges, &[], &lens) - 1.0).abs() < 1e-9);
+        assert!((affinity(a, b, &edges, &[], &no_knn(), &lens) - 1.0).abs() < 1e-9);
     }
 
     #[test]
