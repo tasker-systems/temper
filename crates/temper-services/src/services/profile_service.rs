@@ -100,7 +100,36 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
 }
 
 /// Human path: link lookup → email reconcile → new profile.
+///
+/// Opens with a machine-shape guard, which is a *second* line behind
+/// `auth::classify` (D-hardening). Classification decides which path a token takes;
+/// this asserts at the dangerous action — minting a principal. The guard sits at the
+/// top so it covers the lookup, reconcile AND create branches uniformly: even a
+/// caller that bypasses classification entirely (a future surface, a test harness, a
+/// direct service call) cannot walk a machine identity past the `kb_machine_clients`
+/// registration gate by dressing it as a human. The machine path has a gate; the
+/// human path has auto-provisioning — so a mislabeled machine is exactly the identity
+/// that must never reach here.
 async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
+    // 0: the machine-shape guard. Either signal is disqualifying on its own — the
+    // provider tag (claims minted by the machine seam) or the `@clients` subject
+    // shape (the Auth0 M2M convention, which no human `sub` wears).
+    let machine_provider = claims.provider == crate::auth::MACHINE_PROVIDER_TAG;
+    let machine_shaped_id = claims.external_user_id.ends_with("@clients");
+    if machine_provider || machine_shaped_id {
+        tracing::warn!(
+            external_user_id = %claims.external_user_id,
+            provider = %claims.provider,
+            "machine gate: rejected (machine-shaped identity on the human path)"
+        );
+        return Err(ApiError::Unauthorized(format!(
+            "identity '{}' is machine-shaped and cannot resolve to a human profile. \
+             A machine principal must be registered as a machine client: \
+             temper admin machine provision --client-id <client_id> --label <label>",
+            claims.external_user_id
+        )));
+    }
+
     // 1 & 2: direct lookup by provider + external user id; load linked profile.
     // A verified sign-in refreshes the link's stored email + verification flag
     // (the self-heal path for rows that predate the email_verified column, and
@@ -886,6 +915,78 @@ mod tests {
         let first = resolve_from_claims(&pool, &c).await.expect("first");
         let second = resolve_from_claims(&pool, &c).await.expect("second");
         assert_eq!(first.id, second.id, "resolution is stable across calls");
+    }
+
+    /// Claims that *say* Human but carry a machine-shaped identity — the exact shape a
+    /// classification fall-open produces. `sub` ends in the Auth0 `@clients` suffix but the
+    /// token never declared `gty`, so a surface that treats "not recognized as machine" as
+    /// "therefore human" hands these to the human path.
+    fn machine_shaped_human_claims(external_user_id: &str, provider: &str) -> AuthClaims {
+        AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: provider.to_string(),
+            external_user_id: external_user_id.to_string(),
+            // An M2M token has no email; temper-mcp fills `String::new()` unconditionally.
+            email: String::new(),
+            email_verified: None,
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        }
+    }
+
+    /// The bite test for the human path. Before the Layer-2 guard this FAILS by
+    /// auto-provisioning a human profile for a `@clients` identity — the
+    /// `kb_machine_clients` registration gate bypassed entirely, because the gate only
+    /// guards `PrincipalKind::Machine`.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn human_path_refuses_clients_suffixed_identity(pool: PgPool) {
+        let before = sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
+            .await
+            .expect("count before");
+
+        let err = resolve_from_claims(
+            &pool,
+            &machine_shaped_human_claims("abc123@clients", "auth0"),
+        )
+        .await
+        .expect_err("a machine-shaped identity must never resolve to a human profile");
+
+        match err {
+            ApiError::Unauthorized(msg) => {
+                assert!(
+                    msg.contains("machine"),
+                    "the refusal must name the reason: {msg}"
+                );
+            }
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+
+        let after = sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
+            .await
+            .expect("count after");
+        assert_eq!(
+            before, after,
+            "the human path must not auto-provision a profile for a machine-shaped identity"
+        );
+    }
+
+    /// Same guard, keyed on the provider tag rather than the `sub` shape: a caller that
+    /// mislabels machine-provider claims as Human must not reach the create branch either.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn human_path_refuses_machine_provider_tag(pool: PgPool) {
+        let err = resolve_from_claims(
+            &pool,
+            &machine_shaped_human_claims("plain-client-id", crate::auth::MACHINE_PROVIDER_TAG),
+        )
+        .await
+        .expect_err("machine-provider claims must never resolve to a human profile");
+
+        assert!(
+            matches!(err, ApiError::Unauthorized(ref msg) if msg.contains("machine")),
+            "expected a machine-shaped Unauthorized, got {err:?}"
+        );
     }
 
     async fn seed_bare_profile(pool: &PgPool, handle: &str) -> Uuid {

@@ -101,8 +101,9 @@ reads that extension and calls the seam's Level 2 for its gate effect.
 > extensions via the `AuthUser` extractor.
 
 **temper-mcp.** `ensure_profile_from_parts` (called at the top of every tool) builds
-`AuthClaims` from the injected `RawJwtClaims` (via `normalize_machine`, which also handles the
-machine branch — see [machine-token-contract.md](./machine-token-contract.md)), calls
+`AuthClaims` from the injected `RawJwtClaims` (via `classify`, whose closed-sum return forces
+this surface to handle the machine branch AND the refusal branch — see
+[machine-token-contract.md](./machine-token-contract.md)), calls
 `authenticate` then `require_system_access` back to back, and caches the resolved profile for
 the tool body. Both refusals route through `map_authz_error`.
 

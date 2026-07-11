@@ -74,21 +74,30 @@ pub async fn require_auth(
         })?;
     let raw = token_data.claims;
 
-    // 4. Normalize. A machine (`client_credentials`) token resolves entirely from
+    // 4. Classify. A machine (`client_credentials`) token resolves entirely from
     //    the shared seam — no email. A human token still resolves its email
-    //    (token claim → cached link → OIDC /userinfo) before building claims.
-    let claims = if let Some(machine) = temper_services::auth::normalize_machine(&raw) {
-        machine
-    } else {
-        let (email, email_verified) = resolve_email_from_claims(&state, &raw, &token).await?;
-        AuthClaims {
-            principal_kind: temper_core::types::PrincipalKind::Human,
-            provider: state.config.auth_provider_name.clone(),
-            external_user_id: raw.sub.clone(),
-            email,
-            email_verified,
-            exp: raw.exp,
-            iat: raw.iat,
+    //    (token claim → cached link → OIDC /userinfo) before building claims. The
+    //    match is exhaustive by construction: `Principal` is a closed sum precisely
+    //    so this surface cannot grow an "everything else ⇒ human" default arm.
+    let claims = match temper_services::auth::classify(&raw) {
+        temper_services::auth::Principal::Machine(machine) => machine,
+        temper_services::auth::Principal::Refuse(why) => {
+            tracing::warn!(sub = %raw.sub, why, "rejected: unclassifiable machine-shaped token");
+            return Err(ApiError::Unauthorized(
+                "Invalid or expired token".to_string(),
+            ));
+        }
+        temper_services::auth::Principal::Human => {
+            let (email, email_verified) = resolve_email_from_claims(&state, &raw, &token).await?;
+            AuthClaims {
+                principal_kind: temper_core::types::PrincipalKind::Human,
+                provider: state.config.auth_provider_name.clone(),
+                external_user_id: raw.sub.clone(),
+                email,
+                email_verified,
+                exp: raw.exp,
+                iat: raw.iat,
+            }
         }
     };
 

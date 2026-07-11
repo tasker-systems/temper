@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_team_members (team_id, profile_id, role) SELECT t.id, $1, 'watcher'::team_role FROM kb_teams t WHERE t.slug = 'temper-system'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "455748b85b6e01aef38b5f2b812d78484d44e6e99843b99fe4ec54f28355a913"
+}

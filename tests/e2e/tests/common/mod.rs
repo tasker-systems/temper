@@ -145,7 +145,7 @@ pub fn generate_test_jwt(sub: &str, email: &str) -> String {
 }
 
 /// JWT claims for a machine (`client_credentials`) test token. `gty` is the definitive
-/// machine signal `normalize_machine` keys on; `azp` carries the client id. No email:
+/// machine signal `auth::classify` keys on; `azp` carries the client id. No email:
 /// a machine has none.
 #[derive(Debug, Serialize, Deserialize)]
 struct MachineTestClaims {

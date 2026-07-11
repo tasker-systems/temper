@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM kb_team_members m USING kb_teams t WHERE m.team_id = t.id AND t.slug = 'temper-system' AND m.profile_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e209770d835ea248cc322c8c0c609687c6be233d70d998366a74afe2be031f3"
+}

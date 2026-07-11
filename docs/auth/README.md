@@ -25,7 +25,7 @@ gate hand-added to one surface's middleware silently misses the other.
     · verify JWT (JwksKeyStore)                · verify JWT (same JwksKeyStore)
     · resolve email ladder                     · aud = mcp_audience
     · aud = auth_audience                      ↓ inject RawJwtClaims
-    ↓ normalize_machine → AuthClaims          ensure_profile_from_parts (service.rs)
+    ↓ classify → Machine|Human|Refuse         ensure_profile_from_parts (service.rs)
         │                                          │
         └──────────────┐          ┌────────────────┘
                        ▼          ▼
