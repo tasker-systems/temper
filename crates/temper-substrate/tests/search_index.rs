@@ -61,6 +61,19 @@ async fn index_matches(pool: &sqlx::PgPool, resource: Uuid, term: &str) -> bool 
     .unwrap()
 }
 
+/// The stored vector's `ts_rank` for a query term (0.0 when the resource has no index row / no match).
+async fn index_rank(pool: &sqlx::PgPool, resource: Uuid, term: &str) -> f32 {
+    sqlx::query_scalar::<_, f32>(
+        "SELECT COALESCE((SELECT ts_rank(search_vector, plainto_tsquery('english', $2))
+           FROM kb_resource_search_index WHERE resource_id = $1), 0::real)",
+    )
+    .bind(resource)
+    .bind(term)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn create_populates_index_with_title_and_body(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
@@ -711,5 +724,174 @@ async fn charter_supersede_removes_superseded_prose_from_fts(pool: sqlx::PgPool)
     assert!(
         !index_matches(&pool, telos.uuid(), "zirconium").await,
         "superseded (folded) charter prose must no longer match FTS"
+    );
+}
+
+/// Issue #359 — open_meta `keywords` (weight C) are searchable AND boost ranking.
+/// Two resources share title + body verbatim; only one lists the query term as a keyword. The
+/// keyword-only term matches ONLY the keyworded resource (searchable), and on a shared body term the
+/// keyworded resource ranks strictly higher (the acceptance criterion: keywords lift an otherwise-
+/// identical resource). Keywords are set as a create-time property — the projection order (block
+/// rebuild BEFORE property_set) means this only passes because property_set now re-folds the vector.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn open_meta_keywords_are_searchable_and_boost_rank(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "kw").await;
+
+    let mk = |uri: &'static str, props: Vec<(String, serde_json::Value)>| {
+        let pool = pool.clone();
+        async move {
+            writes::create_resource(
+                &pool,
+                writes::CreateParams {
+                    sources: vec![],
+                    title: "Ocean layers",
+                    origin_uri: uri,
+                    body: "the thermocline separates warm surface water from the cold deep",
+                    doc_type: "concept",
+                    home: AnchorRef::context(home),
+                    owner,
+                    originator: owner,
+                    emitter,
+                    properties: &props,
+                    chunks: None,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid()
+        }
+    };
+
+    let plain = mk("temper://kw/plain", vec![]).await;
+    let withkw = mk(
+        "temper://kw/withkw",
+        vec![(
+            "keywords".to_string(),
+            serde_json::json!(["halocline", "stratification"]),
+        )],
+    )
+    .await;
+
+    // A keyword-only term (absent from title/body) matches only the keyworded resource.
+    assert!(
+        index_matches(&pool, withkw, "halocline").await,
+        "keyword term is indexed and searchable"
+    );
+    assert!(
+        !index_matches(&pool, plain, "halocline").await,
+        "keyword-less resource does not match a keyword-only term"
+    );
+
+    // Acceptance criterion: on a term present in BOTH bodies, the resource that ALSO lists it as a
+    // keyword ranks strictly higher (extra weight-C lexeme). `thermocline` is in both bodies; add it
+    // as a keyword on `withkw` at runtime to make the two identical-except-for-keywords.
+    writes::set_property(
+        &pool,
+        temper_substrate::ids::ResourceId::from(withkw),
+        "keywords",
+        &serde_json::json!(["thermocline"]),
+        emitter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        index_rank(&pool, withkw, "thermocline").await
+            > index_rank(&pool, plain, "thermocline").await,
+        "a resource whose keywords contain the query term ranks above an otherwise-identical one"
+    );
+}
+
+/// Issue #359 — open_meta `descriptor` (weight D) is folded into the vector, so the section descriptor
+/// truncated out of a title stays searchable.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn open_meta_descriptor_is_searchable(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "desc").await;
+    let r = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            sources: vec![],
+            title: "Section 4",
+            origin_uri: "temper://desc/r",
+            body: "generic prose",
+            doc_type: "concept",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[(
+                "descriptor".to_string(),
+                serde_json::json!("centrifugal governor feedback dynamics"),
+            )],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        index_matches(&pool, r.uuid(), "centrifugal").await,
+        "descriptor term (truncated out of the title) is indexed and searchable"
+    );
+    assert!(
+        !index_matches(&pool, r.uuid(), "unrelated").await,
+        "a non-present term still does not match"
+    );
+}
+
+/// Issue #359 — changing an indexed open_meta key at runtime re-folds the vector: the new keyword
+/// becomes searchable and the superseded one drops out (property_set folds the prior row).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn updating_open_meta_keyword_reindexes(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "reidx").await;
+    let r = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            sources: vec![],
+            title: "Doc",
+            origin_uri: "temper://reidx/r",
+            body: "stable body",
+            doc_type: "concept",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[("keywords".to_string(), serde_json::json!(["alpharhythm"]))],
+            chunks: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        index_matches(&pool, r.uuid(), "alpharhythm").await,
+        "create-time keyword is indexed"
+    );
+
+    writes::set_property(
+        &pool,
+        r,
+        "keywords",
+        &serde_json::json!(["betarhythm"]),
+        emitter,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        index_matches(&pool, r.uuid(), "betarhythm").await,
+        "updated keyword is indexed after property_set"
+    );
+    assert!(
+        !index_matches(&pool, r.uuid(), "alpharhythm").await,
+        "superseded (folded) keyword no longer matches"
+    );
+    assert!(
+        index_matches(&pool, r.uuid(), "stable").await,
+        "body unchanged still indexed"
     );
 }
