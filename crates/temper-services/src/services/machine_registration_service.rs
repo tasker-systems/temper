@@ -58,9 +58,10 @@ async fn apply_reach(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     profile_id: Uuid,
-    req: &ProvisionMachineRequest,
+    teams: &[temper_core::types::machine::TeamSpec],
+    grants: &[temper_core::types::machine::GrantSpec],
 ) -> ApiResult<()> {
-    for team in &req.teams {
+    for team in teams {
         sqlx::query!(
             r#"INSERT INTO kb_team_members (team_id, profile_id, role)
                VALUES ($1, $2, $3::text::team_role)
@@ -73,7 +74,7 @@ async fn apply_reach(
         .await?;
     }
 
-    for grant in &req.grants {
+    for grant in grants {
         // Deliberately uses the low-level `insert_grant`, NOT `grant_capability`: the sole
         // authorization here is the handler's `is_system_admin` gate (D5/D12 — Phase A
         // registration is system-admin-only). A system admin may grant a machine write on
@@ -127,6 +128,17 @@ fn map_duplicate(err: sqlx::Error, client_id: &str) -> ApiError {
     ApiError::from(err)
 }
 
+/// The auth-link unique constraint fires before the registration row's; turn its Conflict
+/// into a client-id-naming message.
+fn map_duplicate_from_conflict(err: ApiError, client_id: &str) -> ApiError {
+    match err {
+        ApiError::Conflict(_) => ApiError::Conflict(format!(
+            "machine client '{client_id}' is already registered"
+        )),
+        other => other,
+    }
+}
+
 /// Register a new machine principal, creating its agent profile. One transaction.
 pub async fn provision(
     pool: &PgPool,
@@ -154,18 +166,11 @@ pub async fn provision(
     let (profile_id, handle) =
         profile_service::create_agent_profile_and_link(&mut tx, &req.client_id)
             .await
-            .map_err(|e| match e {
-                // The auth-link unique constraint fires before the registration row's.
-                ApiError::Conflict(_) => ApiError::Conflict(format!(
-                    "machine client '{}' is already registered",
-                    req.client_id
-                )),
-                other => other,
-            })?;
+            .map_err(|e| map_duplicate_from_conflict(e, &req.client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, req).await?;
+    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -187,6 +192,58 @@ pub async fn provision(
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     machine_client_service::get(pool, id).await
+}
+
+/// Issue a temper-minted machine credential (Phase B1). temper generates the `client_id` and
+/// the secret; the SHA-256 hex of the secret is stored, the plaintext is returned once. Creates
+/// the agent profile, auth link, emitters, gating-team membership, and reach — all in one
+/// transaction, exactly like `provision`, but with `issuer='temper'` and a `secret_hash`.
+pub async fn issue(
+    pool: &PgPool,
+    caller: ProfileId,
+    req: &temper_core::types::machine::IssueMachineRequest,
+) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    let client_id = crate::auth::secret::mint_client_id();
+    let secret = crate::auth::secret::mint_secret();
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    let (profile_id, handle) = profile_service::create_agent_profile_and_link(&mut tx, &client_id)
+        .await
+        .map_err(|e| map_duplicate_from_conflict(e, &client_id))?;
+
+    profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
+    enroll_in_gating_team(&mut tx, profile_id).await?;
+    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
+
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO kb_machine_clients
+               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id, secret_hash)
+           VALUES ($1, 'temper', $2, $3, $4, $5, $6)
+           RETURNING id"#,
+        client_id,
+        req.label,
+        profile_id,
+        req.owner_team_id,
+        *caller,
+        secret.hash,
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| map_duplicate(e, &client_id))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
+
+    let client = machine_client_service::get(pool, id).await?;
+    Ok(temper_core::types::machine::IssuedMachineCredential {
+        client,
+        client_secret: secret.plaintext,
+    })
 }
 
 /// Point a fresh `client_id` at an EXISTING agent profile, revoking the old row in the
@@ -262,7 +319,7 @@ mod tests {
 
     use temper_core::types::ids::ProfileId;
     use temper_core::types::machine::{
-        GrantSpec, ProvisionMachineRequest, RebindMachineRequest, TeamSpec,
+        GrantSpec, IssueMachineRequest, ProvisionMachineRequest, RebindMachineRequest, TeamSpec,
     };
 
     use crate::services::machine_registration_service as svc;
@@ -492,6 +549,57 @@ mod tests {
             old_row.revoked_at.is_none(),
             "--no-revoke-old keeps both credentials live"
         );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn issue_mints_a_temper_credential_with_a_stored_hash(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+
+        let cred = svc::issue(
+            &pool,
+            admin,
+            &IssueMachineRequest {
+                label: "sidekiq".to_string(),
+                owner_team_id: None,
+                teams: vec![],
+                grants: vec![],
+            },
+        )
+        .await
+        .expect("issue");
+
+        assert!(
+            cred.client.client_id.starts_with("tmpr_"),
+            "temper mints the id"
+        );
+        assert_eq!(cred.client.issuer, "temper");
+        assert!(!cred.client_secret.is_empty(), "plaintext returned once");
+        assert_eq!(cred.client.registered_by_profile_id, *admin);
+
+        // The stored hash is the SHA-256 of the returned plaintext; the plaintext itself is
+        // never persisted.
+        let stored: Option<String> = sqlx::query_scalar!(
+            "SELECT secret_hash FROM kb_machine_clients WHERE id = $1",
+            cred.client.id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+        assert_eq!(
+            stored.as_deref(),
+            Some(crate::auth::secret::sha256_hex(&cred.client_secret).as_str()),
+        );
+
+        // The auth link uses the machine-principal namespace, NOT 'temper' (D5).
+        let link = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_profile_auth_links \
+              WHERE auth_provider = 'auth0-m2m' AND auth_provider_user_id = $1",
+            cred.client.client_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count link");
+        assert_eq!(link, Some(1));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

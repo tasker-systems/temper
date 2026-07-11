@@ -20,7 +20,14 @@ import {
   rotateRefreshToken,
   storeRefreshToken,
 } from "./flow.js";
-import { accessTtlSeconds, type MintedClaims, mintAccessToken, newOpaqueToken } from "./mint.js";
+import { touchMachineLastSeen, verifyMachineSecret } from "./machine-clients.js";
+import {
+  accessTtlSeconds,
+  type MintedClaims,
+  mintAccessToken,
+  mintMachineAccessToken,
+  newOpaqueToken,
+} from "./mint.js";
 import { reconcileMemberships } from "./reconcile.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
@@ -210,13 +217,23 @@ interface TokenResponse {
   refresh_token: string;
 }
 
+/** The `/oauth/token` success body for client_credentials — no refresh token (RFC 6749 §4.4.3). */
+interface MachineTokenResponse {
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+}
+
 /** An RFC 6749 §5.2 OAuth error response body. */
 interface OAuthErrorBody {
   error: string;
   error_description?: string;
 }
 
-function oauthJson(body: TokenResponse | OAuthErrorBody, status: number): Response {
+function oauthJson(
+  body: TokenResponse | MachineTokenResponse | OAuthErrorBody,
+  status: number,
+): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
@@ -254,11 +271,30 @@ async function issueTokenPair(
   };
 }
 
+/** Reads client credentials from HTTP Basic (preferred, RFC 6749 §2.3.1) or the form body. */
+function readClientCredentials(
+  req: Request,
+  form: FormData,
+): { clientId: string; clientSecret: string } | null {
+  const auth = req.headers.get("authorization");
+  if (auth?.startsWith("Basic ")) {
+    const decoded = Buffer.from(auth.slice("Basic ".length), "base64").toString("utf8");
+    const sep = decoded.indexOf(":");
+    if (sep > 0) {
+      return { clientId: decoded.slice(0, sep), clientSecret: decoded.slice(sep + 1) };
+    }
+  }
+  const clientId = String(form.get("client_id") ?? "");
+  const clientSecret = String(form.get("client_secret") ?? "");
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
 /**
  * `POST /oauth/token` — exchanges an authorization code (grant_type=authorization_code) or an
  * existing refresh token (grant_type=refresh_token) for a fresh access token + refresh token pair.
  * Both grants issue the pair via `issueTokenPair`; the refresh grant rotates (single-use) via
- * `rotateRefreshToken`.
+ * `rotateRefreshToken`. The client_credentials grant mints an access-token-only response for a
+ * temper-issued machine principal (Phase B1).
  */
 export async function handleToken(req: Request, db: NeonClient): Promise<Response> {
   const form = await req.formData();
@@ -296,6 +332,22 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     }
 
     return oauthJson(await issueTokenPair(db, rotated.claims, rotated.clientId), 200);
+  }
+
+  if (grantType === "client_credentials") {
+    const creds = readClientCredentials(req, form);
+    if (!creds) {
+      return oauthError("invalid_request");
+    }
+    if (!(await verifyMachineSecret(db, creds.clientId, creds.clientSecret))) {
+      return oauthError("invalid_client", 401);
+    }
+    await touchMachineLastSeen(db, creds.clientId);
+    const accessToken = await mintMachineAccessToken(creds.clientId);
+    return oauthJson(
+      { access_token: accessToken, token_type: "Bearer", expires_in: accessTtlSeconds() },
+      200,
+    );
   }
 
   return oauthError("unsupported_grant_type");

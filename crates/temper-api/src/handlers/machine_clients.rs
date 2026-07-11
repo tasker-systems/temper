@@ -12,7 +12,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
+use temper_core::types::machine::{
+    IssueMachineRequest, IssuedMachineCredential, MachineClient, ProvisionMachineRequest,
+    RebindMachineRequest, RotateSecretRequest,
+};
 use temper_core::types::AuthenticatedProfile;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::{
@@ -90,4 +93,25 @@ pub async fn revoke(
     Ok(Json(
         machine_client_service::revoke(&state.pool, id, caller).await?,
     ))
+}
+
+pub async fn issue(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<IssueMachineRequest>,
+) -> ApiResult<Json<IssuedMachineCredential>> {
+    let caller = require_admin(&state, &auth.0).await?;
+    let cred = machine_registration_service::issue(&state.pool, caller, &body).await?;
+    Ok(Json(cred))
+}
+
+pub async fn rotate_secret(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<RotateSecretRequest>,
+) -> ApiResult<Json<IssuedMachineCredential>> {
+    require_admin(&state, &auth.0).await?;
+    let cred = machine_client_service::rotate_secret(&state.pool, id, body.grace_seconds).await?;
+    Ok(Json(cred))
 }

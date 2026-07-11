@@ -25,6 +25,8 @@ thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
 [features]

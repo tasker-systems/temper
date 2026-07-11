@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) VALUES ($1, 'agent-tmpr-mcp', 'agent-tmpr-mcp', NULL, '{}')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9e703515241415c7418160e1e346aadafd392db8eaabb355cca50936bf7acc0"
+}

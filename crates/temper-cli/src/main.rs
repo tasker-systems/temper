@@ -735,6 +735,37 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         .await
                     })
                 }),
+                AdminMachineAction::Issue {
+                    label,
+                    owner_team,
+                    teams,
+                    cogmaps,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_machine::issue_remote(
+                            client,
+                            &label,
+                            owner_team.as_deref(),
+                            &teams,
+                            &cogmaps,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminMachineAction::RotateSecret { id, grace_seconds } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_machine::rotate_secret_remote(
+                                client,
+                                &id,
+                                grace_seconds,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
                 AdminMachineAction::List { include_revoked } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {

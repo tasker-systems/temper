@@ -51,6 +51,31 @@ export async function mintAccessToken(claims: MintedClaims): Promise<string> {
     .sign(key);
 }
 
+/**
+ * Mints an EdDSA access token for a temper-issued machine principal. The claim shape mirrors an
+ * Auth0 client_credentials token exactly — `gty:"client-credentials"`, `azp:<client_id>`,
+ * `sub:"<client_id>@clients"`, no email — so `normalize_machine` (Rust) detects it unchanged.
+ */
+export async function mintMachineAccessToken(clientId: string): Promise<string> {
+  const { key, kid } = await getSigningKey();
+  const issuer = requireEnv("AS_ISSUER");
+  const audience = requireEnv("AS_AUDIENCE");
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expSeconds = nowSeconds + accessTtlSeconds();
+
+  return await new SignJWT({
+    azp: clientId,
+    gty: "client-credentials",
+  })
+    .setProtectedHeader({ alg: "EdDSA", kid })
+    .setSubject(`${clientId}@clients`)
+    .setIssuer(issuer)
+    .setAudience(audience)
+    .setIssuedAt(nowSeconds)
+    .setExpirationTime(expSeconds)
+    .sign(key);
+}
+
 /** Generates a fresh 32-byte opaque token (base64url-encoded). */
 export function newOpaqueToken(): string {
   return randomBytes(32).toString("base64url");

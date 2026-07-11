@@ -61,3 +61,30 @@ pub struct RebindMachineRequest {
     /// When false (the default), the old row is revoked in the same transaction.
     pub keep_old_active: bool,
 }
+
+/// Issue a temper-minted machine credential (Phase B1). temper mints the `client_id` AND a
+/// secret (`issuer='temper'`), so — unlike `ProvisionMachineRequest` — there is no external
+/// client id. Reach is plural and always explicit (D10).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueMachineRequest {
+    pub label: String,
+    /// Recorded as `team_id`. Owner, not reach.
+    pub owner_team_id: Option<Uuid>,
+    pub teams: Vec<TeamSpec>,
+    pub grants: Vec<GrantSpec>,
+}
+
+/// A one-time machine credential returned by `issue` and `rotate-secret`. The plaintext
+/// `client_secret` is returned ONCE and never stored; only its SHA-256 hex persists (D1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssuedMachineCredential {
+    pub client: MachineClient,
+    pub client_secret: String,
+}
+
+/// Rotate a temper-issued secret, leaving the previous secret valid for a grace window (D6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RotateSecretRequest {
+    /// Seconds the previous secret stays valid after rotation. Defaults at the CLI.
+    pub grace_seconds: i64,
+}

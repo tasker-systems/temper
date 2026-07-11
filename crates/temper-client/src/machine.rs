@@ -5,7 +5,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
+use temper_core::types::machine::{
+    IssueMachineRequest, IssuedMachineCredential, MachineClient, ProvisionMachineRequest,
+    RebindMachineRequest, RotateSecretRequest,
+};
 
 /// Sub-client for machine-principal registration.
 pub struct MachineClientsClient<'a> {
@@ -70,6 +73,34 @@ impl<'a> MachineClientsClient<'a> {
         let req = self.http.delete(&path);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// Issue a temper-minted machine credential. Returns the one-time plaintext secret.
+    pub async fn issue(&self, body: &IssueMachineRequest) -> Result<IssuedMachineCredential> {
+        let token = self.http.resolve_token()?;
+        let req = self.http.post("/api/machine-clients/issue").json(body);
+        self.http
+            .send_json(
+                &Method::POST,
+                "/api/machine-clients/issue",
+                req,
+                Some(&token),
+            )
+            .await
+    }
+
+    /// Rotate a temper-issued secret, leaving the previous valid for a grace window.
+    pub async fn rotate_secret(
+        &self,
+        id: Uuid,
+        body: &RotateSecretRequest,
+    ) -> Result<IssuedMachineCredential> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/machine-clients/{id}/rotate-secret");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 }
