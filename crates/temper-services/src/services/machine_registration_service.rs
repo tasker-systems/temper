@@ -58,9 +58,10 @@ async fn apply_reach(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     profile_id: Uuid,
-    req: &ProvisionMachineRequest,
+    teams: &[temper_core::types::machine::TeamSpec],
+    grants: &[temper_core::types::machine::GrantSpec],
 ) -> ApiResult<()> {
-    for team in &req.teams {
+    for team in teams {
         sqlx::query!(
             r#"INSERT INTO kb_team_members (team_id, profile_id, role)
                VALUES ($1, $2, $3::text::team_role)
@@ -73,7 +74,7 @@ async fn apply_reach(
         .await?;
     }
 
-    for grant in &req.grants {
+    for grant in grants {
         // Deliberately uses the low-level `insert_grant`, NOT `grant_capability`: the sole
         // authorization here is the handler's `is_system_admin` gate (D5/D12 — Phase A
         // registration is system-admin-only). A system admin may grant a machine write on
@@ -165,7 +166,7 @@ pub async fn provision(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, req).await?;
+    apply_reach(&mut tx, caller, profile_id, &req.teams, &req.grants).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
