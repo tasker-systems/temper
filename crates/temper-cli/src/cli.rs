@@ -449,6 +449,13 @@ pub enum ResourceAction {
         #[arg(long, value_delimiter = ',')]
         fields: Vec<String>,
     },
+    /// Describe the recognized open_meta conventions (the self-describing schema)
+    ///
+    /// Prints the recognized open (caller-defined) frontmatter keys, their shapes, and — via each
+    /// key's description — whether it is FTS-indexed (and at what weight) or shape-only, plus the
+    /// discouraged bare keys. The open tier stays free-form; this is guidance, not a closed
+    /// vocabulary. Mirrors the MCP `describe_open_meta` tool.
+    DescribeOpenMeta,
     /// Show a resource's content
     Show {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temperkb.io/schemas/open_meta.schema.json",
+  "title": "open_meta recognized conventions v2",
+  "description": "The open (caller-defined) frontmatter tier is generally free-form: additionalProperties is true, so any key is allowed and stored. This schema documents the keys temper *recognizes* and constrains their shape. A recognized key with a wrong shape is a bug — for the FTS-indexed keys it is stored-but-not-indexed (silent search miss), which is exactly what this schema exists to catch. Shapes for tags/relates_to/depends_on/references/preceded_by/derived_from intentionally mirror base.schema.json's open-tier keys; keep them in sync. The indexed set is versioned by migration (v1: keywords@C + descriptor@D, 20260711000040; v2: tags@C).",
+  "type": "object",
+  "properties": {
+    "keywords": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "string" } },
+        { "type": "string" }
+      ],
+      "description": "FTS-indexed at weight C (convention v1). Deliberately-attached topical tags that boost search ranking. A JSON array of strings (space-joined into the vector) or a bare JSON string. Synonymous with `tags` for ranking."
+    },
+    "tags": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "string" } },
+        { "type": "string" }
+      ],
+      "description": "FTS-indexed at weight C (convention v2). The everyday topical-tag key; ranks identically to `keywords`, and accepts the same shapes: a JSON array of strings (space-joined into the vector) or a bare JSON string."
+    },
+    "descriptor": {
+      "type": "string",
+      "description": "FTS-indexed at weight D (convention v1). The full section descriptor, for corpora where importers truncate it out of the title under length pressure — keeps the discriminating words searchable. A JSON string."
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Shape-convention (not FTS-indexed). ISO-8601 calendar date, YYYY-MM-DD. The most common open_meta key in production."
+    },
+    "relates_to": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Shape-convention (not indexed). Soft relationship to other resources (UUIDs, slugs, or refs). Parallel to the hard edge model."
+    },
+    "derived_from": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Shape-convention (not indexed). Source resources this was derived from."
+    },
+    "preceded_by": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Shape-convention (not indexed). Resources that precede this in sequence."
+    },
+    "references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Shape-convention (not indexed). Referenced resources or external URIs."
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Shape-convention (not indexed). Dependencies (UUIDs, slugs, or refs)."
+    }
+  },
+  "additionalProperties": true
+}

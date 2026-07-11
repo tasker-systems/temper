@@ -12,6 +12,27 @@ async fn ingest_with_chunks(
     content: &str,
     context_name: &str,
 ) {
+    ingest_with_open_meta(
+        app,
+        title,
+        slug,
+        content,
+        context_name,
+        serde_json::json!({"date": "2026-04-10"}),
+    )
+    .await;
+}
+
+/// Helper: ingest a resource with chunks and a caller-supplied `open_meta`, so tests can exercise the
+/// open_meta → FTS-vector folding (#359 keywords@C/descriptor@D, v2 tags@C).
+async fn ingest_with_open_meta(
+    app: &common::E2eTestApp,
+    title: &str,
+    slug: &str,
+    content: &str,
+    context_name: &str,
+    open_meta: serde_json::Value,
+) {
     let chunk = PackedChunk {
         chunk_index: 0,
         header_path: title.to_string(),
@@ -32,7 +53,7 @@ async fn ingest_with_chunks(
         content: content.to_string(),
         metadata: None,
         managed_meta: None,
-        open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+        open_meta: Some(open_meta),
         chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
@@ -143,6 +164,178 @@ async fn fts_finds_by_body_content(pool: sqlx::PgPool) {
         "FTS should find resource by body content"
     );
     assert_eq!(results[0].title, "Infrastructure Notes");
+}
+
+/// open_meta convention v2: a term present ONLY in `tags` (not title or body) is still findable,
+/// because tags fold into the FTS vector at weight C (migration 20260711000060). This is the ranking
+/// win #359 aimed for, made reachable by the key the corpus actually uses.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn fts_finds_by_open_meta_tags(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    app.client
+        .contexts()
+        .create("fts-tags", None)
+        .await
+        .expect("context create");
+
+    // "quokkatron" appears nowhere in the title or body — only in the tags.
+    ingest_with_open_meta(
+        &app,
+        "Release Checklist",
+        "release-checklist",
+        "Steps for cutting a release: run the suite, tag the commit, publish the artifacts.",
+        "fts-tags",
+        serde_json::json!({"tags": ["quokkatron", "deployment"]}),
+    )
+    .await;
+
+    let results = app
+        .client
+        .search()
+        .text_query("quokkatron", Some("@me/fts-tags".into()), None, Some(10))
+        .await
+        .expect("tag search failed");
+
+    assert!(
+        !results.is_empty(),
+        "a term present only in open_meta.tags must be findable via FTS (tags@C, v2)"
+    );
+    assert_eq!(results[0].title, "Release Checklist");
+    assert!(
+        results[0].fts_score > 0.0,
+        "tag-only match must carry a non-zero fts_score; got {}",
+        results[0].fts_score
+    );
+}
+
+/// open_meta convention v1: a term present ONLY in `descriptor` (not title or body) is still findable,
+/// because descriptor folds into the FTS vector at weight D (migration 20260711000040). Guards the
+/// full open_meta-indexing convention alongside the v2 tags path above.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn fts_finds_by_open_meta_descriptor(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    app.client
+        .contexts()
+        .create("fts-descriptor", None)
+        .await
+        .expect("context create");
+
+    // "zylophrenic" appears nowhere in the title or body — only in the descriptor.
+    ingest_with_open_meta(
+        &app,
+        "Section 4",
+        "section-4",
+        "General notes on the migration and its rollout order.",
+        "fts-descriptor",
+        serde_json::json!({"descriptor": "the zylophrenic subsystem tuning parameters"}),
+    )
+    .await;
+
+    let results = app
+        .client
+        .search()
+        .text_query(
+            "zylophrenic",
+            Some("@me/fts-descriptor".into()),
+            None,
+            Some(10),
+        )
+        .await
+        .expect("descriptor search failed");
+
+    assert!(
+        !results.is_empty(),
+        "a term present only in open_meta.descriptor must be findable via FTS (descriptor@D, v1)"
+    );
+    assert_eq!(results[0].title, "Section 4");
+}
+
+/// Receive-side symmetric-defense gate (Deliverable D): the server rejects a create whose open_meta
+/// carries a *recognized* key with the wrong shape (`descriptor: 42` — stored-but-not-indexed, the
+/// silent search miss the convention exists to catch). Exercised through the real Axum server + client,
+/// so it guards the shared DbBackend gate that every surface (api + mcp) dispatches through.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("fts-badmeta", None)
+        .await
+        .expect("context create");
+
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: "Bad Meta".to_string(),
+        heading_depth: 0,
+        content: "body".to_string(),
+        content_hash: format!("{:0>64x}", 4),
+        embedding: vec![0.1_f32; 768],
+    };
+    let payload = IngestPayload {
+        segmented: None,
+        goal: None,
+        title: "Bad Meta".to_string(),
+        origin_uri: "test://fts/bad-meta".to_string(),
+        context_ref: "@me/fts-badmeta".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: Some(format!("{:0>64x}", 8)),
+        content: "body".to_string(),
+        metadata: None,
+        managed_meta: None,
+        // `descriptor` is a recognized FTS-indexed key; a number is a shape violation.
+        open_meta: Some(serde_json::json!({"descriptor": 42})),
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+
+    let result = app.client.ingest().create(&payload).await;
+    assert!(
+        result.is_err(),
+        "server must reject a create with a mis-shaped recognized open_meta key"
+    );
+
+    // An unknown key with any shape must still pass (the tier stays open — version-skew tolerant).
+    let ok_chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: "Good Meta".to_string(),
+        heading_depth: 0,
+        content: "body".to_string(),
+        content_hash: format!("{:0>64x}", 5),
+        embedding: vec![0.1_f32; 768],
+    };
+    let ok_payload = IngestPayload {
+        title: "Good Meta".to_string(),
+        origin_uri: "test://fts/good-meta".to_string(),
+        content_hash: Some(format!("{:0>64x}", 9)),
+        // An unrecognized key of any shape is fine; `descriptor` here is well-shaped.
+        open_meta: Some(serde_json::json!({"some_future_key": 42, "descriptor": "ok"})),
+        chunks_packed: Some(pack_chunks(&[ok_chunk]).expect("pack chunks")),
+        ..payload
+    };
+    app.client
+        .ingest()
+        .create(&ok_payload)
+        .await
+        .expect("unknown open_meta keys must pass (open tier stays open)");
 }
 
 /// Search with no query and no embedding returns 400 Bad Request.

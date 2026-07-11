@@ -338,6 +338,41 @@ fn validate_managed_meta_pipeline(
     Ok(managed)
 }
 
+/// Receive-side shape gate for the open (caller-defined) frontmatter tier, shared by BOTH
+/// `create_resource` and `update_resource` — the server twin of the CLI send-side check
+/// (symmetric defense). A *recognized* open_meta key carrying a wrong shape (e.g. `descriptor: 42`,
+/// a malformed `date`) is a genuine bug: for the FTS-indexed keys it silently stores-but-does-not-index
+/// (a search miss), which is exactly what this catches. Unrecognized keys always pass — the tier is
+/// `additionalProperties: true`, so a newer convention key reaching an older server never hard-fails
+/// and version skew stays additive-safe. Discouraged keys (bare slug/title) are deliberately NOT gated
+/// here: they are a soft send-side (CLI) warning, not a wire rejection. Shape issues surface as a typed
+/// `BadRequest` (→ 400); a schema-compile failure is a programming error and stays `Config` (→ 500).
+fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(), TemperError> {
+    let Some(value) = open_meta else {
+        return Ok(());
+    };
+    let issues = temper_workflow::schema::validate_open_meta(value)?;
+    if issues.is_empty() {
+        return Ok(());
+    }
+    let detail = issues
+        .iter()
+        .map(|i| {
+            let where_ = if i.path.is_empty() {
+                "open_meta"
+            } else {
+                &i.path
+            };
+            format!("{where_}: {}", i.message)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(TemperError::BadRequest(format!(
+        "invalid open_meta shape: {detail}. A recognized open_meta key carries the wrong shape; \
+         run `temper resource describe-open-meta` for the recognized conventions"
+    )))
+}
+
 /// Maps the substrate readback (`readback::resource_row`) to the native `ResourceRow` — real
 /// timestamps (event-sourced from `kb_events.occurred_at`), name-only doc type, no fabrication.
 /// Shared by `show_resource` and the read selector arms (`list_select`, `show_select`,
@@ -1186,6 +1221,10 @@ impl Backend for DbBackend {
         // body-hash match against the *visible* set (the retired `find_by_body_hash`) would collapse
         // distinct resources into one (e.g. the empty-bodied L0 kernel telos). Re-creating identical
         // content yields a distinct resource by design.
+        // Receive-side symmetric-defense gate: reject a recognized open_meta key carrying the wrong
+        // shape before it lands as a property row (silent-search-miss prevention). Runs on every
+        // surface (api + mcp) because both dispatch through this backend command.
+        validate_open_meta_shape(cmd.open_meta.as_ref())?;
         let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
 
         // Map the surface-supplied ActContext → substrate EventContext (identical re-exported types).
@@ -1324,6 +1363,10 @@ impl Backend for DbBackend {
         // column on any PATCH, independent of whether managed_meta is present (a §7-Die key,
         // never a property).
         let title: Option<String> = cmd.title.clone();
+        // Receive-side symmetric-defense gate (twin of create's): reject a recognized open_meta key
+        // carrying the wrong shape before it lands as a property row. Auth ran above; this is the
+        // validate-before-write step. Covers both the managed+open and open-only branches below.
+        validate_open_meta_shape(cmd.open_meta.as_ref())?;
         let mut properties: Vec<(String, serde_json::Value)> = Vec::new();
         // Validate whenever the caller touches managed_meta OR identity: a title change must
         // still satisfy the schema (e.g. non-empty `temper-title`), so a title-only PATCH runs

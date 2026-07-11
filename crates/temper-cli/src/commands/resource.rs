@@ -353,8 +353,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type).ok();
     let slug_resolved = derive_create_slug(title, doctype_enum);
 
-    // Parse the optional --open-meta JSON object (the free-form open tier).
+    // Parse the optional --open-meta JSON object (the free-form open tier) and validate its shape
+    // send-side (the server re-enforces the same gate — symmetric defense).
     let open_meta_value = open_meta.map(parse_open_meta_flag).transpose()?;
+    if let Some(om) = &open_meta_value {
+        validate_open_meta_send_side(om)?;
+    }
 
     // Build the CreateResource cmd. Body-None when no body input; CloudBackend
     // synthesizes `# {title}\n` in its translator for the empty-body case.
@@ -1390,6 +1394,49 @@ fn parse_open_meta_flag(raw: &str) -> Result<serde_json::Value> {
     Ok(value)
 }
 
+/// Print the self-describing open_meta convention (recognized keys, shapes, FTS-indexing, and
+/// discouraged keys). Mirrors the MCP `describe_open_meta` tool — both render the shared
+/// [`temper_workflow::schema::OpenMetaConvention`]. Respects `--format`.
+pub fn describe_open_meta(format: crate::format::OutputFormat) -> Result<()> {
+    let convention = temper_workflow::schema::describe_open_meta()?;
+    let rendered = crate::format::render(&convention, format)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// Send-side gate for the open (caller-defined) frontmatter tier (create + update), the twin of the
+/// server's `validate_open_meta_shape` (symmetric defense — both ends inject/validate from the same
+/// schema so a mis-shaped recognized key never reaches storage). Hard-errors on a recognized key
+/// carrying the wrong shape (e.g. `descriptor: 42`, a malformed `date`) — for the FTS-indexed keys a
+/// wrong shape stores-but-does-not-index, a silent search miss. Unrecognized keys always pass (the tier
+/// is open), so version skew never hard-fails. Discouraged keys (bare `slug`/`title`, whose canonical
+/// home is `temper-slug`/`temper-title`) surface as a non-blocking stderr warning — the write proceeds.
+fn validate_open_meta_send_side(open_meta: &serde_json::Value) -> Result<()> {
+    let issues = temper_workflow::schema::validate_open_meta(open_meta)?;
+    if !issues.is_empty() {
+        let detail = issues
+            .iter()
+            .map(|i| {
+                let where_ = if i.path.is_empty() {
+                    "open_meta"
+                } else {
+                    &i.path
+                };
+                format!("{where_}: {}", i.message)
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(TemperError::BadRequest(format!(
+            "invalid --open-meta shape: {detail}. Run `temper resource describe-open-meta` for the \
+             recognized conventions"
+        )));
+    }
+    for warning in temper_workflow::schema::check_discouraged_open_meta_keys(open_meta) {
+        output::warning(&warning.message);
+    }
+    Ok(())
+}
+
 /// Combine the update surface's open-tier inputs into one `open_meta` object:
 /// the repeatable list flags (`--tags`/`--relates-to`/…) form the base, then the
 /// explicit `--open-meta` JSON object is merged over it (explicit keys win).
@@ -1408,7 +1455,12 @@ fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_
     if obj.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(serde_json::Value::Object(obj)))
+        let merged = serde_json::Value::Object(obj);
+        // Validate the merged open tier send-side (shape hard-error + discouraged-key warning); the
+        // server re-enforces the shape gate. The typed list flags (`--tags`/…) are already well-shaped,
+        // so in practice this catches a mis-shaped `--open-meta` JSON blob.
+        validate_open_meta_send_side(&merged)?;
+        Ok(Some(merged))
     }
 }
 
@@ -1846,6 +1898,43 @@ mod build_helpers_tests {
         let v = parse_open_meta_flag(r#"{"marker":"x","n":1}"#).expect("valid object");
         assert_eq!(v.get("marker"), Some(&serde_json::json!("x")));
         assert_eq!(v.get("n"), Some(&serde_json::json!(1)));
+    }
+
+    #[test]
+    fn validate_open_meta_send_side_passes_wellshaped_and_unknown_keys() {
+        // Recognized keys with correct shapes + an unknown key (open tier stays open) all pass.
+        let om = serde_json::json!({
+            "tags": ["release", "infra"],
+            "descriptor": "the full section descriptor",
+            "date": "2026-07-11",
+            "some_future_convention": {"nested": true}
+        });
+        assert!(validate_open_meta_send_side(&om).is_ok());
+    }
+
+    #[test]
+    fn validate_open_meta_send_side_hard_errors_on_misshaped_recognized_key() {
+        // descriptor must be a string; a number is a shape violation → hard error.
+        assert!(validate_open_meta_send_side(&serde_json::json!({"descriptor": 42})).is_err());
+        // date must match YYYY-MM-DD.
+        assert!(validate_open_meta_send_side(&serde_json::json!({"date": "July 11"})).is_err());
+        // tags items must be strings.
+        assert!(validate_open_meta_send_side(&serde_json::json!({"tags": [1, 2]})).is_err());
+    }
+
+    #[test]
+    fn validate_open_meta_send_side_warns_but_passes_on_discouraged_keys() {
+        // A bare `slug` is discouraged (canonical home is temper-slug) but not a shape error, so the
+        // write proceeds (warning goes to stderr).
+        assert!(validate_open_meta_send_side(&serde_json::json!({"slug": "my-thing"})).is_ok());
+    }
+
+    #[test]
+    fn build_open_meta_for_update_rejects_misshaped_merged_open_meta() {
+        // A mis-shaped recognized key in the --open-meta blob is caught at merge time.
+        let mut params = empty_update_params("foo");
+        params.open_meta = Some(r#"{"descriptor": 42}"#);
+        assert!(build_open_meta_for_update(&params).is_err());
     }
 
     #[test]

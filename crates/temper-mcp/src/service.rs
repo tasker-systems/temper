@@ -637,6 +637,17 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Describe the recognized open_meta conventions. Returns the self-describing JSON schema for the open (caller-defined) frontmatter tier — recognized keys, their shapes, and which are FTS-indexed (and at what weight) vs shape-only — plus discouraged bare keys. The tier stays free-form (additionalProperties: true); this is guidance for attaching keywords/tags/descriptor/date so they rank and validate correctly."
+    )]
+    async fn describe_open_meta(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::doc_types::describe_open_meta(self).await
+    }
+
+    #[tool(
         description = "Get the authenticated user's profile, including display name, email, and preferences."
     )]
     async fn get_profile(
