@@ -17,6 +17,7 @@ pub mod http;
 pub mod ingest;
 pub mod invocations;
 pub mod login;
+mod login_page;
 pub mod machine;
 pub mod profile;
 pub mod relationships;
