@@ -487,23 +487,28 @@ async fn build_lens_last_active_at_is_visibility_scoped(pool: sqlx::PgPool) {
     set_resource_updated_at(&pool, visible, t1).await;
 
     // R2: homed in the SAME context but soft-deleted — excluded from the
-    // resource_count join set, so its newer stamp (t2) must not leak into
-    // last_active_at either (the two subqueries share the same counted set).
+    // resource_count join set, so its newer stamp (t3, the newest of all) must not leak into
+    // last_active_at either (the two subqueries share the same counted set). This is what proves
+    // last_active_at is scoped rather than a raw max() over the context's homes.
     let hidden = home_resource_returning(&pool, ctx, profile, "hidden-r2").await;
-    set_resource_updated_at(&pool, hidden, t2).await;
+    set_resource_updated_at(&pool, hidden, t3).await;
     soft_delete_resource(&pool, hidden).await;
 
-    // R3: homed in the SAME context, active, but owned/originated by a SECOND
-    // profile with no grant back to the caller — invisible via
-    // `resources_visible_to(profile)` even though `ctx` itself (owned by
-    // `profile`) is visible. Stamped t3 (newest of all three) so a leak would
-    // be unambiguous. Proves the `resources_visible_to` conjunct specifically,
-    // distinct from R2's soft-delete/is_active conjunct.
+    // R3: homed in the SAME context, active, authored by a SECOND profile.
+    //
+    // This case used to assert the OPPOSITE — that R3 was invisible to the caller, and so must not
+    // advance last_active_at. `20260712000010` corrected that: container-read implies interior-read
+    // for EVERY context, personal ones included. Reading a context means reading what is homed in
+    // it, and the only way another profile's resource lands in your personal context is a write
+    // grant you issued. Personal contexts were previously the sole container whose interior you
+    // could not fully see — the odd one out, not the rule.
+    //
+    // So R3 IS visible, and its stamp (t2) legitimately advances last_active_at past R1's t1.
     let other_token =
         common::generate_test_jwt("e2e-other-recency", "other-recency@test.example.com");
     let other_profile = provision_profile(&app, &other_token).await;
-    let invisible = home_resource_returning(&pool, ctx, other_profile, "invisible-r3").await;
-    set_resource_updated_at(&pool, invisible, t3).await;
+    let foreign_authored = home_resource_returning(&pool, ctx, other_profile, "foreign-r3").await;
+    set_resource_updated_at(&pool, foreign_authored, t2).await;
 
     // A second context with no homed resources at all — last_active_at is None.
     let empty_ctx = create_personal_context(&pool, profile, "empty-ctx").await;
@@ -528,18 +533,18 @@ async fn build_lens_last_active_at_is_visibility_scoped(pool: sqlx::PgPool) {
         .last_active_at
         .expect("context with a visible resource has a last_active_at");
     assert!(
-        (last_active_at - t1).num_milliseconds().abs() < 1000,
-        "last_active_at reflects the visible resource's updated stamp (t1), got {last_active_at:?}"
+        (last_active_at - t2).num_milliseconds().abs() < 1000,
+        "last_active_at reflects the newest VISIBLE resource — R3 (t2), authored by another \
+         profile but homed in a context the caller can read, got {last_active_at:?}"
     );
     assert!(
-        (last_active_at - t2).num_milliseconds().abs() > 1000,
-        "the soft-deleted resource's newer stamp (t2) must NOT leak into last_active_at, got {last_active_at:?}"
+        (last_active_at - t1).num_milliseconds().abs() > 1000,
+        "R1's older stamp (t1) must not win over the newer visible R3, got {last_active_at:?}"
     );
     assert!(
         (last_active_at - t3).num_milliseconds().abs() > 1000,
-        "a resource invisible to the caller (owned by another profile, no grant) must NOT \
-         advance last_active_at even though its stamp (t3) is the newest of all three, \
-         got {last_active_at:?}"
+        "the soft-deleted resource's stamp (t3) must NOT leak into last_active_at even though it \
+         is the newest of all three — this is the scoping conjunct, got {last_active_at:?}"
     );
 
     let empty = body

@@ -341,16 +341,76 @@ salience.
 
 ### 3.8 Authz prerequisites
 
-Both must land before the gated context reads can be written correctly.
+> **Rewritten 2026-07-11 against the live schema, mid-execution.** This section originally claimed the
+> context arm of `anchor_readable_by_profile` "ignores `kb_access_grants` entirely," citing the header
+> of `20260630000002_access_grants_read_wiring.sql`. **That gap was already closed** — on 2026-07-01,
+> by `20260701000004_anchor_readable_context_grant.sql`, the migration that quotes it. The sweep read
+> the stale header rather than the live function. Verifying the claim turned up two *different* and
+> real defects, and forced the access model to be written down for the first time. Landed in
+> `20260712000010_context_read_predicates.sql`.
 
-1. **There is no `context_readable_by_profile(p_profile, p_context)` predicate.** The context arm of
-   `anchor_readable_by_profile` is an inline `EXISTS` over `kb_team_contexts` that **ignores
-   `kb_access_grants` entirely** — already flagged as a known gap in the header of
-   `20260630000002_access_grants_read_wiring.sql`. `cogmap_readable_by_profile` has no counterpart on
-   the context side.
-2. **`resources_readable_by(p_principal_kind, p_principal_id)` supports only `'profile'` and
-   `'cogmap'`.** A `'context'` principal kind is needed for the self-read pattern that
-   `cogmap_shape` / `cogmap_region_metrics` use.
+#### The model (it was nowhere stated, which is how it rotted)
+
+The team DAG is an org **enclosure hierarchy** — `EPD ▸ engineering ▸ payroll-group ▸ squad-two` —
+plus cross-cutting affinity groups on the same mechanism. Membership is **transitive upward**: a
+direct member of `squad-two` is thereby a member of every enclosing team. Two axes follow, and they
+are **not** the same axis:
+
+- **READ inherits UP the enclosure chain.** A squad-two member reads what is at or above them —
+  engineering's contexts, EPD's contexts — and *never sideways*: `squad-one` and `security-it-ops`
+  are invisible. This is what `team_ancestors` expresses. It expands upward *from the principal's own
+  team*, so a thing attached to an ancestor reaches every member beneath it.
+- **WRITE requires DIRECT membership** in the owning team, with an authoring role (`owner` /
+  `maintainer` / `member`; `watcher` is read-only). Being transitively in `engineering` lets you read
+  engineering's context; it does not let you author into it.
+
+Team-management RBAC (an owner of an enclosing team creating and managing sub-teams) is a **third**
+axis and confers nothing on contexts or resources.
+
+#### Defect 1 — read was too NARROW: the team-owned arm was flat, in five places
+
+The context-read rule was written out **five times** — `context_visible_to`, `resources_visible_to`
+(branch 5), `edges_visible_to`, `graph_home_contexts`, `resources_in_team_scope` — and every copy
+gated the team-**owned** arm on *direct* membership. So a squad-two member could read a context
+*shared to* engineering but not the context engineering *owns*. Owning was somehow more private than
+sharing.
+
+The copies had already begun drifting from one another, which is the real lesson. `graph_home_contexts`
+had gone flat on the **share** arm too, and its `candidates` CTE is documented as *"a proven superset
+(same branches)"* of `context_visible_to` — a claim that held only while both were equally wrong.
+Widening the predicate alone would have silently turned it into a **subset** and dropped contexts out
+of the graph view.
+
+So the fix is not to widen five copies. It is to create **one** — `contexts_readable_by(p_profile)`,
+the single context read-set — and route all five through it, with `context_readable_by_profile` as its
+boolean grain (the peer of `cogmap_readable_by_profile`). There is nothing left to drift.
+
+#### Defect 2 — write was too WIDE: mutation inherited up, and role gated nothing
+
+`context_authorable_by_profile`'s team-owned arm **ancestor-expanded**. Combined with defect 1 that
+produced a **write-wider-than-read inversion on the same object**: a squad-two member could *author
+into* engineering's context while being unable to *read* it. And no access predicate anywhere
+consulted `kb_team_members.role` — **0 of 15** — so a `watcher` could author.
+
+The write arm is therefore **narrowed** to direct membership in the owning team with an authoring
+role. This *revokes* write that exists today: the one non-additive change in the arc, taken
+deliberately while the deployment is a handful of alpha testers, because it only gets more expensive
+to fix later.
+
+Explicit `kb_access_grants` **write grants are untouched** and still reach through `team_ancestors`. A
+grant is a deliberate act of delegation, not an accident of enclosure — granting write to an umbrella
+team is a considered decision to let everyone under it author.
+
+#### The `'context'` principal kind
+
+`resources_readable_by(p_principal_kind, p_principal_id)` supported only `'profile'` and `'cogmap'`. A
+`'context'` kind is needed for the self-read pattern `cogmap_shape` / `cogmap_region_metrics` use.
+
+Note its real shape: it is `LANGUAGE sql`, a `UNION` whose arms are guarded by
+`WHERE p_principal_kind = …` — **not** a plpgsql `IF/ELSIF`. An unhandled kind therefore returns
+**zero rows rather than raising**, so any test for the new kind must assert that a homed resource comes
+*back*, not that the result is empty. (The originally-planned test asserted `count == 0` and would
+have passed against the unmigrated schema.) The fail-closed behavior is pre-existing and left alone.
 
 ### 3.9 Bugs surfaced by this work
 
@@ -367,6 +427,19 @@ rather than being extracted.
 2. **`cogmap_region_centrality` (`canonical_functions.sql:488`) sums `kb_edges.weight` with no
    `home_anchor` filter**, so it already counts edges asserted outside the map. Under a polymorphic
    anchor this would silently mix context and cogmap edges into one region's centrality.
+3. **`can_modify_resource` had no soft-delete WRITE floor** (found by the adversarial security review
+   of the T1 write axis, and confirmed live). The read side floors on `is_active` everywhere; the
+   write gate never did, so `can_modify_resource(author, tombstone)` returned true while
+   `resources_visible_to` excluded it — read said deny, write said permit on the identical pair. And
+   the write *committed*: `update_resource` (`db_backend.rs`) gates only on `check_can_modify_next`,
+   and a **body-only or open_meta-only PATCH** skips the visibility-gated readback prefetch (it sits
+   behind an `if managed_meta.is_some() || title.is_some()` guard), so the mutation landed on the
+   tombstone. A leak (over-permissive write, I6-violating), not the false-negatives everything else in
+   this arc turned out to be. Fixed additively in `20260712000020_can_modify_active_floor.sql` by
+   wrapping the existing four-arm body in a leading `EXISTS(… is_active)` conjunct — one floor, every
+   present and future arm inherits it. A NARROWING with negligible blast radius (it only ever denies
+   writes to already-invisible rows that have no undelete path), bundled here because it is the same
+   write-authz surface T1 reworks.
 
 ---
 
@@ -411,7 +484,7 @@ PR-sized, ordered by dependency.
 
 | # | Task | Depends on |
 |---|---|---|
-| 1 | **Authz prerequisites** — `context_readable_by_profile`; `'context'` principal kind in `resources_readable_by`; wire the context arm of `anchor_readable_by_profile` to `kb_access_grants`. | — |
+| 1 | **Authz prerequisites** — collapse the five copies of the context-read rule into one `contexts_readable_by` read-set (fixing the flat team-owned arm: read now inherits up the enclosure chain); **narrow** `context_authorable_by_profile` to direct membership + authoring role (closing the write-wider-than-read inversion); add the `'context'` principal kind to `resources_readable_by`. The `kb_access_grants` wiring this row originally called for was **already done** in `20260701000004` — see §3.8. | — |
 | 2 | **M1 schema (additive)** — anchor pair on the four region tables + backfill; `kb_contexts.shape_materialized_event_id` + `telos_centroid`; the new lens columns defaulting to today's behavior; transitional `COMMENT`s. | — |
 | 3 | **Anchor-generalize the producer** — `load()`, `materialize`, `incremental_materialize`, `fold_live_*`, `create_component`, `assert_region`, `formation_touched_count_since`, `region_materialize` + its event schema. Cogmap behavior byte-identical. Fixes bug §3.9.1 (persist `affinity`) and §3.9.2 (home-filter centrality) on the way. | 2 |
 | 4 | **The `w_cos` kernel** — sparse exact-kNN affinity term, `knn_k` / `cos_floor`, the `workflow-default` context lens. Regression floor: all cogmap fixtures identical. | 3 |
