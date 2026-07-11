@@ -2,7 +2,7 @@
 //!
 //! Read path (`lookup_by_client_id`, `touch_last_seen`) is on the authentication
 //! hot path for every machine call. Write paths are operator-driven and rare, and they
-//! authorize through [`machine_authz`] against the *existing row's* owning team (B2 D5):
+//! authorize through `machine_authz` against the *existing row's* owning team (B2 D5):
 //! a system admin, or the owner of the team that owns the machine.
 
 use sqlx::PgPool;

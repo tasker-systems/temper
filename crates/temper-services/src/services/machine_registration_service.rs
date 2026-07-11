@@ -5,7 +5,7 @@
 //! `kb_machine_clients` row — all in ONE transaction, ahead of the machine's first call.
 //!
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
-//! caller's authority through [`machine_authz`] before opening the transaction, so a rejected
+//! caller's authority through `machine_authz` before opening the transaction, so a rejected
 //! registration leaves the database completely unchanged. They record the authorized caller as
 //! `registered_by_profile_id`. `rebind` authorizes the same way, but keyed on the EXISTING row's
 //! owning team (B2 D5) — it never moves a machine between teams.
