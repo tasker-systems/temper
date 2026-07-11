@@ -5,10 +5,14 @@ use crate::error::ApiResult;
 use temper_core::types::element_trail::{ElementEvent, ElementKind, EventTrail};
 use temper_core::types::ids::{ContextId, ProfileId};
 
-/// The most recent event id produced against a context the profile owns (directly, or via a team it
-/// belongs to). Returns `None` when the context has no events the profile may see. Post-collapse events
-/// anchor via `producing_anchor` (no `kb_context_id`/`profile_id`/`resource_id` columns); the cursor is
-/// the context's own event stream, gated by context ownership.
+/// The most recent event id produced against a context the profile can read. Returns `None` when the
+/// context has no events the profile may see. Post-collapse events anchor via `producing_anchor` (no
+/// `kb_context_id`/`profile_id`/`resource_id` columns); the cursor is the context's own event stream,
+/// gated by the canonical context read predicate.
+///
+/// This gate used to be an inline `EXISTS` over `kb_team_members` — the narrowest of the six copies of
+/// the context-read rule that `20260712000010` collapsed. It ignored context shares and explicit
+/// read-grants entirely, so a profile who could read a context by either route still got `None` here.
 pub async fn latest_event_id_for_context(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -20,12 +24,7 @@ pub async fn latest_event_id_for_context(
           FROM kb_events e
          WHERE e.producing_anchor_table = 'kb_contexts'
            AND e.producing_anchor_id = $2
-           AND EXISTS (                                   -- context-ownership gate
-             SELECT 1 FROM kb_contexts c
-              WHERE c.id = $2 AND (
-                (c.owner_table='kb_profiles' AND c.owner_id = $1)
-                OR (c.owner_table='kb_teams' AND c.owner_id IN
-                     (SELECT team_id FROM kb_team_members WHERE profile_id = $1))))
+           AND context_readable_by_profile($1, $2)
          ORDER BY e.occurred_at DESC
          LIMIT 1
         "#,
