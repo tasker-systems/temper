@@ -17,9 +17,19 @@ import { getToken } from "@vercel/connect";
 let cachedM2m: { token: string; expiresAt: number } | undefined;
 
 /**
- * Mint the agent's own Auth0 token via the `client_credentials` grant. Cached across calls until
- * ~60s before expiry. Returns `{ token, expiresAt }` where `expiresAt` is absolute ms-since-epoch,
+ * Mint the agent's own token via the `client_credentials` grant. Cached across calls until ~60s
+ * before expiry. Returns `{ token, expiresAt }` where `expiresAt` is absolute ms-since-epoch,
  * matching eve's `TokenResult` (so the connection can hand this straight to `auth.getToken`).
+ *
+ * The body is form-urlencoded, which RFC 6749 §4 mandates for the token endpoint. Auth0 also
+ * accepts JSON, which is why this sent JSON for as long as Auth0 was the only issuer it faced —
+ * and why nothing was red. Temper's own AS (`packages/temper-cloud/src/oauth/endpoints.ts`) reads
+ * the body with `req.formData()`, so a JSON mint could never have reached its grant branch.
+ * Form-encoding works against BOTH issuers; this is the shape that lets the steward be repointed
+ * at temper's issuer without touching this file again.
+ *
+ * `audience` is Auth0's: temper's AS ignores a request-supplied audience and mints with its own
+ * `AS_AUDIENCE`. Still sent unconditionally — it is required by Auth0 and inert everywhere else.
  */
 export async function mintM2mToken(): Promise<{ token: string; expiresAt: number }> {
   const skewMs = 60_000;
@@ -29,8 +39,8 @@ export async function mintM2mToken(): Promise<{ token: string; expiresAt: number
 
   const res = await fetch(requireEnv("TEMPER_M2M_TOKEN_URL"), {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
       grant_type: "client_credentials",
       client_id: requireEnv("TEMPER_M2M_CLIENT_ID"),
       client_secret: requireEnv("TEMPER_M2M_CLIENT_SECRET"),

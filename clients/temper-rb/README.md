@@ -6,6 +6,12 @@ There is no native extension: one source gem, no compiler on the install box, no
 platform matrix. The client core is generated from the API's `openapi.json` and
 committed, so building and testing this gem needs neither Docker nor a JVM.
 
+> **The integration how-to lives in the repo:**
+> [docs/guides/temper-rb.md](https://github.com/tasker-systems/temper/blob/main/docs/guides/temper-rb.md).
+> It covers the two callers, both machine-credential mint paths, the token
+> lifecycle, attribution across the enqueue boundary, the error taxonomy, and
+> going live. This README is the quickstart.
+
 ## Install
 
 ```ruby
@@ -38,6 +44,9 @@ client.resources.create(
   act: Temper::Act.new(confidence: :probable, reasoning: 'summarised the incident'))
 ```
 
+A `BearerToken` does no I/O and **cannot refresh** — `refresh!` raises. A user's
+token is not the app's to re-mint.
+
 `Temper::Act` refuses to be built with `reasoning`, `rationale`, `persona`, or
 `model` unless you also give `confidence` — the server would reject it with a
 400, so the gem rejects it locally instead.
@@ -49,23 +58,34 @@ CREDENTIALS = Temper::Credentials::ClientCredentials.new(
   token_url:     ENV.fetch('TEMPER_M2M_TOKEN_URL'),
   client_id:     ENV.fetch('TEMPER_M2M_CLIENT_ID'),
   client_secret: ENV.fetch('TEMPER_M2M_CLIENT_SECRET'),
-  audience:      ENV.fetch('TEMPER_M2M_AUDIENCE'))
+  audience:      ENV['TEMPER_M2M_AUDIENCE'])   # Auth0 only — omit for temper-issued
 ```
 
-It caches the token until 60 seconds before its absolute expiry, refreshes under
-a mutex, and re-mints once on a 401 — because a job that holds a token across a
-long unit of work can outlive it, and refresh-ahead-of-expiry alone does not save
-you there.
+It caches the token until 60 seconds before its absolute expiry, mints under a
+mutex (Puma threads race a cold cache), and re-mints once on a 401 — because a job
+that holds a token across a long unit of work can outlive it, and
+refresh-ahead-of-expiry alone does not save you there.
 
-`audience` must equal the API's configured `AUTH_AUDIENCE`, or the minted token
-fails validation before it ever reaches the machine-profile resolver.
+### Two mint paths
+
+The token request is form-encoded on both (RFC 6749 §4). Only the config differs.
+
+| | Auth0-issued (`temper admin machine provision`) | Temper-issued (`temper admin machine issue`) |
+|---|---|---|
+| `client_id` | your Auth0 M2M app's client id | minted by temper, prefixed `tmpr_` |
+| `client_secret` | from Auth0 | printed **once** at `issue` |
+| `token_url` | your Auth0 tenant's `/oauth/token` | **your own instance's** `/oauth/token` |
+| `audience` | **required** — must equal the API's `AUTH_AUDIENCE` | **omit it** |
+
+Temper's own authorization server mints with its server-side `AS_AUDIENCE` and
+ignores a request-supplied one, so the SDK leaves `audience` off the wire entirely
+rather than sending an empty string.
 
 ## Correlation across the enqueue boundary
 
-A correlation id is a bare UUID that outlives any credential. Mint one in the web
-request, serialize it into the job arguments, and stamp it again in the worker —
-the two writes then join in the event ledger even though they were made by
-different principals.
+The Puma request writes as the signed-in user; the Sidekiq job it enqueues writes
+as the **machine profile**. Two authors, honestly — the machine really did make the
+second write. A correlation id stitches them together in the event ledger.
 
 ```ruby
 correlation = SecureRandom.uuid
@@ -105,36 +125,47 @@ never auto-retried.** The SDK classifies; it does not decide to re-submit.
 
 ## Going live
 
-Authentication is not authorization, and a machine principal is not
-self-serve. A valid M2M token does **not** get you in on its own: temper keeps
-a registration allowlist, so an operator must register your `client_id` before
-your first call. An unregistered (or revoked) client authenticates cleanly at
-Auth0 and is then rejected with a terminal `Unauthorized` — `client 'X' is not
-registered with this instance` — which the SDK classifies as a `PermanentError`
-(a Sidekiq worker dead-letters it rather than retrying). This is the first wall
-a new caller hits.
+Authentication is not authorization. A valid M2M token does **not** get you in on
+its own: temper keeps a registration allowlist, so your `client_id` must be
+registered before your first call. An unregistered (or revoked) client
+authenticates cleanly at its issuer and is then rejected with a terminal
+`Unauthorized` — `client 'X' is not registered with this instance` — which the SDK
+classifies as a `PermanentError` (a Sidekiq worker dead-letters it rather than
+retrying). Registered but un-granted, you then get a `SystemAccessRequired` 403.
+Those are the two walls, in that order.
 
-1. Provision an Auth0 M2M application and a client grant for the API's audience.
-2. Set `TEMPER_M2M_TOKEN_URL`, `TEMPER_M2M_CLIENT_ID`, `TEMPER_M2M_CLIENT_SECRET`,
-   and `TEMPER_M2M_AUDIENCE`.
-3. Have an operator **register the client and grant its reach in one command**:
+Registration and reach happen in one command, on whichever mint path you chose:
 
-   ```bash
-   temper admin machine provision \
-     --client-id "$TEMPER_M2M_CLIENT_ID" --label "acme-worker" \
-     --team +acme --cogmap <map-ref>
-   ```
+```bash
+# Auth0-issued: register the M2M application you already created
+temper admin machine provision \
+  --client-id "$TEMPER_M2M_CLIENT_ID" --label "acme-worker" \
+  --owner-team acme-eng --team acme-eng:member --cogmap <map-ref>
 
-   `temper admin machine provision` creates the agent profile up front (there is
-   no first-call auto-provisioning) and enrolls it in the gating team. Each
-   `--team` gives it **team membership** for read reach; each `--cogmap` applies a
-   **cogmap write grant** on that map. Reach is plural and explicit; nothing is
-   inferred from one flag. There is no self-serve path — an operator runs this.
+# Temper-issued: temper mints the client id and secret; the secret prints once
+temper admin machine issue \
+  --label "acme-worker" \
+  --owner-team acme-eng --team acme-eng:member --cogmap <map-ref>
+```
 
-Rotating credentials afterward: rotating the Auth0 **secret** needs no temper
-action (the `client_id` is unchanged). Rotating the Auth0 **application** —
-a new `client_id` — needs `temper admin machine rebind`, which binds the new id
-to the same agent profile so authorship history stays continuous.
+Each `--team` gives **team membership** for read reach; each `--cogmap` applies a
+**cogmap write grant**. Both are repeatable — reach is plural and explicit, and is
+never inferred from `--owner-team` (which records the machine's owner only).
+
+This need not be an operator ticket: minting is authorized for a system admin **or
+the owner of the team that will own the machine**, so a team owner can register
+their own team's machine. A teamless machine is admin-only.
+
+**Rotation.** `temper admin machine rotate-secret` rolls a temper-issued **secret**
+(same `client_id`), keeping the previous one valid for a grace window while you
+redeploy the app with the new secret. `temper admin machine rebind` is a different
+operation: a **new `client_id`** bound to the same agent profile, for rotating the
+Auth0 application behind a machine — and it is system-admin only. Rotating an Auth0
+*secret* needs no temper action at all.
+
+See
+[docs/guides/machine-credentials.md](https://github.com/tasker-systems/temper/blob/main/docs/guides/machine-credentials.md)
+for the operator's side.
 
 Assert it worked at boot rather than discovering it on the first write:
 
@@ -144,8 +175,7 @@ Temper::Client.new(credentials: CREDENTIALS).whoami
 
 An unregistered client surfaces as `Unauthorized` naming the client id; a
 registered-but-under-granted one surfaces as `Forbidden` / `SystemAccessRequired`
-naming the missing grant — both from the server's `error.details`, not a bare
-4xx.
+naming the missing grant — both from the server's `error.details`, not a bare 4xx.
 
 ## Forking
 

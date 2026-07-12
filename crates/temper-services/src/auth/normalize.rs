@@ -1,7 +1,10 @@
 //! Shared JWT claim classification. The single place that decides *what kind of
-//! principal* a decoded JWT is. Both surfaces decode into `RawJwtClaims` and call
-//! [`classify`]; the human branch's email resolution stays per-surface (it differs
-//! by surface), but the routing decision does not.
+//! principal* a decoded JWT is. Both surfaces decode into `RawJwtClaims` and hand it
+//! to the seam, which calls [`classify`]. The human branch's email resolution is no
+//! longer per-surface — it moved into the seam alongside this ([`super::email`]), so
+//! both the routing decision and the ladder are shared. A machine never touches the
+//! ladder at all: `classify` returns [`Principal::Machine`] with its `AuthClaims`
+//! already built, and only the `Human` arm resolves an email.
 //!
 //! The return type is a **closed sum** — [`Principal`] — precisely so that no
 //! surface can express "unrecognized ⇒ human". An `Option<AuthClaims>` return let

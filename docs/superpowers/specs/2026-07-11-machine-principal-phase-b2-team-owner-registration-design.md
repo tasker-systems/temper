@@ -1,6 +1,9 @@
 # Machine-principal Phase B2 — team-owner registration and reach containment
 
-Status: designed 2026-07-11
+Status: ✅ **SHIPPED** as PR #377 — then hardened by PR #384, whose adversarial review found the
+machine-auth fall-open was a **live bypass on temper-mcp**, not the latent footgun this spec
+describes. Read #384 and #388 alongside this: the design below is what was *designed*, and where it
+and the code disagree, **the code wins**.
 Goal: `019f4910` (temper-rb) · Task: `019f4f1d` · Follows: Phase A (PR #351), Phase B1 (PR #374)
 
 ## Problem

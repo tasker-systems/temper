@@ -297,7 +297,15 @@ function readClientCredentials(
  * temper-issued machine principal (Phase B1).
  */
 export async function handleToken(req: Request, db: NeonClient): Promise<Response> {
-  const form = await req.formData();
+  // RFC 6749 §4: the token endpoint takes `application/x-www-form-urlencoded`. A client sending
+  // JSON (as Auth0 tolerates) makes `formData()` throw — without this guard that surfaces as a 500,
+  // which reads to the caller as "the server is broken" rather than "you encoded the request wrong".
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return oauthError("invalid_request");
+  }
   const grantType = String(form.get("grant_type") ?? "");
 
   if (grantType === "authorization_code") {

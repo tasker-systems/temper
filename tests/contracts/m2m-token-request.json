@@ -1,0 +1,38 @@
+{
+  "$comment": [
+    "The wire contract for an OAuth 2.0 client_credentials token request, shared by every temper",
+    "M2M client and by temper's own authorization server.",
+    "",
+    "This file exists because a contract asserted only against itself is not asserted at all. The",
+    "Ruby gem minted with a JSON body and proved it with a stub that parsed JSON; temper's AS read",
+    "the body with `req.formData()` and proved THAT with a form-encoded request. Both suites were",
+    "green and no client could mint against temper's issuer. Auth0 tolerates JSON, so the defect",
+    "was invisible for as long as Auth0 was the only issuer any client faced.",
+    "",
+    "Consumed by:",
+    "  - clients/temper-rb/spec/temper/credentials_spec.rb  (the client emits this shape)",
+    "  - packages/temper-cloud/tests/integration/oauth/client-credentials.test.ts  (the server accepts it)",
+    "",
+    "Adding a client (temper-py, temper-ts) means pinning it against this file too."
+  ],
+
+  "content_type": "application/x-www-form-urlencoded",
+
+  "required_params": ["grant_type", "client_id", "client_secret"],
+
+  "optional_params": {
+    "audience": [
+      "Auth0 requires it. Temper's own AS ignores a request-supplied audience entirely and mints",
+      "with its server-side AS_AUDIENCE, so a temper-issued client must be able to omit it."
+    ]
+  },
+
+  "grant_type": "client_credentials",
+
+  "rejected_content_types": {
+    "application/json": [
+      "RFC 6749 §4 mandates form encoding at the token endpoint. Auth0 accepts JSON as an extension;",
+      "temper's AS does not, and must answer `invalid_request` rather than throwing a 500."
+    ]
+  }
+}

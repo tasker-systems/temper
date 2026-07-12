@@ -13,10 +13,21 @@ describe("buildAsMetadata", () => {
       jwks_uri: "https://saml.example.com/oauth/jwks",
       scopes_supported: ["openid", "profile", "email", "offline_access"],
       response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
+      grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
       code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["none"],
+      token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
     });
+  });
+
+  // This AS has minted machine tokens since Phase B1, but advertised only two grants — so a
+  // conformant client reading this document would conclude M2M was impossible against temper's
+  // own issuer, while the Auth0-fronted metadata (below) advertised it correctly.
+  it("advertises the client_credentials grant it actually implements", () => {
+    const meta = buildAsMetadata("https://saml.example.com");
+
+    expect(meta.grant_types_supported).toContain("client_credentials");
+    expect(meta.token_endpoint_auth_methods_supported).toContain("client_secret_post");
+    expect(meta.token_endpoint_auth_methods_supported).toContain("client_secret_basic");
   });
 
   it("leaves an issuer with no trailing slash unchanged", () => {

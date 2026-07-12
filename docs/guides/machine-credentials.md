@@ -6,8 +6,9 @@ authenticates to Temper with its own credential instead of a person's login. It 
 and is governed by exactly the same access rules as a human with the same memberships.
 
 This guide covers standing one up and reasoning about what it can do: the two ways to mint a
-credential, who is allowed to mint one, how a machine's reach is bounded to its minter's authority,
-and the credential lifecycle (rotation, rebind, revocation). It is the consumable summary of three
+credential, what a client does with it once minted (token endpoint, audience, token lifetime), who is
+allowed to mint one, how a machine's reach is bounded to its minter's authority, and the credential
+lifecycle (rotation, rebind, revocation). It is the consumable summary of three
 design specs — machine-principal registration (Phase A), the issuer grant (Phase B1), and
 team-owner registration with reach containment (Phase B2) — linked at the end; reach for those when
 you need the rationale.
@@ -39,6 +40,85 @@ temper admin machine issue --label "acme steward"
 
 > The `issue` command prints the plaintext secret **exactly once**. Temper stores only its hash and
 > cannot recover it — capture it at mint time or rotate to get a new one.
+
+A temper-minted `client_id` is prefixed **`tmpr_`** — you can tell the two kinds apart at a glance.
+The secret is 32 random bytes, base64url-encoded, and only its SHA-256 hex ever reaches the
+database. `rotate-secret` is the only way to get a fresh plaintext; there is no "show secret".
+
+## What the client puts in its config
+
+Minting the credential is half the job. The other half is the handful of values your app's config
+holds — and they **differ by mint path**. The `audience` row is where integrators get stuck.
+
+| Config value | `provision` (Auth0 mints) | `issue` (Temper mints) |
+|---|---|---|
+| `token_url` | your Auth0 tenant's `https://<tenant>.auth0.com/oauth/token` | **your own Temper instance's `/oauth/token`** — e.g. `https://temper.acme.com/oauth/token` |
+| `client_id` | the Auth0 M2M app's client id | the `tmpr_…` id printed by `issue` |
+| `client_secret` | the Auth0 app's secret | the one-time secret printed by `issue` |
+| `audience` | **required** — must equal the API's configured `AUTH_AUDIENCE`, or the minted token fails audience validation at the resource server | **omit it** — Temper's AS ignores a request-supplied audience entirely and mints with its server-side `AS_AUDIENCE` |
+
+That `token_url` row is the whole point of the `issue` path: **Temper is the Authorization Server**,
+so a temper-issued machine mints its token from *your instance*, with no IdP in the loop. `/oauth/token`
+routes to Temper's own token handler, which carries a `client_credentials` grant alongside
+`authorization_code` and `refresh_token`. A conformant client can discover this rather than
+hard-code it — `GET /.well-known/oauth-authorization-server` lists `client_credentials` in
+`grant_types_supported` and names the `token_endpoint`.
+
+Temper's own clients read these from `TEMPER_M2M_TOKEN_URL`, `TEMPER_M2M_CLIENT_ID`,
+`TEMPER_M2M_CLIENT_SECRET`, and (Auth0 only) `TEMPER_M2M_AUDIENCE` — the same four names in the Ruby
+gem and the steward runtime. Follow the convention; it is one less thing to translate.
+
+An audience is not part of the `client_credentials` protocol — it is Auth0's. Temper's AS never
+reads one off the request, so sending one is inert rather than wrong (the steward reference client
+sends it unconditionally, which is why it works against both). Omitting it for a `tmpr_` credential
+is simply the honest thing.
+
+> **`issue` presumes Temper is your instance's Authorization Server** — the mode `AS_ISSUER` turns
+> on (self-hosted instances; the same AS that backs SAML). A temper-minted token is signed by the AS
+> key and carries `iss = AS_ISSUER`. An instance has **exactly one issuer**, so on an Auth0-fronted
+> instance a temper-minted token would not validate at all — register those machines with
+> `provision` and let Auth0 mint. See [../auth/jwt-verification.md](../auth/jwt-verification.md).
+
+### The token request — form-encoded, not JSON
+
+The token endpoint takes `application/x-www-form-urlencoded`, per RFC 6749 §4. **A JSON body is
+refused with `invalid_request`** — Auth0 tolerates JSON as an extension, Temper's AS does not.
+Credentials may travel in the form body (`client_secret_post`) or in an HTTP Basic header
+(`client_secret_basic`, which the endpoint prefers when present, per RFC 6749 §2.3.1).
+
+```bash
+# Mint a token from a temper-issued credential — no audience, form-encoded
+curl -X POST https://temper.acme.com/oauth/token \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  --data-urlencode grant_type=client_credentials \
+  --data-urlencode "client_id=$TEMPER_M2M_CLIENT_ID" \
+  --data-urlencode "client_secret=$TEMPER_M2M_CLIENT_SECRET"
+```
+
+The exact wire shape — content type, required params, the optional `audience`, and the refusal of
+JSON — is pinned as a cross-language contract in **`tests/contracts/m2m-token-request.json`**, which
+both the client side (the Ruby gem's spec) and the server side (the AS's integration test) assert
+against. A new client (temper-py, temper-ts) pins itself against that file too; a contract asserted
+only against itself is not asserted at all.
+
+### Token lifetime — short, and no refresh token
+
+The response is `{ access_token, token_type: "Bearer", expires_in }`. `expires_in` comes from
+`AS_ACCESS_TTL_SECONDS` — **default 900 seconds (15 minutes)**.
+
+A machine token carries **no refresh token, by design** (RFC 6749 §4.4.3): the credential *is* the
+refresh mechanism, so a machine simply re-mints via `client_credentials`. A client should cache the
+token against its **absolute** expiry with a small skew (60s is the convention in Temper's own
+clients) and re-mint on expiry — and re-mint on a `401`, since a token checked at the top of a long
+unit of work can expire in the middle of it.
+
+### One claim shape, whichever issuer minted it
+
+Temper's mint is deliberately **claim-identical to Auth0's**: `sub: "<client_id>@clients"`,
+`azp: "<client_id>"`, `gty: "client-credentials"`, and no email. That is not cosmetic — it is *why*
+the same registration gate and the same RBAC apply unchanged regardless of who minted the token. The
+resource server normalizes one machine shape, looks the `client_id` up in `kb_machine_clients`, and
+resolves the agent profile. The issuer is an implementation detail below that line.
 
 ## Who may mint one
 
@@ -114,11 +194,34 @@ resurrected). A team owner rotating a *temper-issued* credential uses `rotate-se
 
 `rotate-secret` mints a new secret and keeps the **previous** one valid for a grace window (default
 24h, capped at 7 days) so a running fleet can pick up the new secret with no downtime. At most **two**
-secrets are ever live at once; a second rotation drops the oldest.
+secrets are ever live at once; a second rotation drops the oldest. The token endpoint accepts the
+previous secret **only while `now()` is inside that window** — the moment it lapses, the old secret
+is dead, with no further action from you.
+
+The grace window exists so that *you never have to deploy and rotate in the same instant*. The
+sequence:
 
 ```bash
-temper admin machine rotate-secret <machine-id> --grace 3600   # old secret valid 1 more hour
+# 1. Rotate. The NEW secret prints once; the OLD one stays valid for the grace window.
+temper admin machine rotate-secret <machine-id> --grace 86400
+
+# 2. Both secrets now mint tokens. Your fleet, still holding the old secret, keeps working.
+#    Deploy the new secret to your app's config at your own pace.
+
+# 3. Verify the new secret mints — before the window closes, while you can still roll back.
+curl -X POST https://temper.acme.com/oauth/token \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  --data-urlencode grant_type=client_credentials \
+  --data-urlencode "client_id=tmpr_…" \
+  --data-urlencode "client_secret=<the new secret>"
+
+# 4. Do nothing. The old secret expires on its own when the window lapses.
 ```
+
+Size the window to your deploy cadence, not to your patience: `--grace 3600` is fine for a
+one-service push, and the 7-day cap exists for a fleet that rolls slowly. Only a temper-issued
+(`tmpr_`) credential can be rotated this way — an `auth0-m2m` machine's secret lives at the IdP, and
+`rotate-secret` refuses it.
 
 ### Revocation
 
@@ -183,9 +286,14 @@ temper admin machine show <machine-id>
 
 ## See also
 
-- **Design specs (authoritative):**
+- [Working with Teams](teams.md) — the roles and ownership this model builds on.
+- [Self-hosting with SAML](self-hosting-saml.md) — the proxied-human auth path, and the instance mode
+  (`AS_ISSUER`) that a temper-issued credential requires.
+- [JWT verification](../auth/jwt-verification.md) — how a token is validated, and the one-issuer-per-instance invariant.
+- [The machine-token contract](../auth/machine-token-contract.md) — the claim shape both issuers produce.
+- **The cross-language wire contract:** `tests/contracts/m2m-token-request.json` — pin any new client against it.
+- **Design specs** — the *rationale*, not the current state. They are design records written before
+  the work shipped, so where a spec and this guide disagree, trust the guide (and the code it cites):
   - Registration, rotation & revocation gate (Phase A): `docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md`
   - Temper as a `client_credentials` issuer (Phase B1): `docs/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`
   - Team-owner registration + reach containment (Phase B2): `docs/superpowers/specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md`
-- [Working with Teams](teams.md) — the roles and ownership this model builds on.
-- [Self-hosting with SAML](self-hosting-saml.md) — the proxied-human auth path.

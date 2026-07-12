@@ -1,7 +1,16 @@
 # Shared auth-orchestration seam (temper-services `auth` module)
 
-**Status:** Draft for review · **Date:** 2026-07-02 · **Task:** `019f22f9-716c-7123-9952-35528fcd1a39`
+**Status:** ✅ **SHIPPED, and partly superseded by what shipped.** · **Date:** 2026-07-02 · **Task:** `019f22f9-716c-7123-9952-35528fcd1a39`
 **Mode/effort:** plan / medium · **Branch:** `jct/auth-seam-spec`
+
+> **Two things below are no longer how the code works.** This spec has `resolve_from_claims`
+> *branching on a provider string*; that became a typed, closed `Principal` sum in PR #384 — so a
+> surface cannot express "unrecognized ⇒ human" even by accident. And it has each surface building
+> its own `AuthClaims`; PR #388 moved principal construction **into the seam**, leaving
+> `authenticate`, `classify`, `Principal`, and `resolve_from_claims` crate-private. A forged
+> `AuthClaims` is now *inert rather than forbidden* — nothing accepts one. The public entry points
+> are `authenticate_token` and `resolve_federated_human`. See
+> [docs/auth/authorization-seam.md](../../auth/authorization-seam.md) for the current API.
 
 > **Settled with Cole (2026-07-02):**
 > - **Scope:** one spec, sequenced build tasks.
