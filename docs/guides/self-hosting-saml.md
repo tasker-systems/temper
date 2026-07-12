@@ -320,18 +320,25 @@ open-redirect protection is unweakened. To enable it on a SAML instance:
    `localhost`, `[::1]`), so one loopback entry covers whichever the client sends. Non-loopback
    (HTTPS) redirect URIs are always exact-match.
 
-3. **Confirm audience/issuer alignment** so the AS-minted token validates at `/mcp` after login. The
-   AS mints `iss = AS_ISSUER`, `aud = AS_AUDIENCE`; the MCP middleware validates `iss` against
-   `AUTH_ISSUER` and `aud` against `MCP_AUDIENCE` (which falls back to `AUTH_AUDIENCE`). Require:
+3. **Audience/issuer alignment is enforced at boot** — you do not have to remember it. The AS mints
+   `iss = AS_ISSUER`, `aud = AS_AUDIENCE`; **both** surfaces validate against the instance's one
+   `AUTH_AUDIENCE`. If these disagree, the process **refuses to start** and names the offending
+   variable:
 
-   | AS mints | MCP validates against | Requirement |
+   | AS mints | The instance validates | Enforced requirement |
    | --- | --- | --- |
    | `AS_ISSUER` | `AUTH_ISSUER` | `AS_ISSUER == AUTH_ISSUER` |
-   | `AS_AUDIENCE` | `MCP_AUDIENCE` (or `AUTH_AUDIENCE`) | `AS_AUDIENCE == MCP_AUDIENCE` |
+   | `AS_AUDIENCE` | `AUTH_AUDIENCE` | `AS_AUDIENCE == AUTH_AUDIENCE` |
+   | (its JWKS) | `JWKS_URL` | `JWKS_URL == $AS_ISSUER/oauth/jwks` |
 
-   These already hold on a correctly-configured SAML instance, since regular authenticated API calls
-   validate the same AS-minted tokens against `AUTH_ISSUER`/`AUTH_AUDIENCE`. If `MCP_AUDIENCE` is set
-   separately, it must equal `AS_AUDIENCE`.
+   `MCP_AUDIENCE` is **optional**. temper-mcp no longer has an audience of its own — it reads the
+   instance's one audience, same as temper-api. If you do set `MCP_AUDIENCE`, it must **equal**
+   `AUTH_AUDIENCE`; it is an assertion, not a second value. (It used to fall back to `AUTH_AUDIENCE`
+   when unset, which is why it read like a separate knob. It never usefully was one.)
+
+   These already held on any correctly-configured SAML instance — a divergent audience would mean no
+   AS-minted token ever verified. Temper now names the rule and fails fast instead of leaving you to
+   discover it as a 401.
 
 Then add the server to Claude Code and authenticate:
 

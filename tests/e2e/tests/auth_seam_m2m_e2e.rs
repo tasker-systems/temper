@@ -7,6 +7,7 @@
 
 mod common;
 
+use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::config::ApiConfig;
 use temper_services::state::{AppState, JwksKeyStore};
 
@@ -17,9 +18,12 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
     let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
     let api_config = ApiConfig {
         database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: common::TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
         auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,

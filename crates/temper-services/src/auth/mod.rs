@@ -225,9 +225,12 @@ mod tests {
     fn state(pool: PgPool) -> AppState {
         let config = ApiConfig {
             database_url: "unused".to_string(),
-            jwks_url: "http://127.0.0.1:1/jwks".to_string(),
-            auth_issuer: "http://127.0.0.1:1".to_string(),
-            auth_audience: None,
+            auth: crate::auth_config::AuthConfig {
+                issuer: "http://127.0.0.1:1".to_string(),
+                jwks_url: "http://127.0.0.1:1/jwks".to_string(),
+                audience: "test-audience".to_string(),
+                mode: crate::auth_config::AuthMode::ExternalIdp,
+            },
             auth_provider_name: "test-provider".to_string(),
             cors_origins: vec![],
             port: 0,

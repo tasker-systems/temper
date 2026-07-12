@@ -104,7 +104,14 @@ export async function handleAuthorizationServer(_req: Request): Promise<Response
     : buildAuth0AsMetadata({
         base: requireEnv("MCP_BASE_URL"),
         auth0Domain: requireEnv("AUTH_ISSUER"),
-        mcpAudience: process.env.MCP_AUDIENCE ?? requireEnv("AUTH_AUDIENCE"),
+        // AUTH_AUDIENCE, not `MCP_AUDIENCE ?? AUTH_AUDIENCE`. An instance has exactly ONE audience:
+        // the Rust boot gate (temper-services `auth_config`) refuses to start unless a present
+        // MCP_AUDIENCE *equals* AUTH_AUDIENCE, so reading it here could only ever produce the same
+        // value — or a different one, which is the bug. `??` is nullish-coalescing and does NOT
+        // catch `""`, so an empty MCP_AUDIENCE used to advertise `resource: ""` here while the Rust
+        // side treated it as absent. That is the one-typo-two-behaviors split this whole change
+        // exists to kill; it must not survive in the surface that TELLS clients what to ask for.
+        mcpAudience: requireEnv("AUTH_AUDIENCE"),
       });
 
   return new Response(JSON.stringify(body), {

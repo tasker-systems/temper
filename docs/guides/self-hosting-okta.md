@@ -111,7 +111,7 @@ Set these in your Vercel project. They follow the same contract as the [main gui
 | `AUTH_ISSUER` | api, mcp | `https://<okta-domain>/oauth2/<authServerId>` — **no trailing slash** |
 | `JWKS_URL` | api, mcp | `https://<okta-domain>/oauth2/<authServerId>/v1/keys` |
 | `AUTH_AUDIENCE` | api | The custom authorization server's **Audience** value (e.g. `https://<instance>/api`) |
-| `MCP_AUDIENCE` | mcp | Same as `AUTH_AUDIENCE` (one authorization server serves both surfaces) |
+| `MCP_AUDIENCE` | — | **Optional.** An instance has one audience; both surfaces read `AUTH_AUDIENCE`. If you set this, it must **equal** `AUTH_AUDIENCE` or the instance refuses to boot. |
 | `AUTH_PROVIDER_NAME` | api, mcp | **Keep `auth0`.** It is a profile label and email-cache key, not a validation switch; leave it at the default rather than inventing an `okta` value |
 | `MCP_CLIENT_ID` | mcp | The MCP native application's Client ID |
 | `MCP_BASE_URL` | mcp | `https://<instance>` — no trailing slash |

@@ -62,8 +62,8 @@ pub async fn require_auth(
 
     // 3. Decode and verify the JWT. The allow-list is scoped to exactly the
     //    loaded key's algorithm (see `JwksKeyStore::validation`).
-    let issuer = &state.config.auth_issuer;
-    let audience = state.config.auth_audience.as_deref();
+    let issuer = &state.config.auth.issuer;
+    let audience = state.config.auth.audience.as_str();
     let validation = state.jwks_store.validation(issuer, audience, vk.algorithm);
 
     let token_data: TokenData<temper_services::auth::RawJwtClaims> =

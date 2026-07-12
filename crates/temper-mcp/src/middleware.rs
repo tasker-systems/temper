@@ -52,12 +52,15 @@ pub async fn require_mcp_auth(
         }
     };
 
-    let issuer = &state.api_state.config.auth_issuer;
-    let audience = state.mcp_config.mcp_audience.as_str();
+    // Both surfaces read the ONE audience off the shared AuthConfig. temper-mcp used to carry its
+    // own `mcp_audience`, parsed separately — two parsers for one concept, which is how the two
+    // surfaces came to answer an empty value in opposite ways.
+    let issuer = &state.api_state.config.auth.issuer;
+    let audience = state.api_state.config.auth.audience.as_str();
     let validation = state
         .api_state
         .jwks_store
-        .validation(issuer, Some(audience), vk.algorithm);
+        .validation(issuer, audience, vk.algorithm);
 
     match decode::<RawJwtClaims>(&token, &vk.key, &validation) {
         Ok(data) => {
@@ -66,12 +69,11 @@ pub async fn require_mcp_auth(
             next.run(request).await
         }
         Err(e) => {
-            tracing::warn!(
-                error = %e,
-                issuer = %issuer,
-                audience = %audience,
-                "MCP JWT validation failed"
-            );
+            // Deliberately does NOT log the expected issuer/audience. Anyone can trigger this line
+            // by sending a garbage bearer, and these are precisely the two config values the boot
+            // gate's errors go out of their way never to print. `error` names which check failed,
+            // which is what an operator debugging a 401 actually needs.
+            tracing::warn!(error = %e, "MCP JWT validation failed");
             unauthorized(&state)
         }
     }

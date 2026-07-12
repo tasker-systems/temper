@@ -37,13 +37,42 @@
 
 ### H1: Audience validation disabled when AUTH_AUDIENCE unset
 
-**Status: Fixed (mitigated)**
+**Status: CLOSED (2026-07-12) — structurally, not by documentation.**
 
-When `AUTH_AUDIENCE` env var is empty, `validate_aud` is set to false, accepting any JWT from the same issuer regardless of intended audience.
+When `AUTH_AUDIENCE` was empty or unset, `validate_aud` was set to false, accepting any JWT from the
+same issuer regardless of intended audience.
 
-**Current state:** For development with a single Neon Auth project, this is acceptable. For production, `AUTH_AUDIENCE` must be configured. The Vercel deployment (I4) must set this env var.
+The original mitigation was to *document* the variable as required for production. That is not a
+control: it relied on every future operator reading a checklist, and it left the failure silent when
+they didn't. The finding stayed exploitable-in-principle for three months behind a `tracing::warn`.
 
-**Action:** Document `AUTH_AUDIENCE` as required for production in the I4 deployment checklist.
+**What actually closed it — two fixes, not one:**
+
+1. **The config can no longer omit an audience.** It is a non-optional `String` on a typed
+   `AuthConfig` (`crates/temper-services/src/auth_config.rs`), parsed once at the choke point both
+   surfaces call. A missing audience cannot be *represented*, so `JwksKeyStore::validation` has no
+   branch left that could set `validate_aud = false`, and an instance that cannot state which
+   audience it validates refuses to boot.
+2. **The token can no longer omit the claim.** This was the half that nearly shipped as "fixed".
+   `set_audience` does **not** make `aud` mandatory: `jsonwebtoken`'s `required_spec_claims` defaults
+   to `{"exp"}`, and its docs say plainly *"Validation only happens if `aud` claim is present in the
+   token."* A token carrying **no** `aud` at all was still accepted, with `validate_aud = true`.
+   `validation()` now sets `required_spec_claims(&["exp", "iss", "aud"])`.
+
+An adversarial review caught (2) after (1) was written, committed, and documented as complete. The
+tell was that adding an `aud` claim to every test fixture had changed no test outcome — a suite in
+which every token carries the claim can never discover that the claim is optional. Both halves are
+now bite-tested: `token_with_no_audience_claim_is_refused_on_both_surfaces` and
+`foreign_audience_token_is_refused_on_both_surfaces`
+(`tests/e2e/tests/auth_seam_parity_e2e.rs`). See
+[the design spec](../superpowers/specs/2026-07-12-audience-issuer-env-coherence-design.md).
+
+**Two lessons worth keeping.** First: this finding was correctly identified, correctly rated High,
+and then answered with a doc change. A security control that depends on someone remembering to set an
+environment variable is not a control — make the unsafe state unrepresentable, or it will be reached.
+Second: *requiring a value to match is not the same as requiring it to exist.* "Reject a wrong `aud`"
+and "require this instance's `aud`" are different properties, and only the first one is what
+`set_audience` gives you.
 
 ## Medium Findings
 

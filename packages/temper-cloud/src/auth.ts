@@ -6,12 +6,31 @@ export interface AuthClaims {
   email_verified: boolean;
 }
 
+/**
+ * Verify a bearer token: signature, issuer, AND audience.
+ *
+ * The audience check is not optional and `aud` must be PRESENT. This verifier previously passed no
+ * `audience` option at all, so it accepted any correctly-signed token from the issuer regardless of
+ * which API it was minted for — the same fall-open the Rust surfaces just closed, living on in a
+ * third verifier. It has no live route today, which is exactly why it went unnoticed; an unwired gun
+ * pointed at the same database is still a gun.
+ *
+ * `requiredClaims: ["aud"]` is load-bearing on its own: like jsonwebtoken, jose only *compares* the
+ * audience when the claim exists, so a token omitting `aud` would otherwise pass the comparison by
+ * skipping it.
+ */
 export async function verifyToken(
   token: string,
   key: jose.CryptoKey | jose.KeyObject | jose.JWK | Uint8Array | jose.JWTVerifyGetKey,
   issuer: string,
+  audience: string = getAudience(),
 ): Promise<AuthClaims> {
-  const opts: jose.JWTVerifyOptions = { issuer, algorithms: ["RS256", "EdDSA"] };
+  const opts: jose.JWTVerifyOptions = {
+    issuer,
+    audience,
+    requiredClaims: ["aud", "iss", "exp"],
+    algorithms: ["RS256", "EdDSA"],
+  };
   // jose v6 has separate overloads for key vs getKey — narrow to match
   const { payload } =
     typeof key === "function"
@@ -74,6 +93,18 @@ export function getJwksVerifier(): jose.JWTVerifyGetKey {
 
   cachedJwks = jose.createRemoteJWKSet(new URL(jwksUrl));
   return cachedJwks;
+}
+
+/**
+ * The one audience this instance validates — the same value the Rust boot gate
+ * (`temper-services::auth_config`) refuses to start without. There is exactly one per instance.
+ */
+export function getAudience(): string {
+  const audience = process.env.AUTH_AUDIENCE;
+  if (!audience) {
+    throw new Error("AUTH_AUDIENCE environment variable is required");
+  }
+  return audience;
 }
 
 export function getIssuer(): string {

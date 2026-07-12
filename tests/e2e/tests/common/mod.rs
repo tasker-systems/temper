@@ -19,6 +19,7 @@ use tokio::net::TcpListener;
 use temper_api::create_app;
 use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
 use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
+use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::{
     config::ApiConfig,
     state::{AppState, JwksKeyStore},
@@ -114,6 +115,13 @@ pub async fn run_temper_cli(
     .expect("spawn_blocking join")
 }
 
+/// The audience this test instance validates. Every test JWT must carry it as its `aud`.
+///
+/// Before the auth-config work the fixtures set `auth_audience: None`, which set
+/// `validate_aud = false` — so these tokens carried no `aud` at all and the e2e suite never
+/// exercised audience validation on either surface. It does now.
+pub const TEST_AUDIENCE: &str = "test-audience";
+
 /// JWT claims for test tokens.
 #[derive(Debug, Serialize, Deserialize)]
 struct TestClaims {
@@ -121,8 +129,69 @@ struct TestClaims {
     email: String,
     email_verified: bool,
     iss: String,
+    aud: String,
     iat: i64,
     exp: i64,
+}
+
+/// Claims with **no `aud` at all** — the subtler hole.
+///
+/// Setting an expected audience is not enough on its own: `jsonwebtoken` only checks `aud` when the
+/// claim is PRESENT (`required_spec_claims` defaults to `{"exp"}`, and its docs say so outright).
+/// So a token omitting `aud` entirely was accepted even with `validate_aud = true` — and no test in
+/// this suite could catch it, because every fixture token carries an `aud`.
+#[derive(Debug, Serialize, Deserialize)]
+struct NoAudienceClaims {
+    sub: String,
+    email: String,
+    email_verified: bool,
+    iss: String,
+    iat: i64,
+    exp: i64,
+}
+
+/// Sign a JWT that omits the `aud` claim entirely. Correctly signed, unexpired, right issuer.
+pub fn generate_jwt_without_audience(sub: &str, email: &str) -> String {
+    let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.key"))
+        .expect("Failed to load test RSA private key");
+
+    let now = Utc::now().timestamp();
+    let claims = NoAudienceClaims {
+        sub: sub.to_string(),
+        email: email.to_string(),
+        email_verified: true,
+        iss: "test-issuer".to_string(),
+        iat: now,
+        exp: now + 3600,
+    };
+
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+        .expect("Failed to sign aud-less JWT")
+}
+
+/// Sign a JWT for a DIFFERENT audience than this instance validates — a token the same trusted
+/// issuer minted for some other API. Correctly-signed, unexpired, right issuer, wrong `aud`.
+///
+/// This is the token that used to sail straight through: an unset `AUTH_AUDIENCE` set
+/// `validate_aud = false`, so temper-api accepted it. Anything using this helper is asserting a
+/// refusal.
+pub fn generate_jwt_for_other_audience(sub: &str, email: &str) -> String {
+    let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.key"))
+        .expect("Failed to load test RSA private key");
+
+    let now = Utc::now().timestamp();
+    let claims = TestClaims {
+        sub: sub.to_string(),
+        email: email.to_string(),
+        email_verified: true,
+        iss: "test-issuer".to_string(),
+        aud: "https://some-other-api.example/api".to_string(),
+        iat: now,
+        exp: now + 3600,
+    };
+
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+        .expect("Failed to sign foreign-audience JWT")
 }
 
 /// Sign a JWT with the test RSA private key. Valid for 1 hour.
@@ -136,6 +205,7 @@ pub fn generate_test_jwt(sub: &str, email: &str) -> String {
         email: email.to_string(),
         email_verified: true,
         iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
         iat: now,
         exp: now + 3600,
     };
@@ -153,6 +223,7 @@ struct MachineTestClaims {
     azp: String,
     gty: String,
     iss: String,
+    aud: String,
     iat: i64,
     exp: i64,
 }
@@ -170,6 +241,7 @@ pub fn generate_machine_jwt(client_id: &str) -> String {
         azp: client_id.to_string(),
         gty: "client-credentials".to_string(),
         iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
         iat: now,
         exp: now + 3600,
     };
@@ -189,6 +261,7 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
         email: email.to_string(),
         email_verified: true,
         iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
         iat: now - 7200,
         exp: now - 3600,
     };
@@ -217,6 +290,7 @@ pub fn generate_test_jwt_eddsa(sub: &str, email: &str) -> String {
         email: email.to_string(),
         email_verified: true,
         iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
         iat: now,
         exp: now + 3600,
     };
@@ -362,9 +436,12 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 
     let api_config = ApiConfig {
         database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
         auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,
@@ -461,9 +538,12 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
 
     let api_config = ApiConfig {
         database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
         auth_provider_name: provider.to_string(),
         cors_origins: vec![],
         port: 0,

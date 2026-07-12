@@ -21,15 +21,14 @@ pub struct OAuthStaticConfig {
 }
 
 /// Configuration specific to the MCP server deployment.
+///
+/// Deliberately carries **no audience**. An instance has exactly one, parsed into
+/// `temper_services::auth_config::AuthConfig` and read by both surfaces.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
     /// Public base URL of this MCP server, e.g. `https://temperkb.io`.
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
     pub mcp_base_url: String,
-
-    /// OAuth audience / resource indicator for MCP tokens.
-    /// Must match what Auth0 is configured to issue tokens for.
-    pub mcp_audience: String,
 
     /// Pre-registered Auth0 application client_id for MCP clients.
     /// Returned by the registration endpoint so clients like Claude Desktop
@@ -48,9 +47,6 @@ impl McpConfig {
 
         Ok(Self {
             mcp_base_url: env::var("MCP_BASE_URL").map_err(McpConfigError::Env)?,
-            mcp_audience: env::var("MCP_AUDIENCE")
-                .or_else(|_| env::var("AUTH_AUDIENCE"))
-                .map_err(McpConfigError::Env)?,
             mcp_client_id: env::var("MCP_CLIENT_ID").ok(),
             oauth: server_file.oauth,
         })
