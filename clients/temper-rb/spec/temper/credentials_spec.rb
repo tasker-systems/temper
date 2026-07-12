@@ -23,6 +23,14 @@ RSpec.describe Temper::Credentials do
     let(:token_url) { 'https://auth.test/oauth/token' }
     let(:base) { Time.at(1_000_000) }
 
+    # The cross-language wire contract, shared with temper's own AS. See the file's
+    # $comment for why it exists: both sides used to be green against their own
+    # assumption, and no client could mint against temper's issuer.
+    let(:contract) do
+      JSON.parse(File.read(File.expand_path('../../../../tests/contracts/m2m-token-request.json',
+                                            __dir__)))
+    end
+
     def creds(clock = -> { base })
       described_class.new(token_url: token_url, client_id: 'cid', client_secret: 'sec',
                           audience: 'https://api.test', clock: clock)
@@ -34,15 +42,56 @@ RSpec.describe Temper::Credentials do
                    headers: { 'Content-Type' => 'application/json' })
     end
 
-    it 'mints a token on first use and sends the four M2M fields' do
+    # Parse the mint request the way the SERVER does, not the way the client wrote it.
+    def sent_params
+      form = nil
+      expect(a_request(:post, token_url).with do |req|
+        form = URI.decode_www_form(req.body).to_h
+        true
+      end).to have_been_made.once
+      form
+    end
+
+    it 'mints a token on first use, form-encoded, with the M2M fields' do
       stub_mint('tok-1')
       expect(creds.token).to eq('tok-1')
 
-      expect(a_request(:post, token_url).with do |req|
-        body = JSON.parse(req.body)
-        body['grant_type'] == 'client_credentials' && body['client_id'] == 'cid' &&
-          body['client_secret'] == 'sec' && body['audience'] == 'https://api.test'
-      end).to have_been_made.once
+      expect(sent_params).to eq('grant_type' => 'client_credentials', 'client_id' => 'cid',
+                                'client_secret' => 'sec', 'audience' => 'https://api.test')
+    end
+
+    # THE regression test. The gem sent `application/json`, which Auth0 tolerates and
+    # temper's AS does not: its handleToken reads the body with `req.formData()`, so a
+    # JSON mint never reached the client_credentials branch at all.
+    it 'sends the content type the token endpoint actually parses' do
+      stub_mint('tok-1')
+      creds.token
+
+      expect(a_request(:post, token_url)
+        .with(headers: { 'Content-Type' => contract.fetch('content_type') }))
+        .to have_been_made.once
+    end
+
+    it 'emits exactly the params the shared wire contract requires' do
+      stub_mint('tok-1')
+      creds.token
+
+      expect(sent_params.keys).to include(*contract.fetch('required_params'))
+      expect(sent_params.fetch('grant_type')).to eq(contract.fetch('grant_type'))
+    end
+
+    # A temper-issued credential (`temper admin machine issue`, a tmpr_* client id)
+    # points token_url at the instance's own /oauth/token, which mints with its
+    # server-side AS_AUDIENCE. There is no audience for the caller to send.
+    it 'omits audience entirely for a temper-issued credential' do
+      stub_mint('tok-1')
+      c = described_class.new(token_url: token_url, client_id: 'tmpr_abc',
+                              client_secret: 'sec', clock: -> { base })
+      expect(c.token).to eq('tok-1')
+
+      expect(sent_params).to eq('grant_type' => 'client_credentials',
+                                'client_id' => 'tmpr_abc', 'client_secret' => 'sec')
+      expect(sent_params).not_to have_key('audience')
     end
 
     it 'caches the token across calls' do
@@ -82,13 +131,25 @@ RSpec.describe Temper::Credentials do
       expect(c.refresh!).to eq('tok-2')
     end
 
-    it 'requires every M2M field, throwing rather than defaulting' do
+    it 'requires every mandatory M2M field, throwing rather than defaulting' do
       expect do
         described_class.new(token_url: token_url, client_id: '', client_secret: 's', audience: 'a')
       end.to raise_error(ArgumentError, /client_id/)
 
       expect do
-        described_class.new(token_url: token_url, client_id: 'c', client_secret: 's', audience: nil)
+        described_class.new(token_url: '', client_id: 'c', client_secret: 's')
+      end.to raise_error(ArgumentError, /token_url/)
+    end
+
+    # audience is Auth0's, not the protocol's -- omitting it is a supported
+    # configuration, but a present-and-empty one is still a caller bug.
+    it 'accepts an absent audience but rejects an empty one' do
+      expect do
+        described_class.new(token_url: token_url, client_id: 'c', client_secret: 's')
+      end.not_to raise_error
+
+      expect do
+        described_class.new(token_url: token_url, client_id: 'c', client_secret: 's', audience: '')
       end.to raise_error(ArgumentError, /audience/)
     end
 

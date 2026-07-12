@@ -5,7 +5,8 @@ When the Temper Authorization Server (native SAML) is about to mint a token, it 
 from their SAML-asserted groups. This is a **server-to-server** call between two co-deployed
 siblings — not a browser-facing endpoint, not a JWT path.
 
-Source: `crates/temper-api/src/middleware/internal_auth.rs`. Operator setup:
+Source: `crates/temper-api/src/middleware/internal_auth.rs` (the HMAC gate),
+`crates/temper-api/src/handlers/internal_saml.rs` (the handler). Operator setup:
 [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md#3-map-idp-groups-to-temper-teamsroles-phase-2).
 
 ## Trust model: an HMAC signature over the body
@@ -72,6 +73,29 @@ A true network boundary (making the API non-publicly-routable) is explicitly **o
 scope**: the same API also serves public OAuth/SAML endpoints, so it must stay reachable, and
 private networking is Enterprise-tier Vercel. Not worth it versus hardening the secret.
 
+## The federated path through the seam
+
+The handler does two things: resolve the profile, then reconcile its `idp` memberships. The
+resolve half goes through the [authorization seam](./authorization-seam.md)'s **federated
+entry point**, `resolve_federated_human` — this endpoint was the third site hand-building a
+`PrincipalKind::Human`, and a surface that can construct one can forge one.
+
+Three properties are worth naming, because they are what make a non-JWT path safe to have at
+all:
+
+- **There is nothing to classify.** The assertion was already authenticated server-to-server
+  by the co-deployed AS (the HMAC above) *before* the token is minted. So this path skips
+  `classify` and the email ladder — the email is *asserted*, not resolved — and only
+  resolves-or-JITs the profile the minted token will later resolve to.
+- **`provider` is server config, never a payload field.** The seam is handed
+  `state.config.auth_provider_name`, so the profile this endpoint resolves is the same one
+  `authenticate_token` will resolve the AS's freshly minted token to. A payload-supplied
+  provider would let the caller land the assertion on a *different* profile.
+- **The machine gate still covers it.** `resolve_human_from_claims`'s machine-shape guard is
+  the second, independent layer (see the [machine-token contract](./machine-token-contract.md)),
+  and it sits on *this* path too: an assertion carrying an `@clients`-suffixed
+  `external_user_id` is refused here exactly as it is everywhere else.
+
 ## Bounded blast radius
 
 Even if the endpoint were reached by an attacker, the damage is bounded by design:
@@ -81,7 +105,10 @@ Even if the endpoint were reached by an attacker, the damage is bounded by desig
   operator already wrote.
 - It **never touches `native` memberships** (added in-app or by join-request approval) or
   auto-join teams — reconcile manages only `source='idp'` rows.
-- It is **purely authorization**: it never creates, deletes, or deactivates a profile.
+- It **never deletes or deactivates a profile.** It *can* JIT-create one — the same
+  resolve-or-JIT the token path performs on a first sign-in, for an identity the AS is about
+  to mint a token for anyway. So the worst case is a spurious profile with only
+  operator-mapped `idp` memberships, not an escalation of an existing one.
 
 ## Further hardening: edge rate-limiting
 

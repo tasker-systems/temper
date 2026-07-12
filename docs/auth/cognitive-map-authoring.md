@@ -86,9 +86,20 @@ construction.
 
 Agents are gated **identically** to humans. The steward is an M2M principal
 (`client_credentials`); it authors `019f2391` because it holds an **explicit write
-grant**, exactly the mechanism a granted human would use — *not* via team membership
-(agents belong to no team). There is no agent-specific bypass and no ambient authority:
-every call resolves to one concrete `profile_id`, and every gate evaluates that id.
+grant**, exactly the mechanism a granted human would use — *not* by virtue of any team
+membership, since membership confers **read** only (the Q-A flip). There is no
+agent-specific bypass and no ambient authority: every call resolves to one concrete
+`profile_id`, and every gate evaluates that id.
+
+An agent profile **can** hold team memberships — registration takes `--team <ref>[:role]`
+(repeatable) and also enrolls the machine in the gating team as `watcher`, so it clears the
+`system_access` gate. That is the point of the design: a machine's reach is ordinary teams
+and ordinary grants, bounded to what its minter could confer on a human, so **machine RBAC
+falls out of the same predicates as human RBAC** — there is no machine-specific
+authorization path to keep in sync. What team membership still does *not* buy an agent, any
+more than it buys a human, is cogmap write. See
+[../guides/machine-credentials.md](../guides/machine-credentials.md) and the
+[machine-token contract](machine-token-contract.md).
 
 When a human drives an agent (e.g. an AI assistant over the human's authenticated MCP
 session), the session authenticates as the **human's** principal — there is no separate

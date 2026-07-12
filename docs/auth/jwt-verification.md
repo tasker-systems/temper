@@ -1,10 +1,10 @@
 # JWT verification
 
 Both surfaces verify a Bearer JWT before anything reaches the [authorization
-seam](./authorization-seam.md). Verification stays **per-surface** for the human-token cut
-because the audience differs legitimately; the shared machinery is the `JwksKeyStore`.
-(Verification moves *into* the seam only when machine tokens arrive — see the
-[machine-token contract](./machine-token-contract.md).)
+seam](./authorization-seam.md). Verification stays **per-surface** — and it is now the *only*
+thing that does, because the audience differs legitimately. The shared machinery is the
+`JwksKeyStore`; everything downstream of the decode (classification, the email ladder, claim
+construction, the gates) is the seam's.
 
 Source: `crates/temper-services/src/state.rs` (`JwksKeyStore`),
 `crates/temper-api/src/middleware/auth.rs`, `crates/temper-mcp/src/middleware.rs`.
@@ -19,6 +19,11 @@ An instance validates tokens from exactly **one** issuer, configured by env:
   (Ed25519) tokens; `JwksKeyStore` fetches the OKP key from the AS's `/oauth/jwks`.
   See [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md) for how the AS is
   stood up.
+
+Both issuers mint **human and machine** tokens, with the same signing key per issuer — a
+`client_credentials` token is not a separate key family, only a separate *claim shape*. So
+verification is identical for both and the split happens one step later, in the seam's
+classifier.
 
 `JwksKeyStore` supports both key families and maps each to its algorithm:
 
@@ -52,27 +57,43 @@ Same issuer, different audience — a token minted for the API is not automatica
 the MCP endpoint and vice-versa. Both call `jwks_store.validation(issuer, Some(aud), alg)`
 with their own audience.
 
-## Claim normalization → `AuthClaims`
+## What the surface hands the seam
 
-Verification produces raw JWT claims; each surface normalizes them into the `AuthClaims`
-the seam consumes.
+Verification produces raw JWT claims. The surface decodes them into the shared
+`temper_services::auth::RawJwtClaims` — a *superset* struct whose optional fields (`email`,
+`email_verified`, `azp`, `gty`) absorb the human/machine shape difference — and hands the seam
+**two** things:
 
-**temper-api — the email-resolution ladder.** `AuthClaims.email` is resolved in order
-(`resolve_email_from_claims`):
+| | |
+|---|---|
+| `RawJwtClaims` | the decoded claims, exactly as verified |
+| the raw bearer `&str` | needed by one rung of the email ladder — the `/userinfo` call presents the token itself, not its claims |
+
+That is the whole handoff: `authenticate_token(&state, &raw, token)`. The surface **does not**
+build an `AuthClaims` — the seam is the only constructor. On temper-mcp the two values travel
+through the HTTP extensions as `RawJwtClaims` + `BearerToken` (a newtype, so it cannot be
+confused with any other string in the extensions map).
+
+## The email-resolution ladder (in the seam, for both surfaces)
+
+`crates/temper-services/src/auth/email.rs`. It used to live in temper-api's middleware, and
+*only* there — temper-mcp set `email: String::new()` and auto-provisioned. It now runs for
+whichever surface presented the token, and resolves in order:
 
 1. the `email` claim embedded in the token (a custom Auth0 Action can add it), else
 2. a previously cached email in `kb_profile_auth_links` (from a prior login), else
-3. the OIDC `/userinfo` endpoint (discovered via `/.well-known/openid-configuration`) as a
-   last resort. Failure here is a `401` — the token is missing email and we could not
-   recover it.
+3. the OIDC `/userinfo` endpoint (discovered once per process via
+   `/.well-known/openid-configuration`) as a last resort.
 
-**temper-mcp — the empty-email path.** MCP tokens may omit email; `claims_from` sets
-`email: String::new()` and lets `resolve_from_claims` recover it from the cached auth link
-downstream (`service.rs`). A machine token has no human email at all — see the
-[machine-token contract](./machine-token-contract.md).
+Falling off the bottom is `AuthzError::EmailResolution` → a `401` (HTTP) / a terminal
+`INVALID_REQUEST` (MCP): **a human we cannot name is a human we will not provision.** The
+ladder is deliberately concrete rather than a trait — there is exactly one implementation and
+no policy to vary, and a surface that wanted a different email answer would be re-introducing
+the drift.
 
-Normalization is **input** to the seam. The seam does not verify signatures or resolve
-email; it takes an `AuthClaims` and owns resolve + the gates.
+The ladder is on the **human arm only**. A machine token has no human email and no
+`/userinfo` to ask, so running it on that path would be an authentication failure dressed as a
+lookup — see the [machine-token contract](./machine-token-contract.md).
 
 ## Instance-mode invariants
 
@@ -82,3 +103,11 @@ email; it takes an `AuthClaims` and owns resolve + the gates.
 - **AS↔API shared values must agree.** `AS_AUDIENCE == AUTH_AUDIENCE` and
   `AS_ISSUER == AUTH_ISSUER`; `temper admin saml provision` keeps them consistent by
   construction. Details in [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md).
+- **On an AS instance, don't diverge `MCP_AUDIENCE`.** temper-mcp resolves its audience as
+  `MCP_AUDIENCE ?? AUTH_AUDIENCE` (`temper-mcp/src/config.rs`), while the Temper AS mints
+  **every** token — human and machine — with the server-side `AS_AUDIENCE`, ignoring any
+  request-supplied `audience` (`mint.ts`). So setting `MCP_AUDIENCE` to something other than
+  `AS_AUDIENCE` on an AS instance makes AS-minted tokens unverifiable at the MCP endpoint:
+  there is no way to ask that AS for a differently-audienced token. (Auth0-fronted instances
+  are unaffected — Auth0 mints to the requested `audience` — and in practice they set the two
+  equal anyway.)
