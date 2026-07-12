@@ -8,6 +8,7 @@
 //! later chunks. See goal `019f149b`.
 
 pub mod auth;
+pub mod auth_config;
 pub mod backend;
 pub mod config;
 pub mod error;
