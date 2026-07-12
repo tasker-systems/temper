@@ -419,6 +419,58 @@ Two things must be deleted because they stop being true:
 - the `WAYFIND_UNREACHABLE` hint string, which tells agents context-homed content is unreachable via
   wayfind.
 
+> #### ⚠️ Amended 2026-07-12, during T7's execution (PR #397). Three corrections, all measured.
+>
+> The block above is **kept as written** so the reasoning trail survives, but three of its claims did
+> not survive contact with the data. Measured on prod (273 context regions vs 217 cogmap regions).
+>
+> **1. `κ` cannot do the job this section assigns it, because the normalizer breaks first.**
+> `wayfind_scope_ids` min-max normalizes salience over the **pooled** candidate set. Context salience is
+> driven by `centrality`, an *unbounded degree count* — **max 276** in a context vs **21.5** in a cogmap,
+> giving max salience **69.55** vs **9.53**. Pool the two kinds and every cogmap region's `sal_norm`
+> collapses to **≤ 0.137**: the α term shrinks from a [0, 0.4] range to [0, 0.055]. That *is* the
+> drowning this section says the prior exists to prevent — but the cause is a shared normalizer across
+> two incommensurable scales, not the raw-to-distilled count ratio, and an **additive** prior cannot
+> repair a **multiplicative** range crush.
+>
+> **The fix is to normalize per anchor kind, by `percent_rank`** (min-max is outlier-dominated *within*
+> a kind too: 90% of context regions sat in the bottom **5%** of their own range, cogmaps the bottom
+> 23%, so α was already near-inert). Per-kind normalization is what finally makes κ the *only* cross-kind
+> lever — i.e. what this section always wanted it to be.
+>
+> **2. `κ = 0.25` (what priors of 1.0/0.6 imply) is a structural exclusion, which this section
+> explicitly forbids.** Swept against 40 real query vectors:
+>
+> | κ | cogmap share of top-3 | of top-10 | queries still surfacing a context region in top-3 |
+> |---|---|---|---|
+> | 0.00 | 0.85 / 3 | 2.85 / 10 | 39 / 40 |
+> | **0.05** | **~2.1 / 3** | **~5.8 / 10** | **~25 / 40** ← a tilt |
+> | 0.10 | 2.85 / 3 | 8.65 / 10 | 6 / 40 |
+> | 0.25 | 3.00 / 3 | 10.00 / 10 | **0 / 40** ← an exclusion |
+>
+> Shipped **κ = 0.05**, and the prior is **anchor-keyed in the k-CTE**, *not* lens-resident: keying it on
+> `home_anchor_table` is correct by construction, whereas a lens only *proxies* for anchor kind.
+> `kb_cogmap_lenses.kappa_anchor_prior` (added in T2 "consumed in T7") therefore remains **unconsumed**,
+> and carries a `COMMENT` saying so.
+>
+> **3. "Widen `SearchScope`" is wrong — do not.** It is a wire enum (the `x-temper-search-diagnostics`
+> header, `openapi.json`, generated TS, and the temper-rb gem, which **`raise`s on an unknown enum
+> value**). A new variant is a hard-fail break for an older client and buys nothing: `classify_scope`
+> already reports `Wayfind` whenever wayfind is set, which stays true for a context-scoped wayfind.
+>
+> **Also fixed, because turning contexts on is what fires it — the NaN trap.** A region whose members
+> carry no embedding (a bodyless resource ⇒ zero chunks) has a **zero-vector centroid**, and pgvector's
+> `<=>` against a zero vector is **`NaN`**. Postgres sorts `NaN` **above every real value** on
+> `ORDER BY … DESC`, and `NULLS LAST` does *not* guard it — so un-guarded, wayfind returns those
+> contentless regions as the top-N **for every query**. Ten such regions (3.7%) existed in prod. Latent
+> in the shipped function; dormant only because no *cogmap* region has a zero centroid. Guarded at the
+> consumer with `COALESCE(NULLIF(…, 'NaN'::float8), 0.0)` — a zero vector has no direction, so it has no
+> similarity, and the region competes on salience alone. **The upstream cause is unfixed** (see T8).
+>
+> One thing this section got exactly right and is worth saying out loud: the **client-side** guard in
+> `build_search_params` — not the server — is what actually made `temper search --context X --wayfind`
+> fail. A server-only fix would have left the CLI still refusing the command.
+
 **Orientation gets a context surface**: `context_shape`, `context_region_metrics`, and
 `graph_context_territories`, mirroring the cogmap trio, exposed on MCP and CLI. This is the
 "region-level view of everything in a context" this arc exists to deliver. The existing context graph

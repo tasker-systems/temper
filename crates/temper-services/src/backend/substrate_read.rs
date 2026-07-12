@@ -31,6 +31,7 @@ use temper_core::types::cognitive_maps::{
     CharterBlock, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow, CogmapRegulationRow,
     CogmapStaleness,
 };
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
 use temper_core::types::invocation::{
     Disposition, InvocationActRow, InvocationSummary, InvocationView,
@@ -359,27 +360,24 @@ pub(crate) fn clamp_search_params(params: &SearchParams) -> ClampedSearch {
     }
 }
 
-/// Resolve the one active scope selector (§6) into the corpus bounds for `unified_search`: an optional
-/// context id (Surface A `context_ref`) and an optional explicit scope-id set (Surface B — `cogmap_id`
-/// single-map, or `wayfind` region-salience funnel). At most one of `{context_ref, cogmap_id, wayfind}`
-/// may be set; more than one is a `BadRequest`. An empty scope-id set is the deny case — it yields zero
+/// Resolve the scope selectors (§6) into the corpus bounds for `unified_search`: an optional context id
+/// (Surface A `context_ref`) and an optional explicit scope-id set (Surface B — `cogmap_id` single-map,
+/// or the `wayfind` region-salience funnel). An empty scope-id set is the deny case — it yields zero
 /// rows downstream via `c.id = ANY('{}')`, never an error ("no view from nowhere", spec §5/§7).
+///
+/// `context_ref` and `cogmap_id` remain mutually exclusive — they name two different homes, and asking
+/// for both is incoherent. But **`wayfind` now composes with either** (spec §3.7): since wayfind pools
+/// regions over both anchor kinds, `--context X --wayfind` is no longer a contradiction, it means
+/// *"wayfind within this context"* — the anchor scopes the region pool. That composition is the whole
+/// point of T7, so the old three-way exclusion is gone.
 async fn resolve_search_scope(
     pool: &PgPool,
     profile_id: ProfileId,
     params: &SearchParams,
 ) -> ApiResult<(Option<uuid::Uuid>, Option<Vec<Uuid>>)> {
-    let scope_selectors = [
-        params.context_ref.is_some(),
-        params.cogmap_id.is_some(),
-        params.wayfind,
-    ]
-    .into_iter()
-    .filter(|&set| set)
-    .count();
-    if scope_selectors > 1 {
+    if params.context_ref.is_some() && params.cogmap_id.is_some() {
         return Err(ApiError::BadRequest(
-            "context_ref, cogmap_id, and wayfind are mutually exclusive".into(),
+            "context_ref and cogmap_id are mutually exclusive".into(),
         ));
     }
 
@@ -397,9 +395,18 @@ async fn resolve_search_scope(
         None => None,
     };
 
-    // `wayfind` runs the region-salience funnel (Task A); `cogmap_id` the single-map scope. Both
-    // visibility-gate inside the SQL; an empty result is deny → zero rows, never an error.
+    // `wayfind` runs the region-salience funnel over every visible anchor of both kinds; `cogmap_id`
+    // alone is the single-map scope. Both visibility-gate inside the SQL; an empty result is deny →
+    // zero rows, never an error.
     let scope_ids: Option<Vec<Uuid>> = if params.wayfind {
+        // A named anchor scopes the region pool to itself ("wayfind within this context/cogmap").
+        // The exclusion above guarantees at most one of the two is set, so this match is total and
+        // the arm order carries no hidden precedence. `None` ⇒ pool every visible anchor.
+        let anchor = match (context_id, params.cogmap_id) {
+            (Some(ctx), _) => Some(HomeAnchor::Context(ContextId::from(ctx))),
+            (_, Some(map)) => Some(HomeAnchor::Cogmap(CogmapId::from(map))),
+            (None, None) => None,
+        };
         Some(
             readback::wayfind_scope_ids(
                 pool,
@@ -412,6 +419,7 @@ async fn resolve_search_scope(
                     // Saturate the i64→i32 narrowing so a huge N can't wrap negative; the SQL `k`
                     // CTE then clamps into [1, max_n].
                     regions: params.regions.map(|n| n.clamp(0, i32::MAX as i64) as i32),
+                    anchor,
                 },
             )
             .await
@@ -474,8 +482,19 @@ fn embed_query_if_missing(params: &mut SearchParams) -> bool {
     }
 }
 
-/// Classify the scope selector of a search request (issue #360). Mirrors the mutual-exclusion the
-/// server already enforces in [`resolve_search_scope`]; `Global` is the no-selector default.
+/// Classify the scope selector of a search request (issue #360). `Global` is the no-selector default.
+///
+/// `wayfind` wins the precedence deliberately: since T7 it composes with `context_ref`/`cogmap_id`
+/// (spec §3.7), and when it is set it is the funnel that *produced* the corpus — which is what this
+/// field exists to report. The anchor merely scoped that funnel.
+///
+/// **[`SearchScope`] is deliberately NOT widened** to carry the anchor. It is a wire enum — it rides
+/// the `x-temper-search-diagnostics` header, `openapi.json`, the generated TS types, and the temper-rb
+/// gem, which **`raise`s on an enum value it does not know** (`search_scope.rb:39`). A new variant is
+/// therefore a hard-fail break for an older client, and it would buy nothing: a caller already knows
+/// which anchor it asked for, and diagnostics exist to explain the *result shape*, not to echo the
+/// request back. If the anchor is ever genuinely needed here, add an *optional* field to
+/// [`SearchDiagnostics`] rather than a variant.
 fn classify_scope(params: &SearchParams) -> SearchScope {
     if params.wayfind {
         SearchScope::Wayfind
@@ -497,30 +516,19 @@ fn search_hint(
     scope_size: Option<i64>,
     degraded: bool,
 ) -> Option<String> {
-    // wayfind's defining trap (issue #360): it only reaches cogmap-distilled content, so content that
-    // is context-homed (in no cogmap) is unreachable *by construction* — no rephrasing will ever
-    // surface it. Because the public L0 kernel is visible to everyone, a wayfind scope is rarely
-    // truly empty, so this guidance must fire on `NoMatch` too, not just `OutOfScope`; otherwise an
-    // agent keeps retrying phrasings against content wayfind can never see.
-    const WAYFIND_UNREACHABLE: &str =
-        "wayfind only reaches cogmap-distilled content — if what you \
-        want is context-homed (in no cogmap), it is unreachable here regardless of phrasing. Try \
-        `--context <ref>`, or drop `--wayfind` for an unscoped search.";
-
+    // The `WAYFIND_UNREACHABLE` hint that used to live here is GONE, because it stopped being true
+    // (spec §3.7). It told agents that "wayfind only reaches cogmap-distilled content — if what you
+    // want is context-homed (in no cogmap), it is unreachable here regardless of phrasing." As of T7
+    // wayfind pools regions over BOTH anchor kinds, so context-homed content is reachable, and a
+    // `NoMatch` under wayfind now means what it means everywhere else: rephrase or widen. Leaving the
+    // hint in would have actively taught agents to stop asking for the thing that now works.
     let mut parts: Vec<String> = Vec::new();
     match (scope, reason) {
-        (SearchScope::Wayfind, SearchReason::OutOfScope) => parts.push(format!(
-            "wayfind scope is empty: 0 candidate resources across the cogmaps you can see. \
-             {WAYFIND_UNREACHABLE}"
-        )),
-        (SearchScope::Wayfind, SearchReason::NoMatch) => {
-            let prefix = scope_size
-                .map(|n| format!("{n} candidate resource(s) in wayfind scope; "))
-                .unwrap_or_default();
-            parts.push(format!(
-                "{prefix}nothing matched the query. Note: {WAYFIND_UNREACHABLE}"
-            ));
-        }
+        (SearchScope::Wayfind, SearchReason::OutOfScope) => parts.push(
+            "wayfind scope is empty: 0 candidate resources across the anchors you can see. Drop \
+             `--wayfind` for an unscoped search."
+                .to_string(),
+        ),
         (SearchScope::Cogmap, SearchReason::OutOfScope) => parts.push(
             "this cogmap admits 0 resources you can see — check the cogmap ref, or try \
              `--context <ref>`."
@@ -970,7 +978,11 @@ mod clamp_tests {
     }
 
     #[test]
-    fn hint_out_of_scope_wayfind_suggests_context() {
+    fn hint_out_of_scope_wayfind_suggests_dropping_wayfind() {
+        // T7: the useful escape hatch changed. An empty wayfind scope means zero candidates across
+        // EVERY visible anchor — contexts now included — so steering at `--context` (as this hint used
+        // to) is advice that cannot help: those regions were already pooled. Dropping `--wayfind` for
+        // an unscoped search is the move that can actually widen the corpus.
         let h = search_hint(
             SearchScope::Wayfind,
             SearchReason::OutOfScope,
@@ -979,7 +991,10 @@ mod clamp_tests {
         )
         .expect("out-of-scope wayfind must hint");
         assert!(h.contains("wayfind scope is empty"), "got: {h}");
-        assert!(h.contains("--context"), "must suggest --context; got: {h}");
+        assert!(
+            h.contains("--wayfind"),
+            "must offer dropping --wayfind; got: {h}"
+        );
     }
 
     #[test]
@@ -1010,16 +1025,19 @@ mod clamp_tests {
     }
 
     #[test]
-    fn hint_wayfind_no_match_still_flags_unreachable_and_suggests_context() {
-        // The dogfood trap: wayfind scope is non-empty (L0 is always visible), the query simply
-        // doesn't match — but the content may be context-homed and unreachable by construction.
-        // A bare "rephrase" hint would perpetuate the retry loop, so this must name --context.
+    fn hint_wayfind_no_match_no_longer_claims_context_content_is_unreachable() {
+        // T7 INVERTS this test. It used to require the hint to say that context-homed content is
+        // "unreachable" via wayfind and to steer the caller to `--context`. Wayfind now pools context
+        // regions too (spec §3.7), so that guidance is false — and false guidance is worse than none:
+        // it would teach an agent to stop asking for the thing that now works. A wayfind `NoMatch` is
+        // now an ordinary no-match, and falls through to the generic rephrase-or-widen hint.
         let h = search_hint(SearchScope::Wayfind, SearchReason::NoMatch, Some(3), false)
-            .expect("wayfind no-match must hint");
+            .expect("wayfind no-match must still hint");
         assert!(h.contains('3'), "should surface scope_size; got: {h}");
         assert!(
-            h.contains("--context") && h.contains("unreachable"),
-            "wayfind no-match must flag context-homed unreachability and suggest --context; got: {h}"
+            !h.contains("unreachable"),
+            "the WAYFIND_UNREACHABLE claim must be gone — context-homed content is reachable now; \
+             got: {h}"
         );
     }
 
