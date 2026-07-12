@@ -52,9 +52,13 @@ export function buildAsMetadata(issuer: string): AsMetadata {
     jwks_uri: `${iss}/oauth/jwks`,
     scopes_supported: ["openid", "profile", "email", "offline_access"],
     response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code", "refresh_token"],
+    // client_credentials (Phase B1): this AS mints machine tokens itself. Advertising it is not
+    // cosmetic — a conformant client reads this document to decide whether M2M is possible at all.
+    grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["none"],
+    // `none` for the PKCE public client; the secret-bearing methods are the machine grant's,
+    // which `readClientCredentials` accepts in either form (Basic preferred, RFC 6749 §2.3.1).
+    token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
   };
 }
 

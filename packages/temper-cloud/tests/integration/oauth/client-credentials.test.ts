@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createLocalJWKSet, exportPKCS8, generateKeyPair, jwtVerify } from "jose";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -94,6 +96,71 @@ describe("client_credentials grant", () => {
     expect(payload.azp).toBe("tmpr_cc1");
     expect(payload.sub).toBe("tmpr_cc1@clients");
     expect(payload.email).toBeUndefined();
+  });
+
+  // The server half of the cross-language wire contract in tests/contracts/m2m-token-request.json.
+  // The gem's spec asserts it EMITS this shape; this asserts the AS ACCEPTS it. Neither test alone
+  // catches a mismatch — which is exactly how the gem shipped a JSON mint against a formData()
+  // parser with both suites green.
+  describe("the shared M2M wire contract", () => {
+    const contract = JSON.parse(
+      readFileSync(
+        fileURLToPath(
+          new URL("../../../../../tests/contracts/m2m-token-request.json", import.meta.url),
+        ),
+        "utf8",
+      ),
+    ) as {
+      content_type: string;
+      required_params: string[];
+      grant_type: string;
+    };
+
+    it("accepts a request built from the contract, exactly as a client emits it", async () => {
+      await seedTemperClient(sql, "tmpr_contract", "s3cr3t");
+
+      const params: Record<string, string> = {
+        grant_type: contract.grant_type,
+        client_id: "tmpr_contract",
+        client_secret: "s3cr3t",
+      };
+      // Every param the contract calls required must be one this request actually carries.
+      expect(Object.keys(params)).toEqual(expect.arrayContaining(contract.required_params));
+
+      const res = await handleToken(
+        new Request("https://as/oauth/token", {
+          method: "POST",
+          headers: { "content-type": contract.content_type },
+          body: new URLSearchParams(params),
+        }),
+        db,
+      );
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).access_token).toBeTruthy();
+    });
+
+    // The defect itself. Before the guard in handleToken this threw out of formData() as a 500,
+    // so a JSON-minting client could not even read its own error correctly.
+    it("refuses a JSON body with invalid_request rather than throwing", async () => {
+      await seedTemperClient(sql, "tmpr_json", "s3cr3t");
+
+      const res = await handleToken(
+        new Request("https://as/oauth/token", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            grant_type: "client_credentials",
+            client_id: "tmpr_json",
+            client_secret: "s3cr3t",
+          }),
+        }),
+        db,
+      );
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("invalid_request");
+    });
   });
 
   it("rejects a wrong secret with invalid_client", async () => {

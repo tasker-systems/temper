@@ -2,6 +2,7 @@
 
 require 'faraday'
 require 'json'
+require 'uri'
 
 module Temper
   # Two strategies behind one interface. Precedence is not discovered from the
@@ -26,12 +27,21 @@ module Temper
       end
     end
 
-    # An Auth0 client_credentials machine principal -- a Sidekiq worker.
+    # A client_credentials machine principal -- a Sidekiq worker.
+    #
+    # Works against BOTH issuers a temper instance can be fronted by:
+    #
+    #   * Auth0 (`temper admin machine provision`), where `token_url` is your Auth0
+    #     tenant's /oauth/token and `audience` must equal the API's AUTH_AUDIENCE.
+    #   * temper's own AS (`temper admin machine issue`, a `tmpr_*` client id), where
+    #     `token_url` is your own instance's /oauth/token and `audience` is omitted --
+    #     that AS mints with its server-side AS_AUDIENCE and ignores a request-supplied
+    #     one entirely.
     #
     # Ported from packages/agent-workflows/steward/agent/lib/temper-auth.ts, the
-    # machine-principal caller already running in production: the same four
-    # TEMPER_M2M_* inputs, `requireEnv` semantics (throw, never default), and a
-    # cache keyed on an ABSOLUTE expires_at with a 60s skew.
+    # machine-principal caller already running in production: the same TEMPER_M2M_*
+    # inputs, `requireEnv` semantics (throw, never default), and a cache keyed on an
+    # ABSOLUTE expires_at with a 60s skew.
     #
     # Two deliberate divergences from that reference:
     #
@@ -44,12 +54,15 @@ module Temper
     #     a long unit of work has precisely that bug. Re-mint ON 401.
     class ClientCredentials
       SKEW_SECONDS = 60
+      TOKEN_REQUEST_CONTENT_TYPE = 'application/x-www-form-urlencoded'
 
-      def initialize(token_url:, client_id:, client_secret:, audience:, clock: -> { Time.now })
+      # `audience` is optional because it is Auth0's, not the protocol's. Omit it for a
+      # temper-issued credential.
+      def initialize(token_url:, client_id:, client_secret:, audience: nil, clock: -> { Time.now })
         @token_url = require_value(token_url, 'token_url')
         @client_id = require_value(client_id, 'client_id')
         @client_secret = require_value(client_secret, 'client_secret')
-        @audience = require_value(audience, 'audience')
+        @audience = audience.nil? ? nil : require_value(audience, 'audience')
         @clock = clock
         @mutex = Mutex.new
         @token = nil
@@ -90,7 +103,7 @@ module Temper
 
       def post_token_request
         response = Faraday.post(@token_url) do |req|
-          req.headers['Content-Type'] = 'application/json'
+          req.headers['Content-Type'] = TOKEN_REQUEST_CONTENT_TYPE
           req.body = token_request_body
         end
         return response if response.success?
@@ -99,15 +112,21 @@ module Temper
                                status: response.status, details: response.body)
       end
 
-      # `audience` must equal the API's configured AUTH_AUDIENCE, or the minted
-      # token fails validation before normalize_machine ever runs.
+      # RFC 6749 §4 mandates form encoding at the token endpoint. Auth0 also accepts
+      # JSON, which is why this sent JSON while Auth0 was the only issuer it faced --
+      # and why every test stayed green. Temper's own AS reads the body with
+      # `req.formData()`, so a JSON mint never reaches its client_credentials branch.
+      # Form-encoding is what both issuers accept.
       def token_request_body
-        JSON.generate(
+        params = {
           grant_type: 'client_credentials',
           client_id: @client_id,
-          client_secret: @client_secret,
-          audience: @audience
-        )
+          client_secret: @client_secret
+        }
+        # Auth0 requires it; temper's AS ignores a request-supplied audience and mints
+        # with its own AS_AUDIENCE. Sending an empty one would be a lie, so omit it.
+        params[:audience] = @audience unless @audience.nil?
+        URI.encode_www_form(params)
       end
     end
   end
