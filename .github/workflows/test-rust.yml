@@ -149,6 +149,22 @@ jobs:
 
       - uses: ./.github/actions/install-onnx
 
+      - name: Cache the HuggingFace model
+        # This job downloads bge from HF at runtime too — `--workspace` includes temper-cli, whose
+        # default `embed` feature selects `temper-ingest/embed-download`, and feature unification then
+        # cfg's the bundled `include_bytes!` branch out for the WHOLE build. (Which also means this
+        # job's `lfs: true` currently fetches a 105 MB model it never reads. See task `019f5822`.)
+        #
+        # `actions/cache`, not an upload/download artifact: the model is IMMUTABLE, so it caches
+        # perfectly and persists ACROSS runs. An artifact would need a `prepare` job that every other
+        # job must `needs:` — serializing the DAG and re-shipping ~400 MB every single run to save a
+        # download a cache does once, ever. (Artifacts are the right tool for per-commit BUILD OUTPUTS,
+        # which is what ../tasker-core shares — those would thrash a cache key.)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-bge-base-en-v1.5-${{ runner.os }}
+
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
 
