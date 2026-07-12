@@ -41,6 +41,19 @@ name: Rust Tests
 # would silently keep embedding on a single core. Setting it here is what actually gets the runner's
 # cores in play. It composes fine with `--test-threads 1`: one embed at a time, using all cores, rather
 # than one core while the rest idle.
+#
+# `TEMPER_ONNX_MODEL_PATH` (every test job) + `lfs: true`: **we ship the model; stop downloading it.**
+# A `--workspace` build pulls in temper-cli, whose default `embed` selects `temper-ingest/embed-download`,
+# and feature unification then cfg's the bundled `include_bytes!` branch out of the WHOLE build — so CI
+# was fetching ~400 MB of `onnx/model.onnx` from HuggingFace while a 105 MB quantized copy sat in the
+# repo, pinned long ago for Vercel. Pointing ORT straight at the checkout deletes the download, and with
+# it a serial prewarm step, two `actions/cache` blocks, and an entire class of failure: hf-hub takes a
+# blob lock on first download, and parallel test threads raced it
+# (`Lock acquisition failed: …/blobs/….lock`).
+#
+# It also closes a FIDELITY GAP nobody had noticed: the server (temper-api — no temper-cli in its graph)
+# runs the **bundled quantized** model, while CI was testing against the **full** model from HF. CI was
+# not exercising the model production actually runs. Now it is.
 
 on:
   workflow_call:
@@ -57,47 +70,24 @@ jobs:
       # through `main()`, so without this they would silently embed single-threaded. This env var is
       # the only lever that reaches them.
       TEMPER_ONNX_INTRA_THREADS: 0
+      # Load the model from the checkout instead of downloading it: the repo already ships it.
+      TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        # Deliberately NO `lfs: true`. `embed` is a default feature of temper-cli, which selects
-        # `temper-ingest/embed-download` — the model is fetched from HF at runtime, so the
-        # `include_bytes!` git-LFS branch is cfg'd out and no LFS asset is read here. Only the ort
-        # RUNTIME is needed. The DB jobs DO take LFS: they exercise the bundled server-side embed path.
+        with:
+          # Fetches `models/bge-base-en-v1.5/model_quantized.onnx` (105 MB), which
+          # `TEMPER_ONNX_MODEL_PATH` below points ORT at. Cheaper than the ~400 MB HuggingFace
+          # download this replaces — and it is the model the SERVER actually runs.
+          lfs: true
 
       - uses: ./.github/actions/setup-rust
         with:
-          cache-prefix: unit-v3
+          cache-prefix: unit-v4
           tools: nextest
 
       - uses: ./.github/actions/install-onnx
-
-      - name: Cache the HuggingFace model
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-bge-base-en-v1.5-${{ runner.os }}
-
-      - name: Warm the embedding model (serially, outside the test harness)
-        # `embed` is a DEFAULT feature of temper-cli, and it selects `temper-ingest/embed-download` —
-        # so a `--workspace` build fetches bge-base from HuggingFace at RUNTIME, not from the bundled
-        # git-LFS asset (feature unification keeps `embed-download` winning, so the `include_bytes!`
-        # branch is cfg'd out; that is also why this job takes no LFS).
-        #
-        # hf-hub takes a BLOB LOCK on that first download. This job runs tests in parallel, so once
-        # `test-embed` is enabled workspace-wide, N threads all race the same first download and lose:
-        #   `model init: download model: Lock acquisition failed: …/blobs/….lock`
-        #
-        # So do the download exactly ONCE, serially, before the parallel run — every subsequent test
-        # then finds a warm cache and never touches the lock. (The integration job never hit this
-        # because it already serializes on `--test-threads 1` for the ort mutex.)
-        #
-        # Deliberately `cargo test`, NOT `cargo nextest`: on a COLD cache this step's whole job is to
-        # pull a ~400 MB model, which takes longer than nextest's 120s slow-timeout — so wrapping the
-        # download in the very harness that imposes that timeout just gets it killed mid-download.
-        # `cargo test` has no such timeout. (That is exactly how the first attempt at this step failed.)
-        run: cargo test -p temper-ingest --features test-embed --locked --lib embed::tests::test_embed_text_dimension -- --exact --test-threads 1
 
       - name: Run unit tests
         # `test-embed` here too — temper-ingest's and temper-cli's embedding tests need no database, so
@@ -133,42 +123,24 @@ jobs:
       # Safe alongside `--test-threads 1` — one embed at a time, using all cores, rather than one core
       # while the rest idle.
       TEMPER_ONNX_INTRA_THREADS: 0
+      # Load the model from the checkout instead of downloading it: the repo already ships it.
+      TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          # ⚠️ This is CURRENTLY WASTE, and is kept only because removing it is not free to verify.
-          # It fetches the 105 MB git-LFS bge model, which this job then NEVER READS: `--workspace`
-          # pulls in temper-cli, whose default `embed` selects `temper-ingest/embed-download`, and
-          # feature unification cfg's the bundled `include_bytes!` branch out of the entire build — so
-          # this tier takes the HF *download* path, not the bundled one (`cargo tree -e features -i
-          # hf-hub --workspace` proves it). The comment this replaces claimed the opposite.
-          # Task `019f5822` fixes the cause and deletes this line.
+          # Now MEANINGFUL: it fetches the model `TEMPER_ONNX_MODEL_PATH` points ORT at. Until this
+          # commit it fetched 105 MB this job never read, while the job separately downloaded ~400 MB
+          # from HuggingFace.
           lfs: true
 
       - uses: ./.github/actions/setup-rust
         with:
-          cache-prefix: integration-v3
+          cache-prefix: integration-v4
           tools: nextest,sqlx-cli
 
       - uses: ./.github/actions/install-onnx
-
-      - name: Cache the HuggingFace model
-        # This job downloads bge from HF at runtime too — `--workspace` includes temper-cli, whose
-        # default `embed` feature selects `temper-ingest/embed-download`, and feature unification then
-        # cfg's the bundled `include_bytes!` branch out for the WHOLE build. (Which also means this
-        # job's `lfs: true` currently fetches a 105 MB model it never reads. See task `019f5822`.)
-        #
-        # `actions/cache`, not an upload/download artifact: the model is IMMUTABLE, so it caches
-        # perfectly and persists ACROSS runs. An artifact would need a `prepare` job that every other
-        # job must `needs:` — serializing the DAG and re-shipping ~400 MB every single run to save a
-        # download a cache does once, ever. (Artifacts are the right tool for per-commit BUILD OUTPUTS,
-        # which is what ../tasker-core shares — those would thrash a cache key.)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-bge-base-en-v1.5-${{ runner.os }}
 
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
