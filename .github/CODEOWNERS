@@ -1,0 +1,71 @@
+# CODEOWNERS — ownership segmented by concern, not by convenience.
+#
+# Today this repo has one human owner, so every line resolves to the same person. That is not the
+# point of this file. The point is that **the segmentation itself is the artifact**: it is the
+# declared map of "which functional areas of this codebase are distinct concerns," and it is the
+# input to the code-graph's region selector.
+#
+# See the goal *Trunk-change awareness: a SCIP code graph teams and stewards can watch*
+# (docs/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md §3). A watching
+# subscription declares its region in CODEOWNERS-shaped path globs — because that is how orgs
+# already express ownership — and those globs resolve, per index, into a **SCIP symbol set**, which
+# is what we actually store and diff against. The consequence, and the whole reason SCIP earns its
+# keep over `git diff`: a file move or a rename is provably *not* a change to the region.
+#
+# So keep these globs honest and concern-shaped. When they stop describing real seams, the regions
+# a steward watches stop describing real seams too.
+#
+# Last matching pattern wins (GitHub semantics) — most general first, most specific last.
+
+# ── Default ───────────────────────────────────────────────────────────────────────────────────────
+*                                   @jcoletaylor
+
+# ── Substrate: persistence, the event ledger, replay ───────────────────────────────────────────────
+# The kernel everything else is built on. Changes here have the widest blast radius in the repo.
+/migrations/                        @jcoletaylor
+/crates/temper-substrate/           @jcoletaylor
+/.sqlx/                             @jcoletaylor
+
+# ── Domain: types, vault semantics, doc-type schemas, operations ───────────────────────────────────
+/crates/temper-core/                @jcoletaylor
+/crates/temper-workflow/            @jcoletaylor
+
+# ── Business logic + authz: the layer both surfaces share ──────────────────────────────────────────
+# Auth gates live here on purpose, so temper-api and temper-mcp cannot drift apart.
+/crates/temper-services/            @jcoletaylor
+
+# ── Surfaces: transport only ──────────────────────────────────────────────────────────────────────
+/crates/temper-api/                 @jcoletaylor
+/crates/temper-mcp/                 @jcoletaylor
+/api/                               @jcoletaylor
+/openapi.json                       @jcoletaylor
+
+# ── Client-side: the CLI and the HTTP client it speaks through ─────────────────────────────────────
+/crates/temper-cli/                 @jcoletaylor
+/crates/temper-client/              @jcoletaylor
+/clients/temper-rb/                 @jcoletaylor
+
+# ── ML / ingest: embeddings, chunking, extraction ──────────────────────────────────────────────────
+/crates/temper-ingest/              @jcoletaylor
+
+# ── Agents: the contract crate and the deployed runtimes ───────────────────────────────────────────
+/crates/temper-agents/              @jcoletaylor
+/packages/agent-workflows/          @jcoletaylor
+
+# ── Web: serverless functions and the SvelteKit UI ─────────────────────────────────────────────────
+/packages/temper-cloud/             @jcoletaylor
+/packages/temper-ui/                @jcoletaylor
+
+# ── Build, CI, and developer onboarding ───────────────────────────────────────────────────────────
+/.github/                           @jcoletaylor
+/scripts/                           @jcoletaylor
+/bin/                               @jcoletaylor
+/Makefile.toml                      @jcoletaylor
+/Brewfile                           @jcoletaylor
+
+# ── Docs ──────────────────────────────────────────────────────────────────────────────────────────
+/docs/                              @jcoletaylor
+*.md                                @jcoletaylor
+
+# ── Tests that span the stack ─────────────────────────────────────────────────────────────────────
+/tests/e2e/                         @jcoletaylor
