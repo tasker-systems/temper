@@ -2,7 +2,7 @@
 //!
 //! One read over the substrate graph: given a resource, what does it derive from
 //! (ancestors) and what derives from it (descendants). The walk and its access
-//! gate live in the SQL function `resource_lineage` (20260712000060), which
+//! gate live in the SQL function `resource_lineage` (20260712000070), which
 //! reuses the exact `element_trail_edge` visibility triple (home readable AND
 //! both endpoints readable) and keys on the edge LABEL `derived_from` — spanning
 //! both `edge_kind`s per L1's 2026-07-12 grounding.
