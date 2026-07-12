@@ -66,6 +66,16 @@ pub async fn require_system_access(
             // require_auth already gated deactivation before this layer runs.
             return Err(ApiError::Unauthorized("account is deactivated".to_string()));
         }
+        // Level 2 neither classifies a token nor resolves an email — `require_auth`
+        // did both before this layer runs. Unreachable from `require_system_access`.
+        Err(
+            temper_services::auth::AuthzError::Refused(_)
+            | temper_services::auth::AuthzError::EmailResolution(_),
+        ) => {
+            return Err(ApiError::Internal(
+                "unexpected authentication error from require_system_access".to_string(),
+            ));
+        }
     }
 
     Ok(next.run(request).await)
