@@ -1,5 +1,8 @@
+use crate::cluster::CandidatePairs;
 use crate::ids::ResourceId;
 use crate::knn::KnnGraph;
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +186,84 @@ pub fn affinity(
         .map(|e| lens.w_kind(e.kind) * e.weight)
         .sum();
     edge_sum + lens.w_prop * facet_overlap(a, b, facets) + lens.w_cos * knn.sim(a, b)
+}
+
+/// Enumerate the pairs whose [`affinity`] **can** be nonzero — the sparse input to the clustering core
+/// ([`CandidatePairs`]).
+///
+/// This is the superset invariant, and it is a direct reading of `affinity` above: the affinity of a
+/// pair is the sum of exactly three terms, and each term is zero unless the pair appears in the
+/// corresponding structure.
+///
+/// - `Σ_edges w_kind · weight` — zero unless a declared edge joins the pair.
+/// - `w_prop · facet_overlap`  — zero unless the pair shares a `(path, value)` facet.
+/// - `w_cos · knn.sim`         — zero unless the pair is a RETAINED kNN neighbour. `knn.sim` returns
+///   0.0 for anything outside the top-k-above-floor construction, however similar the raw vectors are
+///   ([`crate::knn`]); that sparsity is what makes this enumeration worth doing at all.
+///
+/// A pair in none of the three has all three terms zero, hence affinity **exactly** 0.0 — and both
+/// consumers already discard exactly-zero pairs. So omitting it changes nothing, and the clustering is
+/// partition-identical to the dense scan (`tests/sparse_candidates_differential.rs` asserts it).
+///
+/// Deliberately NOT lens-aware. A zero weight (`w_cos = 0` in the cogmap regime, say) makes a term
+/// vanish, so a lens-aware version could prune further — but the result would still be a superset, and
+/// making correctness depend on the lens's weights would put a silent partition change one config edit
+/// away. A superset is always safe; the pairs it over-offers are dropped by the `!= 0.0` guard. It also
+/// costs nothing in practice: in the cogmap regime the kNN graph is never even built, so its
+/// contribution here is empty regardless.
+///
+/// Terms can also CANCEL to zero (a negative edge weight against a positive cosine — see
+/// `cluster::agglomerate_drops_a_blend_that_cancels_to_zero`). Those pairs are still offered, still
+/// evaluated, and still dropped by the `!= 0.0` guard — exactly as under the dense scan.
+pub fn candidate_pairs(
+    nodes: &[ResourceId],
+    edges: &[Edge],
+    facets: &[Facet],
+    knn: &KnnGraph,
+) -> CandidatePairs {
+    let members: HashSet<ResourceId> = nodes.iter().copied().collect();
+    let mut pairs: Vec<(Uuid, Uuid)> = Vec::new();
+
+    // term 1 — declared edges.
+    for e in edges {
+        if members.contains(&e.src) && members.contains(&e.tgt) {
+            pairs.push((e.src.uuid(), e.tgt.uuid()));
+        }
+    }
+
+    // term 3 — retained kNN neighbours (empty in the cogmap regime; never built there).
+    for &a in nodes {
+        for &b in knn.neighbours(a) {
+            if members.contains(&b) {
+                pairs.push((a.uuid(), b.uuid()));
+            }
+        }
+    }
+
+    // term 2 — a shared (path, value) facet. Group by the facet key and pair up its owners: those are
+    // precisely the pairs `facet_overlap` can score above zero. A key held by many owners yields many
+    // pairs — but those pairs genuinely ARE nonzero, so this is the true relation, not waste, and it
+    // can never exceed the dense scan it replaces.
+    let mut by_key: HashMap<(&str, &str), Vec<ResourceId>> = HashMap::new();
+    for f in facets {
+        if members.contains(&f.owner) {
+            by_key
+                .entry((f.path.as_str(), f.value.as_str()))
+                .or_default()
+                .push(f.owner);
+        }
+    }
+    for owners in by_key.values_mut() {
+        owners.sort_unstable();
+        owners.dedup();
+        for i in 0..owners.len() {
+            for j in (i + 1)..owners.len() {
+                pairs.push((owners[i].uuid(), owners[j].uuid()));
+            }
+        }
+    }
+
+    CandidatePairs::from_pairs(pairs)
 }
 
 #[cfg(test)]

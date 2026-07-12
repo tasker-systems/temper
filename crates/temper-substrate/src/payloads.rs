@@ -375,6 +375,16 @@ pub struct TelosConstants {
     pub damper_paused: f64,
     #[serde(default = "default_damper_completed")]
     pub damper_completed: f64,
+    /// Cosine-distance threshold above which a telos move triggers a salience-only refresh — gate 1 of
+    /// the two-clock trigger (spec §3.5).
+    ///
+    /// Small by design, and NOT a deadband against a noisy baseline: the telos is a liveness-weighted
+    /// centroid, and a pure advance of wall-clock time scales every goal's liveness by one common
+    /// factor, which cancels in the normalisation. So time alone cannot rotate the telos — drift is
+    /// float noise until the goal census actually changes. Epsilon clears that noise and nothing more;
+    /// widening it would only delay the refresh a closing task is supposed to trigger *now*.
+    #[serde(default = "default_drift_epsilon")]
+    pub drift_epsilon: f64,
 }
 
 fn default_halflife_days() -> f64 {
@@ -395,6 +405,9 @@ fn default_damper_paused() -> f64 {
 fn default_damper_completed() -> f64 {
     0.4
 }
+fn default_drift_epsilon() -> f64 {
+    1e-6
+}
 
 impl Default for TelosConstants {
     fn default() -> Self {
@@ -405,6 +418,7 @@ impl Default for TelosConstants {
             sw_done: default_sw_done(),
             damper_paused: default_damper_paused(),
             damper_completed: default_damper_completed(),
+            drift_epsilon: default_drift_epsilon(),
         }
     }
 }
@@ -449,6 +463,50 @@ pub struct RegionMaterialized {
     /// decision's persisted fingerprint artifact.
     pub membership_fingerprint: String,
     pub region_ids: Vec<RegionId>,
+    /// **The telos as this act computed it** — `anchor_telos_embedding` rendered to pgvector's text
+    /// form (the codebase's established vector round-trip; cf. `replay.rs`'s `embedding::text`).
+    /// `_project_region_materialized` writes it to the anchor's `telos_centroid`, which is what T6's
+    /// drift gate measures against.
+    ///
+    /// It rides the payload rather than being recomputed at projection time because the anchor tables
+    /// are PROJECTIONS: replay must reproduce every column byte-for-byte. Liveness carries an
+    /// `exp(−idle/halflife)` term, so a recompute under replay's later `now()` weights each goal
+    /// differently in the ~16th digit — the centroid is mathematically invariant to that (the uniform
+    /// factor cancels), but the float rounding is not PROVABLY identical after the cast to
+    /// `vector(768)`. Replaying the recorded bytes has no float question at all. It is also the more
+    /// honest record: the act asserts *at watermark W, this anchor's telos was V*.
+    ///
+    /// **Serialized even when `None`** — no `skip_serializing_if`. The projection distinguishes "key
+    /// absent" (a pre-T6 event: leave the column alone) from "key present and null" (a context whose
+    /// last live goal just closed: genuinely has no telos, snapshot NULL). Adding a skip here would
+    /// collapse the two and pin a stale vector forever.
+    #[serde(default)]
+    pub telos_centroid: Option<String>,
+}
+
+/// The cheap clock's act (spec §3.5): an anchor's salience was recomputed against a moved telos,
+/// **without** running formation.
+///
+/// It exists as an event for one reason: the telos snapshot it re-arms lives on a PROJECTION table, so
+/// a direct write would make the anchor unreproducible under replay (exactly the hole T5 left on
+/// `kb_contexts`, invisible only because that table is not in `PROJECTION_DUMPS`).
+///
+/// **Deliberately not a formation event.** `salience_refreshed` appears in neither `STRUCTURAL_EVENTS`
+/// nor `CONTENT_EVENTS` (`replay.rs`), so `formation_touched_count_since` does not count it and the
+/// cheap clock can never advance the threshold the expensive clock gates on. If it could, every closing
+/// task would nudge the anchor toward the re-cluster the two clocks exist to avoid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct SalienceRefreshed {
+    pub home_anchor_table: AnchorTable,
+    pub home_anchor_id: Uuid,
+    pub lens_id: LensId,
+    /// The telos this refresh re-armed the drift gate to — see [`RegionMaterialized::telos_centroid`].
+    #[serde(default)]
+    pub telos_centroid: Option<String>,
+    /// How many live regions had their telos term and salience recomputed. Derived compute, recorded
+    /// for audit; the region ROWS are re-provable by re-derivation, not replayed from here.
+    pub regions_refreshed: i64,
 }
 
 // ── the designed-but-unbuilt families (schemas now, wiring later — spec §3) ──

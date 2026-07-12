@@ -28,6 +28,23 @@ pub const DEFAULT_MATERIALIZE_THRESHOLD: i64 = 5;
 /// lens per map; naming it here keeps the "materialize which perspective" choice in one place.
 pub const DEFAULT_MATERIALIZE_LENS: &str = "telos-default";
 
+/// The default region-producing lens for a **context** (`20260712000050_workflow_default_lens.sql`).
+/// The regime switch is the lens's `w_cos`: `telos-default` holds it at 0 (the declared graph is the
+/// whole signal), `workflow-default` at 1 (the embedding is the primary evidence of regionality) —
+/// which is what lets a context, carrying no facets and almost no declared edges, form regions at all.
+pub const DEFAULT_CONTEXT_LENS: &str = "workflow-default";
+
+/// The default lens for an anchor, by kind. The two regimes are one producer with different weights,
+/// so "which lens" is the ONLY thing that differs between materializing a context and a cogmap — and
+/// picking it in one place is what keeps a caller from silently region-producing a context under the
+/// declared-graph-only lens (which would form nothing, since contexts carry no facets).
+pub fn default_lens_for(anchor: crate::types::home::HomeAnchor) -> &'static str {
+    match anchor {
+        crate::types::home::HomeAnchor::Context(_) => DEFAULT_CONTEXT_LENS,
+        crate::types::home::HomeAnchor::Cogmap(_) => DEFAULT_MATERIALIZE_LENS,
+    }
+}
+
 /// The materialize delta for a cognitive map since its last materialize — the trigger signal the
 /// region-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count);
 /// `exceeds_threshold` is the "should this re-materialize" answer.

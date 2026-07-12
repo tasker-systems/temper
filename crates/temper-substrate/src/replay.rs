@@ -161,6 +161,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // The SQL query above restricts to the three content-bearing types, so the
             // remaining variants are unreachable here — they carry no chunk manifests.
             EventKind::ResourceUpdated
+            | EventKind::SalienceRefreshed
             | EventKind::ResourceDeleted
             | EventKind::ResourceRehomed
             | EventKind::RelationshipAsserted
@@ -321,6 +322,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
             EventKind::RegionMaterialized => {
                 sqlx::query("SELECT _project_region_materialized($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            // T6's cheap clock. Projects ONLY the telos snapshot onto the anchor — the readouts it
+            // recomputed are derived compute (like the region rows), re-provable by re-derivation.
+            EventKind::SalienceRefreshed => {
+                sqlx::query("SELECT _project_salience_refreshed($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)

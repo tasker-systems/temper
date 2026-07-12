@@ -302,7 +302,7 @@ shape is identical, but what matters has moved. Gating the cheap thing behind th
 would mean a goal closing has no effect until ~20 unrelated writes happen to trip the formation
 threshold.
 
-So `materialize_on_threshold` grows a second, cheaper gate, and both live in one call:
+So a write ticks two gates:
 
 ```
 on write to anchor A:
@@ -312,18 +312,59 @@ on write to anchor A:
 
   2. formation      n = formation_touched_count_since(A, watermark)      -- existing count(*)
                     if n ≥ threshold:  incremental_materialize(A, lens)  -- expensive
-                                       (implies a salience refresh)
 ```
 
-`kb_contexts.telos_centroid vector(768)` is the snapshot that makes gate 1 possible. It also makes
-**telos drift a first-class queryable signal** rather than something merely tolerated:
-`anchor_telos_drift(anchor)` reports how far a context's purpose has moved since its shape was last
-computed — the context analogue of `cogmap_staleness`.
+> **Amended 2026-07-12 (T6).** This section said the gate lives in `materialize_on_threshold`, which
+> "grows a second, cheaper gate." Both halves of that were wrong, and the correction matters for
+> anyone reading this as a map of the code:
+>
+> - `materialize_on_threshold` is **`CogmapId`-typed**. There was no context path to grow.
+> - **There was no on-write trigger at all** — for contexts *or* cogmaps. Its only callers were the
+>   explicit `POST …/materialize` handler and the MCP tool; nothing on any resource-write path invoked
+>   it. `on write to anchor A:` described a trigger that did not exist. It does now:
+>   `temper-services/src/backend/region_clocks.rs`, fired inline from `create_resource` /
+>   `update_resource`.
+>
+> Two more corrections from implementation:
+>
+> - The parenthetical "(implies a salience refresh)" on gate 2 is **not relied on**. Formation only
+>   re-populates the readouts of components it re-clusters, so in a multi-component anchor a region in
+>   an untouched component would keep a stale telos term. The clocks therefore tick **independently**:
+>   gate 1 refreshes *all* live regions first. When both fire, the overlap is two set-based UPDATEs.
+> - `refresh_salience` fires a **`salience_refreshed` event**, deliberately in neither
+>   `STRUCTURAL_EVENTS` nor `CONTENT_EVENTS`. It needs an event because `telos_centroid` sits on a
+>   projection table and must be replay-provable; it must not be a *formation* event, or every cheap
+>   trip would advance the threshold gate 2 stands on.
+
+`telos_centroid vector(768)` — on **both** anchor tables, not just `kb_contexts` — is the snapshot that
+makes gate 1 possible. It also makes **telos drift a first-class queryable signal** rather than
+something merely tolerated: `anchor_telos_drift(anchor)` reports how far an anchor's purpose has moved
+since its shape was last computed — the context analogue of `cogmap_staleness`. (A cogmap needs it too:
+its telos is declared, but a *declared* telos still moves when the charter is edited, and without a
+snapshot that motion is invisible.)
+
+**On ε.** It is small — `1e-6`, a lens column — and that is a consequence, not a guess. Liveness is
+`damper · sqrt(Σ stage_weight · exp(−idle/halflife))`. When wall-clock advances and nothing else
+happens, every task's idle grows by the same Δt, so every goal's mass scales by one common factor;
+`sqrt` preserves that and the dampers are time-independent, so a uniform scaling of every weight
+**cancels in the centroid's normalisation**. Pure time passage cannot rotate the telos. So drift is not
+a noisy baseline needing a deadband — it is ~0 until the census actually changes. ε clears float noise
+and nothing more.
 
 The trigger stays event-count-threshold-on-write, generalized. No cron, no agent. Events are
 *already* anchored to contexts (`steward_ingest_delta` counts them today), so
 `formation_touched_count_since` needs only its `producing_anchor_table = 'kb_cogmaps'` filter
 widened.
+
+**And the open question this section left — "is the re-cluster expensive enough to need a finer
+invalidation grain?" — is answered: no.** Measured at the live `@me/temper` dimensions (n=1071, E=570),
+a full context re-cluster cost 563ms, of which 346ms was *waste*: `connected_components` and
+`agglomerate` each scanned all n²/2 pairs to discover which were nonzero, and the affinity relation is
+**1.5% dense**. Formation was making 1,145,970 `affinity` calls to find 8,458 nonzero pairs. Those pairs
+are knowable a priori (a declared edge, a retained kNN neighbour, or a shared facet — all already
+sparse), so enumerating them instead is partition-identical and drops clustering from 365ms to 9.9ms.
+The cost was a constant factor, not the grain. What remains is `knn::build` (212ms, O(n²·768) exact
+cosine) — a separate problem, needing an ANN index, not a finer invalidation grain.
 
 ### 3.6 Schema — expand, migrate, contract (contract deferred)
 
