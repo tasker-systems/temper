@@ -99,6 +99,16 @@ pub struct GetBlockProvenanceInput {
     pub resource: Uuid,
 }
 
+/// MCP input for resource_lineage (Ledger L2).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResourceLineageInput {
+    /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub id: String,
+    /// Max hop distance to walk from the seed (default 16, clamped to 1..=64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<i32>,
+}
+
 /// MCP input for annotate_resource (issue #355) — attach provenance sources without a body revise.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AnnotateResourceInput {
@@ -728,6 +738,40 @@ pub async fn get_block_provenance(
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&rows),
+    )]))
+}
+
+/// Ledger L2 — a resource's bidirectional `derived_from` lineage: what it derives
+/// from (ancestors) and what derives from it (descendants), access-gated.
+/// Service-direct read; the walk + gate live in the `resource_lineage` SQL
+/// function. An unreadable/absent seed is a not-found error (not an empty leak).
+pub async fn resource_lineage(
+    svc: &TemperMcpService,
+    input: ResourceLineageInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+
+    let id = temper_workflow::operations::parse_ref(&input.id)
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+    let depth = input.depth.unwrap_or(16).clamp(1, 64);
+
+    let lineage = temper_services::services::lineage_service::resource_lineage(
+        pool,
+        profile.id,
+        Uuid::from(id),
+        depth,
+    )
+    .await
+    .map_err(|e| match e {
+        temper_services::error::ApiError::NotFound => {
+            rmcp::ErrorData::invalid_params("resource not found or not readable".to_string(), None)
+        }
+        other => rmcp::ErrorData::internal_error(format!("lineage read failed: {other}"), None),
+    })?;
+
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&lineage),
     )]))
 }
 
