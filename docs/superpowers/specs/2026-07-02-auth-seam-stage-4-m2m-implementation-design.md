@@ -10,6 +10,13 @@ Those left three decisions open ("lock in Stage 4"). This doc locks them, choose
 shape, and pins the test plan. **4c (Temper AS-mint `client_credentials`) is out of scope** —
 deferred until a self-hosted instance wants agents.
 
+> **⚠️ Superseded on 4c.** That deferral no longer holds: **4c shipped** as machine-principal
+> Phase B1 (PR #374). Temper's AS mints `client_credentials` tokens today — `handleToken` in
+> `packages/temper-cloud/src/oauth/endpoints.ts`. Read every "4c is deferred / untouched"
+> statement below as a record of the 2026-07-02 decision, not as current fact. The current
+> operator-facing truth is [docs/guides/machine-credentials.md](../../guides/machine-credentials.md);
+> the wire shape is `tests/contracts/m2m-token-request.json`.
+
 ## Why
 
 The deployed T6 steward authenticates as a Vercel Connect `principalType: "app"` (a machine,

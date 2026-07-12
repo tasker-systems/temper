@@ -18,9 +18,10 @@ module Temper
     # Assert the machine profile resolved, and report what it can reach, rather
     # than discovering it on the first write.
     #
-    # Authentication is not authorization: a minted M2M token yields a
-    # JIT-provisioned agent profile and nothing else, so without a cogmap write
-    # grant and team membership every call authenticates cleanly and then 403s.
+    # Authentication is not authorization. A minted M2M token does not even yield a
+    # profile on its own: the client_id must already be registered (lookup-or-401 --
+    # there is no JIT-create branch), and then, without a cogmap write grant and team
+    # membership, every call authenticates cleanly and 403s.
     def whoami
       call(idempotent: true) { |api| Generated::ProfileApi.new(api).get_profile }
     end

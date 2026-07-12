@@ -3,7 +3,11 @@
 **Date:** 2026-07-10
 **Goal:** `019f4910` — temper-rb, a native Ruby client for the temper API
 **Beat:** G3 — a machine-principal auth path for SDK callers (`client_credentials`)
-**Status:** design approved; Phase A is the current build target, Phase B is deferred
+**Status:** ✅ **SHIPPED.** Phase A merged as PR #351. Phase B is no longer deferred — B1 (temper
+as `client_credentials` issuer) merged as PR #374, B2 (team-owner registration + reach containment)
+as PR #377. The design below is the record of what was *designed*; where it and the code disagree,
+**the code wins**. For the current operator-facing truth see
+[docs/guides/machine-credentials.md](../../guides/machine-credentials.md).
 
 ---
 

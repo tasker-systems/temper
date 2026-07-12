@@ -2,9 +2,16 @@
 
 **Date:** 2026-07-10
 **Goal:** `019f4910` — temper-rb, a native Ruby client for the temper API
-**Task:** `019f4c36` — Phase B (this spec covers **B1 only**; B2 is deferred, see below)
+**Task:** `019f4c36` — Phase B (this spec covers **B1 only**)
 **Depends on:** Phase A (`kb_machine_clients` registration gate, PR #351, merged to `main`)
-**Status:** design approved 2026-07-10
+**Status:** ✅ **SHIPPED** as PR #374. B2 is no longer deferred either — it shipped as PR #377.
+
+> **One thing this spec could not foresee.** B1 proved a temper-*issued token* authenticates through
+> the gate, but never that a *client library could mint one*: every M2M client sent a JSON body,
+> which Auth0 tolerates and this AS — which reads the request with `req.formData()` — does not. The
+> token endpoint requires `application/x-www-form-urlencoded` (RFC 6749 §4). Closed on the branch
+> that added `tests/contracts/m2m-token-request.json`, the cross-language wire contract both the
+> clients and the AS now assert against.
 
 ---
 
