@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution FROM kb_cogmap_lenses WHERE name=$3 AND (home_anchor_table IS NULL OR (home_anchor_table=$1 AND home_anchor_id=$2)) ORDER BY home_anchor_table NULLS LAST LIMIT 1",
+  "query": "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, w_cos, knn_k, cos_floor, s_telos, s_ref, s_central, resolution FROM kb_cogmap_lenses WHERE name=$3 AND (home_anchor_table IS NULL OR (home_anchor_table=$1 AND home_anchor_id=$2)) ORDER BY home_anchor_table NULLS LAST LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -35,21 +35,36 @@
       },
       {
         "ordinal": 6,
-        "name": "s_telos",
+        "name": "w_cos",
         "type_info": "Float8"
       },
       {
         "ordinal": 7,
-        "name": "s_ref",
-        "type_info": "Float8"
+        "name": "knn_k",
+        "type_info": "Int4"
       },
       {
         "ordinal": 8,
-        "name": "s_central",
+        "name": "cos_floor",
         "type_info": "Float8"
       },
       {
         "ordinal": 9,
+        "name": "s_telos",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "s_ref",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "s_central",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
         "name": "resolution",
         "type_info": "Float8"
       }
@@ -71,8 +86,11 @@
       false,
       false,
       false,
+      false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "53f30636e1bc6399c11d7a7ffcf6254b926e3018d2a6f9c68bb6f7e9ead77bc3"
+  "hash": "70a5513767166fbb833687dbf1a9381422c2aa5bc58141434b1a794a0bbe17ab"
 }

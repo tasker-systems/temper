@@ -107,20 +107,46 @@ pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<
         .flat_map(|r| expand_facets(ResourceId::from(r.owner_id), &r.property_value, r.weight))
         .collect();
 
-    // the named lens for this anchor, else the global default (home_anchor_table IS NULL — how
-    // telos-default and telos-default-propheavy are seeded). The name is bound (Plan 3 Step 0) so the
-    // same producer materializes different lenses over one substrate — S6f plurality.
-    //
-    // `NULLS LAST` keeps an anchor-specific lens winning over the global default, exactly as
-    // `ORDER BY cogmap_id NULLS LAST` did.
+    let (lens, lens_id) = load_lens(pool, anchor, lens_name).await?;
+
+    let knn = load_knn(pool, &nodes, &lens).await?;
+
+    Ok(Substrate {
+        nodes,
+        edges,
+        facets,
+        knn,
+        lens,
+        lens_id,
+    })
+}
+
+/// Resolve the named lens for an anchor — the lens row ALONE, with no substrate around it.
+///
+/// Split out of [`load`] for T6's cheap clock (spec §3.5): a salience-only refresh needs the lens's
+/// blend weights and its id, and NOTHING else — no nodes, no edges, no facets, and above all no kNN
+/// graph, whose exact-cosine build is O(n²·768) and is the single most expensive thing `load` does.
+/// Resolving the lens through the same function the producer uses means the two cannot drift apart on
+/// which lens they mean.
+///
+/// The named lens for this anchor, else the global default (`home_anchor_table IS NULL` — how
+/// `telos-default`, `telos-default-propheavy` and `workflow-default` are seeded). The name is bound
+/// (Plan 3 Step 0) so the same producer materializes different lenses over one substrate — S6f
+/// plurality. `NULLS LAST` keeps an anchor-specific lens winning over the global default, exactly as
+/// `ORDER BY cogmap_id NULLS LAST` did.
+pub async fn load_lens(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    lens_name: &str,
+) -> Result<(Lens, LensId)> {
     let lr = sqlx::query!(
         "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, w_cos, knn_k, cos_floor, \
                 s_telos, s_ref, s_central, resolution \
          FROM kb_cogmap_lenses \
          WHERE name=$3 AND (home_anchor_table IS NULL OR (home_anchor_table=$1 AND home_anchor_id=$2)) \
          ORDER BY home_anchor_table NULLS LAST LIMIT 1",
-        anchor_table,
-        anchor_id,
+        anchor.table(),
+        anchor.uuid(),
         lens_name,
     )
     .fetch_one(pool)
@@ -140,17 +166,7 @@ pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<
         s_central: lr.s_central,
         resolution: lr.resolution,
     };
-
-    let knn = load_knn(pool, &nodes, &lens).await?;
-
-    Ok(Substrate {
-        nodes,
-        edges,
-        facets,
-        knn,
-        lens,
-        lens_id: LensId::from(lr.id),
-    })
+    Ok((lens, LensId::from(lr.id)))
 }
 
 /// Pool each node's chunk embeddings into one per-resource vector and build the sparse kNN graph.

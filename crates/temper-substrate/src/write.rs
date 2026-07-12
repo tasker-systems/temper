@@ -172,6 +172,10 @@ pub async fn materialize(
 
     let mut tx = pool.begin().await?;
     let watermark = current_watermark(&mut tx).await?;
+    // The telos this act SEES — recorded in the payload so `_project_region_materialized` writes the
+    // anchor's snapshot from the ledger. The anchor tables are projections; a direct write here (what
+    // T5 did) is not reproducible under replay.
+    let telos = current_telos_text(&mut tx, anchor, s.lens_id).await?;
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
@@ -180,6 +184,7 @@ pub async fn materialize(
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
             region_ids: &flat_region_ids,
+            telos: telos.as_deref(),
             emitter,
         },
     )
@@ -196,7 +201,6 @@ pub async fn materialize(
     let work: Vec<(&ComponentWork, &Vec<RegionAssignment>)> =
         comp_refs.iter().copied().zip(&assignments).collect();
     assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
-    snapshot_context_telos(&mut tx, anchor, s.lens_id).await?;
     // (the materialization watermark on the anchor row is set by _project_region_materialized — the
     // event's projection half — not here.)
     tx.commit().await?;
@@ -268,6 +272,10 @@ pub async fn incremental_materialize(
     // region_ids records the regions THIS act (re-)asserted — the changed components' regions, reused
     // and minted alike, exactly the set it has always recorded. The full membership fingerprint records
     // the complete resulting shape (untouched components' regions included).
+    // The telos this act SEES — recorded in the payload so `_project_region_materialized` writes the
+    // anchor's snapshot from the ledger. The anchor tables are projections; a direct write here (what
+    // T5 did) is not reproducible under replay.
+    let telos = current_telos_text(&mut tx, anchor, s.lens_id).await?;
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
@@ -276,6 +284,7 @@ pub async fn incremental_materialize(
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
             region_ids: &flat_region_ids,
+            telos: telos.as_deref(),
             emitter,
         },
     )
@@ -292,7 +301,6 @@ pub async fn incremental_materialize(
     assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
 
     refresh_moved_region_readouts(pool, &mut tx, anchor, &s, &zero, &diff.unchanged, ev).await?;
-    snapshot_context_telos(&mut tx, anchor, s.lens_id).await?;
 
     tx.commit().await?;
 
@@ -725,34 +733,186 @@ async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Resul
     populate_readouts(tx, region, sub, zero_centroid).await
 }
 
-/// Snapshot a context's computed telos onto `kb_contexts.telos_centroid`.
+/// The anchor's telos RIGHT NOW, in pgvector's text form — the value an act records so its projection
+/// (and therefore replay) can write the snapshot from the ledger instead of recomputing it.
 ///
-/// A cogmap DECLARES its telos (`kb_cogmaps.telos_resource_id`), so there is nothing to snapshot —
-/// its vector is always readable from the charter. A context COMPUTES one from the liveness-weighted
-/// goal census, so unless it is recorded there is nothing for T6's two-clock gate to compare the
-/// current telos *against* (spec §3.5). Written inside the materialize transaction, where `now()` —
-/// an input to liveness — is stable, so this records exactly the telos the readouts were computed
-/// against, not a later re-read of a moved clock.
+/// Read inside the act's transaction, where `now()` — an input to goal liveness — is stable, so it is
+/// exactly the telos the readouts were computed against, not a later re-read of a moved clock.
 ///
-/// No-op for a cogmap anchor. NULL is a legitimate value: a context with no live, embedded goals has
-/// no telos, and storing NULL is what lets the gate see one appear.
-async fn snapshot_context_telos(
+/// `None` is a legitimate value, not an error: an anchor with no live, embedded telos has none (a
+/// context with no goals), and recording NULL is what lets the gate see one appear — and, when the
+/// last live goal closes, disappear.
+///
+/// Text rather than a decoded vector because that is this codebase's established pgvector round-trip
+/// (cf. `replay.rs`'s `embedding::text`, `substrate::load_knn`); introducing a third convention here
+/// would buy nothing.
+async fn current_telos_text(
     tx: &mut PgConnection,
     anchor: HomeAnchor,
     lens_id: LensId,
-) -> Result<()> {
-    let HomeAnchor::Context(ctx) = anchor else {
-        return Ok(());
-    };
-    sqlx::query(
-        "UPDATE kb_contexts SET telos_centroid = anchor_telos_embedding('kb_contexts', $1, $2) \
-         WHERE id = $1",
+) -> Result<Option<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT anchor_telos_embedding($1, $2, $3)::text")
+            .bind(anchor.table())
+            .bind(anchor.uuid())
+            .bind(lens_id.uuid())
+            .fetch_one(&mut *tx)
+            .await?,
     )
-    .bind(ctx.uuid())
+}
+
+/// The cheap clock's reading (spec §3.5, gate 1): how far has this anchor's telos moved since its
+/// shape was last computed, and does that clear the lens's epsilon?
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TelosDrift {
+    /// Cosine distance between the current telos and the snapshot. `None` before the first
+    /// materialize (nothing snapshotted) or when the anchor has no telos at all — both mean "there is
+    /// no drift question to ask yet", NOT "no drift".
+    pub distance: Option<f64>,
+    /// Whether it cleared `kb_cogmap_lenses.telos_drift_epsilon`. `false` when `distance` is `None` —
+    /// a never-materialized anchor has no regions to refresh, and the FORMATION clock owns that trip.
+    pub exceeds_epsilon: bool,
+}
+
+/// Read an anchor's telos drift against the lens's epsilon — ONE query, one telos computation.
+///
+/// This is the whole cost of the cheap clock's gate, and it is what lets the expensive clock stay on
+/// its event-count threshold: a write that does not move the telos pays a single cosine and stops.
+/// The epsilon stays SQL-resident (a lens column) rather than being carried through the Rust [`crate::affinity::Lens`],
+/// which deliberately holds only what the producer reads — the same call T5 made for the other telos
+/// constants.
+pub async fn telos_drift(pool: &PgPool, anchor: HomeAnchor, lens_id: LensId) -> Result<TelosDrift> {
+    // LATERAL so `anchor_telos_drift` is evaluated ONCE and compared to epsilon, rather than called
+    // twice (it recomputes the goal-liveness centroid each time it is invoked).
+    let row = sqlx::query!(
+        "SELECT d.drift, (d.drift > l.telos_drift_epsilon) AS exceeds \
+           FROM kb_cogmap_lenses l \
+           CROSS JOIN LATERAL (SELECT anchor_telos_drift($1, $2, l.id) AS drift) d \
+          WHERE l.id = $3",
+        anchor.table(),
+        anchor.uuid(),
+        lens_id.uuid(),
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(TelosDrift {
+        distance: row.drift,
+        // NULL drift ⇒ NULL comparison ⇒ `None` here. Decline to fire, don't fire spuriously.
+        exceeds_epsilon: row.exceeds.unwrap_or(false),
+    })
+}
+
+/// What a salience-only refresh did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SalienceRefresh {
+    /// Live regions whose telos_alignment + salience were recomputed.
+    pub regions_refreshed: u64,
+}
+
+/// **Refresh salience WITHOUT running formation** — T6's cheap clock (spec §3.5).
+///
+/// This is the whole point of the task. T5 proved the two clocks come apart, but proved it *through a
+/// full `materialize`*: it ran the entire producer twice and observed that formation was a no-op the
+/// second time. That no-op is not free — at live prod dimensions it is a kNN build plus a re-cluster
+/// over ~1k resources. This path never touches `substrate::load`, `cluster_components`,
+/// `connected_components` or `agglomerate` at all.
+///
+/// The separation is structural, not hopeful: formation reads members, edges, facets and embeddings;
+/// liveness reads `temper-stage` property rows and `advances` edges. **The two input sets are
+/// disjoint.** Closing a task rewrites a `temper-stage` row — in the second set, not the first — so
+/// membership *cannot* move while the telos *must*.
+///
+/// Only the telos-dependent readout is recomputed. `content_cohesion`, `reference_standing` and
+/// `centrality` do not depend on the telos, and membership and content have not moved (if they had,
+/// this would be a formation trip, not a salience one) — so recomputing them would be waste, and the
+/// stored values are still exactly right. The salience expression is character-for-character the one
+/// in `populate_readouts`, so a refresh lands on the value a full materialize would have produced;
+/// `context_two_clocks.rs` asserts that differentially rather than trusting the reading.
+///
+/// Set-based, not per-region: two statements for the whole anchor, where `populate_readouts` is three
+/// round-trips *per region* (the @me/temper context carries 288). Two statements and not one because
+/// Postgres evaluates every SET right-hand side against the OLD row — so a salience that reads
+/// `telos_alignment` must run in a LATER statement than the one that writes it, or it silently blends
+/// the previous telos. That is the same trap `populate_readouts` documents for the centroid.
+///
+/// Fires a `salience_refreshed` event — which is **not** a formation event.
+///
+/// It needs an event at all because the telos snapshot it re-arms lives on `kb_contexts`/`kb_cogmaps`,
+/// which are PROJECTION tables: replay must reproduce every column from the ledger, so a direct write
+/// would make the anchor unreproducible (exactly the hole T5 left, invisible only because
+/// `kb_contexts` is not in `PROJECTION_DUMPS`).
+///
+/// But `salience_refreshed` appears in neither `STRUCTURAL_EVENTS` nor `CONTENT_EVENTS`, so
+/// `formation_touched_count_since` does not count it. That is load-bearing: if the cheap clock's event
+/// advanced the threshold the EXPENSIVE clock gates on, every closing task would nudge the anchor
+/// toward the re-cluster the two clocks exist to avoid, and the separation would quietly undo itself.
+/// It also leaves `shape_materialized_event_id` alone — that is the formation watermark, and salience
+/// is not formation. Two clocks, two watermarks.
+pub async fn refresh_salience(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    lens_name: &str,
+    emitter: EntityId,
+) -> Result<SalienceRefresh> {
+    // The lens ALONE — no substrate, no kNN. This is what makes the clock cheap.
+    let (lens, lens_id) = substrate::load_lens(pool, anchor, lens_name).await?;
+
+    let mut tx = pool.begin().await?;
+
+    // 1. the telos-dependent readout, over every live region of this anchor+lens. `nullif(…, 'NaN')`
+    //    guards the zero-centroid edge (a memberless/unembedded region → cosine-vs-zero = NaN), as
+    //    populate_readouts does — salience coalesces the resulting NULL to 0 below.
+    let touched = sqlx::query(
+        "UPDATE kb_cogmap_regions r SET \
+           telos_alignment = nullif(anchor_region_telos_alignment(\
+                               r.id, r.home_anchor_table, r.home_anchor_id, $3), 'NaN'::double precision) \
+         WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 \
+           AND NOT r.is_folded",
+    )
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(lens_id.uuid())
     .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    // 2. re-blend. A LATER statement, so it reads the telos_alignment just written (see above).
+    sqlx::query(
+        "UPDATE kb_cogmap_regions r SET salience = \
+           $4*coalesce(r.telos_alignment,0) + $5*r.reference_standing + $6*r.centrality \
+         WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 \
+           AND NOT r.is_folded",
+    )
+    .bind(anchor.table())
+    .bind(anchor.uuid())
+    .bind(lens_id.uuid())
+    .bind(lens.s_telos)
+    .bind(lens.s_ref)
+    .bind(lens.s_central)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+
+    // 3. re-arm the clock. Read inside the same transaction as the readouts, so the snapshot is exactly
+    //    the telos they were computed against — the same discipline `materialize` follows — and record
+    //    it in the act, so the projection (and replay) writes it from the ledger.
+    let telos = current_telos_text(&mut tx, anchor, lens_id).await?;
+    fire(
+        &mut tx,
+        SeedAction::SalienceRefresh {
+            anchor,
+            lens: lens_id,
+            telos: telos.as_deref(),
+            regions_refreshed: touched as i64,
+            emitter,
+        },
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(SalienceRefresh {
+        regions_refreshed: touched,
+    })
 }
 
 /// Write a region's member rows, each scored by [`member_affinity`].
