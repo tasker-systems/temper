@@ -43,6 +43,26 @@ impl From<CliConfidence> for temper_core::types::ConfidenceBand {
     }
 }
 
+/// CLI-local enum mirroring `ElementKind` for clap `value_enum` parsing — the
+/// element a trail belongs to. Kept in `cli.rs` (not `temper-core`) to avoid a
+/// `clap` dependency there, mirroring `CliEdgeKind`/`CliPolarity`. Maps to
+/// `temper_core::types::element_trail::ElementKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliElementKind {
+    Node,
+    Edge,
+}
+
+impl From<CliElementKind> for temper_core::types::element_trail::ElementKind {
+    fn from(k: CliElementKind) -> Self {
+        use temper_core::types::element_trail::ElementKind;
+        match k {
+            CliElementKind::Node => ElementKind::Node,
+            CliElementKind::Edge => ElementKind::Edge,
+        }
+    }
+}
+
 /// Per-act agent-authorship + invocation-correlation flags shared by every authored-write CLI
 /// command (resource create, edge assert/fold) via `#[command(flatten)]`. All optional and
 /// available to any caller — agent-driven CLI is the *expected* case, not a restricted one.
@@ -305,6 +325,22 @@ pub enum Commands {
     Steward {
         #[command(subcommand)]
         cmd: StewardCmd,
+    },
+
+    /// Read the event trail (append-only history) of a graph element — a resource
+    /// node or a relationship edge.
+    ///
+    /// Wraps the same access-gated ledger read the web UI's trail rail uses
+    /// (`GET /api/graph/elements/{kind}/{id}/trail`): a time-ordered list of the
+    /// events that produced and mutated the element, each with its actor, timestamp,
+    /// confidence, and replay-sufficient payload. An element you cannot read (or that
+    /// does not exist) yields an empty trail, never an error.
+    Trail {
+        /// Which element to trail: `node` (a resource) or `edge` (a relationship).
+        kind: CliElementKind,
+        /// The element, by ref: a resource ref (UUID or decorated `slug-<uuid>`) for a
+        /// node, or the edge's UUID for an edge. Only the trailing UUID is used.
+        r#ref: String,
     },
 
     /// Print the CLI version, optionally with the running binary's SHA-256.
@@ -1544,6 +1580,46 @@ mod meta_only_flag_tests {
             ])
             .is_err(),
             "--goal and --clear-goal must conflict"
+        );
+    }
+
+    #[test]
+    fn trail_parses_node_and_edge_kinds() {
+        use clap::Parser;
+        let node = Cli::try_parse_from([
+            "temper",
+            "trail",
+            "node",
+            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+        ])
+        .expect("trail node <ref> must parse");
+        match node.command {
+            Commands::Trail { kind, r#ref } => {
+                assert_eq!(kind, CliElementKind::Node);
+                assert_eq!(r#ref, "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
+            }
+            _ => panic!("expected Trail"),
+        }
+
+        let edge = Cli::try_parse_from([
+            "temper",
+            "trail",
+            "edge",
+            "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+        ])
+        .expect("trail edge <ref> must parse");
+        match edge.command {
+            Commands::Trail { kind, .. } => assert_eq!(kind, CliElementKind::Edge),
+            _ => panic!("expected Trail"),
+        }
+    }
+
+    #[test]
+    fn trail_rejects_unknown_kind() {
+        use clap::Parser;
+        assert!(
+            Cli::try_parse_from(["temper", "trail", "bogus", "some-ref"]).is_err(),
+            "an element kind other than node|edge must be a parse error"
         );
     }
 
