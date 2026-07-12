@@ -50,51 +50,43 @@ pub struct AuthConfig {
 /// Every message names the offending environment variable and states the relation it must satisfy.
 /// **No message ever prints a value** — anyone who can act on the error can already read them, and a
 /// config value in a log is a liability with no upside.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
+    #[error("{0} is not set.")]
     Missing(&'static str),
+
+    #[error(
+        "AUTH_AUDIENCE is not set. Both surfaces validate the `aud` claim; set it to the API \
+         identifier your IdP mints tokens for."
+    )]
     MissingAudience,
+
+    #[error(
+        "MCP_AUDIENCE is set but does not equal AUTH_AUDIENCE. This instance validates one \
+         audience on both surfaces. Set them to the same value, or unset MCP_AUDIENCE."
+    )]
     McpAudienceMismatch,
+
+    #[error(
+        "AS_ISSUER is set, so this instance mints its own tokens — but AS_AUDIENCE does not equal \
+         AUTH_AUDIENCE. The authorization server mints every token with AS_AUDIENCE and the API \
+         validates AUTH_AUDIENCE. Set them to the same value."
+    )]
     AsAudienceMismatch,
+
+    #[error(
+        "AS_ISSUER is set, but AUTH_ISSUER does not equal it — byte for byte. The AS mints `iss` \
+         from the raw AS_ISSUER and the API matches it exactly, so even a trailing-slash difference \
+         means no token it mints will ever verify. Set AUTH_ISSUER to the same value as AS_ISSUER."
+    )]
     AsIssuerMismatch,
+
+    #[error(
+        "AS_ISSUER is set, but JWKS_URL does not point at this instance's authorization server. \
+         Set JWKS_URL to $AS_ISSUER/oauth/jwks."
+    )]
     AsJwksMismatch,
 }
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Missing(var) => write!(f, "{var} is not set."),
-            Self::MissingAudience => write!(
-                f,
-                "AUTH_AUDIENCE is not set. Both surfaces validate the `aud` claim; set it to the \
-                 API identifier your IdP mints tokens for."
-            ),
-            Self::McpAudienceMismatch => write!(
-                f,
-                "MCP_AUDIENCE is set but does not equal AUTH_AUDIENCE. This instance validates one \
-                 audience on both surfaces. Set them to the same value, or unset MCP_AUDIENCE."
-            ),
-            Self::AsAudienceMismatch => write!(
-                f,
-                "AS_ISSUER is set, so this instance mints its own tokens — but AS_AUDIENCE does not \
-                 equal AUTH_AUDIENCE. The authorization server mints every token with AS_AUDIENCE \
-                 and the API validates AUTH_AUDIENCE. Set them to the same value."
-            ),
-            Self::AsIssuerMismatch => write!(
-                f,
-                "AS_ISSUER is set, but AUTH_ISSUER does not equal it. The API must trust the \
-                 authorization server it fronts. Set AUTH_ISSUER to the same value as AS_ISSUER."
-            ),
-            Self::AsJwksMismatch => write!(
-                f,
-                "AS_ISSUER is set, but JWKS_URL does not point at this instance's authorization \
-                 server. Set JWKS_URL to $AS_ISSUER/oauth/jwks."
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 /// Read a variable, treating whitespace-only and empty as absent — uniformly, for every variable.
 /// Before this, an empty `AUTH_AUDIENCE` disabled validation on temper-api while an empty
@@ -237,9 +229,37 @@ mod tests {
     }
 
     #[test]
-    fn mcp_audience_unset_is_normal_not_a_fallback() {
-        // The instance simply has its one audience. Absence is correct, not degraded.
-        let cfg = parse_auth_config(env(&external_idp())).expect("valid");
+    fn an_empty_mcp_audience_is_absent_not_a_mismatch() {
+        // Empty means absent, uniformly. This is the value that used to mean two OPPOSITE things:
+        // temper-api filtered it to None and disabled validation; temper-mcp did not filter it and
+        // enforced `aud == ""`, rejecting every token. One typo, one variable, two failures.
+        let e = with(external_idp(), "MCP_AUDIENCE", "   ");
+        let cfg = parse_auth_config(env(&e)).expect("whitespace-only is absent, not a mismatch");
+        assert_eq!(cfg.audience, "https://temperkb.io/api");
+    }
+
+    #[test]
+    fn auth_issuer_and_jwks_url_are_required() {
+        assert_eq!(
+            parse_auth_config(env(&without(external_idp(), "AUTH_ISSUER"))),
+            Err(ConfigError::Missing("AUTH_ISSUER"))
+        );
+        assert_eq!(
+            parse_auth_config(env(&without(external_idp(), "JWKS_URL"))),
+            Err(ConfigError::Missing("JWKS_URL"))
+        );
+    }
+
+    #[test]
+    fn values_are_trimmed_before_use() {
+        // The audience is fed straight into `Validation::set_audience`, so a stray space would
+        // silently never match.
+        let e = with(
+            external_idp(),
+            "AUTH_AUDIENCE",
+            "  https://temperkb.io/api  ",
+        );
+        let cfg = parse_auth_config(env(&e)).expect("valid");
         assert_eq!(cfg.audience, "https://temperkb.io/api");
     }
 

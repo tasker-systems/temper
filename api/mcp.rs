@@ -21,8 +21,9 @@ async fn main() -> Result<(), vercel_runtime::Error> {
         )
         .init();
 
-    // An instance that cannot state which audience it validates must not serve traffic. A warning
-    // was never a control.
+    // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry
+    // their remedy in Display. An instance that cannot state which audience it validates must not
+    // serve traffic.
     let api_config = ApiConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
     let mcp_config = McpConfig::from_env().expect("Failed to load McpConfig from environment");
 

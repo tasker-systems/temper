@@ -261,11 +261,6 @@ mod tests {
         Some((enc, dec))
     }
 
-    // The test that used to live here — `validation_without_audience_disables_aud_check` — asserted
-    // that a `None` audience set `validate_aud = false`. It pinned the vulnerability as correct
-    // behavior. It is gone, and its inverse is below: there is no way to build a `Validation` from
-    // this store that does not check the audience.
-
     #[test]
     fn validation_always_enables_the_aud_check() {
         let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());

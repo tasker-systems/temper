@@ -28,9 +28,12 @@ impl ApiConfig {
         Self::from_lookup(|key| env::var(key).ok())
     }
 
-    /// Load from an arbitrary lookup. Exists so config is testable without touching the global,
-    /// racy process environment.
-    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+    /// Load from an arbitrary lookup rather than the process environment.
+    ///
+    /// Private: the injectable seam that tests actually use is [`parse_auth_config`], which owns
+    /// every rule worth testing. Exposing this would be test-only machinery in the public API that
+    /// no test even calls.
+    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let auth = parse_auth_config(&lookup)?;
 
         // The mode is not consulted after parsing. It is logged because an operator who cannot tell

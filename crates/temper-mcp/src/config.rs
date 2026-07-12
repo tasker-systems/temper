@@ -21,18 +21,15 @@ pub struct OAuthStaticConfig {
 }
 
 /// Configuration specific to the MCP server deployment.
+///
+/// Deliberately carries **no audience**. An instance has exactly one, parsed into
+/// `temper_services::auth_config::AuthConfig` and read by both surfaces.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
     /// Public base URL of this MCP server, e.g. `https://temperkb.io`.
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
     pub mcp_base_url: String,
 
-    // NOTE: there is deliberately no `mcp_audience` here any more. An instance has exactly ONE
-    // audience, parsed once into `temper_services::auth_config::AuthConfig` and read by both
-    // surfaces. `MCP_AUDIENCE` the env var still exists, but it is now only an assertion that it
-    // restates `AUTH_AUDIENCE` — enforced at boot, in one place. Two parsers for one concept is
-    // what let an empty value disable validation on temper-api while rejecting every token on
-    // temper-mcp.
     /// Pre-registered Auth0 application client_id for MCP clients.
     /// Returned by the registration endpoint so clients like Claude Desktop
     /// can complete OAuth without manual client_id entry.

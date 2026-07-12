@@ -16,8 +16,9 @@ async fn main() {
         )
         .init();
 
-    // An instance that cannot state which audience it validates must not serve traffic. A warning
-    // was never a control.
+    // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry
+    // their remedy in Display. An instance that cannot state which audience it validates must not
+    // serve traffic.
     let config = ApiConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
 
     let pool = PgPoolOptions::new()
