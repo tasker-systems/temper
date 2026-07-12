@@ -1,8 +1,10 @@
 //! MCP service — the central handler for all MCP tool calls.
 //!
-//! Each invocation creates a fresh `TemperMcpService`. The authenticated
-//! caller's profile is resolved from `RawJwtClaims` (injected by the JWT
-//! middleware into the HTTP request extensions) on **every** request.
+//! Each invocation creates a fresh `TemperMcpService`. The authenticated caller's
+//! profile is resolved on **every** request by handing the shared auth seam the
+//! `RawJwtClaims` + `BearerToken` the JWT middleware injected into the HTTP request
+//! extensions. This surface constructs no principal of its own: it presents a verified
+//! token and maps `AuthzError` to rmcp (see `map_authz_error`).
 //!
 //! In stateless mode (Vercel serverless), `initialize()` may run on a
 //! different invocation than the subsequent tool call, so we cannot rely
@@ -21,11 +23,11 @@ use rmcp::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use temper_core::types::{AuthClaims, Profile};
+use temper_core::types::Profile;
 use temper_services::auth::RawJwtClaims;
-use temper_services::services::profile_service;
 use temper_services::state::AppState;
 
+use crate::middleware::BearerToken;
 use crate::tools;
 
 /// Central MCP service. One instance per client session.
@@ -57,44 +59,6 @@ impl TemperMcpService {
         }
     }
 
-    /// Classify decoded JWT claims into `AuthClaims`. A machine
-    /// (`client_credentials`) token resolves via the shared seam; a human MCP
-    /// token may omit email (resolved from cached auth links downstream).
-    ///
-    /// Fallible because [`temper_services::auth::Principal`] is a closed sum: a
-    /// machine-shaped token we cannot coherently classify is a `Refuse`, not a
-    /// human. This surface is the one that made that distinction load-bearing —
-    /// it has no email-resolution step (`email` below is unconditionally empty),
-    /// so before the closed sum a `Refuse`-shaped token fell into the human arm
-    /// and auto-provisioned a profile, bypassing the `kb_machine_clients`
-    /// registration gate that temper-api's email step happened to block by luck.
-    fn claims_from(&self, raw: &RawJwtClaims) -> Result<AuthClaims, rmcp::ErrorData> {
-        match temper_services::auth::classify(raw) {
-            temper_services::auth::Principal::Machine(machine) => Ok(machine),
-            // Terminal, like the machine-gate denial in `map_authz_error`: the token
-            // is structurally incoherent, so retrying it changes nothing.
-            temper_services::auth::Principal::Refuse(why) => {
-                tracing::warn!(sub = %raw.sub, why, "rejected: unclassifiable machine-shaped token");
-                Err(rmcp::ErrorData::new(
-                    rmcp::model::ErrorCode::INVALID_REQUEST,
-                    "This token is machine-shaped but does not declare a valid \
-                     client_credentials grant. This error is terminal and should not be retried."
-                        .to_string(),
-                    None,
-                ))
-            }
-            temper_services::auth::Principal::Human => Ok(AuthClaims {
-                principal_kind: temper_core::types::PrincipalKind::Human,
-                provider: self.api_state.config.auth_provider_name.clone(),
-                external_user_id: raw.sub.clone(),
-                email: String::new(),
-                email_verified: None,
-                exp: raw.exp,
-                iat: raw.iat,
-            }),
-        }
-    }
-
     /// Resolve the profile from HTTP request parts and cache it.
     ///
     /// In stateless mode each request creates a fresh service instance, so
@@ -104,15 +68,14 @@ impl TemperMcpService {
         &self,
         parts: &http::request::Parts,
     ) -> Result<(), rmcp::ErrorData> {
-        let claims = parts.extensions.get::<RawJwtClaims>().ok_or_else(|| {
-            tracing::warn!("RawJwtClaims not found in HTTP request extensions");
-            rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
-        })?;
+        let (claims, token) = authed_request(parts)?;
 
-        let auth_claims = self.claims_from(claims)?;
-
-        // Level 1: resolve + deactivation gate (shared seam).
-        let authed = temper_services::auth::authenticate(&self.api_state.pool, &auth_claims)
+        // Level 1: classify → human email ladder → resolve → deactivation gate, all in
+        // the shared seam. This surface used to build the human `AuthClaims` itself,
+        // with `email: ""` and no ladder — the drift that let an unnamable human
+        // auto-provision a junk profile here while temper-api refused the same token.
+        // It no longer constructs a principal at all; it hands over the verified token.
+        let authed = temper_services::auth::authenticate_token(&self.api_state, claims, &token.0)
             .await
             .map_err(map_authz_error)?;
 
@@ -708,12 +671,57 @@ impl TemperMcpService {
     }
 }
 
+/// The two things the JWT middleware injects for an authenticated request: the
+/// decoded claims and the raw token the seam's `/userinfo` rung may need.
+///
+/// Their absence is not an authentication failure but a wiring bug — the middleware
+/// injects both or rejects the request — so it maps to an internal error, as the
+/// missing-claims case always has.
+fn authed_request(
+    parts: &http::request::Parts,
+) -> Result<(&RawJwtClaims, &BearerToken), rmcp::ErrorData> {
+    let claims = parts.extensions.get::<RawJwtClaims>().ok_or_else(|| {
+        tracing::warn!("RawJwtClaims not found in HTTP request extensions");
+        rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
+    })?;
+    let token = parts.extensions.get::<BearerToken>().ok_or_else(|| {
+        tracing::warn!("BearerToken not found in HTTP request extensions");
+        rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
+    })?;
+    Ok((claims, token))
+}
+
 /// Map the shared seam's refusal vocabulary onto rmcp transport errors.
 /// The deactivation and access-required strings are terminal ("do not retry")
 /// and byte-identical to the pre-seam inline messages.
 fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
     use temper_services::auth::AuthzError;
     match e {
+        // Terminal, like the machine-gate denial below: the token is structurally
+        // incoherent (machine-shaped, but not coherently a machine), so retrying it
+        // changes nothing. The seam has already logged the `sub` and the reason.
+        AuthzError::Refused(_) => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            "This token is machine-shaped but does not declare a valid \
+             client_credentials grant. This error is terminal and should not be retried."
+                .to_string(),
+            None,
+        ),
+        // Also terminal: a human token we cannot put a name to. Before the seam owned
+        // the email ladder this surface skipped it entirely and auto-provisioned a
+        // profile with `email: ''`; that junk-row path is closed on purpose. The token
+        // carries no `email` claim and no earlier sign-in cached one, so re-sending it
+        // resolves nothing — the fix is a token with an email claim, not a retry.
+        AuthzError::EmailResolution(err) => {
+            tracing::warn!(%err, "rejected: could not resolve an email for a human token");
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                "Could not resolve an email address for this token. \
+                 This error is terminal and should not be retried."
+                    .to_string(),
+                None,
+            )
+        }
         AuthzError::Deactivated { profile_id } => {
             tracing::warn!(%profile_id, "rejected: profile is deactivated");
             rmcp::ErrorData::new(
@@ -786,33 +794,28 @@ impl rmcp::ServerHandler for TemperMcpService {
             context.peer.set_peer_info(request);
         }
 
-        // Extract RawJwtClaims from the HTTP request parts injected by the
-        // StreamableHttpService transport.
+        // Resolve the session's principal through the shared seam, from the HTTP request
+        // parts injected by the StreamableHttpService transport.
+        //
+        // This used to call `resolve_from_claims` directly, which skipped Level 1's
+        // `is_active` gate: a deactivated account was refused on every *tool call* but
+        // still opened a session. `authenticate_token` closes that — refusals here are
+        // authentication decisions and propagate, rather than being warned past as the
+        // old best-effort cache seed was.
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            if let Some(claims) = parts.extensions.get::<RawJwtClaims>() {
-                // A `Refuse` propagates rather than being warned past: profile
-                // resolution here is best-effort caching, but *classification* is an
-                // authentication decision, and an unclassifiable machine-shaped token
-                // has no business opening a session.
-                let auth_claims = self.claims_from(claims)?;
-                match profile_service::resolve_from_claims(&self.api_state.pool, &auth_claims).await
-                {
-                    Ok(profile) => {
-                        tracing::info!(
-                            profile_id = %profile.id,
-                            sub = %claims.sub,
-                            "MCP session initialized"
-                        );
-                        let mut guard = self.profile.lock().await;
-                        *guard = Some(profile);
-                    }
-                    Err(e) => {
-                        tracing::warn!(sub = %claims.sub, "Failed to resolve profile: {e:?}");
-                    }
-                }
-            } else {
-                tracing::warn!("RawJwtClaims not found in request extensions after middleware");
-            }
+            let (claims, token) = authed_request(parts)?;
+            let authed =
+                temper_services::auth::authenticate_token(&self.api_state, claims, &token.0)
+                    .await
+                    .map_err(map_authz_error)?;
+
+            tracing::info!(
+                profile_id = %authed.profile.id,
+                sub = %claims.sub,
+                "MCP session initialized"
+            );
+            let mut guard = self.profile.lock().await;
+            *guard = Some(authed.profile);
         }
 
         Ok(self.get_info())

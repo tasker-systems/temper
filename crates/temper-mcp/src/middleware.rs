@@ -2,8 +2,9 @@
 //!
 //! Re-uses temper-api's `JwksKeyStore` for token validation. Simpler than
 //! the full `require_auth` middleware — we validate the JWT and inject the
-//! decoded [`RawJwtClaims`] for the service to normalize (human vs machine)
-//! and resolve downstream.
+//! decoded [`RawJwtClaims`] plus the raw [`BearerToken`], which the service
+//! hands to `temper_services::auth::authenticate_token` to classify, resolve
+//! and gate the principal.
 
 use axum::{
     body::Body,
@@ -19,9 +20,18 @@ use temper_services::auth::RawJwtClaims;
 
 use crate::router::McpAppState;
 
+/// The raw, already-verified bearer token of the current request.
+///
+/// A newtype rather than a bare `String` so it cannot be confused with any other
+/// string in the extensions map. It travels beside [`RawJwtClaims`] because the
+/// shared auth seam's human email ladder may need to present it to the IdP's
+/// `/userinfo` endpoint — the one rung that needs the token itself, not its claims.
+#[derive(Debug, Clone)]
+pub struct BearerToken(pub String);
+
 /// Validate the Auth0 Bearer JWT on every MCP request.
 ///
-/// On success, injects [`RawJwtClaims`] into request extensions.
+/// On success, injects [`RawJwtClaims`] and [`BearerToken`] into request extensions.
 /// On failure, returns 401 with a `WWW-Authenticate` header that triggers
 /// the MCP client's OAuth flow (per MCP 2025-03-26 auth spec).
 pub async fn require_mcp_auth(
@@ -52,6 +62,7 @@ pub async fn require_mcp_auth(
     match decode::<RawJwtClaims>(&token, &vk.key, &validation) {
         Ok(data) => {
             request.extensions_mut().insert(data.claims);
+            request.extensions_mut().insert(BearerToken(token));
             next.run(request).await
         }
         Err(e) => {

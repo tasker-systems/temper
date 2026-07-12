@@ -86,13 +86,17 @@ pub(crate) async fn generate_profile_handle_conn(
 
 /// Resolve a profile from JWT claims.
 ///
+/// Crate-private: the only ways in are `auth::authenticate_token` (the token path) and
+/// `auth::resolve_federated_human` (the SAML path). A surface cannot reach the profile
+/// *minting* path with claims it built itself — see the `auth` module doc.
+///
 /// Lookup order:
 /// 1. Find an existing `kb_profile_auth_links` row by `(auth_provider, auth_provider_user_id)`.
 /// 2. If found, load the linked profile.
 /// 3. If not found, check whether any auth link shares the same email (reconciliation).
 /// 4. If email matches an existing link, create a new auth link pointing to that profile.
 /// 5. Otherwise, create a new profile and a new auth link.
-pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
+pub(crate) async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
     match claims.principal_kind {
         PrincipalKind::Human => resolve_human_from_claims(pool, claims).await,
         PrincipalKind::Machine => resolve_machine_from_claims(pool, claims).await,

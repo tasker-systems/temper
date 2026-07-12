@@ -33,6 +33,10 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
 
 fn machine_parts(client_id: &str) -> axum::http::request::Parts {
     axum::http::Request::builder()
+        // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
+        // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
+        // carry both or the service rejects the request as unwired.
+        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
         .extension(temper_services::auth::RawJwtClaims {
             sub: format!("{client_id}@clients"),
             email: None,

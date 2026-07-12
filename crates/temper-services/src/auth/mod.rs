@@ -5,29 +5,67 @@
 //! re-implements the ordering. Adding a future gate is one edit here, enforced
 //! on every surface.
 //!
+//! **The seam owns principal construction.** A surface hands in a verified token
+//! and gets back an [`AuthenticatedProfile`]; it never builds an `AuthClaims`, and
+//! nothing here accepts one. That is the whole enforcement mechanism: `AuthClaims`
+//! is still a public type a surface *can* construct, but with `authenticate`,
+//! `classify`, `Principal` and `resolve_from_claims` all crate-private, a forged one
+//! has nowhere to go. It is inert rather than forbidden.
+//!
+//! This closes the level below the one `normalize.rs` closed. PR #384 made
+//! *classification* total, so no surface could say "unrecognized ⇒ human" — but each
+//! surface still hand-built its own human `AuthClaims`, and they disagreed:
+//! temper-api ran a three-rung email ladder, temper-mcp set `email: ""` and
+//! auto-provisioned. Any surface that can construct an `AuthClaims` can construct a
+//! `PrincipalKind::Human`, which is precisely the asymmetry that made #384's bug
+//! asymmetric. One constructor, one ladder (`email.rs`), one answer per token.
+//!
+//! Entry points:
+//! - [`authenticate_token`] — the token path. Verified [`RawJwtClaims`] + the raw
+//!   token ⇒ authenticated profile. Both surfaces' every authed request.
+//! - [`resolve_federated_human`] — the federated path. An assertion already
+//!   authenticated out-of-band (SAML/HMAC, no JWT) ⇒ resolved-or-JIT'd profile.
+//! - [`require_system_access`] — Level 2, consuming proof of Level 1.
+//!
 //! Two levels form a typestate chain:
-//! 1. [`authenticate`] — resolve the profile + `is_active`. Runs on every authed
-//!    request on both surfaces. Yields [`AuthenticatedProfile`].
+//! 1. `authenticate` (crate-private, reached only via [`authenticate_token`]) — resolve
+//!    the profile + `is_active`. Runs on every authed request on both surfaces.
+//!    Yields [`AuthenticatedProfile`].
 //! 2. [`require_system_access`] — consumes proof of Level 1, adds the access gate.
 //!    Runs on the gated tier of both surfaces. Yields [`SystemAuthorized`].
 
 use sqlx::PgPool;
 
 use temper_core::types::ids::ProfileId;
-use temper_core::types::{AuthClaims, AuthenticatedProfile};
+use temper_core::types::{AuthClaims, AuthenticatedProfile, PrincipalKind, Profile};
 
+mod email;
 mod normalize;
 pub mod secret;
-pub use normalize::{classify, Principal, RawJwtClaims, MACHINE_PROVIDER_TAG};
+pub use normalize::{RawJwtClaims, MACHINE_PROVIDER_TAG};
+// Crate-private on purpose: classification is a decision the seam makes, not one a
+// surface is shown. A surface that can see `Principal` can pattern-match its way back
+// to hand-building the human arm — the exact drift this module exists to prevent.
+pub(crate) use normalize::{classify, Principal};
 
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiResult};
 use crate::services::profile_service;
+use crate::state::AppState;
 
 /// The reason an authn/authz gate refused a request. Each surface maps these to
 /// its own transport (HTTP status / rmcp error); the variants are the shared
 /// vocabulary of *why*, never the words on the wire.
 #[derive(Debug)]
 pub enum AuthzError {
+    /// The token is machine-shaped but not coherently so — classification (crate-private,
+    /// see `normalize.rs`) refused it. Carries the reason (already logged by the seam) so a
+    /// surface can decide how much of it to say on the wire; neither says any of it.
+    Refused(&'static str),
+    /// The human email ladder fell off its bottom rung: no `email` claim, no cached
+    /// auth link, and `/userinfo` did not answer. Distinct from [`Self::ProfileResolution`]
+    /// because nothing was resolved — we could not even name the human, so no write
+    /// was attempted.
+    EmailResolution(ApiError),
     /// `resolve_from_claims` failed (DB error, missing link data, etc.).
     ProfileResolution(ApiError),
     /// The `has_system_access` gate check itself failed (DB error) — distinct
@@ -42,13 +80,89 @@ pub enum AuthzError {
     SystemAccessDenied { profile_id: uuid::Uuid },
 }
 
+/// **The token path.** A verified JWT ⇒ an authenticated, active profile.
+///
+/// The one entry point for both surfaces' authed requests. The surface verifies the
+/// signature (each has its own audience) and decodes into [`RawJwtClaims`]; from
+/// there the seam owns everything — classification, the human email ladder, claim
+/// construction, and the Level 1 gates. `token` is the raw bearer, needed only for
+/// the ladder's `/userinfo` rung.
+///
+/// The machine arm **must not** run the email ladder: an M2M principal has no email
+/// and no `/userinfo` to ask, so a ladder on that path would be an authentication
+/// failure dressed as a lookup. That ordering is load-bearing, not incidental — see
+/// `machine_token_authenticates_without_running_the_email_ladder`.
+pub async fn authenticate_token(
+    state: &AppState,
+    raw: &RawJwtClaims,
+    token: &str,
+) -> Result<AuthenticatedProfile, AuthzError> {
+    let claims = match classify(raw) {
+        Principal::Machine(machine) => machine,
+        Principal::Refuse(why) => {
+            tracing::warn!(sub = %raw.sub, why, "rejected: unclassifiable machine-shaped token");
+            return Err(AuthzError::Refused(why));
+        }
+        Principal::Human => {
+            let (email, email_verified) = email::resolve_email_from_claims(state, raw, token)
+                .await
+                .map_err(AuthzError::EmailResolution)?;
+            AuthClaims {
+                principal_kind: PrincipalKind::Human,
+                provider: state.config.auth_provider_name.clone(),
+                external_user_id: raw.sub.clone(),
+                email,
+                email_verified,
+                exp: raw.exp,
+                iat: raw.iat,
+            }
+        }
+    };
+
+    authenticate(&state.pool, &claims).await
+}
+
+/// **The federated path.** An identity asserted by a trusted peer, not a token.
+///
+/// Called by the internal SAML reconcile endpoint, whose assertion the co-deployed
+/// Authorization Server has *already* validated server-to-server (HMAC over the body,
+/// per `require_internal_signature`) before the token is minted. There is no JWT here
+/// and nothing to classify: the caller is trusted, and this only resolves-or-JITs the
+/// profile the minted token will later resolve to. `provider` must be the server's
+/// configured provider name — never a payload field — so both paths land on the same
+/// profile.
+///
+/// The trust assumption is exactly "the caller authenticated the assertion". It is not
+/// a hole in the machine gate: #384's machine-shape guard at the top of
+/// `resolve_human_from_claims` still covers this path, so an assertion carrying an
+/// `@clients`-suffixed `external_user_id` is refused here as it is everywhere else.
+pub async fn resolve_federated_human(
+    pool: &PgPool,
+    provider: &str,
+    external_user_id: &str,
+    email: &str,
+    email_verified: Option<bool>,
+) -> ApiResult<Profile> {
+    let claims = AuthClaims {
+        principal_kind: PrincipalKind::Human,
+        provider: provider.to_string(),
+        external_user_id: external_user_id.to_string(),
+        email: email.to_string(),
+        email_verified,
+        // exp/iat are unused by resolve_from_claims; supply zero rather than inventing a clock.
+        exp: 0,
+        iat: 0,
+    };
+
+    profile_service::resolve_from_claims(pool, &claims).await
+}
+
 /// Level 1 — authentication. Verified+normalized claims → a resolved, active profile.
 ///
-/// Runs on **every** authenticated request on **both** surfaces. Callers are
-/// responsible for verifying the JWT and normalizing it into `claims` first
-/// (each surface's audience differs); this function owns resolve + the
-/// deactivation gate.
-pub async fn authenticate(
+/// Runs on **every** authenticated request on **both** surfaces, reached only through
+/// [`authenticate_token`]. Crate-private: a surface cannot hand this function claims it
+/// built itself, which is what makes a forged `AuthClaims` inert (module doc).
+pub(crate) async fn authenticate(
     pool: &PgPool,
     claims: &AuthClaims,
 ) -> Result<AuthenticatedProfile, AuthzError> {
@@ -100,6 +214,221 @@ pub async fn require_system_access(
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
+
+    use crate::config::ApiConfig;
+    use crate::state::{AppState, JwksKeyStore};
+
+    /// An `AppState` whose IdP is *unroutable on purpose*. Port 1 refuses instantly,
+    /// so the userinfo rung of the email ladder can never succeed — any test that
+    /// passes against this state proved it resolved without reaching the network,
+    /// and any test that fails against it proves the ladder ran off its bottom rung.
+    fn state(pool: PgPool) -> AppState {
+        let config = ApiConfig {
+            database_url: "unused".to_string(),
+            jwks_url: "http://127.0.0.1:1/jwks".to_string(),
+            auth_issuer: "http://127.0.0.1:1".to_string(),
+            auth_audience: None,
+            auth_provider_name: "test-provider".to_string(),
+            cors_origins: vec![],
+            port: 0,
+            enable_swagger: false,
+            internal_reconcile_secret: None,
+            embed_dispatch_secret: None,
+        };
+        AppState::new(
+            pool,
+            JwksKeyStore::new("http://127.0.0.1:1/jwks".to_string()),
+            config,
+        )
+    }
+
+    /// A human token as Auth0 mints it *without* our email Action: a bare `sub`.
+    fn human_raw(sub: &str, email: Option<&str>) -> RawJwtClaims {
+        RawJwtClaims {
+            sub: sub.to_string(),
+            email: email.map(str::to_string),
+            email_verified: None,
+            azp: None,
+            gty: None,
+            exp: 9999,
+            iat: 1111,
+        }
+    }
+
+    /// A `client_credentials` token in the shape Auth0 actually mints.
+    fn machine_raw(client_id: &str) -> RawJwtClaims {
+        RawJwtClaims {
+            sub: format!("{client_id}@clients"),
+            email: None,
+            email_verified: None,
+            azp: Some(client_id.to_string()),
+            gty: Some("client-credentials".to_string()),
+            exp: 9999,
+            iat: 1111,
+        }
+    }
+
+    async fn profile_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar!(r#"SELECT count(*) as "count!: i64" FROM kb_profiles"#)
+            .fetch_one(pool)
+            .await
+            .expect("count profiles")
+    }
+
+    /// Seed a profile whose auth link already carries a cached email — the state a
+    /// returning human is in after their first sign-in through temper-api.
+    async fn seed_linked_human(pool: &PgPool, sub: &str, email: &str) -> uuid::Uuid {
+        let profile_id = uuid::Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, $2, $2, $3, '{}')",
+            profile_id,
+            format!("human-{sub}"),
+            email,
+        )
+        .execute(pool)
+        .await
+        .expect("seed profile");
+        sqlx::query!(
+            "INSERT INTO kb_profile_auth_links \
+               (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at) \
+             VALUES ($1, $2, 'test-provider', $3, $4, true, true, now())",
+            uuid::Uuid::now_v7(),
+            profile_id,
+            sub,
+            email,
+        )
+        .execute(pool)
+        .await
+        .expect("seed auth link");
+        profile_id
+    }
+
+    /// The deliberate closure: an email-less, link-less human token no longer
+    /// auto-provisions a junk `email: ''` profile on the surface that used to skip the
+    /// ladder (temper-mcp). Both surfaces now run the one ladder, so both refuse — and
+    /// refusal must be *before* any write, not after.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn emailless_unlinked_human_is_refused_without_provisioning(pool: PgPool) {
+        let before = profile_count(&pool).await;
+
+        let err = authenticate_token(
+            &state(pool.clone()),
+            &human_raw("auth0|nobody", None),
+            "tok",
+        )
+        .await
+        .expect_err("an email-less, link-less human must not authenticate");
+
+        assert!(
+            matches!(err, AuthzError::EmailResolution(ApiError::Unauthorized(_))),
+            "expected EmailResolution(Unauthorized), got {err:?}"
+        );
+        assert_eq!(
+            profile_count(&pool).await,
+            before,
+            "a refused token must provision nothing"
+        );
+    }
+
+    /// The path that keeps every returning MCP human working: no `email` claim on the
+    /// token, but a cached `kb_profile_auth_links` row from an earlier sign-in. Rung 2
+    /// answers, so the (unroutable) userinfo rung is never reached.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn human_without_email_claim_resolves_from_cached_link(pool: PgPool) {
+        let expected = seed_linked_human(&pool, "auth0|returning", "returning@example.test").await;
+
+        let authed = authenticate_token(
+            &state(pool.clone()),
+            &human_raw("auth0|returning", None),
+            "tok",
+        )
+        .await
+        .expect("a linked human resolves from the cached email");
+
+        assert_eq!(authed.profile.id, expected);
+        assert_eq!(authed.claims.email, "returning@example.test");
+        assert_eq!(
+            authed.claims.principal_kind,
+            temper_core::types::PrincipalKind::Human
+        );
+    }
+
+    /// The machine path must never touch the email ladder — an M2M token has no email
+    /// and no `/userinfo` to ask. The unroutable issuer is the assertion: if the ladder
+    /// ran, this call would fail against port 1 instead of authenticating.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn machine_token_authenticates_without_running_the_email_ladder(pool: PgPool) {
+        let expected = register_machine(&pool, "ladder-free-client").await;
+
+        let authed = authenticate_token(
+            &state(pool.clone()),
+            &machine_raw("ladder-free-client"),
+            "tok",
+        )
+        .await
+        .expect("a registered machine authenticates with no email resolution");
+
+        assert_eq!(authed.profile.id, expected);
+        assert_eq!(
+            authed.claims.principal_kind,
+            temper_core::types::PrincipalKind::Machine
+        );
+        assert_eq!(authed.claims.email, "", "a machine has no email");
+    }
+
+    /// `Principal::Refuse` reaches the surfaces as `AuthzError::Refused` — the closed
+    /// sum's refusal is now a value of the *seam's* error vocabulary, not something each
+    /// surface re-derives from a classification it can see.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn refused_classification_surfaces_as_refused(pool: PgPool) {
+        let before = profile_count(&pool).await;
+
+        // Machine-shaped subject with no `client_credentials` grant: incoherent.
+        let raw = human_raw("abc123@clients", None);
+        let err = authenticate_token(&state(pool.clone()), &raw, "tok")
+            .await
+            .expect_err("an unclassifiable machine-shaped token must be refused");
+
+        assert!(
+            matches!(err, AuthzError::Refused(why) if why.contains("machine-shaped")),
+            "expected Refused, got {err:?}"
+        );
+        assert_eq!(
+            profile_count(&pool).await,
+            before,
+            "a refused token must provision nothing"
+        );
+    }
+
+    /// The federated (SAML) path JITs a profile from an assertion the caller already
+    /// authenticated server-to-server. No token, no ladder — the email is asserted.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn federated_human_resolves_from_asserted_identity(pool: PgPool) {
+        let profile = resolve_federated_human(
+            &pool,
+            "test-provider",
+            "saml|jane",
+            "jane@example.test",
+            Some(true),
+        )
+        .await
+        .expect("federated resolve");
+
+        assert_eq!(profile.email.as_deref(), Some("jane@example.test"));
+
+        // Idempotent: the same assertion resolves to the same profile.
+        let again = resolve_federated_human(
+            &pool,
+            "test-provider",
+            "saml|jane",
+            "jane@example.test",
+            Some(true),
+        )
+        .await
+        .expect("federated resolve (repeat)");
+        assert_eq!(again.id, profile.id);
+    }
 
     // Helper: build AuthClaims for a synthetic principal.
     fn claims(sub: &str, email: &str) -> AuthClaims {
