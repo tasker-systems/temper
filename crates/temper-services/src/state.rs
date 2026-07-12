@@ -131,18 +131,31 @@ impl JwksKeyStore {
             .ok_or_else(|| "JWKS cache empty after refresh".to_string())
     }
 
-    /// Build a `Validation` for the given issuer and optional audience, with an
-    /// allow-list scoped to exactly `algorithm` (the loaded key's family).
+    /// Build a `Validation` for the given issuer and audience, with an allow-list scoped to exactly
+    /// `algorithm` (the loaded key's family).
     ///
-    /// The allow-list must be single-family: `jsonwebtoken` rejects a
-    /// `Validation` whose list mixes families the cached key does not match.
-    /// `audience` is not optional. It used to be, and a `None` set `validate_aud = false` — which
-    /// meant an unset `AUTH_AUDIENCE` disabled the check outright. An instance that cannot state
-    /// which audience it validates does not boot (see [`crate::auth_config`]), so there is no longer
-    /// an input that could reach that branch.
+    /// The allow-list must be single-family: `jsonwebtoken` rejects a `Validation` whose list mixes
+    /// families the cached key does not match.
+    ///
+    /// **Two separate things must be true for the audience to actually be checked**, and only the
+    /// first is obvious:
+    ///
+    /// 1. The config must carry an audience. It used to be an `Option`, and a `None` set
+    ///    `validate_aud = false` — so an unset `AUTH_AUDIENCE` disabled the check outright. There is
+    ///    no `None` left to hand in (see [`crate::auth_config`]).
+    /// 2. **The token must actually carry an `aud` claim.** `set_audience` alone does NOT enforce
+    ///    that. `required_spec_claims` defaults to `{"exp"}`, and jsonwebtoken's own docs say:
+    ///    *"Validation only happens if `aud` claim is present in the token."* A token with **no**
+    ///    `aud` — or a malformed one that fails to parse as a string — hits the fallthrough arm and
+    ///    is **accepted**. Fixing (1) without (2) closes half the door and documents the other half
+    ///    as shut.
+    ///
+    /// `iss` is required for the same reason: the issuer match has the same present-only semantics,
+    /// so a claims-minimal token signed by any key in the trusted JWKS would otherwise walk in.
     pub fn validation(&self, issuer: &str, audience: &str, algorithm: Algorithm) -> Validation {
         let mut v = Validation::new(algorithm);
         v.algorithms = vec![algorithm];
+        v.set_required_spec_claims(&["exp", "iss", "aud"]);
         v.set_issuer(&[issuer]);
         v.set_audience(&[audience]);
         v
@@ -269,6 +282,25 @@ mod tests {
                 .unwrap_or(false),
             "issuer should be set"
         );
+    }
+
+    /// `set_audience` is NOT sufficient, and this is the trap: jsonwebtoken only checks `aud` when
+    /// the claim is PRESENT (`required_spec_claims` defaults to `{"exp"}`). A token carrying no
+    /// `aud` at all was accepted even with `validate_aud = true`.
+    #[test]
+    fn aud_and_iss_are_required_to_be_present_not_merely_matched() {
+        let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
+        let v = store.validation("https://auth.example.com", "temper-api", Algorithm::RS256);
+
+        assert!(
+            v.required_spec_claims.contains("aud"),
+            "a token with NO aud claim must be refused, not silently accepted"
+        );
+        assert!(
+            v.required_spec_claims.contains("iss"),
+            "the issuer match has the same present-only semantics as the audience match"
+        );
+        assert!(v.required_spec_claims.contains("exp"));
     }
 
     #[test]

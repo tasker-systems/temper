@@ -69,12 +69,11 @@ pub async fn require_mcp_auth(
             next.run(request).await
         }
         Err(e) => {
-            tracing::warn!(
-                error = %e,
-                issuer = %issuer,
-                audience = %audience,
-                "MCP JWT validation failed"
-            );
+            // Deliberately does NOT log the expected issuer/audience. Anyone can trigger this line
+            // by sending a garbage bearer, and these are precisely the two config values the boot
+            // gate's errors go out of their way never to print. `error` names which check failed,
+            // which is what an operator debugging a 401 actually needs.
+            tracing::warn!(error = %e, "MCP JWT validation failed");
             unauthorized(&state)
         }
     }

@@ -29,7 +29,7 @@ exactly how the drift above keeps recurring one level down.
   ───────────────────                        ────────────────────────────────────────
   require_auth (middleware/auth.rs)          require_mcp_auth (middleware.rs)
     · verify JWT (JwksKeyStore)                · verify JWT (same JwksKeyStore)
-    · aud = auth_audience                      · aud = mcp_audience
+    · aud = config.auth.audience               · aud = config.auth.audience (the SAME one)
     ↓ decode → RawJwtClaims                    ↓ inject RawJwtClaims + BearerToken
         │                                      ensure_profile_from_parts (service.rs)
         │                                          │

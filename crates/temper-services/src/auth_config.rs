@@ -96,12 +96,6 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// Strip trailing slashes. Auth0 issuers conventionally end in `/` and the AS's own metadata
-/// already strips them, so a raw string compare would false-positive.
-fn norm(s: &str) -> &str {
-    s.trim_end_matches('/')
-}
-
 /// Read a variable, treating whitespace-only and empty as absent — uniformly, for every variable.
 /// Before this, an empty `AUTH_AUDIENCE` disabled validation on temper-api while an empty
 /// `MCP_AUDIENCE` made temper-mcp reject every token. One typo, two opposite failures.
@@ -135,12 +129,28 @@ pub fn parse_auth_config(
             if as_audience != audience {
                 return Err(ConfigError::AsAudienceMismatch);
             }
-            if norm(&as_issuer) != norm(&issuer) {
+
+            // BYTE-EXACT, deliberately — do NOT normalize trailing slashes here.
+            //
+            // The AS mints `iss` from the RAW `AS_ISSUER` (`mint.ts`: `setIssuer(requireEnv(
+            // "AS_ISSUER"))`, no trimming), and we hand the RAW `AUTH_ISSUER` to
+            // `Validation::set_issuer`, which matches by exact string membership. So
+            // `AS_ISSUER=https://x/` with `AUTH_ISSUER=https://x` is NOT a harmless cosmetic
+            // difference: it would boot green and then reject every token the AS ever mints.
+            // A tolerant comparison here would admit exactly the class of broken instance this
+            // module exists to refuse.
+            if as_issuer != issuer {
                 return Err(ConfigError::AsIssuerMismatch);
             }
-            if norm(&jwks_url) != format!("{}/oauth/jwks", norm(&as_issuer)) {
+
+            // The JWKS URL is FETCHED verbatim, so it too must be exact. The issuer may legally
+            // carry a trailing slash (it is just an identifier string) — the URL derived from it
+            // must not double it.
+            let expected_jwks = format!("{}/oauth/jwks", as_issuer.trim_end_matches('/'));
+            if jwks_url != expected_jwks {
                 return Err(ConfigError::AsJwksMismatch);
             }
+
             AuthMode::TemperAs
         }
     };
@@ -302,24 +312,46 @@ mod tests {
         );
     }
 
-    // --- normalization ---
+    // --- exactness: a trailing slash is NOT cosmetic ---
 
     #[test]
-    fn trailing_slashes_are_normalized_before_comparison() {
-        // AS_ISSUER with a trailing slash, AUTH_ISSUER without: the same instance.
+    fn a_trailing_slash_on_as_issuer_alone_is_refused() {
+        // The subtle one, and an earlier cut of this module got it WRONG: it normalized trailing
+        // slashes before comparing, so this config booted green — and then rejected every token
+        // the AS minted.
+        //
+        // The AS mints `iss` from the raw AS_ISSUER ("https://temper.acme.com/"), while the API
+        // validates against the raw AUTH_ISSUER ("https://temper.acme.com"), matched by exact
+        // string. Tolerating the difference admits precisely the broken instance this module
+        // exists to refuse.
         let e = with(temper_as(), "AS_ISSUER", "https://temper.acme.com/");
-        let cfg = parse_auth_config(env(&e)).expect("trailing slash must not be a mismatch");
-        assert_eq!(cfg.mode, AuthMode::TemperAs);
+        assert_eq!(
+            parse_auth_config(env(&e)),
+            Err(ConfigError::AsIssuerMismatch)
+        );
     }
 
     #[test]
-    fn a_jwks_url_with_a_trailing_slash_still_matches() {
+    fn a_trailing_slash_on_both_issuers_is_fine_and_does_not_double_the_jwks_url() {
+        // An issuer carrying a trailing slash is legal — it is just an identifier, and here the AS
+        // and the API agree on it byte for byte. The JWKS URL derived from it must not double up.
+        let e = with(temper_as(), "AS_ISSUER", "https://temper.acme.com/");
+        let e = with(e, "AUTH_ISSUER", "https://temper.acme.com/");
+        let cfg = parse_auth_config(env(&e)).expect("issuers agreeing byte-for-byte must be valid");
+        assert_eq!(cfg.mode, AuthMode::TemperAs);
+        assert_eq!(cfg.issuer, "https://temper.acme.com/");
+        assert_eq!(cfg.jwks_url, "https://temper.acme.com/oauth/jwks");
+    }
+
+    #[test]
+    fn a_jwks_url_with_a_trailing_slash_is_refused() {
+        // The JWKS URL is fetched verbatim; a trailing slash makes it a different URL.
         let e = with(
             temper_as(),
             "JWKS_URL",
             "https://temper.acme.com/oauth/jwks/",
         );
-        assert!(parse_auth_config(env(&e)).is_ok());
+        assert_eq!(parse_auth_config(env(&e)), Err(ConfigError::AsJwksMismatch));
     }
 
     // --- errors are actionable but leak nothing ---

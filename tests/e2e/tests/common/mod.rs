@@ -134,6 +134,41 @@ struct TestClaims {
     exp: i64,
 }
 
+/// Claims with **no `aud` at all** — the subtler hole.
+///
+/// Setting an expected audience is not enough on its own: `jsonwebtoken` only checks `aud` when the
+/// claim is PRESENT (`required_spec_claims` defaults to `{"exp"}`, and its docs say so outright).
+/// So a token omitting `aud` entirely was accepted even with `validate_aud = true` — and no test in
+/// this suite could catch it, because every fixture token carries an `aud`.
+#[derive(Debug, Serialize, Deserialize)]
+struct NoAudienceClaims {
+    sub: String,
+    email: String,
+    email_verified: bool,
+    iss: String,
+    iat: i64,
+    exp: i64,
+}
+
+/// Sign a JWT that omits the `aud` claim entirely. Correctly signed, unexpired, right issuer.
+pub fn generate_jwt_without_audience(sub: &str, email: &str) -> String {
+    let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.key"))
+        .expect("Failed to load test RSA private key");
+
+    let now = Utc::now().timestamp();
+    let claims = NoAudienceClaims {
+        sub: sub.to_string(),
+        email: email.to_string(),
+        email_verified: true,
+        iss: "test-issuer".to_string(),
+        iat: now,
+        exp: now + 3600,
+    };
+
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+        .expect("Failed to sign aud-less JWT")
+}
+
 /// Sign a JWT for a DIFFERENT audience than this instance validates — a token the same trusted
 /// issuer minted for some other API. Correctly-signed, unexpired, right issuer, wrong `aud`.
 ///

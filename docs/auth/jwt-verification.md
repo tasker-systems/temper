@@ -43,19 +43,30 @@ the caller guess it.
 The JWKS is cached with a 1-hour TTL (`JwksKeyStore::new`); tests preload a static key via
 `with_static_key`.
 
-## The per-surface audience split
+## One audience, both surfaces
 
-This is the one part verification does **not** share, and the reason it stays per-surface
-for now:
+There used to be a **per-surface audience split** here: temper-api validated `config.auth_audience`
+while temper-mcp validated `mcp_config.mcp_audience`, parsed separately from `MCP_AUDIENCE` with a
+fallback to `AUTH_AUDIENCE`. That is gone.
 
 | | issuer | audience |
 |---|--------|----------|
-| temper-api | `config.auth_issuer` | `config.auth_audience` |
-| temper-mcp | `config.auth_issuer` (same) | `mcp_config.mcp_audience` (**different**) |
+| temper-api | `config.auth.issuer` | `config.auth.audience` |
+| temper-mcp | `config.auth.issuer` (same) | `config.auth.audience` (**the same**) |
 
-Same issuer, different audience — a token minted for the API is not automatically valid at
-the MCP endpoint and vice-versa. Both call `jwks_store.validation(issuer, Some(aud), alg)`
-with their own audience.
+Both call `jwks_store.validation(issuer, audience, alg)` — note `audience: &str`, not
+`Option<&str>`. An instance has exactly **one** audience, parsed once at boot.
+
+Two parsers for one concept is precisely how the surfaces came to disagree: an empty
+`AUTH_AUDIENCE` made temper-api set `validate_aud = false` and accept everything, while an empty
+`MCP_AUDIENCE` made temper-mcp enforce `aud == ""` and reject everything. One typo, two opposite
+failures, neither of them anyone's decision.
+
+> **`set_audience` is not sufficient on its own.** `jsonwebtoken` only *compares* the audience when
+> the `aud` claim is **present** — `required_spec_claims` defaults to `{"exp"}`. A token omitting
+> `aud` entirely was accepted even with `validate_aud = true`. `validation()` therefore sets
+> `required_spec_claims(&["exp", "iss", "aud"])`. Requiring the *value* to match without requiring
+> the *claim* to exist closes half a door.
 
 ## What the surface hands the seam
 
