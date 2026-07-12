@@ -5213,6 +5213,7 @@ dependencies = [
  "regex",
  "sha2",
  "similar",
+ "temp-env",
  "temper-core",
  "tempfile",
  "thiserror 2.0.18",

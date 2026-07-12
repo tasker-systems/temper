@@ -98,11 +98,18 @@ cargo nextest run -p temper-api --features test-db test_name  # specific crate w
 > **Gotcha:** a bare `cargo nextest run -p temper-api` (no test filter) **hangs** at test-list enumeration — nextest lists the `temper-api` **bin** target, whose `main()` ignores `--list` and blocks (the slow-timeout doesn't cover the list step). Always scope to the integration test target(s): `cargo nextest run -p temper-api --features test-db --test relationship_handler_test`. Also export `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` for `#[sqlx::test]` under bare `cargo` (the `cargo make` tasks set it for you).
 
 ### Embed-gated e2e tests
-`cargo make test-e2e` only enables `--features test-db`. CI's separate "Embed & MCP Round-Trip Tests" job additionally enables `test-embed`, which gates push-body and ingest-pipeline tests that exercise the embed pipeline (10 extra tests at last count). When touching push-body, ingest-pipeline, or YAML fixture loading code, run with both features locally to match CI:
+`cargo make test-e2e` only enables `--features test-db`, so it **silently compiles out every `test-embed`-gated test**. CI does not: **every CI test job enables `test-embed`**, and ONNX is installed in all of them. When touching push-body, ingest-pipeline, or YAML fixture loading code, run with both features locally to match CI:
 ```bash
 cargo make test-e2e-embed
 ```
-The Embed CI job is the only one with ONNX Runtime installed, so it's also the one that catches workspace-feature-unification surprises (see `temper-cloud` enabling `ingest-pipeline` on `temper-api`).
+
+> **CI runs everything, by construction.** Jobs are split by **intention** (what they need from the environment), never by feature flag: **Unit** (no DB) · **Integration & E2E** (Postgres + LFS — the whole DB-backed workspace in ONE `--workspace` command) · **Substrate Artifacts** (a different feature set). Coverage is nightly (`coverage.yml`), out of the PR path, so an instrumented-build OOM can never block a merge.
+>
+> There is **no "the job with ONNX"** any more — that was a historical constraint and it is gone. Confining `test-embed` to one job is precisely what let `streaming_ingest_test` rot: its tests were *compiled out* of the integration job and *filtered out* of the embed job's allowlist, so they ran **nowhere**, and a 484-second test hid behind a green tick for months.
+>
+> **Never add a `-E 'binary(...)'` filter to a CI test job.** Selection is `--workspace` so a new crate or test is picked up with no CI edit. A filter that makes CI green is hiding a test, not fixing one.
+>
+> Shared CI behavior lives in composite actions (`.github/actions/install-onnx`, `.github/actions/setup-rust`) rather than being copy-pasted per job — the ONNX install had drifted into **five** near-identical copies.
 
 ### TypeScript (temper-cloud)
 ```bash
@@ -158,7 +165,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - `web-api` — enables utoipa OpenAPI derives (temper-core)
 - `typescript` — enables ts-rs type generation (temper-core)
 - `mcp` — enables schemars JsonSchema derives for MCP tool parameters (temper-core)
-- `artifact-tests` — enables temper-substrate's **scenario write-path** integration tests (bootseed, seed/scenario load + roundtrip + equivalence, charter, content, ledger, replay) plus ONNX. Tests run on ephemeral `public`-schema databases via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]` — each test gets its own isolated database. The Embed CI job enables it (ONNX installed there); run locally with **`cargo make test-artifacts`**. temper-substrate's pure core tests (affinity, cluster) are ungated and run in CI.
+- `artifact-tests` — enables temper-substrate's **scenario write-path** integration tests (bootseed, seed/scenario load + roundtrip + equivalence, charter, content, ledger, replay) plus ONNX. Tests run on ephemeral `public`-schema databases via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]` — each test gets its own isolated database. CI runs it in its own **Substrate Artifact Tests** job (a distinct feature set, so it cannot fold into the `--workspace` integration run); run locally with **`cargo make test-artifacts`**. temper-substrate's pure core tests (affinity, cluster) are ungated and run in CI.
 - `scenario-schema` — enables `schemars::JsonSchema` derives on the scenario YAML model (temper-substrate) for the JSON-Schema snapshot test (`tests/scenario_schema.rs`).
 
 ## Key Patterns

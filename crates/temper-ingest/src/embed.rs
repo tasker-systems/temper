@@ -1,11 +1,22 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! Two model-loading strategies, selected at compile time by feature flags:
+//! THREE model-loading strategies. Two are selected at compile time by feature
+//! flags; the third overrides both at runtime:
 //!
 //! - **`embed`** (default): model bundled via `include_bytes!()` at compile
 //!   time (no runtime downloads).  Requires git-lfs checkout.
 //! - **`embed-download`**: model downloaded at runtime from Hugging Face via
 //!   hf-hub.  Safe on machines without git-lfs; used by the CLI.
+//! - **`TEMPER_ONNX_MODEL_PATH`** (runtime, wins over both): load the model from
+//!   a file on disk.  The only strategy that costs neither binary size nor
+//!   network — which is why CI uses it: the repo already ships the model, so
+//!   downloading ~400 MB from HF to test it was pure waste.  Mirrors the
+//!   existing `ORT_DYLIB_PATH`, which does the same for the runtime library.
+//!
+//! Note that a `--workspace` build resolves to **`embed-download`**, because
+//! temper-cli's default `embed` feature selects it and Cargo unifies features
+//! across the build — so the `include_bytes!` branch is cfg'd out of every
+//! workspace build, whether or not that is what you intended.
 //!
 //! ONNX session created once per process via `OnceLock`.
 //!
@@ -265,25 +276,76 @@ fn load_model() -> Result<&'static Model> {
     }
 }
 
-/// Build ORT session from bundled model bytes.
+/// Build ORT session from bundled model bytes — or from `TEMPER_ONNX_MODEL_PATH` when set.
+///
+/// The override is honored here too, even though this build already has the model compiled in. An env
+/// var that works in one build configuration and is silently ignored in another is a footgun: the two
+/// configurations are selected by Cargo feature unification, which is not something a caller setting an
+/// env var can see.
 #[cfg(all(feature = "embed", not(feature = "embed-download")))]
 fn build_session() -> std::result::Result<Session, String> {
-    Session::builder()
+    let mut builder = Session::builder()
         .map_err(|e| format!("ort session builder: {e}"))?
         .with_intra_threads(resolve_intra_op_threads())
-        .map_err(|e| format!("ort threads: {e}"))?
-        .commit_from_memory(MODEL_BYTES)
-        .map_err(|e| format!("ort load: {e}"))
+        .map_err(|e| format!("ort threads: {e}"))?;
+
+    match model_path_override()? {
+        Some(path) => builder
+            .commit_from_file(&path)
+            .map_err(|e| format!("ort load: {e}")),
+        None => builder
+            .commit_from_memory(MODEL_BYTES)
+            .map_err(|e| format!("ort load: {e}")),
+    }
 }
 
-/// Build ORT session by downloading model from Hugging Face Hub.
+/// Env override: load the ONNX model from this filesystem path instead of fetching it.
+///
+/// A third acquisition path, alongside `include_bytes!` (bundled) and the Hugging Face download —
+/// and the only one that costs neither binary size nor network. It exists because the repo **already
+/// ships** the model as a git-LFS asset (`models/bge-base-en-v1.5/model_quantized.onnx`), so any
+/// environment with a checkout — CI, local dev — is downloading ~400 MB it already has on disk.
+///
+/// Deliberately mirrors [`ORT_DYLIB_PATH`](self), the sibling env var this crate already uses to point
+/// ORT at its runtime library. Same idea, same shape: env var → asset on disk.
+pub const MODEL_PATH_ENV: &str = "TEMPER_ONNX_MODEL_PATH";
+
+/// Resolve the model-path override, if set. `Ok(None)` ⇒ not set, use the compiled-in acquisition path.
+///
+/// A set-but-unusable path is a hard error, never a silent fallback: the whole point of setting this is
+/// to NOT hit the network, so quietly downloading 400 MB because of a typo would defeat it — and would
+/// look like a mysteriously slow build rather than a misconfiguration.
+fn model_path_override() -> std::result::Result<Option<std::path::PathBuf>, String> {
+    let Ok(raw) = std::env::var(MODEL_PATH_ENV) else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let path = std::path::PathBuf::from(trimmed);
+    if !path.is_file() {
+        return Err(format!(
+            "{MODEL_PATH_ENV} is set to {} but that is not a readable file \
+             (a git-LFS pointer that was never fetched looks exactly like this — try `git lfs pull`)",
+            path.display()
+        ));
+    }
+    Ok(Some(path))
+}
+
+/// Build ORT session from `TEMPER_ONNX_MODEL_PATH` if set, else by downloading from Hugging Face Hub.
 #[cfg(feature = "embed-download")]
 fn build_session() -> std::result::Result<Session, String> {
-    let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
-    let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
-    let model_path = repo
-        .get("onnx/model.onnx")
-        .map_err(|e| format!("download model: {e}"))?;
+    let model_path = match model_path_override()? {
+        Some(path) => path,
+        None => {
+            let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
+            let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
+            repo.get("onnx/model.onnx")
+                .map_err(|e| format!("download model: {e}"))?
+        }
+    };
 
     Session::builder()
         .map_err(|e| format!("ort session builder: {e}"))?
@@ -484,6 +546,63 @@ pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Model-path override (TEMPER_ONNX_MODEL_PATH) ----
+    //
+    // These use `temp_env::with_var` rather than bare `std::env::set_var`: the test binary is
+    // multi-threaded, and process env is global — a bare set/unset races every other test that reads
+    // env, which is exactly the kind of flake that gets "fixed" by serializing the whole suite.
+
+    #[test]
+    fn model_path_override_unset_means_use_the_compiled_in_path() {
+        temp_env::with_var_unset(MODEL_PATH_ENV, || {
+            assert!(
+                matches!(model_path_override(), Ok(None)),
+                "unset ⇒ fall through to the build's own acquisition path"
+            );
+        });
+    }
+
+    #[test]
+    fn model_path_override_treats_empty_and_whitespace_as_unset() {
+        // A CI expression that resolves to nothing (`TEMPER_ONNX_MODEL_PATH: ${{ ... }}` with an empty
+        // value) must not become a hard error — it means "not configured", not "misconfigured".
+        for blank in ["", "   "] {
+            temp_env::with_var(MODEL_PATH_ENV, Some(blank), || {
+                assert!(
+                    matches!(model_path_override(), Ok(None)),
+                    "blank {blank:?} ⇒ unset, not an error"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn model_path_override_on_a_missing_file_fails_loudly_and_names_lfs() {
+        // The whole point of setting this is to NOT hit the network. Silently falling back to a 400 MB
+        // download because of a typo would defeat it AND look like a mysteriously slow build. And the
+        // overwhelmingly likely cause in CI is an unfetched git-LFS pointer, so the error says so.
+        temp_env::with_var(MODEL_PATH_ENV, Some("/nonexistent/model.onnx"), || {
+            let err = model_path_override().expect_err("a missing file must be an error");
+            assert!(err.contains(MODEL_PATH_ENV), "names the var; got: {err}");
+            assert!(
+                err.contains("git lfs pull"),
+                "names the likely cause; got: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn model_path_override_accepts_a_real_file() {
+        // Any readable file proves the RESOLUTION logic; ORT's own load is what validates the content.
+        // A tempfile rather than `file!()`, which is workspace-relative while the test's cwd is the
+        // crate dir.
+        let f = tempfile::NamedTempFile::new().expect("tempfile");
+        temp_env::with_var(MODEL_PATH_ENV, Some(f.path().as_os_str()), || {
+            let resolved = model_path_override().expect("a readable file resolves");
+            assert_eq!(resolved.as_deref(), Some(f.path()));
+        });
+    }
 
     // ---- Feature guard tests ----
 

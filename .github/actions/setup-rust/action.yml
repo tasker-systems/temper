@@ -1,0 +1,40 @@
+name: "Setup Rust"
+description: "Rust toolchain + build cache + the cargo tools a job actually needs. One place, so cache keys and tool versions cannot drift between jobs."
+author: "Tasker Systems"
+
+# Why this exists as a composite action:
+#
+# The toolchain / cache / tool-install preamble was repeated in every Rust job, and the cache
+# `prefix-key` was hand-copied — which means two jobs that SHOULD share a warm cache silently stop
+# sharing one the moment somebody edits a key in only one place.
+#
+# `tools` is an explicit input rather than "install everything", because installing llvm-cov in a job
+# that never measures coverage is pure wall-clock.
+
+inputs:
+  cache-prefix:
+    description: "Build-cache key prefix. Jobs with the SAME feature set should share a prefix; jobs with different feature sets must not (their target/ dirs differ)."
+    required: false
+    default: "test-v2"
+  tools:
+    description: "Comma-separated cargo tools for taiki-e/install-action (e.g. `nextest`, `nextest,sqlx-cli`, `nextest,sqlx-cli,cargo-llvm-cov`)."
+    required: false
+    default: "nextest"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Setup Rust build cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: ${{ inputs.cache-prefix }}
+
+    # One install-action call, not one per tool: it resolves prebuilt binaries, so this is seconds
+    # rather than the minutes a `cargo install` would cost.
+    - name: Install cargo tools
+      uses: taiki-e/install-action@v2
+      with:
+        tool: ${{ inputs.tools }}

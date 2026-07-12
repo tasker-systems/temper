@@ -1,0 +1,49 @@
+name: "Install ONNX Runtime"
+description: "Installs the ONNX Runtime shared library and exports ORT_DYLIB_PATH. Required by EVERY job that RUNS Rust tests."
+author: "Tasker Systems"
+
+# Why this exists as a composite action:
+#
+# This block used to be copy-pasted into FIVE jobs in test-rust.yml, each with a slightly different
+# comment and the same pinned version. That is exactly the kind of duplication that drifts: bump the
+# version in four places and the fifth job silently tests against a different runtime.
+#
+# `ort` is needed WHEREVER TESTS RUN, not only where `test-embed` is enabled. `embed` is a default
+# feature of temper-cli, and any body-bearing ingest path initializes ort at RUNTIME — so a plain
+# `--workspace` unit run touches it too. The only Rust job that does NOT need this is one that compiles
+# but executes nothing (clippy), because ort is loaded lazily on first use, not at link time.
+#
+# `ort` 2.0.0-rc.12 uses `load-dynamic` (API 18), so it wants the 1.18.x shared library at runtime and
+# finds it via ORT_DYLIB_PATH.
+
+inputs:
+  version:
+    description: "ONNX Runtime version. Must satisfy ort's load-dynamic API level (18 ⇒ 1.18.x)."
+    required: false
+    default: "1.18.1"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cache ONNX Runtime
+      id: onnx-cache
+      uses: actions/cache@v4
+      with:
+        path: onnxruntime-linux-x64-${{ inputs.version }}
+        key: onnxruntime-${{ runner.os }}-${{ inputs.version }}
+
+    - name: Download ONNX Runtime
+      if: steps.onnx-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -sSL -o onnxruntime.tgz \
+          "https://github.com/microsoft/onnxruntime/releases/download/v${{ inputs.version }}/onnxruntime-linux-x64-${{ inputs.version }}.tgz"
+        tar -xzf onnxruntime.tgz
+        rm -f onnxruntime.tgz
+
+    - name: Export ORT_DYLIB_PATH
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${{ inputs.version }}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
