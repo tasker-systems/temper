@@ -1,8 +1,17 @@
 # Trunk-Change Awareness — a SCIP Code Graph Teams and Stewards Can Watch
 
-**Date:** 2026-07-12 (reframed same-day — §0; revised after spikes S1–S3 — §0.5)
-**Status:** Design proposed. **Spikes S1, S2, S3 complete — measured, and three load-bearing claims
-were DISPROVED.** S4/S5/S6 pending. Not yet approved for implementation.
+**Date:** 2026-07-12 (reframed same-day — §0; revised after S1–S3 — §0.5; after S6 — §0.6)
+**Status:** Design proposed. **Spikes S1, S2, S3, S6 complete — measured across four languages and
+four indexers. Seven load-bearing claims were DISPROVED.** S4/S5 pending. Not approved for
+implementation.
+
+> ## ⚠️ The single most important thing in this document
+>
+> **"SCIP" is not one thing.** It is a wire format implemented by four indexers with **wildly
+> different capabilities** (§0.6). The design does not get to assume a format guarantee — **capability
+> must be declared per index, and a change class must be able to say "I cannot see this" out loud.**
+> **Silence must never encode absence of capability.** Every number in §0.5 is rust-analyzer's, and
+> rust-analyzer turns out to be the *outlier* on three of the five axes that matter.
 **Scope:** A native, event-sourced code-intelligence graph in Temper, sourced from SCIP, built as a
 **sibling projection family** on the substrate kernel — kept architecturally distinct from the curated
 resource/edge/cogmap graph and joined to it **only by symbol-string citation**.
@@ -208,6 +217,147 @@ Depth 2 costs **1,687 more watched symbols to surface 14 more rows** and drags t
 
 ---
 
+## 0.6 The per-indexer capability matrix (S6 — four languages, four indexers, real repos)
+
+Measured over `../tasker-core` (970 rs · 1,256 py · 207 rb · 199 ts), `../storyteller` (already a
+production Temper context + cogmap region), and this repo. **Every cell is a command that was run.**
+
+| | **Rust** (rust-analyzer 1.93) | **TypeScript** (scip-typescript 0.4.0) | **Python** (scip-python 0.6.6) | **Ruby** (scip-ruby 0.4.7) |
+|---|---|---|---|---|
+| Runs on ordinary code | **PANICS on tasker-core**; else OK (52 s) | yes (1–5 s) | yes (6 s) | yes (0.13 s) — **no Sorbet needed** |
+| `enclosing_range`, **body-bearing defs** | 100% *(over-emits)* | **100%** *except accessors* | **100%** | **0% — ZERO** |
+| Descriptor grammar | module path | **FILE PATH** | module path | **module nesting, file-independent** |
+| File move symbol-neutral? | only if module path preserved | **NEVER — `+8/−8`** | yes — `+0/−0` | **ALWAYS — `+0/−0`** |
+| `relationships` | **0** | **168** (all `is_implementation`) | **105** (all `is_implementation`) | 24, **0 impl** |
+| `signature_documentation` | **21,165** | **0** | **0** | **0** |
+| signature via `documentation[0]` | no (prose only) | yes (fenced block) | yes (fenced block) | no |
+| `Test` occurrence role | **NO** | **NO** | **NO** | **NO** |
+| occurrences / definition | 6.66 | 4.68 | 3.88 | 3.82 |
+
+**Typed ranges: 0 across all four indexers.** T5 generalizes — a typed-only decoder reads *nothing*, anywhere.
+
+### ❌ C1 — The `enclosing_range` metric in §0.5 is the WRONG METRIC, and reading it naively kills two healthy languages
+
+Raw coverage over *all* definition occurrences: Rust 100% · TS **19.5%** · Python **23.8%** · Ruby 0%.
+Taken at face value that says *"TS and Python cannot support the content hash."* **That conclusion is
+false.**
+
+The correct denominator is **body-bearing definitions**. TS and Python emit `enclosing_range` for
+exactly the symbols that *have a body*, and omit it for params/fields/constants, which have none. A
+purpose-built probe proved the rule is **semantic, not syntactic**: `const f = (a) => {…}` (a SCIP
+*term*) gets a range; `const LIMIT = 42` (also a term) does not.
+
+> **rust-analyzer's 100% is the anomaly — it over-emits, tagging even params and fields.**
+> **The content hash works on Rust, TypeScript, and Python. Report body-bearing coverage.**
+
+### ❌ C2 — Ruby has ZERO `enclosing_range`. **Ruby can be grounded in; it cannot be watched.**
+
+`0 / 5,741` definition occurrences. No flag enables it. **And it is NOT the Sorbet problem** —
+`scip-ruby` ran on completely un-annotated Ruby in 0.13 s, printed *"No errors! Great job,"* and
+resolves references *fine* (occ/def **3.82** ≈ Python's 3.88, so **the 1-hop frontier is healthy**).
+
+The parse-vs-inference hypothesis was right about descriptors and references and **wrong about
+`enclosing_range`** — it *is* parse-level; scip-ruby simply never emits it.
+
+| Ruby | |
+|---|---|
+| **Survives** | `added`, `removed`, `moved-only`, all three grounding reads |
+| **LOST** | **`body-changed`** (no content hash — *the modal refactor*) and **`signature-changed`** |
+
+A Ruby steward's feed would report *"nothing happened"* while its methods are rewritten — **exactly the
+failure §8 rates as worse than reading nothing at all.** Ruby therefore gets **grounding reads, not a
+subscription**, and the schema must **declare** that rather than silently under-report.
+
+*(The irony worth recording: Ruby is the ONLY language where a file move is always free — `+0/−0`, even
+two directories deeper. The strong form of D1, false for Rust, is TRUE for the one language we cannot watch.)*
+
+### ❌ C3 — `relationships` ARE populated. Do NOT cut `code_implementations`.
+
+TypeScript **168** and Python **105**, all `is_implementation` — real inheritance edges
+(`DefaultPublisher → BasePublisher`, `→ abc/ABC#`). **rust-analyzer is the outlier at zero.**
+`code_implementations` is **deliverable on TS and Python** as a **declared per-indexer capability**.
+§0.5/D2's "cut the read" conclusion was drawn from a one-indexer sample and is **withdrawn**.
+
+### ❌ C4 — M3 (`signature_documentation` is the highest-value payload) is **Rust-only**
+
+Rust 21,165; TS, Python, Ruby: **0**. The signature *is* recoverable on TS/Python — from
+`documentation[0]`, an AST-rendered **fenced code block**, with prose in `documentation[1+]`. The two
+are **mutually exclusive** (rust-analyzer's `documentation[0]` is prose, often absent), so **there is
+no single extraction rule.**
+
+**Correctness hazard:** on TS/Python, signature and prose share **one repeated field**. A naive
+whole-field comparison yields **false `signature-changed` on docstring-only edits.** Take
+`documentation[0]` **only if fenced.**
+
+### ⚠️ C5 — NEW RISK: **the indexer does not always run.** rust-analyzer PANICS on `tasker-core`.
+
+```
+thread 'main' panicked at salsa-0.24.0/src/function/fetch.rs:271
+dependency graph cycle when querying GenericPredicates<'db>
+WARN cyclic deps: tasker_worker -> tasker_core, alternative path: tasker_core -> tasker_worker
+```
+
+Exit **101**, no index, **965 Rust files**. The cycle is a **legal, ordinary Cargo pattern**
+(`tasker-worker` dev-depends on `tasker-core` for a test-utils re-export; `tasker-core` depends back).
+storyteller (177 rs) indexes fine.
+
+> **Ingest MUST model "index failed at commit C" as a first-class state.** Otherwise the steward sees
+> silence — the identical catastrophic false negative this whole design exists to prevent. This is not
+> hypothetical: **it is the primary target repo.**
+
+### ❌ C6 — The `Test`-role hope is dead. Zero of four indexers populate it.
+
+Roles observed: rust-analyzer `{Definition}` · scip-typescript `{Definition}` · scip-python
+`{Definition, ReadAccess}` · scip-ruby `{Definition, ReadAccess, WriteAccess}`. So rust-analyzer's
+degeneracy is **not** a SCIP limit — but **nobody emits `Test`.** Path globs remain the only way to
+drop in-file unit-test noise (§3). The free win does not exist.
+
+### Language verdicts
+
+- **Python — fully supported. The best all-round language:** content hash ✓, module-path region
+  stability ✓, **and** `code_implementations` ✓.
+- **Rust — fully supported where the indexer runs.** No `code_implementations`. **The indexer can panic
+  on a legal workspace (C5).**
+- **TypeScript — supported, with two NAMED losses.** (a) **Accessors are body-hash-blind** — `0/50`
+  get/set have `enclosing_range`; a rewrite inside a getter is **invisible**. (b) **No file move is
+  symbol-neutral** — **the 25× noise-reduction payoff (M2) does not exist on TypeScript.**
+- **Ruby — grounding only, no subscription** (C2).
+
+### The read surface (S6 Part 2) — validated against the oracle, not against our beliefs
+
+`code_definition` / `code_references` / `code_hover` built as exact traversals and diffed against
+`scip snapshot`:
+
+| index | oracle (def,ref) pairs | ours | missing | extra |
+|---|---|---|---|---|
+| Rust (temper) | 38,020 | 38,020 | **0** | **0** |
+| TypeScript (temper-cloud) | 1,216 | 1,216 | **0** | **0** |
+
+The oracle earned its keep: it first reported 493 mismatches that turned out to be **our own parser
+bug** (493 = exactly the document count). *Validate against the tool, never against your beliefs.*
+
+**Union, with no disambiguation needed.** Every symbol is self-identifying by tool + package manager +
+package (`rust-analyzer cargo temper-cli 0.2.1 …` vs `scip-typescript npm temper-cloud 0.1.0 …`). Two
+indexes **cannot collide in the symbol space**, so a region spanning Rust + TS is a plain union and
+reads need no `tool` parameter.
+
+### What §0.6 forces into the design
+
+1. **`kb_code_indexes` carries a CAPABILITY DESCRIPTOR, not a boolean:**
+   `{has_enclosing_range, has_relationships, signature_source: field7|documentation0|none,
+   descriptor_grammar: module|filepath, roles_emitted}`. Reads and change classes **consult it**.
+2. **A change class must be declarable UNSUPPORTED for an index — and say so.** **Silence must never
+   encode "I cannot see this."** This is precisely what makes Ruby *safe* to ingest rather than
+   dangerous.
+3. **Signature extraction branches per indexer** — field 7 (Rust) vs *fenced* `documentation[0]`
+   (TS/Python), or none (Ruby).
+4. **Index failure is a first-class state** (C5).
+5. **T1's key is even coarser than thought.** `tasker-core` alone needs **four indexes from four tools
+   over four disjoint subtrees**. `tool_name` cannot distinguish an *invocation*, let alone a subtree.
+6. **No free test-noise exclusion** (C6) — path globs stay.
+
+---
+
 ## 1. Load-bearing premises
 
 ### 1.1 The two graphs are different in kind
@@ -403,9 +553,9 @@ trunk commit/hour. Does not change the design. Somebody should see the number fi
 | **S1** | The watching model | ✅ **Complete.** Disproved D1; found T1, T2; proved M4. |
 | **S2** | Change-set & materiality | ✅ **Complete.** Disproved D2, D4; found T4; proved M1, M2, M3, M6. |
 | **S3** | `temper-scip` decoder & ingest | ✅ **Complete.** Disproved D3, D4; found T2, T3, T5, T6; proved M5. |
-| **S4** | Event, projector, replay & prune | Pending. Now also owns: the two-blob payload, `kb_code_symbols` never-pruned, chain gaps. |
-| **S5** | The judgment membrane | Pending. Unaffected by the spike findings. |
-| **S6** | Grounding read surface | Pending — **and at risk.** `code_implementations` has **no data** on Rust (§0.5/D2). **S6 must first measure `scip-typescript`**: does it populate relationships, and do its descriptors embed the **file path** (which would void the file-move payoff for TS entirely)? **Both are load-bearing and neither has been measured.** |
+| **S6** | Per-indexer capability matrix + grounding reads | ✅ **Complete.** Disproved C1, C3, C4, C6; found C2 (Ruby unwatchable), **C5 (the indexer PANICS on the primary repo)**. Read surface validated **exactly** against the `scip snapshot` oracle. |
+| **S4** | Event, projector, replay & prune | Pending. **Scope grew:** the two-blob payload, `kb_code_symbols` never-pruned, chain gaps — **plus the capability descriptor (§0.6/1), UNSUPPORTED change classes (§0.6/2), and index-failure as a first-class state (§0.6/C5).** |
+| **S5** | The judgment membrane | Pending. **One addition from §0.6:** a steward must be able to read *"this class is UNSUPPORTED for this index"* and judge accordingly — an agent that cannot distinguish "nothing changed" from "I cannot see changes of this kind" is the exact failure this design exists to prevent. |
 
 ---
 
@@ -418,11 +568,20 @@ trunk commit/hour. Does not change the design. Somebody should see the number fi
 - **A feed that reports silence** — the failure mode that is **worse than reading nothing at all**, and
   the one we measured happening (§0.5). Mitigated by the content hash, and by making
   `unresolved_paths` a first-class output rather than an empty set.
-- **Per-indexer capability drift** — relationships, `enclosing_range`, and packed-vs-typed ranges are
-  **properties of the indexer, not of SCIP.** Every number in this spec is rust-analyzer's.
-  **`scip-typescript` is entirely unmeasured.**
+- **Per-indexer capability drift — MEASURED, and worse than feared (§0.6).** `relationships`,
+  `enclosing_range`, `signature_documentation`, descriptor grammar, and occurrence roles are
+  **properties of the INDEXER, not of SCIP** — and **rust-analyzer, the one we measured first, is the
+  OUTLIER on three of five axes.** Mitigated by the capability descriptor and by making UNSUPPORTED a
+  thing a change class can *say*. **This is now a first-class modelling concern, not a footnote.**
+- **The indexer does not always run (§0.6/C5).** rust-analyzer **panics** on `tasker-core` — a legal
+  Cargo workspace, and our primary target. **Index failure must be a first-class state**, or the
+  steward reads silence.
 - **Trunk-chain gaps** — a steward reading "nothing changed" across a hole is worse than one reading
   nothing. Gaps must be detected and surfaced (S4).
+- **Measuring the wrong thing (§0.6/C1).** The first `enclosing_range` metric — raw coverage over all
+  definitions — would have condemned TypeScript and Python as unsupportable. The right denominator
+  (**body-bearing** definitions) shows both at 100%. **A metric that makes a healthy language look dead
+  is a bug in the metric.** Name the denominator before trusting the number.
 - **Producer-asserted hashes** — the server cannot verify a content hash (it has no source). This is
   what machine-principal attribution is for, and it is a real trust boundary to name out loud.
 
