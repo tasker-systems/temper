@@ -541,7 +541,7 @@ module Temper::Generated
     # @option opts [SortOrder] :order 
     # @option opts [Integer] :limit 
     # @option opts [Integer] :offset 
-    # @option opts [Boolean] :meta_only When true, the list endpoint returns &#x60;ResourceMetaListResponse&#x60; (&#x60;Vec&lt;ResourceMetaResponse&gt;&#x60; rows) instead of &#x60;ResourceListResponse&#x60; (&#x60;Vec&lt;ResourceRow&gt;&#x60; rows). Default: false.
+    # @option opts [Boolean] :meta_only When true, the list endpoint returns &#x60;ResourceMetaListResponse&#x60; (&#x60;Vec&lt;ResourceDetail&gt;&#x60; rows — full row + both meta tiers) instead of &#x60;ResourceListResponse&#x60; (&#x60;Vec&lt;ResourceRow&gt;&#x60; rows). Default: false.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [ListResourcesResponse]
     def list_resources(opts = {})
@@ -561,7 +561,7 @@ module Temper::Generated
     # @option opts [SortOrder] :order 
     # @option opts [Integer] :limit 
     # @option opts [Integer] :offset 
-    # @option opts [Boolean] :meta_only When true, the list endpoint returns &#x60;ResourceMetaListResponse&#x60; (&#x60;Vec&lt;ResourceMetaResponse&gt;&#x60; rows) instead of &#x60;ResourceListResponse&#x60; (&#x60;Vec&lt;ResourceRow&gt;&#x60; rows). Default: false.
+    # @option opts [Boolean] :meta_only When true, the list endpoint returns &#x60;ResourceMetaListResponse&#x60; (&#x60;Vec&lt;ResourceDetail&gt;&#x60; rows — full row + both meta tiers) instead of &#x60;ResourceListResponse&#x60; (&#x60;Vec&lt;ResourceRow&gt;&#x60; rows). Default: false.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(ListResourcesResponse, Integer, Hash)>] ListResourcesResponse data, response status code and response headers
     def list_resources_with_http_info(opts = {})

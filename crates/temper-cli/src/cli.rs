@@ -494,8 +494,10 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Return `Vec<ResourceMetaResponse>` rows instead of
-        /// `Vec<ResourceRow>` rows. Hits GET /api/resources?meta_only=true.
+        /// Full per-row view minus the body: each row carries both the
+        /// managed and open meta tiers on top of the usual row fields
+        /// (`Vec<ResourceDetail>`, vs the default `Vec<ResourceRow>` which
+        /// carries neither tier). Hits GET /api/resources?meta_only=true.
         #[arg(long)]
         meta_only: bool,
         /// Subselect top-level response keys on each row (anchor key
@@ -526,8 +528,9 @@ pub enum ResourceAction {
         /// resource's content blocks was distilled from. Calls GET /provenance.
         #[arg(long, conflicts_with = "meta_only")]
         provenance: bool,
-        /// Return only the resource's meta tier (managed + open
-        /// frontmatter, hashes); no body. Calls GET /meta endpoint.
+        /// Show everything except the body: the full resource view
+        /// (title, type, context, owner, and both the managed and open
+        /// meta tiers) minus the reconstructed markdown body.
         #[arg(long, conflicts_with = "edges")]
         meta_only: bool,
         /// Subselect top-level response keys (resource_id always

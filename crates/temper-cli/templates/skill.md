@@ -166,8 +166,9 @@ When you need to peek at a resource or scan a list without paying for the full
 body, use the projection flags. They make orientation reads dramatically
 cheaper, both in tokens and in API work:
 
-- `temper resource show <ref> --meta-only` — frontmatter (managed +
-  open) and hashes only; no body. Calls `GET /api/resources/<id>/meta`.
+- `temper resource show <ref> --meta-only` — the full resource view
+  (title, type, context, owner, and both the managed and open meta tiers)
+  minus the reconstructed body. Everything `show` gives you except the body.
 - `temper resource list --type <t> --context @me/<ctx> --meta-only` — meta tier per
   row instead of full row payloads.
 - `--fields <a,b,c>` on either of the above — subselect top-level response

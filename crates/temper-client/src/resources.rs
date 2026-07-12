@@ -44,9 +44,9 @@ impl<'a> ResourceClient<'a> {
             .await
     }
 
-    /// List visible resources with meta projection (`Vec<ResourceMetaResponse>`
-    /// rows). Sibling of [`ResourceClient::list`]; forces
-    /// `meta_only=true` on the wire.
+    /// List visible resources with the full per-row meta view
+    /// (`Vec<ResourceDetail>` rows — row + both meta tiers, no body). Sibling of
+    /// [`ResourceClient::list`]; forces `meta_only=true` on the wire.
     pub async fn list_meta(&self, params: &ResourceListParams) -> Result<ResourceMetaListResponse> {
         let mut params = params.clone();
         params.meta_only = Some(true);

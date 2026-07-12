@@ -157,8 +157,8 @@ pub struct ResourceListParams {
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
     /// When true, the list endpoint returns `ResourceMetaListResponse`
-    /// (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
-    /// (`Vec<ResourceRow>` rows). Default: false.
+    /// (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
+    /// `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta_only: Option<bool>,
 }

@@ -877,7 +877,6 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         }
         None => (None, None),
     };
-    let state_dir = config.state_dir.clone();
     let fields_owned: Vec<String> = params.fields.to_vec();
     // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
     // `advances`→goal edge. An unparseable ref is a hard error (never a silent drop).
@@ -899,14 +898,10 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         ..Default::default()
     };
 
-    // Cloud-only list: a non-blocking staleness pre-flight, then the
-    // server query. Any error (network, auth, 4xx/5xx) surfaces as-is —
-    // there is no local-scan fallback.
+    // Cloud-only list: the server query. Any error (network, auth, 4xx/5xx)
+    // surfaces as-is — there is no local-scan fallback.
     let response = runtime::with_client(move |client| {
         Box::pin(async move {
-            if let Some(ctx) = context.as_deref() {
-                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
-            }
             client
                 .resources()
                 .list(&api_params)
@@ -955,12 +950,13 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// `list --meta-only`: call client.resources().list_meta() and emit
-/// the ResourceMetaListResponse shape. Applies the shared top-level
-/// projection filter to each row in the envelope when `fields` is
-/// non-empty; the envelope keys (`rows`, `total`, `facets`) are
-/// preserved untouched.
-fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
+/// `list --meta-only`: call client.resources().list_meta() and emit the
+/// meta-list envelope, whose rows are now full `ResourceDetail`s (row + both
+/// meta tiers per item — the whole view minus each body). Injects each row's
+/// decorated `ref` (rows carry a title now), then applies the shared top-level
+/// projection filter to each row when `fields` is non-empty; the envelope keys
+/// (`rows`, `total`, `facets`) are preserved untouched.
+fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
     use temper_workflow::types::resource::ResourceListParams;
 
@@ -993,14 +989,9 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     };
     let fmt = params.format;
     let fields_owned: Vec<String> = params.fields.to_vec();
-    let context_owned = params.context.map(ToString::to_string);
-    let state_dir = config.state_dir.clone();
 
     let response = runtime::with_client(|client| {
         Box::pin(async move {
-            if let Some(ctx) = context_owned.as_deref() {
-                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
-            }
             client
                 .resources()
                 .list_meta(&api_params)
@@ -1011,6 +1002,15 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let mut envelope = serde_json::to_value(&response)
         .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
+
+    // Identity-out: every printed row carries its decorated `ref` (parity with the
+    // full `list` path). Rows are `ResourceDetail` now, so they carry the title
+    // `inject_ref` needs.
+    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
+        for row in rows.iter_mut() {
+            inject_ref(row);
+        }
+    }
 
     // Truncation signal — parity with the full `list` path (see `inject_truncation_signal`).
     let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
@@ -1360,12 +1360,22 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// `show --meta-only`: hit GET /api/resources/{id}/meta and emit the
-/// ResourceMetaResponse shape under the chosen format. Applies the
-/// shared top-level projection filter when `fields` is non-empty.
+/// `show --meta-only`: the full `show` view **minus the body**.
+///
+/// Fetches the same `ResourceDetail` the default path does (the row flattened
+/// — title, doc_type, context, owner, the stage/seq/mode/effort projections —
+/// plus both `managed_meta` and `open_meta` tiers), and simply skips the
+/// separate `content` body fetch. So `--meta-only` is a strict subset of the
+/// full `show`: everything except the (expensive-to-reconstruct) body. Applies
+/// the shared top-level projection filter when `fields` is non-empty.
+///
+/// This deliberately hits `GET /api/resources/{id}` (row + tiers, no body
+/// reconstruction) rather than the narrower `GET /api/resources/{id}/meta`:
+/// the meta endpoint omits every identity/display field (title included), which
+/// made the projection too lossy to orient from.
 ///
 /// Cloud-only and context-free: the id was already resolved from the ref by
-/// `show`; this calls `get_meta` by id directly (no `resolve_by_uri`).
+/// `show`; this calls `get` by id directly (no `resolve_by_uri`).
 fn show_meta_only(
     _config: &Config,
     id: temper_core::types::ids::ResourceId,
@@ -1376,22 +1386,21 @@ fn show_meta_only(
 
     let fields_inner = fields.to_vec();
 
-    let meta = runtime::with_client(|client| {
+    let detail = runtime::with_client(|client| {
         Box::pin(async move {
             client
                 .resources()
-                .get_meta(uuid::Uuid::from(id))
+                .get(uuid::Uuid::from(id))
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 
-    let mut value = serde_json::to_value(&meta)
+    let mut value = serde_json::to_value(&detail)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    // Inject `ref` before the `--fields` filter (parity with `list`): the anchor `id` is
-    // always preserved. The meta projection carries no `title`, so `inject_ref` is a no-op
-    // here — the row's `id` is itself a valid ref. Kept for shape parity with `list`, whose
-    // rows do carry a title.
+    // Inject `ref` (and `context_ref`) before the `--fields` filter, exactly as the full
+    // `show` and `list` do: the anchor `id` is always preserved. Now that `--meta-only`
+    // carries the title, this produces the same decorated `ref` the full `show` emits.
     inject_ref(&mut value);
     let filtered = temper_core::projection::apply_top_level_filter(value, &fields_inner, "id")
         .map_err(map_projection_error)?;
@@ -2778,16 +2787,21 @@ mod list_meta_only_tests {
 
     #[test]
     fn list_meta_filter_applies_per_row_and_preserves_envelope() {
-        // Build a stub ResourceMetaListResponse-shaped JSON
+        // Build a stub meta-list envelope. Rows are `ResourceDetail`-shaped now
+        // (full row + both tiers), so they carry `title`/`doc_type_name` too.
         let envelope = serde_json::json!({
             "rows": [
                 {
                     "id": "11111111-1111-1111-1111-111111111111",
+                    "title": "Alpha",
+                    "doc_type_name": "task",
                     "managed_meta": {"stage": "in-progress"},
                     "open_meta": {"tags": []}
                 },
                 {
                     "id": "22222222-2222-2222-2222-222222222222",
+                    "title": "Beta",
+                    "doc_type_name": "task",
                     "managed_meta": {"stage": "done"},
                     "open_meta": null
                 }
@@ -2815,7 +2829,10 @@ mod list_meta_only_tests {
                 row.get("open_meta").is_none(),
                 "open_meta should be dropped"
             );
-            assert!(row.get("managed_hash").is_none(), "hash should be dropped");
+            assert!(
+                row.get("title").is_none(),
+                "title should be dropped by --fields managed_meta"
+            );
         }
     }
 }

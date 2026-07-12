@@ -5,9 +5,10 @@ mod common;
 use serde_json::Value;
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
-/// `temper resource show <slug> --meta-only --format json` returns
-/// the ResourceMetaResponse shape (id + managed_meta + open_meta) — a strict
-/// subset of the full `show` object.
+/// `temper resource show <slug> --meta-only --format json` returns the full
+/// `show` view **minus the body**: the row (title, doc_type, context, owner, the
+/// stage/seq/mode/effort projections) plus both `managed_meta` and `open_meta`
+/// tiers — everything except the reconstructed markdown body.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -68,12 +69,24 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
     let stdout: Value = serde_json::from_slice(&output.stdout).expect("json parse");
     assert!(stdout.get("id").is_some(), "missing id anchor: {stdout}");
     assert!(stdout.get("managed_meta").is_some(), "missing managed_meta");
-    // Confirm we DON'T have the body or row fields
-    assert!(stdout.get("content").is_none(), "should not include body");
-    assert!(
-        stdout.get("title").is_none(),
-        "should not include row title"
+    // The row's identity/display fields are now included — that's the whole point of
+    // the redefinition (`--meta-only` = full `show` minus body).
+    assert_eq!(
+        stdout.get("title").and_then(Value::as_str),
+        Some("Show Meta Test"),
+        "title must be present: {stdout}"
     );
+    assert_eq!(
+        stdout.get("doc_type_name").and_then(Value::as_str),
+        Some("task"),
+        "doc_type_name must be present: {stdout}"
+    );
+    // Now that the title is present, the decorated `ref` is emitted too (parity with
+    // the full `show`).
+    assert!(stdout.get("ref").is_some(), "ref must be present: {stdout}");
+    // The body is the one thing `--meta-only` withholds.
+    assert!(stdout.get("content").is_none(), "should not include body");
+    assert!(stdout.get("markdown").is_none(), "should not include body");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -289,6 +302,17 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             row.get("managed_meta").is_some(),
             "row missing managed_meta"
         );
+        // Rows are full `ResourceDetail`s now — they carry the row's identity/display
+        // fields (and the decorated `ref`), not just the meta tiers.
+        assert!(
+            row.get("title").is_some(),
+            "row missing title (should be a full detail row now): {row}"
+        );
+        assert!(
+            row.get("doc_type_name").is_some(),
+            "row missing doc_type_name: {row}"
+        );
+        assert!(row.get("ref").is_some(), "row missing decorated ref: {row}");
     }
     assert!(stdout.get("total").is_some(), "envelope missing total");
     assert!(stdout.get("facets").is_some(), "envelope missing facets");
