@@ -1,27 +1,39 @@
 name: Rust Tests
 
-# =============================================================================
-# Test tier notes:
-#   cargo nextest run --workspace                         -> Unit tests only
-#   cargo nextest run --workspace --features test-embed   -> + embedding tests
-#   cargo nextest run --workspace --features test-db      -> + DB integration tests
+# Jobs are split by INTENTION — by what a job needs from its ENVIRONMENT — never by feature flag:
 #
-# The ort RUNTIME is installed in EVERY job that runs Rust tests (unit, integration,
-# embed, coverage) — `embed` is a DEFAULT feature of temper-cli, so the workspace
-# build compiles + runs `#[cfg(feature = "embed")]` tests in the unit job too, and
-# any body-bearing path initializes ort at runtime. We deliberately make ort
-# available everywhere rather than splitting "which job may run embed code" (the
-# prior model). Each test job has the "Install ONNX Runtime" step (ort 2.0.0-rc.12
-# `load-dynamic`, API 18 -> ORT 1.18.x).
+#   Unit         no database.
+#   Integration  needs Postgres (+ git-LFS for the bundled model). The whole DB-backed workspace, in
+#                ONE command.
+#   Artifacts    needs Postgres, but a different FEATURE SET (temper-substrate's write-path scenarios),
+#                which is why it cannot fold into the workspace run above.
 #
-# The git-LFS bge model is a SEPARATE axis: the integration / embed / coverage jobs
-# checkout `lfs: true` because they exercise the BUNDLED (`include_bytes!`) embed
-# path (server-side embed via `temper-ingest/embed`). The unit job does NOT need LFS
-# — temper-cli's `embed` selects `temper-ingest/embed-download`, which fetches the
-# model at runtime and stays active under feature-unification, cfg'ing out the
-# bundled branch. (code-quality's Rust job needs neither: it compiles --all-features
-# but executes no tests, so it never initializes ort or reads a model.)
-# =============================================================================
+# ── Two rules that keep this honest ────────────────────────────────────────────────────────────────
+#
+# 1. **EVERY test job enables `test-embed`.** ONNX is installed in all of them (see the `install-onnx`
+#    action), so "the job that has ONNX" stopped being a meaningful category some time ago — it was a
+#    historical constraint and it is gone. Confining `test-embed` to a single job is exactly what let
+#    `streaming_ingest_test` rot: its tests were COMPILED OUT of the integration job (test-db only) and
+#    FILTERED OUT of the embed job (an allowlist), so they ran NOWHERE — and a 484-second test sat
+#    undiscovered behind a green tick. Two gates, each individually reasonable, that together produced
+#    a silent hole.
+#
+# 2. **Test selection is `--workspace`, never a hand-written list.** The old embed job named six
+#    per-crate invocations plus an allowlist of individual e2e binaries — a structure that is only
+#    correct while somebody remembers to update it, and it stopped being correct. `--workspace` is
+#    correct BY CONSTRUCTION: a new crate, a new test file, a newly feature-gated test is picked up with
+#    no CI edit at all. If you ever find yourself adding `-E 'binary(...)'` here to get CI green, you
+#    are hiding a test, not fixing one.
+#
+# Coverage is NOT here. It lives in `coverage.yml` on a nightly schedule, so an instrumented-build OOM
+# can never block a merge — and so the workspace is not tested twice on every single push.
+#
+# `--exclude temper-cloud`: the repo root is BOTH the workspace manifest and the temper-cloud package,
+# and temper-cloud enables `ingest-pipeline` on temper-api, which unifies features across the build.
+#
+# `--test-threads 1`: temper-ingest holds its ONNX session behind a `Mutex<Session>` and pins inference
+# to one core (`embed.rs`), so concurrent body-bearing tests contend on it and flake `embed_texts`.
+# That is a cost we are currently paying, not a preference — task `019f57d2` owns removing it.
 
 on:
   workflow_call:
@@ -30,53 +42,34 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    env:
-      SQLX_OFFLINE: "true"
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        # No `lfs: true` here: `embed` is a default feature of temper-cli, which selects
-        # `temper-ingest/embed-download` — the model is fetched at runtime from HF (not the
-        # `include_bytes!` git-LFS-bundled path). Feature-unification keeps `embed-download` active across
-        # the workspace build, so the bundled branch is cfg'd out and no LFS asset is read. Only the ort
-        # RUNTIME is needed (below). The integration / embed / coverage jobs DO use LFS because they
-        # exercise the bundled server-side embed path.
+        # Deliberately NO `lfs: true`. `embed` is a default feature of temper-cli, which selects
+        # `temper-ingest/embed-download` — the model is fetched from HF at runtime, so the
+        # `include_bytes!` git-LFS branch is cfg'd out and no LFS asset is read here. Only the ort
+        # RUNTIME is needed. The DB jobs DO take LFS: they exercise the bundled server-side embed path.
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          prefix-key: test-v2
+          cache-prefix: unit-v3
+          tools: nextest
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install ONNX Runtime
-        # `embed` is a default feature of temper-cli, so the workspace unit run compiles + RUNS the
-        # `#[cfg(feature = "embed")]` tests (e.g. the reconcile manifest tests), which initialize ort at
-        # runtime. ort 2.0.0-rc.12 uses `load-dynamic` (API 18): fetch the ONNX Runtime 1.18.x shared
-        # library and point ORT_DYLIB_PATH at it. Same step as the integration / embed / coverage jobs —
-        # ort is now available in every job that runs Rust tests.
-        run: |
-          set -euo pipefail
-          ORT_VERSION=1.18.1
-          curl -sSL -o onnxruntime.tgz \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
-          tar -xzf onnxruntime.tgz
-          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install-onnx
 
       - name: Run unit tests
-        run: cargo nextest run --workspace --locked --no-fail-fast
+        # `test-embed` here too — temper-ingest's and temper-cli's embedding tests need no database, so
+        # this is their home. They used to be two more hand-written invocations in the old embed job.
+        run: cargo nextest run --workspace --features test-embed --locked --no-fail-fast
 
   integration-tests:
     name: Integration & E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The entire DB-backed workspace WITH embed, serialized on ort. It is the long pole by design —
+    # it is now the job that actually runs everything.
+    timeout-minutes: 60
 
     services:
       postgres:
@@ -101,53 +94,37 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          # The bge-base-en-v1.5 model + the bundled libonnxruntime are git-LFS
-          # (crates/temper-ingest/{models,lib}); `include_bytes!` bakes them in at
-          # compile time, so without an LFS checkout the build embeds a pointer and
-          # any server-side embed fails. Needed now that the test-db tier embeds.
+          # The bge-base-en-v1.5 model + the bundled libonnxruntime are git-LFS assets, read via
+          # `include_bytes!` by the server-side embed path this tier exercises.
           lfs: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          prefix-key: test-db-v3 # bumped: force a clean recompile that bakes the real LFS bge model
+          cache-prefix: integration-v3
+          tools: nextest,sqlx-cli
 
-      - name: Install cargo-nextest and cargo-sqlx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,sqlx-cli
-
-      - name: Install ONNX Runtime
-        # The WS6 collapse moved chunk embedding server-side (the substrate's
-        # `create_resource` embeds inline via `temper_ingest::embed`), so ANY
-        # body-bearing ingest now initializes ort at runtime — not just the
-        # `test-embed`-gated tests. ONNX is therefore needed wherever the
-        # test-db tier runs. ort 2.0.0-rc.12 uses `load-dynamic` (API 18): fetch
-        # the ONNX Runtime 1.18.x shared library and point ORT_DYLIB_PATH at it.
-        run: |
-          set -euo pipefail
-          ORT_VERSION=1.18.1
-          curl -sSL -o onnxruntime.tgz \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
-          tar -xzf onnxruntime.tgz
-          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install-onnx
 
       - name: Run migrations
-        run: cargo sqlx migrate run
+        run: cargo sqlx migrate run --source migrations
 
       - name: Run integration & E2E tests
-        # --test-threads 1: server-side embedding bakes the bge model into every test binary; running
-        # the body-bearing ingest tests concurrently contends on ort and flakes embed_texts (the Embed
-        # job serializes for the same reason). Serial keeps the embedding tests deterministic.
-        run: cargo nextest run --workspace --exclude temper-cloud --features test-db --locked --no-fail-fast --test-threads 1
+        # ONE command for the whole DB-backed workspace. This single line replaces the old integration
+        # job AND all six per-crate invocations of the old embed job — including the e2e allowlist that
+        # was keeping streaming_ingest_test out of CI entirely.
+        run: |
+          cargo nextest run \
+            --workspace --exclude temper-cloud \
+            --features test-db,test-embed \
+            --locked --no-fail-fast --test-threads 1
 
-  test-rust-embed:
-    name: Embed & MCP Round-Trip Tests
+  artifact-tests:
+    name: Substrate Artifact Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Its own job because it is a different FEATURE SET, not a different environment: `artifact-tests`
+    # runs temper-substrate's write-path scenarios on ephemeral per-test databases. It cannot fold into
+    # the workspace run above — enabling the feature there would unify it across every crate.
 
     services:
       postgres:
@@ -174,179 +151,12 @@ jobs:
         with:
           lfs: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Rust build cache
-        uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          prefix-key: test-embed-v1
+          cache-prefix: artifacts-v3
+          tools: nextest
 
-      - name: Install cargo-nextest and cargo-sqlx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,sqlx-cli
+      - uses: ./.github/actions/install-onnx
 
-      - name: Install ONNX Runtime
-        # ort 2.0.0-rc.12 uses `load-dynamic` with API 18, so we need the
-        # ONNX Runtime 1.18.x shared library at runtime. Download the
-        # prebuilt Linux x64 tarball from microsoft/onnxruntime and point
-        # ORT_DYLIB_PATH at the .so so the ort crate can find it. Without
-        # this, any test that actually initializes ort (e.g. a real
-        # server-side embed pass) fails with "ONNX Runtime not found".
-        run: |
-          set -euo pipefail
-          ORT_VERSION=1.18.1
-          curl -sSL -o onnxruntime.tgz \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
-          tar -xzf onnxruntime.tgz
-          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
-
-      - name: Run migrations
-        run: cargo sqlx migrate run
-
-      - name: Run ingest pipeline tests
-        # temper-api links ort unconditionally via temper-substrate →
-        # temper-ingest(embed), so its embed-exercising tests run here (ONNX +
-        # Postgres present). `test-embed` is REQUIRED, not optional: the
-        # server-embed fallback test in resource_chunks_packed_test.rs is
-        # `#[cfg(feature = "test-embed")]`, so a test-db-only run compiles it
-        # OUT and never exercises the `chunks_packed: None` → server-embed path
-        # that every MCP create relies on. This is the only CI job that runs
-        # temper-api test-embed tests, so gating it here is what keeps that path
-        # (and any future temper-api test-embed test) from rotting silently.
-        run: |
-          cargo nextest run -p temper-api --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast
-          cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1 --no-fail-fast
-          # temper-services' segmented-append server-chunking test (`chunks_packed: None`) is
-          # `#[cfg(feature = "test-embed")]` for the same reason: a test-db-only run compiles it
-          # out and never exercises the path every MCP append relies on.
-          cargo nextest run -p temper-services --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast
-
-      - name: Run CLI-side embed pipeline tests
-        # temper-cli unit tests gated on `feature = "test-embed"` cover
-        # compute_body_chunks / build_ingest_payload — they need ONNX at
-        # runtime, so they live here rather than in the Unit Tests job.
-        run: cargo nextest run -p temper-cli --features test-embed --locked --test-threads 1 --no-fail-fast
-
-      - name: Run MCP round-trip + cloud body-update e2e tests
-        # Combined filter: the mcp_round_trip_test binary (all tests), plus
-        # the three cloud_update_* body-bearing tests that exercise
-        # build_ingest_payload through the embed pipeline. The pre-cloud-only
-        # filter also included push_command_test, sync_run_push_body_round_trip,
-        # graph_build_then_sync_materializes_edges, and
-        # local_mode_session_create_wire_shape_regression — all retired in
-        # PR #94's cloud-only sweep.
-        run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + binary(mcp_segmented_ingest_test) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'
-
-      - name: Run cognitive-map artifact write-path tests
-        # artifact-tests gates the write-path integration tests: bootseed,
-        # seed/scenario load+roundtrip+equivalence, charter, content, ledger, replay.
-        # These create ephemeral databases via #[sqlx::test] — ONNX Runtime and a
-        # running Postgres service (both present in this job) are the only requirements.
-        run: cargo nextest run -p temper-substrate --features "artifact-tests" --locked --test-threads 1 --no-fail-fast
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    # Informational, never a merge gate: introduced before CODECOV_TOKEN is
-    # configured, and correctness is already gated by the integration-tests job
-    # (which runs the same test-db tier uninstrumented). `continue-on-error`
-    # keeps a missing token or a Codecov outage from blocking PRs. Mirrors the
-    # test-db tier only — embed/ONNX coverage is out of scope for the baseline.
-    #
-    # Two-part optionality (issue: a coverage OOM should never fail a PR):
-    #   1. job-level `continue-on-error` below → the coverage job never fails the
-    #      `test-rust` aggregate, so the branch-protection `ci-success` gate stays
-    #      green regardless of this job.
-    #   2. step-level `continue-on-error` on "Generate coverage" → an infra failure
-    #      (notably "No space left on device" from the instrumented build) marks
-    #      the JOB green instead of a scary red ✗, since coverage is advisory.
-    # The "Free disk space" step below removes preinstalled runner bloat so the
-    # instrumented build usually fits and produces real data; the tolerances are
-    # the safety net for when it still doesn't.
-    continue-on-error: true
-
-    services:
-      postgres:
-        image: pgvector/pgvector:0.8.2-pg18-trixie
-        env:
-          POSTGRES_DB: temper_development
-          POSTGRES_USER: temper
-          POSTGRES_PASSWORD: temper
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5437:5432
-        options: >-
-          --health-cmd "pg_isready -U temper -d temper_development"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
-
-    env:
-      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
-
-    steps:
-      - name: Free disk space
-        # The coverage-instrumented build of the whole workspace (plus the LFS bge
-        # model + ONNX) is disk-heavy and has hit "No space left on device" on the
-        # default ~14 GB-free runner. Drop preinstalled toolchains we never use to
-        # reclaim ~20-30 GB before the build. `|| true` — never fail the job on a
-        # missing path or a slow prune.
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
-          sudo docker image prune --all --force || true
-          df -h /
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          lfs: true # LFS bge model + libonnxruntime baked via include_bytes! (see integration job)
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Setup Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: coverage-v2 # bumped: clean recompile bakes the real LFS bge model
-
-      - name: Install cargo-nextest, cargo-llvm-cov, cargo-sqlx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,cargo-llvm-cov,sqlx-cli
-
-      - name: Install ONNX Runtime
-        # Server-side embedding (the WS6 collapse) means the test-db tier
-        # initializes ort on every body-bearing ingest — see the integration
-        # job. ort 2.0.0-rc.12 needs the ONNX Runtime 1.18.x shared library.
-        run: |
-          set -euo pipefail
-          ORT_VERSION=1.18.1
-          curl -sSL -o onnxruntime.tgz \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
-          tar -xzf onnxruntime.tgz
-          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
-
-      - name: Run migrations
-        run: cargo sqlx migrate run
-
-      - name: Generate coverage (test-db tier)
-        # Mirrors the integration-tests job's tier so the baseline reflects
-        # unit + DB integration + e2e (now incl. the server-side embed path).
-        # step-level continue-on-error: a coverage build failure (e.g. an OOM
-        # despite the disk-free step above) leaves the JOB green rather than a red
-        # ✗ — coverage is advisory and correctness is gated by integration-tests.
-        continue-on-error: true
-        run: cargo llvm-cov nextest --workspace --exclude temper-cloud --features test-db --locked --no-fail-fast --test-threads 1 --lcov --output-path lcov.info
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          fail_ci_if_error: false
+      - name: Run substrate artifact tests
+        run: cargo nextest run -p temper-substrate --features artifact-tests --locked --no-fail-fast --test-threads 1

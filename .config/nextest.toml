@@ -7,3 +7,30 @@ final-status-level = "flaky"
 retries = 1
 fail-fast = false
 
+# ---------------------------------------------------------------------------
+# Per-test timeout overrides.
+#
+# The default (60s × 2 ⇒ killed at 120s) is the right guard for essentially every test we have. These
+# are the deliberate exceptions — each is slow for a reason we have MEASURED, not because it hangs. If
+# you add an entry here, say why, and link the task that will let you delete it again.
+# ---------------------------------------------------------------------------
+
+# `segmented_create_roundtrips_large_body` drives a >1 MiB body (~840 chunks) through the real CLI
+# segmented-ingest path with real ONNX. **Measured: 484s. It is NOT hanging — it passes.** It is
+# CPU-bound inside native ONNX inference, which temper-ingest currently pins to a SINGLE core
+# (`embed.rs:206`: `.with_intra_threads(1)`, a bare constant with no rationale). Unpinning it takes the
+# same test to 155s (3.1×, ~500% CPU). Release mode buys 2.4% — i.e. nothing; the cost is all native C++.
+#
+# The body size is not incidental padding: it is the ONLY thing that pushes the CLI past
+# `SEGMENT_BUDGET_BYTES` (256 KiB) and exercises the multi-block begin/append/finalize path at all. So
+# do NOT "fix" this by shrinking the body — that deletes the coverage instead of the cost.
+#
+# This generous timeout is a KNOWN, TEMPORARY DEBT, scoped to one test — not a blanket loosening.
+# Task `019f57d2` (ingest throughput spike) owns the real fix; restore the default when it lands.
+[[profile.default.overrides]]
+filter = 'test(=segmented_create_roundtrips_large_body)'
+slow-timeout = { period = "120s", terminate-after = 6 }
+
+[[profile.ci.overrides]]
+filter = 'test(=segmented_create_roundtrips_large_body)'
+slow-timeout = { period = "120s", terminate-after = 6 }

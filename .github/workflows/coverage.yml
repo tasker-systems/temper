@@ -1,0 +1,95 @@
+name: Coverage
+
+# Coverage is ADVISORY, so it deliberately lives OUTSIDE the PR path.
+#
+# It used to be a fourth job in test-rust.yml, which meant the entire DB-backed workspace was compiled
+# and tested TWICE on every push — once to gate correctness, once more under llvm-cov instrumentation
+# purely to emit lcov (~20 minutes of duplicate compute per push).
+#
+# That job carried `continue-on-error` at BOTH job and step level, for a good reason: the instrumented
+# build is disk-heavy and had hit "No space left on device", and a coverage OOM must never fail a PR.
+# The catch is that `cargo llvm-cov nextest` IS the test run — so you cannot both fold coverage into the
+# gating run AND keep a coverage-infra failure non-gating. They are mutually exclusive.
+#
+# Moving it here resolves that cleanly: coverage cannot block a merge because it is not in the merge
+# path at all, and the PR pipeline stops paying for a second full workspace run. Drift is caught the
+# next morning rather than on the PR — an acceptable trade for an advisory signal.
+#
+# Run it on demand with: gh workflow run coverage.yml
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: Coverage (workspace, test-db + test-embed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+
+    steps:
+      - name: Free disk space
+        # The coverage-instrumented build of the whole workspace (plus the LFS bge model + ONNX) is
+        # disk-heavy and has hit "No space left on device" on the default ~14 GB-free runner. Drop
+        # preinstalled toolchains we never use to reclaim ~20-30 GB. `|| true` — never fail on a
+        # missing path or a slow prune.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: coverage-v3
+          tools: nextest,cargo-llvm-cov,sqlx-cli
+
+      - name: Add llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - uses: ./.github/actions/install-onnx
+
+      - name: Run migrations
+        run: cargo sqlx migrate run --source migrations
+
+      - name: Generate coverage
+        # Now measures the SAME tier the integration job gates on — test-db AND test-embed. The old
+        # coverage job measured test-db only, so every embed-gated path was invisible to it.
+        run: |
+          cargo llvm-cov nextest \
+            --workspace --exclude temper-cloud \
+            --features test-db,test-embed \
+            --locked --no-fail-fast --test-threads 1 \
+            --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
