@@ -13,6 +13,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::materialize::{MaterializeDelta, DEFAULT_MATERIALIZE_THRESHOLD};
 
@@ -45,10 +46,13 @@ pub async fn materialize_delta(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-    let formation_events =
-        temper_substrate::replay::formation_touched_count_since(pool, *cogmap_id, watermark)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let formation_events = temper_substrate::replay::formation_touched_count_since(
+        pool,
+        HomeAnchor::Cogmap(cogmap_id),
+        watermark,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let threshold = threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
     Ok(MaterializeDelta {

@@ -53,8 +53,8 @@ async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
     // whose substrate gained formation-affecting events AFTER its recorded watermark is legitimately
     // stale (the drift-detection concept) and is skipped; at least one lens must be provably fresh.
     let mut proven = 0usize;
-    for (cogmap, lens_id, watermark, fingerprint) in recorded {
-        if replay::formation_touched_since(&pool, cogmap, watermark)
+    for (anchor, lens_id, watermark, fingerprint) in recorded {
+        if replay::formation_touched_since(&pool, anchor, watermark)
             .await
             .unwrap()
         {
@@ -71,7 +71,7 @@ async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let out = write::materialize_cogmap(&pool, cogmap.into(), &lens_name, emitter.into())
+        let out = write::materialize(&pool, anchor, &lens_name, emitter.into())
             .await
             .unwrap();
         assert_eq!(

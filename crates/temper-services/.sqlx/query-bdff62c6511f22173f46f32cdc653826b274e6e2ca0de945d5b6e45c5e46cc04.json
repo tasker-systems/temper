@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT source_id, target_id, edge_kind::text AS \"kind!\", label, weight FROM kb_edges WHERE home_anchor_table='kb_cogmaps' AND home_anchor_id=$1 AND source_table='kb_resources' AND target_table='kb_resources' AND NOT is_folded",
+  "query": "SELECT source_id, target_id, edge_kind::text AS \"kind!\", label, weight FROM kb_edges WHERE home_anchor_table=$1 AND home_anchor_id=$2 AND source_table='kb_resources' AND target_table='kb_resources' AND NOT is_folded",
   "describe": {
     "columns": [
       {
@@ -31,6 +31,7 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Uuid"
       ]
     },
@@ -42,5 +43,5 @@
       false
     ]
   },
-  "hash": "66e831b94f04ec78e1df236323ad3655d026f7dafe2f205c064b04316c58ff1a"
+  "hash": "bdff62c6511f22173f46f32cdc653826b274e6e2ca0de945d5b6e45c5e46cc04"
 }

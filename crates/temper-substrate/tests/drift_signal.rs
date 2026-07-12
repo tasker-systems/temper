@@ -9,6 +9,7 @@
 //! suffered). The two-tier decision table itself (incl. the Readout tier) is unit-proven in `drift`.
 mod common;
 
+use temper_core::types::home::HomeAnchor;
 use temper_substrate::drift::{self, DriftTier};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{CogmapId, EntityId, ProfileId};
@@ -42,9 +43,9 @@ async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
 
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(
+    write::materialize(
         &pool,
-        loaded.cogmap.into(),
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
         "telos-default",
         loaded.emitter.into(),
     )
@@ -52,9 +53,13 @@ async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
     .unwrap();
 
     // Fresh — just materialized, nothing has touched the cogmap since.
-    let (tier, diff) = drift::lens_drift(&pool, loaded.cogmap, "telos-default")
-        .await
-        .unwrap();
+    let (tier, diff) = drift::lens_drift(
+        &pool,
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
+        "telos-default",
+    )
+    .await
+    .unwrap();
     assert_eq!(tier, DriftTier::Fresh);
     assert!(!diff.has_structural_change());
     let prior_components = diff.unchanged.len();
@@ -87,9 +92,13 @@ async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
 
     // Structural — and component-scoped: exactly the one new component is changed; every prior
     // component is provably unchanged; nothing is stale.
-    let (tier2, diff2) = drift::lens_drift(&pool, loaded.cogmap, "telos-default")
-        .await
-        .unwrap();
+    let (tier2, diff2) = drift::lens_drift(
+        &pool,
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
+        "telos-default",
+    )
+    .await
+    .unwrap();
     assert_eq!(tier2, DriftTier::Structural);
     assert_eq!(
         diff2.changed.len(),

@@ -20,6 +20,7 @@ use crate::ids::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 // ── shared shapes ───────────────────────────────────────────────────────────
@@ -42,6 +43,15 @@ pub enum AnchorTable {
     Teams,
     #[serde(rename = "kb_profiles")]
     Profiles,
+}
+
+impl From<HomeAnchor> for AnchorTable {
+    fn from(a: HomeAnchor) -> Self {
+        match a {
+            HomeAnchor::Context(_) => AnchorTable::Contexts,
+            HomeAnchor::Cogmap(_) => AnchorTable::Cogmaps,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -359,7 +369,17 @@ pub struct LensCreated {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct RegionMaterialized {
-    pub cogmap_id: CogmapId,
+    /// The anchor the regions were formed over — a context OR a cognitive map (spec §3.6 M2).
+    /// Supersedes `cogmap_id`.
+    pub home_anchor_table: AnchorTable,
+    pub home_anchor_id: Uuid,
+    /// VESTIGIAL, dual-written through the expand window. `kb_events` is APPEND-ONLY: every
+    /// `region_materialized` event written before T3 carries this key and no anchor pair, and those
+    /// rows are immortal. Keeping it written (and OPTIONAL, so a context act can omit it) is what lets
+    /// the ledger probe in `replay::last_materialize_event` read old and new acts with one query.
+    /// `None` for a context anchor. Do not read this in new code.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cogmap_id: Option<CogmapId>,
     pub lens_id: LensId,
     /// Max event id over the substrate at load time — the point-in-time the projection saw.
     pub watermark_event_id: EventId,

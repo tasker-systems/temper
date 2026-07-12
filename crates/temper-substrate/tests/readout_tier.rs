@@ -6,6 +6,7 @@
 //! `drift_signal.rs` names ("the Readout tier is unit-proven in `drift`" — never reached end-to-end).
 mod common;
 
+use temper_core::types::home::HomeAnchor;
 use temper_substrate::drift::{self, DriftTier};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, EntityId};
@@ -38,9 +39,9 @@ async fn revise_reaches_readout_tier_no_component_changes(pool: sqlx::PgPool) {
     let loaded = loader::load_seed(&pool, &seed).await.unwrap();
 
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(
+    write::materialize(
         &pool,
-        loaded.cogmap.into(),
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
         "telos-default",
         loaded.emitter.into(),
     )
@@ -48,9 +49,13 @@ async fn revise_reaches_readout_tier_no_component_changes(pool: sqlx::PgPool) {
     .unwrap();
 
     // Fresh — nothing has touched the cogmap since the materialize.
-    let (tier, diff) = drift::lens_drift(&pool, loaded.cogmap, "telos-default")
-        .await
-        .unwrap();
+    let (tier, diff) = drift::lens_drift(
+        &pool,
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
+        "telos-default",
+    )
+    .await
+    .unwrap();
     assert_eq!(tier, DriftTier::Fresh, "fresh right after materialize");
     let prior = diff.unchanged.len();
     assert!(prior >= 1, "the seed materialized ≥1 component");
@@ -84,9 +89,13 @@ async fn revise_reaches_readout_tier_no_component_changes(pool: sqlx::PgPool) {
     tx.commit().await.unwrap();
 
     // Readout — touched, but no component's membership inputs changed.
-    let (tier2, diff2) = drift::lens_drift(&pool, loaded.cogmap, "telos-default")
-        .await
-        .unwrap();
+    let (tier2, diff2) = drift::lens_drift(
+        &pool,
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
+        "telos-default",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         tier2,
         DriftTier::Readout,

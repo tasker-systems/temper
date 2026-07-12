@@ -11,6 +11,7 @@
 //! All are isolated ephemeral DBs via `temper_substrate::MIGRATOR` and are ONNX-dependent.
 
 use std::path::Path;
+use temper_core::types::home::HomeAnchor;
 use temper_substrate::scenario::{bootseed, loader, model::Scenario, model::Seed, runner};
 use temper_substrate::{embed, write};
 
@@ -84,9 +85,9 @@ async fn baseline_matches_04b_sql_verdict(pool: sqlx::PgPool) {
     // state run_eval.sh evaluates 04b against.
     let loaded = loader::load_seed(&pool, &load_seed_yaml()).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
-    write::materialize_cogmap(
+    write::materialize(
         &pool,
-        loaded.cogmap.into(),
+        HomeAnchor::Cogmap(loaded.cogmap.into()),
         "telos-default",
         loaded.emitter.into(),
     )
