@@ -30,7 +30,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+# `vendored` bundles the Swagger UI assets via `utoipa-swagger-ui-vendored` instead
+# of having the build script fetch them from GitHub at compile time. Keeps the build
+# hermetic — no network dependency on github.com (which sandboxed/proxied CI and web
+# sessions cannot reach), so `emit-openapi`, clippy, and the pre-commit hook all build
+# offline. The pinned assets track the crate version, same as the download would.
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 utoipa-axum = "0.2"
 
 [features]

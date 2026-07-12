@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
+use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
@@ -159,6 +160,20 @@ impl<'a> ResourceClient<'a> {
     pub async fn edges(&self, resource_id: Uuid) -> Result<Vec<GraphEdgeRow>> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{resource_id}/edges");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// Read a resource's bidirectional `derived_from` lineage (ancestors +
+    /// descendants), access-gated. `depth` bounds the walk when supplied.
+    pub async fn lineage(&self, resource_id: Uuid, depth: Option<i32>) -> Result<ResourceLineage> {
+        let token = self.http.resolve_token()?;
+        let path = match depth {
+            Some(d) => format!("/api/resources/{resource_id}/lineage?depth={d}"),
+            None => format!("/api/resources/{resource_id}/lineage"),
+        };
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))

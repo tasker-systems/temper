@@ -672,6 +672,7 @@ pub struct ShowParams<'a> {
     pub r#ref: &'a str,
     pub format: crate::format::OutputFormat,
     pub edges: bool,
+    pub lineage: bool,
     pub provenance: bool,
     pub meta_only: bool,
     pub fields: &'a [String],
@@ -1227,6 +1228,7 @@ pub(crate) fn build_show_document(
     metadata: serde_json::Value,
     body: &str,
     edges: Option<EdgesReport>,
+    lineage: Option<temper_core::types::lineage::ResourceLineage>,
     provenance: Option<Vec<temper_core::types::provenance::BlockProvenanceRow>>,
 ) -> Result<serde_json::Value> {
     let mut doc = metadata;
@@ -1244,6 +1246,14 @@ pub(crate) fn build_show_document(
             "edges".to_string(),
             serde_json::to_value(edges)
                 .map_err(|e| TemperError::Api(format!("edges serialize: {e}")))?,
+        );
+    }
+
+    if let Some(lineage) = lineage {
+        obj.insert(
+            "lineage".to_string(),
+            serde_json::to_value(lineage)
+                .map_err(|e| TemperError::Api(format!("lineage serialize: {e}")))?,
         );
     }
 
@@ -1312,6 +1322,11 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     } else {
         None
     };
+    let lineage = if params.lineage {
+        Some(fetch_lineage(id)?)
+    } else {
+        None
+    };
     let provenance = if params.provenance {
         Some(fetch_provenance(id)?)
     } else {
@@ -1320,7 +1335,7 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
 
     match params.format {
         crate::format::OutputFormat::Json => {
-            let doc = build_show_document(metadata, &body, edges, provenance)?;
+            let doc = build_show_document(metadata, &body, edges, lineage, provenance)?;
             let rendered = crate::format::render(&doc, params.format)?;
             crate::output::plain(rendered);
         }
@@ -1332,6 +1347,9 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
             crate::output::plain(rendered);
             if let Some(edges) = edges {
                 crate::output::plain(crate::format::render(&edges, params.format)?);
+            }
+            if let Some(lineage) = lineage {
+                crate::output::plain(crate::format::render(&lineage, params.format)?);
             }
             if let Some(provenance) = provenance {
                 crate::output::plain(crate::format::render(&provenance, params.format)?);
@@ -1423,6 +1441,26 @@ fn fetch_edges(id: temper_core::types::ids::ResourceId) -> Result<EdgesReport> {
         .collect();
 
     Ok(EdgesReport { outgoing, incoming })
+}
+
+/// Fetch a resource's bidirectional `derived_from` lineage via the API.
+///
+/// Hits `GET /api/resources/{id}/lineage` and returns ancestors + descendants,
+/// each access-gated. An unreadable/absent resource is a NotFound error.
+fn fetch_lineage(
+    id: temper_core::types::ids::ResourceId,
+) -> Result<temper_core::types::lineage::ResourceLineage> {
+    use crate::actions::runtime;
+
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .lineage(uuid::Uuid::from(id), None)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })
 }
 
 /// Fetch the itemized per-block provenance for a resource via the API.
@@ -2875,15 +2913,34 @@ mod build_show_document_tests {
             outgoing: vec![],
             incoming: vec![],
         };
+        let lineage = temper_core::types::lineage::ResourceLineage {
+            resource_id: uuid::Uuid::nil(),
+            ancestors: vec![],
+            descendants: vec![],
+        };
 
-        let doc = build_show_document(metadata, "# body\n", Some(edges), Some(vec![]))
-            .expect("build show document");
+        let doc = build_show_document(
+            metadata,
+            "# body\n",
+            Some(edges),
+            Some(lineage),
+            Some(vec![]),
+        )
+        .expect("build show document");
 
-        // One document: content, edges, and provenance all hang off the resource object.
+        // One document: content, edges, lineage, and provenance all hang off the resource object.
         assert_eq!(doc["title"], "A Node");
         assert_eq!(doc["content"], "# body\n");
         assert!(doc["edges"]["outgoing"].is_array(), "edges folded: {doc}");
         assert!(doc["edges"]["incoming"].is_array(), "edges folded: {doc}");
+        assert!(
+            doc["lineage"]["ancestors"].is_array(),
+            "lineage folded: {doc}"
+        );
+        assert!(
+            doc["lineage"]["descendants"].is_array(),
+            "lineage folded: {doc}"
+        );
         assert!(doc["provenance"].is_array(), "provenance folded: {doc}");
 
         // And it round-trips through a single `serde_json::from_str` with no trailing data.
@@ -2894,12 +2951,17 @@ mod build_show_document_tests {
     #[test]
     fn build_show_document_omits_absent_sections() {
         let metadata = serde_json::json!({ "id": "11111111-1111-1111-1111-111111111111" });
-        let doc = build_show_document(metadata, "b", None, None).expect("build show document");
+        let doc =
+            build_show_document(metadata, "b", None, None, None).expect("build show document");
 
         assert_eq!(doc["content"], "b");
         assert!(
             doc.get("edges").is_none(),
             "no edges key when not requested: {doc}"
+        );
+        assert!(
+            doc.get("lineage").is_none(),
+            "no lineage key when not requested: {doc}"
         );
         assert!(
             doc.get("provenance").is_none(),

@@ -230,33 +230,6 @@ pub fn content_sidecar(blocks: &[PreparedBlock]) -> HashMap<String, ChunkContent
     map
 }
 
-// ── references (spec §4) ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum RefRel {
-    Supersedes,
-    DerivedFrom,
-    Touches,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum RefTarget {
-    Event(Uuid),
-    Resource(Uuid),
-    Block(Uuid),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct EventReference {
-    pub rel: RefRel,
-    pub target: RefTarget,
-}
-
 // ── the six live payloads ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -878,17 +851,6 @@ mod tests {
             serde_json::from_value::<RelationshipAsserted>(v).unwrap(),
             p
         );
-    }
-
-    #[test]
-    fn references_serialize_tagged() {
-        let r = EventReference {
-            rel: RefRel::DerivedFrom,
-            target: RefTarget::Block(Uuid::nil()),
-        };
-        let v = serde_json::to_value(r).unwrap();
-        assert_eq!(v["rel"], "derived_from");
-        assert_eq!(v["target"]["kind"], "block");
     }
 
     #[test]

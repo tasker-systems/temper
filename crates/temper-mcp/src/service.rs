@@ -126,6 +126,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Trace a resource's derived_from lineage in both directions: `ancestors` (what it derives from) and `descendants` (what derives from it), each a transitive, access-gated walk. Every node carries the reaching edge and whether that edge is folded — a folded ancestor is shown, flagged, so you can see when what you rest on has been superseded. Optional `depth` bounds the walk (default 16)."
+    )]
+    async fn resource_lineage(
+        &self,
+        Parameters(input): Parameters<tools::resources::ResourceLineageInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::resource_lineage(self, input).await
+    }
+
+    #[tool(
         description = "Get the itemized block-provenance for a resource — the sources each of its content blocks was distilled from, in (block, accretion) order. Access-scoped: an unreadable resource returns an empty list."
     )]
     async fn get_block_provenance(

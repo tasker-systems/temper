@@ -32,6 +32,7 @@ pub mod ingest;
 pub mod invitation;
 pub mod invocation;
 pub mod invocation_requests;
+pub mod lineage;
 pub mod machine;
 pub mod materialize;
 pub mod merge;
@@ -78,6 +79,7 @@ pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChu
 pub use invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationStatus, TeamInvitation,
 };
+pub use lineage::{LineageNode, ResourceLineage};
 pub use materialize::{
     MaterializeAck, MaterializeDelta, MaterializeDeltaInput, MaterializeRequest,
     MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,

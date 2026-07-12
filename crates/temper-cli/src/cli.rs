@@ -517,6 +517,11 @@ pub enum ResourceAction {
         /// Show graph edges connected to this resource
         #[arg(long)]
         edges: bool,
+        /// Show the resource's derived_from lineage — what it derives from
+        /// (ancestors) and what derives from it (descendants), access-gated.
+        /// Calls GET /lineage.
+        #[arg(long, conflicts_with = "meta_only")]
+        lineage: bool,
         /// Show itemized per-block provenance — the sources each of the
         /// resource's content blocks was distilled from. Calls GET /provenance.
         #[arg(long, conflicts_with = "meta_only")]
