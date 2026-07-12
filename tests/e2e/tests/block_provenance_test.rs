@@ -420,6 +420,7 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
                     r#ref: &distilled_ref,
                     format: temper_cli::format::OutputFormat::Json,
                     edges: false,
+                    lineage: false,
                     provenance: true,
                     meta_only: false,
                     fields: &[],
