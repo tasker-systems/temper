@@ -49,6 +49,10 @@ pub enum EventKind {
     PropertySet,
     LensCreated,
     RegionMaterialized,
+    /// The cheap clock's act (T6, spec §3.5): salience recomputed against a moved telos, with NO
+    /// formation. Deliberately absent from `STRUCTURAL_EVENTS`/`CONTENT_EVENTS`, so it never advances
+    /// the threshold the expensive clock gates on.
+    SalienceRefreshed,
     RelationshipFolded,
     BlockMutated,
     /// The `block_provenance_annotated` event (issue #355) — attach provenance sources to an existing
@@ -79,6 +83,7 @@ impl EventKind {
             EventKind::PropertySet => "property_set",
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
+            EventKind::SalienceRefreshed => "salience_refreshed",
             EventKind::RelationshipFolded => "relationship_folded",
             EventKind::BlockMutated => "block_mutated",
             EventKind::BlockProvenanceAnnotated => "block_provenance_annotated",
@@ -110,6 +115,7 @@ impl EventKind {
             "property_set" => EventKind::PropertySet,
             "lens_created" => EventKind::LensCreated,
             "region_materialized" => EventKind::RegionMaterialized,
+            "salience_refreshed" => EventKind::SalienceRefreshed,
             "relationship_folded" => EventKind::RelationshipFolded,
             "block_mutated" => EventKind::BlockMutated,
             "block_provenance_annotated" => EventKind::BlockProvenanceAnnotated,
@@ -231,6 +237,19 @@ pub enum SeedAction<'a> {
         watermark: EventId,
         membership_fingerprint: &'a str,
         region_ids: &'a [RegionId],
+        /// The telos as this act computed it (pgvector text form), recorded so the projection — and
+        /// therefore replay — can write the anchor's snapshot from the ledger rather than recompute it.
+        /// `None` when the anchor has no telos (a context with no live, embedded goals).
+        telos: Option<&'a str>,
+        emitter: EntityId,
+    },
+    /// The cheap clock (T6, spec §3.5): re-arm the drift gate after a salience-only refresh.
+    SalienceRefresh {
+        anchor: HomeAnchor,
+        lens: LensId,
+        /// The telos the refresh recomputed salience against — the new snapshot.
+        telos: Option<&'a str>,
+        regions_refreshed: i64,
         emitter: EntityId,
     },
     RelationshipFold {
@@ -338,6 +357,7 @@ impl SeedAction<'_> {
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
+            SeedAction::SalienceRefresh { .. } => EventKind::SalienceRefreshed,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
             SeedAction::BlockAnnotate { .. } => EventKind::BlockProvenanceAnnotated,
@@ -736,6 +756,7 @@ pub async fn fire_with(
             watermark,
             membership_fingerprint,
             region_ids,
+            telos,
             emitter,
         } => {
             // The emitter is the actor on whose behalf materialization runs — passed explicitly, never
@@ -751,6 +772,7 @@ pub async fn fire_with(
                 watermark_event_id: watermark,
                 membership_fingerprint: membership_fingerprint.to_owned(),
                 region_ids: region_ids.to_vec(),
+                telos_centroid: telos.map(str::to_owned),
             };
             let id = sqlx::query_scalar!(
                 "SELECT region_materialize($1,$2)",
@@ -760,6 +782,31 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("region_materialize returned null")?;
+            Ok(Fired::Materialize(EventId::from(id)))
+        }
+
+        SeedAction::SalienceRefresh {
+            anchor,
+            lens,
+            telos,
+            regions_refreshed,
+            emitter,
+        } => {
+            let payload = payloads::SalienceRefreshed {
+                home_anchor_table: anchor.into(),
+                home_anchor_id: anchor.uuid(),
+                lens_id: lens,
+                telos_centroid: telos.map(str::to_owned),
+                regions_refreshed,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT salience_refresh($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("salience_refresh returned null")?;
             Ok(Fired::Materialize(EventId::from(id)))
         }
 
@@ -1113,6 +1160,7 @@ mod tests {
                 watermark: EventId::from(Uuid::nil()),
                 membership_fingerprint: "",
                 region_ids: &[],
+                telos: None,
                 emitter,
             }
             .event_type()

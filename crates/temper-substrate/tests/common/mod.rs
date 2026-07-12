@@ -374,3 +374,6 @@ pub async fn telos_default_readout_signature(pool: &sqlx::PgPool, cogmap: uuid::
         .await
         .unwrap()
 }
+
+/// A real, embedded context to materialize regions over — shared by the telos + two-clock tests.
+pub mod context_fixture;

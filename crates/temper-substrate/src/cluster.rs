@@ -30,6 +30,75 @@ fn canon(a: usize, b: usize) -> (usize, usize) {
     }
 }
 
+/// The pairs whose affinity **can** be nonzero — a SUPERSET of the nonzero set, never a subset.
+///
+/// Both consumers of affinity ([`connected_components`] and [`agglomerate`]'s precompute) discard any
+/// pair whose affinity is exactly zero. They used to *evaluate* all n²/2 pairs to discover that, which
+/// in the context regime is where formation's time went: at live prod dimensions (n=1071, E=570) the
+/// affinity relation is **1.48% dense** — 8,458 nonzero pairs — and formation spent **1,145,970**
+/// `affinity` calls to find them, each one a linear scan of the edge slice.
+///
+/// But which pairs can be nonzero is knowable a priori. `affinity` is a sum of three terms, and each is
+/// zero unless the pair appears in an already-sparse structure it is cheap to enumerate: a declared
+/// edge, a retained kNN neighbour, or a shared facet ([`crate::affinity::candidate_pairs`] is the
+/// enumerator, and lives next to `affinity` so the superset invariant is provable in one place).
+/// Feeding that set in instead of the dense scan is **partition-identical, not approximate**: a pair
+/// outside it has all three terms zero, so it would have been discarded anyway. See
+/// `tests/sparse_candidates_differential.rs`, which asserts exactly that against [`Self::dense`].
+///
+/// Pairs are canonical `(min, max)`, sorted, and deduped — a pair carrying both an edge and a kNN link
+/// enters once. Order does not affect the result (the heap's `Ord` is a total order and union-find's
+/// closure is order-independent), but a stable one keeps runs reproducible.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CandidatePairs {
+    pairs: Vec<(Uuid, Uuid)>,
+}
+
+impl CandidatePairs {
+    /// Canonicalize, sort, dedup. The one constructor — every source funnels through it, so the
+    /// representation invariant holds by construction. Self-pairs are dropped (affinity is only ever
+    /// asked about distinct nodes).
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (Uuid, Uuid)>) -> Self {
+        let mut pairs: Vec<(Uuid, Uuid)> = pairs
+            .into_iter()
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| if a < b { (a, b) } else { (b, a) })
+            .collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        Self { pairs }
+    }
+
+    /// Every pair — the O(n²) enumeration the clustering core performed unconditionally before the
+    /// sparse set existed. A trivially-correct superset: it is what the callers with no sparse
+    /// structure to draw on (the pure-clustering tests, which carry a matrix rather than a substrate)
+    /// still use, and the differential baseline the sparse enumeration is checked against.
+    pub fn dense(nodes: &[Uuid]) -> Self {
+        let mut sorted = nodes.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut pairs = Vec::with_capacity(sorted.len().saturating_sub(1) * sorted.len() / 2);
+        for i in 0..sorted.len() {
+            for j in (i + 1)..sorted.len() {
+                pairs.push((sorted[i], sorted[j]));
+            }
+        }
+        Self { pairs }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(Uuid, Uuid)> {
+        self.pairs.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.pairs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+}
+
 /// A candidate merge sitting in the priority queue. Ordering is the selection total order: prefer the
 /// higher quantized avg-link; break ties by the LEXICOGRAPHICALLY-SMALLER (cluster-min, cluster-min)
 /// pair — `Reverse` so the smaller pair is "greatest" under the max-heap. `(va, vb)` are the endpoint
@@ -107,12 +176,13 @@ fn make_candidate(
 /// No random initialization. Same inputs -> identical output.
 pub fn cluster<F: Fn(Uuid, Uuid) -> f64>(
     nodes: &[Uuid],
+    candidates: &CandidatePairs,
     aff: &F,
     resolution: f64,
 ) -> Vec<Vec<Uuid>> {
     let mut clusters: Vec<Vec<Uuid>> = Vec::new();
-    for component in connected_components(nodes, aff) {
-        clusters.extend(agglomerate(&component, aff, resolution));
+    for component in connected_components(nodes, candidates, aff) {
+        clusters.extend(agglomerate(&component, candidates, aff, resolution));
     }
     // components are disjoint ⇒ every cluster's min UUID is unique ⇒ this is a stable total order,
     // identical to whole-graph agglomeration's final `sort_by(x[0])`.
@@ -138,12 +208,18 @@ pub fn cluster<F: Fn(Uuid, Uuid) -> f64>(
 /// Exposed for the incremental-materialize path, which clusters one component at a time.
 pub fn agglomerate<F: Fn(Uuid, Uuid) -> f64>(
     nodes: &[Uuid],
+    candidates: &CandidatePairs,
     aff: &F,
     resolution: f64,
 ) -> Vec<Vec<Uuid>> {
     let mut sorted = nodes.to_vec();
     sorted.sort();
     let n = sorted.len();
+    // `nodes` is ONE component; `candidates` spans the whole anchor. Index the component's members so
+    // a candidate touching another component is skipped in O(1) — cheaper than partitioning the
+    // candidate set per component, and the skipped pairs are exactly the cross-component ones whose
+    // affinity `connected_components` already proved zero.
+    let idx: HashMap<Uuid, usize> = sorted.iter().enumerate().map(|(i, &u)| (u, i)).collect();
 
     // active-cluster slabs, indexed by a stable id (0..n initially). A merge keeps the smaller-min id
     // as the survivor and deactivates the other; `version` invalidates that cluster's stale heap entries.
@@ -155,23 +231,29 @@ pub fn agglomerate<F: Fn(Uuid, Uuid) -> f64>(
     let mut adj: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
     let mut heap: BinaryHeap<Candidate> = BinaryHeap::new();
 
-    // Precompute the sparse affinity map ONCE (O(n²) affinity calls). Singletons' avg-link IS aff(x,y)
-    // exactly (no accumulation), so the initial selection ties match the old core bit-for-bit. Negative
-    // affinities are kept (nonzero) — they can't merge alone (< resolution > 0) but a Lance-Williams
-    // blend can later cross the threshold; pairs that are exactly 0 never enter and never merge.
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let a = aff(sorted[i], sorted[j]);
-            // nonzero AND finite. Production `affinity` already excludes NaN edges and bounds facet
-            // overlap, so non-finite never arrives — but a non-finite weight here would slip past the
-            // `avg < resolution` guard (NaN/`+inf` both fail `<`) and wrongly MERGE, where the reference
-            // (`avg >= resolution`) would stop. Defense-in-depth: treat non-finite as absent (no edge).
-            if a != 0.0 && a.is_finite() {
-                weight.insert((i, j), a);
-                adj[i].insert(j);
-                adj[j].insert(i);
-                heap.push(make_candidate(i, j, a, version[i], version[j], &members));
-            }
+    // Precompute the sparse affinity map ONCE, over the CANDIDATE pairs — the pairs whose affinity can
+    // be nonzero ([`CandidatePairs`]). This used to scan all n²/2 pairs; every pair the enumeration
+    // omits has all three affinity terms zero, so the `a != 0.0` guard below would have dropped it
+    // anyway, and the resulting map — hence the partition — is identical. Singletons' avg-link IS
+    // aff(x,y) exactly (no accumulation), so the initial selection ties still match the old core
+    // bit-for-bit. Negative affinities are kept (nonzero) — they can't merge alone (< resolution > 0)
+    // but a Lance-Williams blend can later cross the threshold; pairs that are exactly 0 never enter.
+    for &(x, y) in candidates.iter() {
+        // both endpoints must be in THIS component (see `idx` above).
+        let (Some(&i), Some(&j)) = (idx.get(&x), idx.get(&y)) else {
+            continue;
+        };
+        let (i, j) = canon(i, j);
+        let a = aff(sorted[i], sorted[j]);
+        // nonzero AND finite. Production `affinity` already excludes NaN edges and bounds facet
+        // overlap, so non-finite never arrives — but a non-finite weight here would slip past the
+        // `avg < resolution` guard (NaN/`+inf` both fail `<`) and wrongly MERGE, where the reference
+        // (`avg >= resolution`) would stop. Defense-in-depth: treat non-finite as absent (no edge).
+        if a != 0.0 && a.is_finite() {
+            weight.insert((i, j), a);
+            adj[i].insert(j);
+            adj[j].insert(i);
+            heap.push(make_candidate(i, j, a, version[i], version[j], &members));
         }
     }
 
@@ -282,11 +364,16 @@ pub fn agglomerate<F: Fn(Uuid, Uuid) -> f64>(
 /// cluster (C joins {A,B} on avg(aff(A,C),aff(B,C))≥resolution with aff(A,C)=0), so a region can span
 /// any nonzero-connected set but never crosses a nonzero-component boundary (cross-component avg-link
 /// is 0 < resolution). Deterministic: each component sorted ascending, components ordered by min UUID.
-pub fn connected_components<F: Fn(Uuid, Uuid) -> f64>(nodes: &[Uuid], aff: &F) -> Vec<Vec<Uuid>> {
+pub fn connected_components<F: Fn(Uuid, Uuid) -> f64>(
+    nodes: &[Uuid],
+    candidates: &CandidatePairs,
+    aff: &F,
+) -> Vec<Vec<Uuid>> {
     let mut sorted = nodes.to_vec();
     sorted.sort();
     // union-find over indices into `sorted` (stable order ⇒ deterministic).
     let mut parent: Vec<usize> = (0..sorted.len()).collect();
+    let idx: HashMap<Uuid, usize> = sorted.iter().enumerate().map(|(i, &u)| (u, i)).collect();
     fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]]; // path halving
@@ -294,16 +381,19 @@ pub fn connected_components<F: Fn(Uuid, Uuid) -> f64>(nodes: &[Uuid], aff: &F) -
         }
         x
     }
-    for i in 0..sorted.len() {
-        for j in (i + 1)..sorted.len() {
-            // index-pair iteration is intentional: union-find merges indices into `sorted`, and the
-            // symmetric upper-triangle (j>i) visits each unordered pair once.
-            if aff(sorted[i], sorted[j]) != 0.0 {
-                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
-                if ri != rj {
-                    // union toward the smaller root index to keep the merge order deterministic.
-                    parent[ri.max(rj)] = ri.min(rj);
-                }
+    // Only the CANDIDATE pairs can be nonzero ([`CandidatePairs`]) — every other pair's affinity is
+    // exactly zero and would never have unioned anything, so visiting only these yields the identical
+    // partition while skipping the n²/2 scan that used to evaluate them all to find that out. Nodes
+    // with no candidate pair stay their own root, so singleton components still fall out below.
+    for &(x, y) in candidates.iter() {
+        let (Some(&i), Some(&j)) = (idx.get(&x), idx.get(&y)) else {
+            continue;
+        };
+        if i != j && aff(sorted[i], sorted[j]) != 0.0 {
+            let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+            if ri != rj {
+                // union toward the smaller root index to keep the merge order deterministic.
+                parent[ri.max(rj)] = ri.min(rj);
             }
         }
     }
@@ -410,7 +500,7 @@ mod tests {
         // {1,2} bound, {3,4} bound, no cross affinity → two components.
         let nodes = [id(1), id(2), id(3), id(4)];
         let aff = aff_from(&[(1, 2, 1.0), (3, 4, 1.0)]);
-        let comps = connected_components(&nodes, &aff);
+        let comps = connected_components(&nodes, &CandidatePairs::dense(&nodes), &aff);
         assert_eq!(comps, vec![vec![id(1), id(2)], vec![id(3), id(4)]]);
     }
 
@@ -422,7 +512,7 @@ mod tests {
         // so 1,2,3 MUST be one component even though aff(1,3)=0 and aff(2,3) never crosses 0.5.
         let nodes = [id(1), id(2), id(3)];
         let aff = aff_from(&[(1, 2, 1.0), (2, 3, 0.01)]);
-        let comps = connected_components(&nodes, &aff);
+        let comps = connected_components(&nodes, &CandidatePairs::dense(&nodes), &aff);
         assert_eq!(comps, vec![vec![id(1), id(2), id(3)]]);
     }
 
@@ -431,7 +521,7 @@ mod tests {
         // 3 has zero affinity to everyone → its own singleton component (separation = absence).
         let nodes = [id(1), id(2), id(3)];
         let aff = aff_from(&[(1, 2, 1.0)]);
-        let comps = connected_components(&nodes, &aff);
+        let comps = connected_components(&nodes, &CandidatePairs::dense(&nodes), &aff);
         assert_eq!(comps, vec![vec![id(1), id(2)], vec![id(3)]]);
     }
 
@@ -445,13 +535,13 @@ mod tests {
         let aff = aff_from(&[(1, 2, 0.9), (2, 3, 0.9), (4, 5, 0.7)]);
         let resolution = 0.5;
 
-        let decomposed = cluster(&nodes, &aff, resolution);
+        let decomposed = cluster(&nodes, &CandidatePairs::dense(&nodes), &aff, resolution);
 
         // independent reference: agglomerate the whole node set in one pass (the pre-decomposition path).
         let mut all = nodes.to_vec();
         all.sort();
         let whole_graph = {
-            let mut cs = agglomerate(&all, &aff, resolution);
+            let mut cs = agglomerate(&all, &CandidatePairs::dense(&all), &aff, resolution);
             cs.sort_by(|x: &Vec<Uuid>, y: &Vec<Uuid>| x[0].cmp(&y[0]));
             cs
         };
@@ -471,7 +561,7 @@ mod tests {
         let aff = aff_from(&[(1, 2, 0.9), (2, 3, 0.9)]);
         let res = 0.4;
         assert_eq!(
-            agglomerate(&nodes, &aff, res),
+            agglomerate(&nodes, &CandidatePairs::dense(&nodes), &aff, res),
             agglomerate_reference(&nodes, &aff, res)
         );
     }
@@ -485,7 +575,7 @@ mod tests {
         let nodes = [id(1), id(2), id(3)];
         let aff = aff_from(&[(1, 2, 0.9), (1, 3, 0.5), (2, 3, -0.5)]);
         let res = 0.4;
-        let got = agglomerate(&nodes, &aff, res);
+        let got = agglomerate(&nodes, &CandidatePairs::dense(&nodes), &aff, res);
         assert_eq!(got, agglomerate_reference(&nodes, &aff, res));
         assert_eq!(got, vec![vec![id(1), id(2)], vec![id(3)]]);
     }
@@ -500,7 +590,7 @@ mod tests {
         let nodes = [id(1), id(2), id(3)];
         let aff = aff_from(&[(1, 3, 0.95), (1, 2, 0.9), (2, 3, -0.2)]);
         let res = 0.3;
-        let got = agglomerate(&nodes, &aff, res);
+        let got = agglomerate(&nodes, &CandidatePairs::dense(&nodes), &aff, res);
         assert_eq!(got, agglomerate_reference(&nodes, &aff, res));
         assert_eq!(got, vec![vec![id(1), id(2), id(3)]]);
     }
@@ -574,7 +664,7 @@ mod tests {
             let aff = aff_from(&edges);
             let res = [0.45f64, 0.6, 0.75][rng.below(3) as usize];
 
-            let got = cluster(&nodes, &aff, res);
+            let got = cluster(&nodes, &CandidatePairs::dense(&nodes), &aff, res);
             let want = {
                 let mut cs = agglomerate_reference(&nodes, &aff, res);
                 cs.sort_by(|x: &Vec<Uuid>, y: &Vec<Uuid>| x[0].cmp(&y[0]));
@@ -608,7 +698,7 @@ mod tests {
             let aff = aff_from(&edges);
             let res = [0.25f64, 0.4, 0.6][rng.below(3) as usize];
 
-            let got = cluster(&nodes, &aff, res);
+            let got = cluster(&nodes, &CandidatePairs::dense(&nodes), &aff, res);
             let want = {
                 let mut cs = agglomerate_reference(&nodes, &aff, res);
                 cs.sort_by(|x: &Vec<Uuid>, y: &Vec<Uuid>| x[0].cmp(&y[0]));
@@ -650,15 +740,15 @@ mod tests {
             for i in (1..shuffled.len()).rev() {
                 shuffled.swap(i, rng.below((i + 1) as u64) as usize);
             }
-            let base = agglomerate(&ascending, &aff, res);
+            let base = agglomerate(&ascending, &CandidatePairs::dense(&ascending), &aff, res);
             assert_eq!(
                 base,
-                agglomerate(&shuffled, &aff, res),
+                agglomerate(&shuffled, &CandidatePairs::dense(&shuffled), &aff, res),
                 "seed {seed}: partition must not depend on input node order"
             );
             assert_eq!(
                 base,
-                agglomerate(&ascending, &aff, res),
+                agglomerate(&ascending, &CandidatePairs::dense(&ascending), &aff, res),
                 "seed {seed}: re-run must be identical (no random init)"
             );
         }
@@ -698,7 +788,7 @@ mod tests {
         let t_ref = t0.elapsed();
 
         let t1 = Instant::now();
-        let lw = agglomerate(&nodes, &aff, res);
+        let lw = agglomerate(&nodes, &CandidatePairs::dense(&nodes), &aff, res);
         let t_lw = t1.elapsed();
 
         assert_eq!(

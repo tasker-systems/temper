@@ -8,6 +8,7 @@
 //! doc type, no fabricated fields. The §7-dissolved fields (`kb_doc_type_id`, `slug`, `managed_hash`,
 //! `open_hash`) are gone. See `native_resource_row` and the historical §9 parity floor.
 
+use crate::backend::region_clocks;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
@@ -1095,6 +1096,34 @@ impl DbBackend {
 }
 
 impl DbBackend {
+    /// Tick T6's two region clocks after a resource write (spec §3.5) — cheap salience clock on telos
+    /// drift, expensive formation clock on the event-count threshold. See [`region_clocks`].
+    ///
+    /// **Never fails the write.** The resource has already committed, and region geometry is a
+    /// projection over committed substrate: if a clock errors, the resource is still correct, still
+    /// readable, still searchable, and only its regions are briefly stale — which the very next write
+    /// re-drives from the same watermarks. Escalating would trade a self-healing staleness for a
+    /// user-visible 500. Same posture as the embed-backfill enqueue in these write paths.
+    async fn tick_region_clocks(&self, anchor: HomeAnchor, emitter: EntityId) {
+        match region_clocks::tick(&self.pool, anchor, emitter, None).await {
+            Ok(tick) => {
+                if tick.salience_refreshed || tick.materialized {
+                    tracing::debug!(
+                        anchor = %anchor.uuid(),
+                        salience_refreshed = tick.salience_refreshed,
+                        materialized = tick.materialized,
+                        "region clocks ticked"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                anchor = %anchor.uuid(),
+                error = %e,
+                "region clocks failed; regions are stale until the next write re-drives them"
+            ),
+        }
+    }
+
     /// Per-act correlation-integrity gate. When an authored act carries an `invocation_id`, the caller
     /// must be able to read the invocation's originating cogmap (absent OR unreadable → uniform 404, no
     /// existence oracle — matching the `invocation_show`/`close_invocation` deny→NotFound contract), and
@@ -1304,6 +1333,10 @@ impl Backend for DbBackend {
                 );
             }
         }
+
+        // T6 — tick the two region clocks (spec §3.5). The resource has committed; region geometry is
+        // a projection over it, so a clock failure is logged, never escalated (see `region_clocks`).
+        self.tick_region_clocks(cmd.home, emitter).await;
 
         let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
             .await?;
@@ -1522,6 +1555,22 @@ impl Backend for DbBackend {
                     "failed to enqueue embed backfill on update; resource is FTS-only until re-driven"
                 );
             }
+        }
+
+        // T6 — tick the two region clocks (spec §3.5). This is the write that matters most: a task
+        // moving to `done` is an UPDATE, it rewrites a `temper-stage` property row, and that row is an
+        // input to goal liveness but NOT to formation — so the telos moves while membership cannot.
+        // The cheap clock exists to make that visible immediately instead of waiting for ~5 unrelated
+        // writes to trip the formation threshold.
+        match region_clocks::home_of(&self.pool, new_id).await {
+            Ok(Some(anchor)) => self.tick_region_clocks(anchor, emitter).await,
+            // No home row ⇒ no anchor whose regions this write could affect ⇒ no clocks to tick.
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                resource_id = %new_id,
+                error = %e,
+                "could not resolve home anchor; region clocks not ticked"
+            ),
         }
 
         let row =
