@@ -136,20 +136,15 @@ impl JwksKeyStore {
     ///
     /// The allow-list must be single-family: `jsonwebtoken` rejects a
     /// `Validation` whose list mixes families the cached key does not match.
-    pub fn validation(
-        &self,
-        issuer: &str,
-        audience: Option<&str>,
-        algorithm: Algorithm,
-    ) -> Validation {
+    /// `audience` is not optional. It used to be, and a `None` set `validate_aud = false` — which
+    /// meant an unset `AUTH_AUDIENCE` disabled the check outright. An instance that cannot state
+    /// which audience it validates does not boot (see [`crate::auth_config`]), so there is no longer
+    /// an input that could reach that branch.
+    pub fn validation(&self, issuer: &str, audience: &str, algorithm: Algorithm) -> Validation {
         let mut v = Validation::new(algorithm);
         v.algorithms = vec![algorithm];
         v.set_issuer(&[issuer]);
-        if let Some(aud) = audience {
-            v.set_audience(&[aud]);
-        } else {
-            v.validate_aud = false;
-        }
+        v.set_audience(&[audience]);
         v
     }
 
@@ -253,14 +248,20 @@ mod tests {
         Some((enc, dec))
     }
 
+    // The test that used to live here — `validation_without_audience_disables_aud_check` — asserted
+    // that a `None` audience set `validate_aud = false`. It pinned the vulnerability as correct
+    // behavior. It is gone, and its inverse is below: there is no way to build a `Validation` from
+    // this store that does not check the audience.
+
     #[test]
-    fn validation_without_audience_disables_aud_check() {
+    fn validation_always_enables_the_aud_check() {
         let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
-        let v = store.validation("https://auth.example.com", None, Algorithm::RS256);
+        let v = store.validation("https://auth.example.com", "temper-api", Algorithm::RS256);
         assert!(
-            !v.validate_aud,
-            "audience validation should be disabled when None"
+            v.validate_aud,
+            "audience validation must never be disabled — the caller cannot express 'no audience'"
         );
+        assert!(v.algorithms.contains(&Algorithm::RS256));
         assert!(
             v.iss
                 .as_ref()
@@ -268,18 +269,6 @@ mod tests {
                 .unwrap_or(false),
             "issuer should be set"
         );
-    }
-
-    #[test]
-    fn validation_with_audience_enables_aud_check() {
-        let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
-        let v = store.validation(
-            "https://auth.example.com",
-            Some("temper-api"),
-            Algorithm::RS256,
-        );
-        assert!(v.validate_aud, "audience validation should be enabled");
-        assert!(v.algorithms.contains(&Algorithm::RS256));
     }
 
     #[test]
@@ -394,7 +383,7 @@ mod tests {
 
         let validation = store.validation(
             "https://as.example",
-            Some("https://api.example"),
+            "https://api.example",
             Algorithm::EdDSA,
         );
 

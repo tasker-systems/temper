@@ -22,7 +22,9 @@ async fn main() -> Result<(), vercel_runtime::Error> {
         )
         .init();
 
-    let config = ApiConfig::from_env().expect("Failed to load config from environment");
+    // An instance that cannot state which audience it validates must not serve traffic. A warning
+    // was never a control.
+    let config = ApiConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
 
     // Bound connection acquisition so a cold Neon compute-resume fails fast
     // rather than hanging the whole serverless invocation window until Vercel
@@ -37,7 +39,7 @@ async fn main() -> Result<(), vercel_runtime::Error> {
         .await
         .expect("Failed to connect to database");
 
-    let jwks_store = JwksKeyStore::new(config.jwks_url.clone());
+    let jwks_store = JwksKeyStore::new(config.auth.jwks_url.clone());
     let state = AppState::new(pool, jwks_store, config);
     let app = temper_api::create_app(state);
 

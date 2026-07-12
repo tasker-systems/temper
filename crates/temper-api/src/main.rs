@@ -16,7 +16,9 @@ async fn main() {
         )
         .init();
 
-    let config = ApiConfig::from_env().expect("Failed to load config from environment");
+    // An instance that cannot state which audience it validates must not serve traffic. A warning
+    // was never a control.
+    let config = ApiConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -24,7 +26,7 @@ async fn main() {
         .await
         .expect("Failed to connect to database");
 
-    let jwks_store = JwksKeyStore::new(config.jwks_url.clone());
+    let jwks_store = JwksKeyStore::new(config.auth.jwks_url.clone());
     let port = config.port;
     let state = AppState::new(pool, jwks_store, config);
     let app = create_app(state);

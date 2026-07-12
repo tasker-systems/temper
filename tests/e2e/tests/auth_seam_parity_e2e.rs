@@ -15,6 +15,7 @@ mod common;
 
 use reqwest::StatusCode;
 
+use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::config::ApiConfig;
 use temper_services::state::{AppState, JwksKeyStore};
 
@@ -29,9 +30,12 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
     let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
     let api_config = ApiConfig {
         database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: common::TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
         auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,
@@ -201,5 +205,47 @@ async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
         err.message.contains("requires approval"),
         "MCP system-access message expected, got: {}",
         err.message
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn foreign_audience_token_is_refused(pool: sqlx::PgPool) {
+    // The bite test for the audience gate. This token is correctly signed by the trusted issuer,
+    // unexpired, and carries a valid `sub` — everything is right about it except that it was minted
+    // for a DIFFERENT API's audience.
+    //
+    // It used to be accepted. `AUTH_AUDIENCE` resolved empty-or-unset to `None`, and `None` made
+    // `JwksKeyStore::validation` set `validate_aud = false`, so temper-api checked no audience at
+    // all. Every fixture in this suite ran that way, which is why no test ever caught it: the
+    // tokens carried no `aud` claim and nothing looked at one.
+    let app = common::setup(pool.clone()).await;
+
+    // Positive control: the SAME endpoint, with a correctly-audienced token, is admitted. Without
+    // this, a 401 below could just as well mean the request was malformed.
+    let ok = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .expect("api request");
+    assert_eq!(
+        ok.status(),
+        StatusCode::OK,
+        "positive control: a correctly-audienced token must be admitted"
+    );
+
+    let foreign = common::generate_jwt_for_other_audience("e2e-test-user", "e2e@test.com");
+    let refused = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {foreign}"))
+        .send()
+        .await
+        .expect("api request");
+    assert_eq!(
+        refused.status(),
+        StatusCode::UNAUTHORIZED,
+        "a token minted for another audience must be refused, not admitted"
     );
 }

@@ -54,7 +54,7 @@ pub(super) async fn resolve_email_from_claims(
         None => {
             let endpoint = state
                 .userinfo_endpoint
-                .get_or_try_init(|| discover_userinfo_endpoint(&state.config.auth_issuer))
+                .get_or_try_init(|| discover_userinfo_endpoint(&state.config.auth.issuer))
                 .await
                 .map_err(|e| {
                     tracing::warn!("OIDC discovery failed: {e}");

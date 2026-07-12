@@ -1,11 +1,16 @@
+use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
 use std::env;
 
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
     pub database_url: String,
-    pub jwks_url: String,
-    pub auth_issuer: String,
-    pub auth_audience: Option<String>,
+    /// This instance's verified auth identity — issuer, JWKS, the one audience, and the mode.
+    ///
+    /// Replaces the old `auth_issuer` / `auth_audience` / `jwks_url` trio. That `auth_audience` was
+    /// an `Option<String>`, and a `None` reached `JwksKeyStore::validation`, which answered it by
+    /// setting `validate_aud = false` — so an unset or empty `AUTH_AUDIENCE` silently switched
+    /// audience validation off. There is no `None` to hand it any more.
+    pub auth: AuthConfig,
     pub auth_provider_name: String,
     pub cors_origins: Vec<String>,
     pub port: u16,
@@ -18,25 +23,26 @@ pub struct ApiConfig {
 }
 
 impl ApiConfig {
-    pub fn from_env() -> Result<Self, env::VarError> {
-        let cors_origins: Vec<String> = env::var("CORS_ORIGINS")
+    /// Load from the process environment. Refuses to produce a config an instance cannot serve on.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|key| env::var(key).ok())
+    }
+
+    /// Load from an arbitrary lookup. Exists so config is testable without touching the global,
+    /// racy process environment.
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let auth = parse_auth_config(&lookup)?;
+
+        // The mode is not consulted after parsing. It is logged because an operator who cannot tell
+        // which mode their instance is in is exactly the operator who mis-sets these variables.
+        tracing::info!(mode = %auth.mode, "auth configured");
+
+        let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
             .unwrap_or_default()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-
-        let auth_audience = env::var("AUTH_AUDIENCE").ok().filter(|s| !s.is_empty());
-
-        let auth_provider_name =
-            env::var("AUTH_PROVIDER_NAME").unwrap_or_else(|_| "auth0".to_string());
-
-        if auth_audience.is_none() {
-            tracing::warn!(
-                "AUTH_AUDIENCE is not set — JWT audience validation is disabled. \
-                 This is acceptable for development but MUST be configured in production."
-            );
-        }
 
         if cors_origins.is_empty() {
             tracing::info!(
@@ -45,7 +51,7 @@ impl ApiConfig {
             );
         }
 
-        let enable_swagger = env::var("ENABLE_SWAGGER")
+        let enable_swagger = lookup("ENABLE_SWAGGER")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
@@ -54,23 +60,15 @@ impl ApiConfig {
         }
 
         Ok(Self {
-            database_url: env::var("DATABASE_URL")?,
-            jwks_url: env::var("JWKS_URL")?,
-            auth_issuer: env::var("AUTH_ISSUER")?,
-            auth_audience,
-            auth_provider_name,
+            database_url: lookup("DATABASE_URL").ok_or(ConfigError::Missing("DATABASE_URL"))?,
+            auth,
+            auth_provider_name: lookup("AUTH_PROVIDER_NAME").unwrap_or_else(|| "auth0".to_string()),
             cors_origins,
-            port: env::var("PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(3000),
+            port: lookup("PORT").and_then(|p| p.parse().ok()).unwrap_or(3000),
             enable_swagger,
-            internal_reconcile_secret: env::var("INTERNAL_RECONCILE_SECRET")
-                .ok()
+            internal_reconcile_secret: lookup("INTERNAL_RECONCILE_SECRET")
                 .filter(|s| !s.is_empty()),
-            embed_dispatch_secret: env::var("EMBED_DISPATCH_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty()),
+            embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
         })
     }
 }

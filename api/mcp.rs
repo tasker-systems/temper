@@ -21,7 +21,9 @@ async fn main() -> Result<(), vercel_runtime::Error> {
         )
         .init();
 
-    let api_config = ApiConfig::from_env().expect("Failed to load ApiConfig from environment");
+    // An instance that cannot state which audience it validates must not serve traffic. A warning
+    // was never a control.
+    let api_config = ApiConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
     let mcp_config = McpConfig::from_env().expect("Failed to load McpConfig from environment");
 
     let pool = PgPoolOptions::new()
@@ -30,7 +32,7 @@ async fn main() -> Result<(), vercel_runtime::Error> {
         .await
         .expect("Failed to connect to database");
 
-    let jwks_store = JwksKeyStore::new(api_config.jwks_url.clone());
+    let jwks_store = JwksKeyStore::new(api_config.auth.jwks_url.clone());
     let api_state = AppState::new(pool, jwks_store, api_config);
 
     let app = temper_mcp::build_router(api_state, mcp_config);

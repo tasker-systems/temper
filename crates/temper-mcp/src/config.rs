@@ -27,10 +27,12 @@ pub struct McpConfig {
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
     pub mcp_base_url: String,
 
-    /// OAuth audience / resource indicator for MCP tokens.
-    /// Must match what Auth0 is configured to issue tokens for.
-    pub mcp_audience: String,
-
+    // NOTE: there is deliberately no `mcp_audience` here any more. An instance has exactly ONE
+    // audience, parsed once into `temper_services::auth_config::AuthConfig` and read by both
+    // surfaces. `MCP_AUDIENCE` the env var still exists, but it is now only an assertion that it
+    // restates `AUTH_AUDIENCE` — enforced at boot, in one place. Two parsers for one concept is
+    // what let an empty value disable validation on temper-api while rejecting every token on
+    // temper-mcp.
     /// Pre-registered Auth0 application client_id for MCP clients.
     /// Returned by the registration endpoint so clients like Claude Desktop
     /// can complete OAuth without manual client_id entry.
@@ -48,9 +50,6 @@ impl McpConfig {
 
         Ok(Self {
             mcp_base_url: env::var("MCP_BASE_URL").map_err(McpConfigError::Env)?,
-            mcp_audience: env::var("MCP_AUDIENCE")
-                .or_else(|_| env::var("AUTH_AUDIENCE"))
-                .map_err(McpConfigError::Env)?,
             mcp_client_id: env::var("MCP_CLIENT_ID").ok(),
             oauth: server_file.oauth,
         })

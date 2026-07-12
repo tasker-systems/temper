@@ -16,6 +16,7 @@ use tokio::net::TcpListener;
 
 use temper_api::create_app;
 use temper_services::{
+    auth_config::{AuthConfig, AuthMode},
     config::ApiConfig,
     state::{AppState, JwksKeyStore},
 };
@@ -232,6 +233,13 @@ impl TestApp {
     }
 }
 
+/// The audience this test instance validates. Every test JWT must carry it as its `aud`.
+///
+/// Before the auth-config work, the fixture set `auth_audience: None`, which set
+/// `validate_aud = false` — so these tokens carried no `aud` at all and the suite never exercised
+/// audience validation. It does now.
+pub const TEST_AUDIENCE: &str = "test-audience";
+
 /// Claim shape used for test JWT encoding.
 #[derive(Debug, Serialize, Deserialize)]
 struct TestClaims {
@@ -239,6 +247,7 @@ struct TestClaims {
     email: String,
     email_verified: bool,
     iss: String,
+    aud: String,
     iat: i64,
     exp: i64,
 }
@@ -256,6 +265,7 @@ pub fn generate_test_jwt(sub: &str, email: &str) -> String {
         email: email.to_string(),
         email_verified: true,
         iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
         iat: now,
         exp: now + 3600,
     };
@@ -275,6 +285,7 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
         email: email.to_string(),
         email_verified: true,
         iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
         iat: now - 7200,
         exp: now - 3600,
     };
@@ -298,9 +309,12 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
 
     let config = ApiConfig {
         database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
         auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,
@@ -345,9 +359,12 @@ pub async fn setup_test_app_with_config(
 
     let mut config = ApiConfig {
         database_url: "unused".to_string(),
-        jwks_url: "unused".to_string(),
-        auth_issuer: "test-issuer".to_string(),
-        auth_audience: None,
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
         auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,
