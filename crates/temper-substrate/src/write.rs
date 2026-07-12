@@ -34,13 +34,13 @@ fn cluster_components(s: &Substrate) -> Vec<ComponentWork> {
     // `affinity` is typed on `ResourceId`; the pure clustering algorithm (`cluster`) works over opaque
     // `Uuid` nodes. Bridge at this one boundary: feed cluster the bare node uuids, lift each pair back
     // to `ResourceId` for the affinity lookup.
-    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.lens);
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.knn, &s.lens);
     let node_uuids: Vec<Uuid> = s.nodes.iter().map(|n| n.uuid()).collect();
     connected_components(&node_uuids, &aff)
         .into_iter()
         .map(|members| {
             let clusters = agglomerate(&members, &aff, s.lens.resolution);
-            let fingerprint = component_fingerprint(&members, &s.edges, &s.facets, &s.lens);
+            let fingerprint = component_fingerprint(&members, &s.edges, &s.facets, &s.knn, &s.lens);
             ComponentWork {
                 members,
                 fingerprint,
@@ -84,9 +84,10 @@ fn zero_centroid() -> String {
 /// [`incremental_materialize`] reuses on the next pass.
 ///
 /// `anchor` is a context OR a cognitive map (spec §3.6 M2). The regime is the LENS's business, not
-/// this function's: with `w_cos = 0` (every lens seeded today) formation is declared-graph-only and a
-/// context — which carries no facets and a near-monotone edge graph — forms nothing useful. T4's
-/// kernel is what makes the context regime work.
+/// this function's. With `w_cos = 0` (`telos-default` and every other cogmap lens) formation is
+/// declared-graph-only. With `w_cos > 0` (`workflow-default`, the context lens) the sparse exact-kNN
+/// cosine term joins the kernel and the embedding becomes the primary evidence of regionality — which
+/// is what lets a context, carrying no facets and a near-monotone edge graph, form anything at all.
 pub async fn materialize(
     pool: &PgPool,
     anchor: HomeAnchor,
@@ -495,6 +496,7 @@ fn member_affinity(m: Uuid, members: &[Uuid], sub: &Substrate) -> f64 {
                 ResourceId::from(p),
                 &sub.edges,
                 &sub.facets,
+                &sub.knn,
                 &sub.lens,
             )
         })

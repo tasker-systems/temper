@@ -1,8 +1,14 @@
-//! `temper-substrate` — deterministic, declared-only telos-lens region producer.
+//! `temper-substrate` — deterministic, telos-lens region producer over two regimes.
 //!
 //! Production-quality clustering core (`affinity`, `cluster`) written to lift wholesale into
-//! `temper-cogmap` later (spec §6b). Cosine never enters region *formation* — it appears only as
-//! a downstream SQL readout (Plan 1 functions).
+//! `temper-cogmap` later (spec §6b).
+//!
+//! ONE producer, TWO regimes, selected entirely by the lens's `w_cos` (spec §3.1):
+//!   - `w_cos == 0` — the **cogmap** regime. The declared graph (edges + facets) is the whole signal;
+//!     cosine never enters region *formation* and appears only as a downstream SQL readout.
+//!   - `w_cos > 0` — the **context** regime. A sparse exact-kNN cosine term ([`knn`]) joins the
+//!     kernel, and the embedding becomes the PRIMARY evidence of regionality — which is what lets a
+//!     context, carrying no facets and almost no declared edges, form regions at all.
 pub mod affinity;
 pub mod cluster;
 pub mod content;
@@ -12,6 +18,7 @@ pub mod events;
 pub mod fingerprint;
 pub mod ids;
 pub mod keys;
+pub mod knn;
 pub mod payloads;
 pub mod readback;
 pub mod replay;

@@ -122,12 +122,12 @@ pub(crate) async fn live_components(
 pub(crate) fn current_component_fingerprints(s: &Substrate) -> Vec<(Vec<Uuid>, String)> {
     // `affinity`/`cluster` bridge: feed the opaque node uuids, lift each pair to `ResourceId` (mirrors
     // `write::cluster_components`).
-    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.lens);
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.knn, &s.lens);
     let node_uuids: Vec<Uuid> = s.nodes.iter().map(|n| n.uuid()).collect();
     connected_components(&node_uuids, &aff)
         .into_iter()
         .map(|members| {
-            let fp = component_fingerprint(&members, &s.edges, &s.facets, &s.lens);
+            let fp = component_fingerprint(&members, &s.edges, &s.facets, &s.knn, &s.lens);
             (members, fp)
         })
         .collect()

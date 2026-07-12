@@ -16,9 +16,26 @@ async fn seed_system_seeds_registry_and_global_lenses_idempotently(pool: sqlx::P
             .await
             .unwrap();
     assert_eq!(
-        lenses, 4,
-        "exactly four global system lenses after (idempotent) seeding (telos-default x2 + orientation + wayfinding)"
+        lenses, 5,
+        "exactly five global system lenses after (idempotent) seeding (telos-default x2 + orientation \
+         + wayfinding + workflow-default, the context regime's kernel lens)"
     );
+
+    // The context lens is the ONLY one with the kernel switched on. If a cogmap lens ever picks up a
+    // nonzero w_cos, formation changes for every map in production — this is the guard on that.
+    let regime: Vec<(String, f64)> = sqlx::query_as(
+        "SELECT name, w_cos FROM kb_cogmap_lenses WHERE cogmap_id IS NULL ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for (name, w_cos) in &regime {
+        let expected = if name == "workflow-default" { 1.0 } else { 0.0 };
+        assert_eq!(
+            *w_cos, expected,
+            "lens `{name}` must carry w_cos={expected} — the kernel is on for contexts ONLY"
+        );
+    }
 
     let has_lens_created: bool =
         sqlx::query_scalar("SELECT exists(SELECT 1 FROM kb_event_types WHERE name='lens_created')")
@@ -35,7 +52,11 @@ async fn seed_system_seeds_registry_and_global_lenses_idempotently(pool: sqlx::P
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(sys_lens_events, 4, "four system-scope lens_created events");
+    assert_eq!(
+        sys_lens_events, 5,
+        "five system-scope lens_created events — workflow-default is event-sourced through \
+         lens_create like every other lens, not raw-INSERTed"
+    );
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

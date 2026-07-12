@@ -253,10 +253,25 @@ pub struct LensDef {
     pub w_leads_to: f64,
     pub w_near: f64,
     pub w_prop: f64,
+    /// The kNN cosine weight — the regime switch (spec §3.1). Defaulted to 0.0 (declared-only), so
+    /// every pre-kernel fixture YAML stays valid and keeps meaning exactly what it meant.
+    #[serde(default)]
+    pub w_cos: f64,
+    #[serde(default = "default_knn_k")]
+    pub knn_k: u32,
+    #[serde(default = "default_cos_floor")]
+    pub cos_floor: f64,
     pub s_telos: f64,
     pub s_ref: f64,
     pub s_central: f64,
     pub resolution: f64,
+}
+
+fn default_knn_k() -> u32 {
+    12
+}
+fn default_cos_floor() -> f64 {
+    0.55
 }
 
 /// Internally tagged by `do:` — serde_yaml 0.9 rejects the externally-tagged single-key-map form

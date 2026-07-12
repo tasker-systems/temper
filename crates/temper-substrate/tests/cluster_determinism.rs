@@ -1,5 +1,6 @@
 use temper_substrate::affinity::{affinity, Edge, EdgeKind, Facet, Lens};
 use temper_substrate::cluster::cluster;
+use temper_substrate::knn::KnnGraph;
 use uuid::Uuid;
 
 fn id(n: u128) -> Uuid {
@@ -27,7 +28,9 @@ fn fixture() -> (Vec<Uuid>, Vec<Edge>, Vec<Facet>, Lens) {
 #[test]
 fn isolated_node_forms_its_own_cluster() {
     let (nodes, edges, facets, lens) = fixture();
-    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &edges, &facets, &lens);
+    // the declared-only regime: `lens` is telos-default (w_cos = 0), so the graph is never consulted
+    let knn = KnnGraph::default();
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &edges, &facets, &knn, &lens);
     let clusters = cluster(&nodes, &aff, lens.resolution);
     assert_eq!(clusters.len(), 2);
     assert!(clusters.iter().any(|c| c == &vec![id(1), id(2)]));
@@ -37,7 +40,9 @@ fn isolated_node_forms_its_own_cluster() {
 #[test]
 fn reproducible_byte_identical_on_rerun() {
     let (nodes, edges, facets, lens) = fixture();
-    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &edges, &facets, &lens);
+    // the declared-only regime: `lens` is telos-default (w_cos = 0), so the graph is never consulted
+    let knn = KnnGraph::default();
+    let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &edges, &facets, &knn, &lens);
     let one = cluster(&nodes, &aff, lens.resolution);
     let two = cluster(&nodes, &aff, lens.resolution);
     assert_eq!(one, two);

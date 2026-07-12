@@ -342,6 +342,12 @@ pub struct LensWeights {
     pub leads_to: f64,
     pub near: f64,
     pub prop: f64,
+    /// The sparse exact-kNN cosine weight — the regime switch (spec §3.1). **Defaulted, not required:**
+    /// `kb_events` is append-only, so the `lens_created` events for the pre-kernel lenses are immortal
+    /// and carry no `cos` key. A required field would break `replay`'s round-trip through this struct
+    /// on every one of them. The default (0.0) is exactly what those lenses ARE — declared-only.
+    #[serde(default)]
+    pub cos: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -351,6 +357,16 @@ pub struct SalienceWeights {
     #[serde(rename = "ref")]
     pub reference: f64,
     pub central: f64,
+}
+
+/// The kNN graph's construction params. Defaulted for the same append-only reason as
+/// [`LensWeights::cos`], and to the same values the SQL columns default to — so a pre-kernel
+/// `lens_created` event replays to exactly the row that already exists.
+fn default_knn_k() -> u32 {
+    12
+}
+fn default_cos_floor() -> f64 {
+    0.55
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -364,6 +380,10 @@ pub struct LensCreated {
     pub weights: LensWeights,
     pub salience: SalienceWeights,
     pub resolution: f64,
+    #[serde(default = "default_knn_k")]
+    pub knn_k: u32,
+    #[serde(default = "default_cos_floor")]
+    pub cos_floor: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
