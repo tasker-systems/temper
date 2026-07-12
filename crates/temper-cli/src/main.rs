@@ -19,6 +19,15 @@ fn main() {
         )
         .init();
 
+    // The CLI embeds one document for one user, so let ONNX Runtime spread a
+    // single inference across every core — measured 3.1× faster than the pinned
+    // default on large bodies (task 019f57d2). The server deliberately does NOT
+    // do this (concurrent ingests would oversubscribe the box); see
+    // `temper_ingest::embed::set_intra_op_threads`. Overridable per-run via
+    // `TEMPER_ONNX_INTRA_THREADS`. Must run before the first embed.
+    #[cfg(feature = "embed")]
+    temper_ingest::embed::set_intra_op_threads(0);
+
     let cli = Cli::parse();
 
     // Resolve global output settings once, before dispatch. Color is applied
