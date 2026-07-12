@@ -176,17 +176,6 @@ pub async fn check_context_staleness(
     evaluate_staleness(&cursor, server_latest)
 }
 
-/// Run the staleness pre-flight and print one warning line if the context's
-/// projection is stale. All other outcomes are silent. This is the
-/// caller-facing entry point for context-touching commands.
-pub async fn warn_if_context_stale(client: &TemperClient, state_dir: &Path, context: &str) {
-    if check_context_staleness(client, state_dir, context).await == StalenessOutcome::Stale {
-        crate::output::warning(format!(
-            "projection for '{context}' is stale — run `temper pull {context}` to refresh"
-        ));
-    }
-}
-
 /// Remove projection `.md` files for resources no longer present in the
 /// context. `keep` is the set of absolute file paths the current pull
 /// wrote. Walks `<vault_root>/<owner>/<context_name>/<doc_type>/*.md` across

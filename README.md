@@ -161,8 +161,9 @@ Every command accepts the global flags `--format json|toon` and `--color auto|al
 | `temper resource create --type <type> --title <title>` | Create a resource (goal, task, session, research, decision, concept) |
 | `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
 | `temper resource list --type <type>` | List resources of a type |
+| `temper resource list --type <type> --meta-only` | List with both meta tiers per row (managed + open), no bodies — triage a context on metadata in one call |
 | `temper resource show <ref>` | Show a resource by ref |
-| `temper resource show <ref> --meta-only` | Frontmatter only — a cheap orientation read, no body |
+| `temper resource show <ref> --meta-only` | Everything `show` returns except the body — a cheap orientation read |
 | `temper resource show <ref> --edges` | Show a resource plus its graph edges |
 
 ### Goals and Tasks

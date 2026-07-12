@@ -166,19 +166,25 @@ When you need to peek at a resource or scan a list without paying for the full
 body, use the projection flags. They make orientation reads dramatically
 cheaper, both in tokens and in API work:
 
-- `temper resource show <ref> --meta-only` — frontmatter (managed +
-  open) and hashes only; no body. Calls `GET /api/resources/<id>/meta`.
-- `temper resource list --type <t> --context @me/<ctx> --meta-only` — meta tier per
-  row instead of full row payloads.
+- `temper resource show <ref> --meta-only` — the full resource view
+  (title, type, context, owner, and both the managed and open meta tiers)
+  minus the reconstructed body. Everything `show` gives you except the body.
+- `temper resource list --type <t> --context @me/<ctx> --meta-only` — each
+  matching resource as a full row **plus** both meta tiers (still no body). The
+  default `list` carries neither tier, so this is how you triage a whole context
+  on managed- or open-meta fields — stage, provenance, your own `open_meta`
+  keys — in one call instead of one `show` per resource.
 - `--fields <a,b,c>` on either of the above — subselect top-level response
-  keys (the anchor key — `id` or `resource_id` — is always preserved). For
-  nested projection, pipe through `jq`.
+  keys (the anchor key `id` is always preserved). For nested projection, pipe
+  through `jq`.
 - `temper resource show <ref> --edges` — adds the graph edges
   connected to this resource. Cannot be combined with `--meta-only`.
 
-Reach for these first when triaging a context, comparing a few resources, or
-deciding whether to read the body. Fall back to the full `show` only when you
-need the body.
+Reach for `--meta-only` whenever you need a resource's metadata but not its
+prose — triaging a context, comparing a few resources, or deciding whether to
+read the body. It is strictly cheaper than a full `show` (no body
+reconstruction) and strictly richer than the default `list` (which omits both
+meta tiers). Fall back to the full `show` only when you actually need the body.
 
 ## Vault Projection (local cache)
 

@@ -26,6 +26,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
+use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId};
@@ -1136,33 +1137,42 @@ pub async fn unified_search(pool: &PgPool, q: UnifiedSearchQuery<'_>) -> Result<
 /// Request parameters for [`wayfind_scope_ids`] (params struct). Borrowed embedding view; the caller
 /// owns it. `None` `lens_id` ⇒ each region's memoized salience; `Some` ⇒ recompute under that lens's
 /// `s_*`. `None` `embedding` ⇒ the query-cosine term is zeroed (salience-only). `None` `regions` ⇒ the
-/// SQL `k`-CTE default.
+/// SQL `k`-CTE default. `None` `anchor` ⇒ pool regions from **every** visible anchor over both kinds;
+/// `Some` ⇒ "wayfind within this anchor" (spec §3.7). A `Some` anchor the principal cannot read is not
+/// an error — it simply admits no rows, because the scope is still intersected with
+/// `visible_region_anchors` inside the SQL.
 #[derive(Debug, Clone)]
 pub struct WayfindScopeQuery<'a> {
     pub principal: ProfileId,
     pub lens_id: Option<LensId>,
     pub embedding: Option<&'a [f32]>,
     pub regions: Option<i32>,
+    pub anchor: Option<HomeAnchor>,
 }
 
-/// Surface B Half 2: resolve the wayfind bounding resource-id set — the region-salience funnel across
-/// the principal's visible maps, UNION the direct homed scope of region-less/thin maps (spec §4/§5).
-/// The returned ids feed `unified_search` as `p_scope_ids`; this function only establishes scope.
+/// Resolve the wayfind bounding resource-id set — the region-salience funnel across the principal's
+/// visible **anchors of both kinds** (cogmaps *and* contexts, spec §3.7), UNION the direct homed scope
+/// of region-less anchors (cold-start §5). The returned ids feed `unified_search` as `p_scope_ids`;
+/// this function only establishes scope.
 ///
 /// Runtime `sqlx::query_as` — the `::vector` cast on the query embedding forbids the compile-time
 /// macros (the same established exception as [`unified_search`] / [`vector_search`]). All tuning
-/// constants (α/β, default/ceiling N, thin threshold, recall floor, normalization) live in the SQL
-/// function's `k` CTE, never here. Gate is in the SQL at every stage: a principal who can see no maps
-/// gets zero rows, never an error.
+/// constants (α/β, the anchor prior κ, default/ceiling N, thin threshold, recall floor, and the
+/// per-anchor-kind normalization) live in the SQL function's `k` CTE, never here. Gate is in the SQL at
+/// every stage: a principal who can see no anchors gets zero rows, never an error.
 pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Result<Vec<Uuid>> {
     let emb_text = q.embedding.map(format_pgvector);
-    let ids: Vec<(Uuid,)> = sqlx::query_as("SELECT wayfind_scope_ids($1, $2, $3::vector, $4)")
-        .bind(q.principal)
-        .bind(q.lens_id)
-        .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
-        .bind(q.regions)
-        .fetch_all(pool)
-        .await?;
+    let ids: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT wayfind_scope_ids($1, $2, $3::vector, $4, $5, $6)")
+            .bind(q.principal)
+            .bind(q.lens_id)
+            .bind(emb_text) // NULL when None → p_emb NULL → query-cosine term zeroed
+            .bind(q.regions)
+            // NULL/NULL when None → unscoped: pool every visible anchor over both kinds.
+            .bind(q.anchor.map(HomeAnchor::table))
+            .bind(q.anchor.map(HomeAnchor::uuid))
+            .fetch_all(pool)
+            .await?;
     Ok(ids.into_iter().map(|(id,)| id).collect())
 }
 

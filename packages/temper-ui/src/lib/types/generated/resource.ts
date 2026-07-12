@@ -55,8 +55,8 @@ context_ref: string | null, doc_type_name: string | null, owner: string | null, 
 goal: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
 /**
  * When true, the list endpoint returns `ResourceMetaListResponse`
- * (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
- * (`Vec<ResourceRow>` rows). Default: false.
+ * (`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of
+ * `ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.
  */
 meta_only: boolean | null, };
 

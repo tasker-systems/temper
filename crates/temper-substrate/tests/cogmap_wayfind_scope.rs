@@ -105,12 +105,21 @@ struct RegionSeed<'a> {
     member_count: i32,
 }
 
+/// Plant a region on the fixture cogmap.
+///
+/// The **anchor pair is mandatory**: since T7 the wayfind pool is keyed on
+/// `(home_anchor_table, home_anchor_id)` — not `cogmap_id` — and `kb_cogmap_regions` has **no trigger**
+/// deriving one from the other. A fixture writing only `cogmap_id` plants regions the funnel cannot
+/// see, and the map then looks region-*less*, silently falling through to the cold-start branch that
+/// returns its whole homed scope. Every one of these tests would still "pass a search" while asserting
+/// nothing about region selection. The producer dual-writes both (spec §3.6 M1); so does this.
 async fn insert_region(pool: &PgPool, s: RegionSeed<'_>) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO kb_cogmap_regions
-           (cogmap_id, lens_id, centroid, salience, telos_alignment, reference_standing,
-            centrality, member_count, asserted_by_event_id, last_event_id)
-         VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $9)
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience,
+            telos_alignment, reference_standing, centrality, member_count,
+            asserted_by_event_id, last_event_id)
+         VALUES ($1, 'kb_cogmaps', $1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $9)
          RETURNING id",
     )
     .bind(s.cogmap)
@@ -223,6 +232,7 @@ async fn wayfind_selects_top_n_regions(pool: PgPool) {
             lens_id: None,
             embedding: Some(&q),
             regions: Some(2),
+            anchor: None, // unscoped: pool every visible anchor (T7)
         },
     )
     .await
@@ -261,6 +271,7 @@ async fn wayfind_regions_below_one_clamps_to_one(pool: PgPool) {
             lens_id: None,
             embedding: Some(&q),
             regions: Some(-1),
+            anchor: None, // unscoped: pool every visible anchor (T7)
         },
     )
     .await
@@ -295,6 +306,7 @@ async fn sparse_high_cosine_region_beats_large_low_cosine(pool: PgPool) {
             lens_id: None,
             embedding: Some(&q),
             regions: Some(1),
+            anchor: None, // unscoped: pool every visible anchor (T7)
         },
     )
     .await
@@ -328,6 +340,7 @@ async fn region_less_map_degrades_to_direct_scope(pool: PgPool) {
             lens_id: None,
             embedding: Some(&q),
             regions: Some(3), // no-op against a region-less map; must not error
+            anchor: None,     // unscoped: pool every visible anchor (T7)
         },
     )
     .await
@@ -359,6 +372,7 @@ async fn wayfind_excludes_unreadable_maps(pool: PgPool) {
             lens_id: None,
             embedding: Some(&q),
             regions: Some(3),
+            anchor: None, // unscoped: pool every visible anchor (T7)
         },
     )
     .await
@@ -413,6 +427,7 @@ async fn lens_override_recomputes_salience_from_components(pool: PgPool) {
             lens_id: None,
             embedding: Some(&q),
             regions: Some(1),
+            anchor: None, // unscoped: pool every visible anchor (T7)
         },
     )
     .await
@@ -434,6 +449,7 @@ async fn lens_override_recomputes_salience_from_components(pool: PgPool) {
             lens_id: Some(LensId::from(override_lens)),
             embedding: Some(&q),
             regions: Some(1),
+            anchor: None, // unscoped: pool every visible anchor (T7)
         },
     )
     .await

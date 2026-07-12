@@ -128,9 +128,9 @@ deciding whether to read more deeply.
 
 | Pattern | What it returns |
 |---------|-----------------|
-| `temper resource show <ref> --meta-only` | Frontmatter (managed + open) and hashes; no body. Calls `GET /api/resources/<id>/meta`. |
-| `temper resource list --type <t> --context @me/<ctx> --meta-only` | Meta-tier rows instead of full row payloads. |
-| `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key (`id` or `resource_id`) is always preserved. Pipe through `jq` for nested projection. |
+| `temper resource show <ref> --meta-only` | The full `show` view — the row (title, type, context, owner, stage/seq/mode/effort) plus both the managed and open meta tiers — minus the reconstructed body. |
+| `temper resource list --type <t> --context @me/<ctx> --meta-only` | Each row as a full payload **plus** both meta tiers (no bodies). The default `list` carries neither tier, so this triages a whole context on managed/open-meta fields in one call. |
+| `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key `id` is always preserved. Pipe through `jq` for nested projection. |
 | `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
 
 ## Vault Projection (local cache)
