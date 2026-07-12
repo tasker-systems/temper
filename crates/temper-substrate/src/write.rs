@@ -1,7 +1,7 @@
 use crate::events::{fire, SeedAction};
 use crate::ids::{EntityId, EventId, LensId, RegionId, ResourceId};
 use crate::{
-    affinity::{affinity, Lens},
+    affinity::affinity,
     cluster::{agglomerate, connected_components},
     drift,
     fingerprint::component_fingerprint,
@@ -192,6 +192,7 @@ pub async fn materialize(
     let work: Vec<(&ComponentWork, &Vec<RegionAssignment>)> =
         comp_refs.iter().copied().zip(&assignments).collect();
     assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
+    snapshot_context_telos(&mut tx, anchor, s.lens_id).await?;
     // (the materialization watermark on the anchor row is set by _project_region_materialized — the
     // event's projection half — not here.)
     tx.commit().await?;
@@ -287,6 +288,7 @@ pub async fn incremental_materialize(
     assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
 
     refresh_moved_region_readouts(pool, &mut tx, anchor, &s, &zero, &diff.unchanged, ev).await?;
+    snapshot_context_telos(&mut tx, anchor, s.lens_id).await?;
 
     tx.commit().await?;
 
@@ -438,7 +440,7 @@ async fn refresh_moved_region_readouts(
         .fetch_all(&mut **tx)
         .await?;
         for rid in &region_ids {
-            populate_readouts(tx, *rid, &s.lens, zero_centroid).await?;
+            populate_readouts(tx, *rid, s, zero_centroid).await?;
         }
         // one batched last_event_id stamp for every refreshed region (same `ev` for all).
         if !region_ids.is_empty() {
@@ -716,7 +718,37 @@ async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Resul
         }
     }
     write_region_members(&mut *tx, region, members, sub).await?;
-    populate_readouts(tx, region, &sub.lens, zero_centroid).await
+    populate_readouts(tx, region, sub, zero_centroid).await
+}
+
+/// Snapshot a context's computed telos onto `kb_contexts.telos_centroid`.
+///
+/// A cogmap DECLARES its telos (`kb_cogmaps.telos_resource_id`), so there is nothing to snapshot —
+/// its vector is always readable from the charter. A context COMPUTES one from the liveness-weighted
+/// goal census, so unless it is recorded there is nothing for T6's two-clock gate to compare the
+/// current telos *against* (spec §3.5). Written inside the materialize transaction, where `now()` —
+/// an input to liveness — is stable, so this records exactly the telos the readouts were computed
+/// against, not a later re-read of a moved clock.
+///
+/// No-op for a cogmap anchor. NULL is a legitimate value: a context with no live, embedded goals has
+/// no telos, and storing NULL is what lets the gate see one appear.
+async fn snapshot_context_telos(
+    tx: &mut PgConnection,
+    anchor: HomeAnchor,
+    lens_id: LensId,
+) -> Result<()> {
+    let HomeAnchor::Context(ctx) = anchor else {
+        return Ok(());
+    };
+    sqlx::query(
+        "UPDATE kb_contexts SET telos_centroid = anchor_telos_embedding('kb_contexts', $1, $2) \
+         WHERE id = $1",
+    )
+    .bind(ctx.uuid())
+    .bind(lens_id.uuid())
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 /// Write a region's member rows, each scored by [`member_affinity`].
@@ -757,12 +789,18 @@ async fn write_region_members(
 /// centrality / internal_tension, then lens-weighted salience. Idempotent over fixed membership — the
 /// readout-refresh tier (drift §1) calls this on reused components whose content moved; `assert_region`
 /// calls it on a freshly-asserted region. Membership must already be inserted.
+/// Recompute a region's readouts and its blended salience.
+///
+/// Takes the whole [`Substrate`] rather than just its [`crate::affinity::Lens`] because the telos readout needs the
+/// lens **id**, not only its weights: the goal-liveness constants (halflife, stage weights, dampers)
+/// are lens-resident columns that `anchor_region_telos_alignment` reads from the row (spec §3.4).
 async fn populate_readouts(
     tx: &mut PgConnection,
     region: Uuid,
-    lens: &Lens,
+    sub: &Substrate,
     zero_centroid: &str,
 ) -> Result<()> {
+    let lens = &sub.lens;
     // Centroid FIRST, in its own statement — Postgres evaluates all SET right-hand sides against the
     // OLD row, so the telos_alignment readout (which SELECTs the stored centroid) must run in a LATER
     // statement or it reads the zero placeholder → cosine-vs-zero = NaN → NaN salience. Pool per
@@ -785,16 +823,23 @@ async fn populate_readouts(
     // Readouts now read the correct stored centroid. nullif guards the zero-centroid edge (a
     // memberless/unembedded region → cosine-vs-zero = NaN) so telos_alignment stores NULL, not NaN;
     // the salience UPDATE below already coalesces NULL telos_alignment to 0.
+    //
+    // The telos readout dispatches on the region's own ANCHOR (spec §3.4), not on `r.cogmap_id` —
+    // which is NULL for a context region, so the old call silently returned NULL for every one of
+    // them. The cogmap branch of `anchor_region_telos_alignment` delegates to the unchanged
+    // `cogmap_region_telos_alignment`, so a cogmap's readouts are byte-identical to before.
     sqlx::query(
         "UPDATE kb_cogmap_regions r SET \
            content_cohesion   = cogmap_region_content_cohesion(r.id), \
-           telos_alignment    = nullif(cogmap_region_telos_alignment(r.id, r.cogmap_id), 'NaN'::double precision), \
+           telos_alignment    = nullif(anchor_region_telos_alignment(\
+                                  r.id, r.home_anchor_table, r.home_anchor_id, $2), 'NaN'::double precision), \
            reference_standing = cogmap_region_reference_standing(r.id), \
            centrality         = cogmap_region_centrality(r.id), \
            internal_tension   = cogmap_region_internal_tension(r.id, ARRAY['contradicts']) \
          WHERE r.id=$1",
     )
     .bind(region)
+    .bind(sub.lens_id.uuid())
     .execute(&mut *tx)
     .await?;
     // salience = lens-weighted blend of the three parts. telos_alignment is NULLABLE (NULL when the
