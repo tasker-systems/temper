@@ -138,8 +138,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          # The bge-base-en-v1.5 model + the bundled libonnxruntime are git-LFS assets, read via
-          # `include_bytes!` by the server-side embed path this tier exercises.
+          # ⚠️ This is CURRENTLY WASTE, and is kept only because removing it is not free to verify.
+          # It fetches the 105 MB git-LFS bge model, which this job then NEVER READS: `--workspace`
+          # pulls in temper-cli, whose default `embed` selects `temper-ingest/embed-download`, and
+          # feature unification cfg's the bundled `include_bytes!` branch out of the entire build — so
+          # this tier takes the HF *download* path, not the bundled one (`cargo tree -e features -i
+          # hf-hub --workspace` proves it). The comment this replaces claimed the opposite.
+          # Task `019f5822` fixes the cause and deletes this line.
           lfs: true
 
       - uses: ./.github/actions/setup-rust
