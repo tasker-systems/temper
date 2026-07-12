@@ -59,6 +59,27 @@ jobs:
 
       - uses: ./.github/actions/install-onnx
 
+      - name: Cache the HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-bge-base-en-v1.5-${{ runner.os }}
+
+      - name: Warm the embedding model (serially)
+        # `embed` is a DEFAULT feature of temper-cli, and it selects `temper-ingest/embed-download` —
+        # so a `--workspace` build fetches bge-base from HuggingFace at RUNTIME, not from the bundled
+        # git-LFS asset (feature unification keeps `embed-download` winning, so the `include_bytes!`
+        # branch is cfg'd out; that is also why this job takes no LFS).
+        #
+        # hf-hub takes a BLOB LOCK on that first download. This job runs tests in parallel, so once
+        # `test-embed` is enabled workspace-wide, N threads all race the same first download and lose:
+        #   `model init: download model: Lock acquisition failed: …/blobs/….lock`
+        #
+        # So do the download exactly ONCE, single-threaded, before the parallel run — every subsequent
+        # test then finds a warm cache and never touches the lock. (The integration job never hit this
+        # because it already serializes on `--test-threads 1` for the ort mutex.)
+        run: cargo nextest run -p temper-ingest --features test-embed --locked --test-threads 1 -E 'test(=embed::tests::test_embed_text_dimension)'
+
       - name: Run unit tests
         # `test-embed` here too — temper-ingest's and temper-cli's embedding tests need no database, so
         # this is their home. They used to be two more hand-written invocations in the old embed job.
@@ -154,9 +175,19 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-prefix: artifacts-v3
-          tools: nextest
+          tools: nextest,sqlx-cli
 
       - uses: ./.github/actions/install-onnx
+
+      - name: Run migrations
+        # NOT optional, and not only for the tests themselves: `DATABASE_URL` is set in this job, so
+        # sqlx's `query!` macros verify against the LIVE database at COMPILE time. Against an
+        # un-migrated database that is a build failure, not a test failure:
+        #   `error returned from database: function cogmap_genesis(...) does not exist`
+        #   ... originates in the macro `sqlx::query`
+        # The tests themselves get ephemeral per-test databases from `#[sqlx::test(migrator = ...)]`;
+        # this migrated database exists purely to satisfy the macros.
+        run: cargo sqlx migrate run --source migrations
 
       - name: Run substrate artifact tests
         run: cargo nextest run -p temper-substrate --features artifact-tests --locked --no-fail-fast --test-threads 1
