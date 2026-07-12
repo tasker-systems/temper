@@ -287,6 +287,7 @@ temper admin machine show <machine-id>
 ## See also
 
 - [Working with Teams](teams.md) — the roles and ownership this model builds on.
+- [Auth identity: the variables that must agree](self-hosting.md#auth-identity-the-variables-that-must-agree) — the env-var contract each mint path implies, and why `issue` requires an instance whose `AS_AUDIENCE` *is* its `AUTH_AUDIENCE`.
 - [Self-hosting with SAML](self-hosting-saml.md) — the proxied-human auth path, and the instance mode
   (`AS_ISSUER`) that a temper-issued credential requires.
 - [JWT verification](../auth/jwt-verification.md) — how a token is validated, and the one-issuer-per-instance invariant.

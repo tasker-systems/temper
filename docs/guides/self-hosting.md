@@ -97,7 +97,7 @@ The contract is **one API resource server and two native applications** (plus an
 
 ### 1. API resource server
 
-Create an API in Auth0. The **identifier** you assign becomes the OAuth audience. This identifier appears as `AUTH_AUDIENCE` (for the REST API) and `MCP_AUDIENCE` (for the MCP server) in your Vercel environment. A conventional value is `https://<instance>/api`.
+Create an API in Auth0. The **identifier** you assign becomes the OAuth audience — the one audience your instance validates, on both surfaces. It appears as `AUTH_AUDIENCE` in your Vercel environment. A conventional value is `https://<instance>/api`. See [Auth identity: the variables that must agree](#auth-identity-the-variables-that-must-agree) for the full contract, including the optional `MCP_AUDIENCE` restatement.
 
 ### 2. CLI native application
 
@@ -131,9 +131,9 @@ The Auth0 MCP server (`@auth0/auth0-mcp-server`) provides the same information i
 | ----------- | -------------------- | ----- |
 | Tenant domain | `AUTH_ISSUER` | `https://<tenant>.auth0.com/` — trailing slash required |
 | Tenant JWKS endpoint | `JWKS_URL` | `https://<tenant>.auth0.com/.well-known/jwks.json` |
-| API identifier | `AUTH_AUDIENCE` | Set to the same value as `MCP_AUDIENCE` if using one API |
+| API identifier | `AUTH_AUDIENCE` | The one audience — validated by **both** the REST API and the MCP server |
 | Auth provider | `AUTH_PROVIDER_NAME` | Always `auth0` |
-| API identifier (MCP) | `MCP_AUDIENCE` | Typically same as `AUTH_AUDIENCE` |
+| API identifier (MCP) | `MCP_AUDIENCE` | Optional. If set, it **must equal** `AUTH_AUDIENCE` — it restates the one audience, it does not add a second one |
 | MCP app client_id | `MCP_CLIENT_ID` | The MCP native application's client_id |
 | Instance base URL | `MCP_BASE_URL` | `https://<instance>` — no trailing slash |
 
@@ -149,9 +149,9 @@ Import the repository into a new Vercel project. Set `framework` override to **O
 | `DATABASE_URL_UNPOOLED` | deploy step | Yes | Direct Neon connection string (migrations only) |
 | `AUTH_ISSUER` | api, mcp | Yes | `https://<tenant>.auth0.com/` — trailing slash required |
 | `JWKS_URL` | api, mcp | Yes | `https://<tenant>.auth0.com/.well-known/jwks.json` |
-| `AUTH_AUDIENCE` | api | Yes | Auth0 API identifier (e.g. `https://<instance>/api`) |
+| `AUTH_AUDIENCE` | api, mcp | Yes | The one audience both surfaces validate (e.g. `https://<instance>/api`). Boot fails if unset or empty |
 | `AUTH_PROVIDER_NAME` | api, mcp | Yes | Set to `auth0` |
-| `MCP_AUDIENCE` | mcp | Yes | Auth0 API identifier for MCP token validation |
+| `MCP_AUDIENCE` | api, mcp | No | An optional restatement of `AUTH_AUDIENCE`. If set it must **equal** it; unset is the normal configuration |
 | `MCP_CLIENT_ID` | mcp | Yes | MCP native application client_id |
 | `MCP_BASE_URL` | mcp | Yes | `https://<instance>` — used in OAuth discovery responses |
 | `API_BASE_URL` | ui | No | Only for the optional [web UI](#deploy-the-ui-optional) (a separate Vercel project); not required for API + MCP + CLI |
@@ -162,6 +162,69 @@ Import the repository into a new Vercel project. Set `framework` override to **O
 | `CORS_ORIGINS` | api | Situational | See note below |
 
 **`CORS_ORIGINS` caveat:** This variable is required for any client that calls the API **cross-origin** from a browser. When `CORS_ORIGINS` is unset, the API returns no CORS headers and cross-origin requests fail. Note the bundled `temper-ui` does **not** need it — it reverse-proxies API/MCP traffic same-origin through its own server (see [Deploy the UI](#deploy-the-ui-optional)), so the browser never makes a cross-origin call. Set `CORS_ORIGINS` only if you run a *separate* browser-based client against the API directly. A permissive development value is `*`; production should list only the specific origins that need access.
+
+### Auth identity: the variables that must agree
+
+**Audience:** every operator standing up an instance — Auth0, Okta, or Temper's own AS.
+
+**Scope:** the six variables that decide *whose* tokens this instance trusts and *which* tokens it accepts. Six variables, but not six decisions — read the table below as one identity spelled several ways.
+
+Your instance runs in exactly one of two **modes**, and the mode is decided by a single signal: whether `AS_ISSUER` is set.
+
+- **External IdP** — `AS_ISSUER` unset. Auth0 or Okta mints tokens; Temper is a pure resource server. This is the shape the rest of this guide assumes, and the shape `temperkb.io` runs.
+- **Temper AS** — `AS_ISSUER` set. Temper's own authorization server mints tokens: the mode that backs [SAML](./self-hosting-saml.md) and [temper-issued machine credentials](./machine-credentials.md).
+
+| Variable | External IdP (`AS_ISSUER` unset) | Temper AS (`AS_ISSUER` set) |
+| -------- | -------------------------------- | --------------------------- |
+| `AUTH_ISSUER` | The IdP's issuer URL — `https://<tenant>.auth0.com/` | Your instance's origin — **must equal `AS_ISSUER`** |
+| `JWKS_URL` | The IdP's JWKS endpoint — `https://<tenant>.auth0.com/.well-known/jwks.json` | **Must be `$AS_ISSUER/oauth/jwks`** — the AS publishes its own keys |
+| `AUTH_AUDIENCE` | The IdP's API identifier. **The one audience**, validated on both surfaces | **Must equal `AS_AUDIENCE`** |
+| `MCP_AUDIENCE` | Optional. If set, **must equal `AUTH_AUDIENCE`**; unset is normal | Optional. Same rule |
+| `AS_ISSUER` | Leave unset — setting it flips the instance into AS mode | Required. Your instance's origin (no trailing slash needed) — its presence *is* the mode signal |
+| `AS_AUDIENCE` | Leave unset — never read in this mode | Required. **Must equal `AUTH_AUDIENCE`** |
+
+Trailing slashes are normalized before every comparison — Auth0 issuers conventionally end in `/` and the AS's own metadata strips them, so `https://temper.acme.com` and `https://temper.acme.com/` are the same issuer as far as the gate is concerned.
+
+> **On an AS instance the three audiences are one value spelled three ways — not three independent knobs.** The Temper AS mints **every** token, human and machine, with the single server-side `AS_AUDIENCE`, ignoring any request-supplied `audience` (`packages/temper-cloud/src/oauth/mint.ts`). So `AS_AUDIENCE` is the audience *minted*, `AUTH_AUDIENCE` the audience *validated*, and `MCP_AUDIENCE` — if you set it at all — merely *restates* it. They are the same string or the instance verifies nothing. Under an external IdP there is no AS, so `AS_*` is unset entirely: that is why the agreement rules are mode-dependent, and why no operator should be expected to hold them in their head.
+
+In AS mode, derive the values from the instance origin rather than retyping them — the five variables carry two facts, and a typo in any one of them is a typo in a fact you already stated:
+
+```sh
+# AS mode: issuer, JWKS, and audience all restate one instance. Derive, don't retype.
+INSTANCE="https://temper.acme.com"
+
+AS_ISSUER="$INSTANCE"                     # the mode signal
+AUTH_ISSUER="$INSTANCE"                   # == AS_ISSUER
+JWKS_URL="$INSTANCE/oauth/jwks"           # == $AS_ISSUER/oauth/jwks
+AS_AUDIENCE="$INSTANCE/api"               # what the AS mints
+AUTH_AUDIENCE="$INSTANCE/api"             # == AS_AUDIENCE — what both surfaces validate
+```
+
+> **An incoherent auth config fails the boot.** Both surfaces parse this identity once, at startup, through the same code (`crates/temper-services/src/auth_config.rs`), and an instance that violates any rule above **refuses to start** — naming the offending variable and the relation it must satisfy (it never prints a value). That is deliberate. The old behavior was a `warn` line and a served request; a warning in a serverless log is not a control.
+
+The gate's messages are prescriptive, e.g. *"MCP_AUDIENCE is set but does not equal AUTH_AUDIENCE. This instance validates one audience on both surfaces. Set them to the same value, or unset MCP_AUDIENCE."* Boot also logs which mode it resolved — an operator who cannot tell which mode their instance is in is precisely the operator who mis-sets these variables:
+
+```sh
+# Confirm the mode the instance booted in — "temper-AS" or "external-IdP"
+vercel logs <deployment-url> | grep 'auth configured'
+```
+
+**These are not new constraints.** A working AS instance already satisfied every one of them: a divergent audience verifies nothing, a divergent issuer trusts the wrong party, and a misdirected `JWKS_URL` checks no signature against the keys that actually signed the token. Temper now *names* rules that were already true, and fails fast when they are not — which is why a hard boot failure cannot break a working deployment. It can only refuse to start one that was already broken and had not noticed.
+
+#### What breaks if they disagree
+
+The old failures were quiet, and they were quiet in *opposite* directions — one typo, two behaviors:
+
+| Misconfiguration | Old behavior | Now |
+| ---------------- | ------------ | --- |
+| `AUTH_AUDIENCE` unset or empty | The REST API set `validate_aud = false` and **accepted any token from the issuer**, regardless of which API it was minted for — audience validation silently off | Boot refuses |
+| `MCP_AUDIENCE` empty | The MCP server enforced `aud == ""` and **rejected every token** | An empty value is treated as *absent*, uniformly — the instance's one audience still applies |
+| `MCP_AUDIENCE` set to something else | The two surfaces validated two different audiences | Boot refuses |
+| `AS_AUDIENCE` ≠ `AUTH_AUDIENCE` (AS mode) | Every AS-minted token 401s at the resource server | Boot refuses |
+| `AUTH_ISSUER` ≠ `AS_ISSUER` (AS mode) | The API trusts a party that mints none of its tokens | Boot refuses |
+| `JWKS_URL` not the AS's (AS mode) | No signature is ever checked against the keys that signed the token | Boot refuses |
+
+Every one of those used to surface as a caller's 401 — or, worse, as a *missing* 401 — days later, far from the variable that caused it. Now it surfaces as a loud refusal at startup, with the variable named.
 
 ### vercel.json summary
 
@@ -267,7 +330,7 @@ For manual configuration (e.g. Claude Desktop's `claude_desktop_config.json`):
 }
 ```
 
-The MCP server validates JWTs against `JWKS_URL` and checks `MCP_AUDIENCE`. Ensure `MCP_CLIENT_ID` matches the Auth0 native application registered for your MCP clients and that the client's callback URLs are allowlisted in that Auth0 application.
+The MCP server validates JWTs against `JWKS_URL` and checks the instance's one audience — `AUTH_AUDIENCE`, the same value the REST API validates (see [Auth identity](#auth-identity-the-variables-that-must-agree)). Ensure `MCP_CLIENT_ID` matches the Auth0 native application registered for your MCP clients and that the client's callback URLs are allowlisted in that Auth0 application.
 
 ## Deploy the UI (optional)
 

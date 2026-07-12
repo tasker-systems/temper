@@ -70,7 +70,7 @@ Sources: [self-hosting.md § Environment variable contract](./self-hosting.md#en
 | `JWKS_URL` | Yes | — | — | Auth0 JWKS, or `https://<instance>/oauth/jwks` in the SAML path |
 | `AUTH_AUDIENCE` | Yes | — | — | Must equal `AS_AUDIENCE` / `MCP_AUDIENCE` / UI `OIDC_AUDIENCE` |
 | `AUTH_PROVIDER_NAME` | Yes | — | — | `auth0`, or `saml:<idp-key>` in the SAML path (max 32 chars) |
-| `MCP_AUDIENCE` | Yes | — | — | Same value as `AUTH_AUDIENCE` (single-audience AS — see must-match table) |
+| `MCP_AUDIENCE` | No | — | — | **Optional.** An instance has ONE audience; both surfaces read `AUTH_AUDIENCE`. If set, must **equal** it — enforced at boot, not by discipline. |
 | `MCP_CLIENT_ID` | Yes | — | — | Auth0 MCP native app client_id; n/a in the SAML path (client allowlisting is `AS_CLIENTS` instead) |
 | `MCP_BASE_URL` | Yes | — | — | `https://<instance>` — used in OAuth discovery responses |
 | **SAML Authorization Server (AS) block** | | | | |
@@ -122,9 +122,14 @@ because omitting it would misconfigure this guide's primary (SAML) path.
 
 ### Must-match by construction
 
+> **The audience and issuer joins are enforced at boot.** Temper parses them once and **refuses to
+> start** if they disagree, naming the offending variable and the relation it must satisfy. You do
+> not have to hold this table in your head — but the values below are what it checks, and
+> `JWKS_URL` must be `$AS_ISSUER/oauth/jwks` on an AS instance.
+
 | Join | Values that must be equal |
 |------|---------------------------|
-| Audience | `AS_AUDIENCE` = `AUTH_AUDIENCE` = `MCP_AUDIENCE` = UI `OIDC_AUDIENCE` |
+| Audience | `AS_AUDIENCE` = `AUTH_AUDIENCE` = `MCP_AUDIENCE` (if set) = UI `OIDC_AUDIENCE` |
 | Issuer | `AS_ISSUER` = `AUTH_ISSUER`; UI `OIDC_ISSUER` resolves the same issuer |
 | Provider label | `AUTH_PROVIDER_NAME` = `saml:<idp-key>` |
 | Reconcile secret | `INTERNAL_RECONCILE_SECRET` identical on the AS and API env (same Vercel project) |

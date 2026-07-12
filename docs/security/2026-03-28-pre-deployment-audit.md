@@ -37,13 +37,24 @@
 
 ### H1: Audience validation disabled when AUTH_AUDIENCE unset
 
-**Status: Fixed (mitigated)**
+**Status: CLOSED (2026-07-12) — structurally, not by documentation.**
 
-When `AUTH_AUDIENCE` env var is empty, `validate_aud` is set to false, accepting any JWT from the same issuer regardless of intended audience.
+When `AUTH_AUDIENCE` was empty or unset, `validate_aud` was set to false, accepting any JWT from the
+same issuer regardless of intended audience.
 
-**Current state:** For development with a single Neon Auth project, this is acceptable. For production, `AUTH_AUDIENCE` must be configured. The Vercel deployment (I4) must set this env var.
+The original mitigation was to *document* the variable as required for production. That is not a
+control: it relied on every future operator reading a checklist, and it left the failure silent when
+they didn't. The finding stayed exploitable-in-principle for three months behind a `tracing::warn`.
 
-**Action:** Document `AUTH_AUDIENCE` as required for production in the I4 deployment checklist.
+**What actually closed it:** the audience is now a non-optional `String` on a typed `AuthConfig`
+(`crates/temper-services/src/auth_config.rs`), parsed once at the choke point both surfaces call. A
+missing audience cannot be *represented*, so `JwksKeyStore::validation` no longer has a branch that
+could disable the check — and an instance that cannot state which audience it validates refuses to
+boot. See [the design spec](../superpowers/specs/2026-07-12-audience-issuer-env-coherence-design.md).
+
+**The lesson worth keeping:** this finding was correctly identified, correctly rated High, and then
+answered with a doc change. A security control that depends on someone remembering to set an
+environment variable is not a control — make the unsafe state unrepresentable, or it will be reached.
 
 ## Medium Findings
 

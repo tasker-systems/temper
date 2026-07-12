@@ -97,17 +97,29 @@ lookup — see the [machine-token contract](./machine-token-contract.md).
 
 ## Instance-mode invariants
 
+These are no longer advice. They are **enforced at boot** by `parse_auth_config`
+(`temper-services/src/auth_config.rs`) — an instance that violates any of them refuses to start,
+naming the variable and the relation it must satisfy. They used to be operator discipline, which is
+how they came to be violated silently.
+
 - **One issuer per instance.** An instance is either an AS/SAML instance (`AS_ISSUER` set,
   EdDSA) **or** an Auth0/OIDC instance (RS256) — never both. Setting `AS_ISSUER` flips the
-  instance into AS mode.
-- **AS↔API shared values must agree.** `AS_AUDIENCE == AUTH_AUDIENCE` and
-  `AS_ISSUER == AUTH_ISSUER`; `temper admin saml provision` keeps them consistent by
-  construction. Details in [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md).
-- **On an AS instance, don't diverge `MCP_AUDIENCE`.** temper-mcp resolves its audience as
-  `MCP_AUDIENCE ?? AUTH_AUDIENCE` (`temper-mcp/src/config.rs`), while the Temper AS mints
-  **every** token — human and machine — with the server-side `AS_AUDIENCE`, ignoring any
-  request-supplied `audience` (`mint.ts`). So setting `MCP_AUDIENCE` to something other than
-  `AS_AUDIENCE` on an AS instance makes AS-minted tokens unverifiable at the MCP endpoint:
-  there is no way to ask that AS for a differently-audienced token. (Auth0-fronted instances
-  are unaffected — Auth0 mints to the requested `audience` — and in practice they set the two
-  equal anyway.)
+  instance into AS mode (`AuthMode::TemperAs`).
+- **`AUTH_AUDIENCE` is mandatory.** Empty counts as unset. It used to resolve to `None`, which set
+  `validate_aud = false` and **disabled audience validation outright**; there is no longer an
+  `Option` to carry that state.
+- **AS↔API shared values must agree.** `AS_AUDIENCE == AUTH_AUDIENCE`, `AS_ISSUER == AUTH_ISSUER`,
+  and `JWKS_URL == $AS_ISSUER/oauth/jwks` (trailing slashes normalized before comparison).
+  `temper admin saml provision` keeps them consistent by construction. Details in
+  [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md).
+- **An instance has exactly ONE audience.** temper-mcp no longer carries its own — the
+  `mcp_audience` field is gone, and both surfaces read `AuthConfig::audience`. `MCP_AUDIENCE`
+  survives as an env var, but purely as an assertion: if set, it **must equal** `AUTH_AUDIENCE`, or
+  the instance does not boot. There was previously an `MCP_AUDIENCE ?? AUTH_AUDIENCE` fallback, and
+  two parsers for one concept is precisely how the surfaces came to answer an empty value in
+  opposite ways — temper-api fell open, temper-mcp fell shut.
+
+  This matters most on an AS instance: the Temper AS mints **every** token — human and machine —
+  with the server-side `AS_AUDIENCE`, ignoring any request-supplied `audience` (`mint.ts`). There is
+  no way to ask it for a differently-audienced token, so a divergent `MCP_AUDIENCE` would make
+  AS-minted tokens unverifiable at `/mcp`. That is now unreachable rather than merely discouraged.
