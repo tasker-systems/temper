@@ -9,9 +9,10 @@ use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
     ReweightRelationshipRequest,
 };
+use temper_core::types::lineage::ResourceLineage;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
-use temper_services::services::edge_service;
+use temper_services::services::{edge_service, lineage_service};
 use temper_services::state::AppState;
 use temper_workflow::operations::{
     AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
@@ -39,6 +40,38 @@ pub async fn list(
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<GraphEdgeRow>>> {
     edge_service::list_resource_edges(&state.pool, auth.0.profile.id, resource_id)
+        .await
+        .map(Json)
+}
+
+/// Query params for the lineage read — an optional depth bound on the walk.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct LineageQuery {
+    /// Max hop distance to walk from the seed (default 16, clamped to 1..=64).
+    pub depth: Option<i32>,
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "resource_lineage",
+    path = "/api/resources/{id}/lineage",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID"), LineageQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Bidirectional derived_from lineage", body = ResourceLineage),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
+pub async fn lineage(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(resource_id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<LineageQuery>,
+) -> ApiResult<Json<ResourceLineage>> {
+    let depth = q.depth.unwrap_or(16).clamp(1, 64);
+    lineage_service::resource_lineage(&state.pool, auth.0.profile.id, resource_id, depth)
         .await
         .map(Json)
 }

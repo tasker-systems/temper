@@ -100,6 +100,7 @@ lib/temper/generated/models/invocation_summary.rb
 lib/temper/generated/models/invocation_view.rb
 lib/temper/generated/models/join_request.rb
 lib/temper/generated/models/join_request_status.rb
+lib/temper/generated/models/lineage_node.rb
 lib/temper/generated/models/list_resources_response.rb
 lib/temper/generated/models/managed_meta.rb
 lib/temper/generated/models/materialize_ack.rb
@@ -137,6 +138,7 @@ lib/temper/generated/models/resource_create_request.rb
 lib/temper/generated/models/resource_detail.rb
 lib/temper/generated/models/resource_facets.rb
 lib/temper/generated/models/resource_grant_body.rb
+lib/temper/generated/models/resource_lineage.rb
 lib/temper/generated/models/resource_list_response.rb
 lib/temper/generated/models/resource_meta_list_response.rb
 lib/temper/generated/models/resource_meta_response.rb

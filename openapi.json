@@ -4147,6 +4147,91 @@
         ]
       }
     },
+    "/api/resources/{id}/lineage": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Resources"
+        ],
+        "operationId": "resource_lineage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Max hop distance to walk from the seed (default 16, clamped to 1..=64).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bidirectional derived_from lineage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceLineage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/resources/{id}/meta": {
       "parameters": [
         {
@@ -7805,6 +7890,50 @@
         "format": "uuid",
         "description": "A `kb_cogmap_lenses.id` value."
       },
+      "LineageNode": {
+        "type": "object",
+        "description": "One resource reached while walking a seed's `derived_from` lineage.",
+        "required": [
+          "resource_id",
+          "ref",
+          "title",
+          "is_active",
+          "edge_id",
+          "edge_folded",
+          "depth"
+        ],
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Hop distance from the seed (1 = a direct neighbour); the shallowest reach."
+          },
+          "edge_folded": {
+            "type": "boolean",
+            "description": "Whether the reaching edge is folded — the supersession signal at read time."
+          },
+          "edge_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `derived_from` edge by which this node was reached from the frontier."
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "The resource's soft-delete state (`kb_resources.is_active`)."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Decorated ref (`sluggify(title)-<uuid>`) — paste-able into any ref-taking command."
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "ListResourcesResponse": {
         "oneOf": [
           {
@@ -8786,6 +8915,36 @@
         "type": "string",
         "format": "uuid",
         "description": "A `kb_resources.id` value."
+      },
+      "ResourceLineage": {
+        "type": "object",
+        "description": "A resource's bidirectional `derived_from` lineage, each side already gated to\nwhat the caller may read.",
+        "required": [
+          "resource_id",
+          "ancestors",
+          "descendants"
+        ],
+        "properties": {
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LineageNode"
+            },
+            "description": "What the seed derives from, transitively (nearest first)."
+          },
+          "descendants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LineageNode"
+            },
+            "description": "What derives from the seed, transitively (nearest first)."
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The seed resource the lineage was requested for."
+          }
+        }
       },
       "ResourceListResponse": {
         "type": "object",

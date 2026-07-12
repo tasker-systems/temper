@@ -221,6 +221,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 ResourceAction::Show {
                     r#ref,
                     edges,
+                    lineage,
                     provenance,
                     meta_only,
                     fields,
@@ -230,6 +231,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         r#ref: &r#ref,
                         format: output_format,
                         edges,
+                        lineage,
                         provenance,
                         meta_only,
                         fields: &fields,

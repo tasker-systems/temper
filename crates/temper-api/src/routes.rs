@@ -61,6 +61,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
+        .routes(routes!(handlers::edges::lineage))
         .routes(routes!(handlers::edges::assert))
         .routes(routes!(handlers::edges::retype))
         .routes(routes!(handlers::edges::reweight))
