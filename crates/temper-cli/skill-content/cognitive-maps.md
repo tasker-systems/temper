@@ -233,7 +233,8 @@ When in doubt, prefer leaving the node and lowering confidence over churning a f
 
 Pass `managed_meta` explicitly only to override a derived value; a value you supply always
 wins, and a missing one is filled rather than overwritten. Read it back with
-`temper resource show <ref>` — the full show carries both meta tiers.
+`temper resource show <ref> --meta-only` — that carries both meta tiers without paying for
+the node body (a plain `temper resource show <ref>` carries the tiers too, plus the body).
 
 ### Two authoring gotchas
 
