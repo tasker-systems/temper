@@ -1,7 +1,7 @@
 use crate::events::{fire, SeedAction};
 use crate::ids::{EntityId, EventId, LensId, RegionId, ResourceId};
 use crate::{
-    affinity::affinity,
+    affinity::{affinity, candidate_pairs},
     cluster::{agglomerate, connected_components},
     drift,
     fingerprint::component_fingerprint,
@@ -84,10 +84,14 @@ fn cluster_components(s: &Substrate) -> Vec<ComponentWork> {
     // to `ResourceId` for the affinity lookup.
     let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.knn, &s.lens);
     let node_uuids: Vec<Uuid> = s.nodes.iter().map(|n| n.uuid()).collect();
-    connected_components(&node_uuids, &aff)
+    // The pairs that can be nonzero, enumerated ONCE from the sparse structures that produce them —
+    // instead of rediscovering them by evaluating all n²/2 pairs, twice (once here, once inside each
+    // `agglomerate`). Partition-identical; see `CandidatePairs`.
+    let candidates = candidate_pairs(&s.nodes, &s.edges, &s.facets, &s.knn);
+    connected_components(&node_uuids, &candidates, &aff)
         .into_iter()
         .map(|members| {
-            let clusters = agglomerate(&members, &aff, s.lens.resolution);
+            let clusters = agglomerate(&members, &candidates, &aff, s.lens.resolution);
             let fingerprint = component_fingerprint(&members, &s.edges, &s.facets, &s.knn, &s.lens);
             ComponentWork {
                 members,

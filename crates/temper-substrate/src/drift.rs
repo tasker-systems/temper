@@ -4,7 +4,7 @@
 //! components (expensive), or re-run the SQL readouts over fixed membership (cheap). The boolean
 //! "is it stale" stays derivable (any non-`Fresh` tier ⇒ stale), so this is backwards-observable.
 
-use crate::affinity::affinity;
+use crate::affinity::{affinity, candidate_pairs};
 use crate::cluster::connected_components;
 use crate::fingerprint::component_fingerprint;
 use crate::substrate::Substrate;
@@ -124,7 +124,8 @@ pub(crate) fn current_component_fingerprints(s: &Substrate) -> Vec<(Vec<Uuid>, S
     // `write::cluster_components`).
     let aff = |x: Uuid, y: Uuid| affinity(x.into(), y.into(), &s.edges, &s.facets, &s.knn, &s.lens);
     let node_uuids: Vec<Uuid> = s.nodes.iter().map(|n| n.uuid()).collect();
-    connected_components(&node_uuids, &aff)
+    let candidates = candidate_pairs(&s.nodes, &s.edges, &s.facets, &s.knn);
+    connected_components(&node_uuids, &candidates, &aff)
         .into_iter()
         .map(|members| {
             let fp = component_fingerprint(&members, &s.edges, &s.facets, &s.knn, &s.lens);
