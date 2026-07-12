@@ -9,8 +9,20 @@
 # (docs/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md §3). A watching
 # subscription declares its region in CODEOWNERS-shaped path globs — because that is how orgs
 # already express ownership — and those globs resolve, per index, into a **SCIP symbol set**, which
-# is what we actually store and diff against. The consequence, and the whole reason SCIP earns its
-# keep over `git diff`: a file move or a rename is provably *not* a change to the region.
+# is what we actually store and diff against.
+#
+# What that buys us, measured against real commits: a symbol's identity is independent of its
+# POSITION within a file, so a pure line-shift is not a change. On a real commit that is a 25× noise
+# reduction — 468 of 487 "changes" a watcher would otherwise see are symbols that merely moved down.
+#
+# What it does NOT buy us — the strong claim was tested and it FAILED: a file move is only free when
+# the module path survives it. In Rust the descriptor *is* the module path, and the file path
+# determines the module path, so hoisting a file one directory up destroys and recreates its entire
+# symbol set while `git` reports a rename with zero lines changed. Don't repeat the stronger claim.
+#
+# Two of these segments are also structurally invisible to the code graph, which is worth knowing
+# before you rely on one: `/migrations/` resolves to ZERO symbols (SQL is in no SCIP index), and
+# `/tests/e2e/` resolves to ONE (its bodies are behind `#![cfg(feature = "test-db")]`).
 #
 # So keep these globs honest and concern-shaped. When they stop describing real seams, the regions
 # a steward watches stop describing real seams too.
