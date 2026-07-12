@@ -991,6 +991,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 commands::steward::advance_watermark(&cogmap, &event, output_format)
             }
         },
+        Commands::Trail { kind, r#ref } => commands::trail::run(kind, &r#ref, output_format),
         Commands::Version { checksum } => {
             temper_cli::commands::version::run(checksum, output_format)
         }

@@ -12,5 +12,6 @@ pub mod search;
 pub mod show_cache;
 pub mod steward;
 pub mod task;
+pub mod trail;
 pub mod types;
 pub mod vault;
