@@ -168,11 +168,7 @@ impl<'a> ResourceClient<'a> {
 
     /// Read a resource's bidirectional `derived_from` lineage (ancestors +
     /// descendants), access-gated. `depth` bounds the walk when supplied.
-    pub async fn lineage(
-        &self,
-        resource_id: Uuid,
-        depth: Option<i32>,
-    ) -> Result<ResourceLineage> {
+    pub async fn lineage(&self, resource_id: Uuid, depth: Option<i32>) -> Result<ResourceLineage> {
         let token = self.http.resolve_token()?;
         let path = match depth {
             Some(d) => format!("/api/resources/{resource_id}/lineage?depth={d}"),

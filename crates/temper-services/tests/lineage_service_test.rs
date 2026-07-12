@@ -158,7 +158,13 @@ async fn build(pool: &PgPool) -> Fixture {
     // C df A — cycle
     derived_from(pool, c, a, "leads_to", "inverse", ctx_in, ev, false).await;
 
-    Fixture { p_in, p_out, a, b, c }
+    Fixture {
+        p_in,
+        p_out,
+        a,
+        b,
+        c,
+    }
 }
 
 /// title -> (depth, edge_folded)
@@ -182,23 +188,50 @@ async fn ancestors_walk_both_kinds_gated_folded_and_cycle_safe(pool: PgPool) -> 
     // B reached at depth 1 via the leads_to edge; C at depth 2 via the express
     // edge — proves the walk keys on the LABEL, not edge_kind.
     assert_eq!(anc.get("Resource B"), Some(&(1, false)), "B @1 (leads_to)");
-    assert_eq!(anc.get("Resource C"), Some(&(2, false)), "C @2 (express, transitive)");
+    assert_eq!(
+        anc.get("Resource C"),
+        Some(&(2, false)),
+        "C @2 (express, transitive)"
+    );
     // F reached at depth 1, and its edge is folded — a superseded ancestor is
     // shown, flagged.
-    assert_eq!(anc.get("Resource F"), Some(&(1, true)), "F @1, folded flag set");
+    assert_eq!(
+        anc.get("Resource F"),
+        Some(&(1, true)),
+        "F @1, folded flag set"
+    );
     // Endpoint gate: H is homed where p_in can't read → excluded.
-    assert!(!anc.contains_key("Resource H"), "H excluded (endpoint gate)");
+    assert!(
+        !anc.contains_key("Resource H"),
+        "H excluded (endpoint gate)"
+    );
     // Home gate: the A→D edge is homed in an unreadable context → excluded, even
     // though D itself is readable.
-    assert!(!anc.contains_key("Resource D"), "D excluded (edge-home gate)");
+    assert!(
+        !anc.contains_key("Resource D"),
+        "D excluded (edge-home gate)"
+    );
     // Cycle-safety: the seed A is never re-emitted.
-    assert!(!anc.contains_key("Resource A"), "seed not re-emitted (cycle safe)");
+    assert!(
+        !anc.contains_key("Resource A"),
+        "seed not re-emitted (cycle safe)"
+    );
     assert_eq!(anc.len(), 3, "exactly B, C, F");
 
     // The ref is decorated and paste-able.
-    let b_node = lineage.ancestors.iter().find(|n| n.title == "Resource B").unwrap();
-    assert!(b_node.r#ref.ends_with(&fx.b.to_string()), "ref carries the uuid");
-    assert!(b_node.r#ref.starts_with("resource-b-"), "ref carries the slug");
+    let b_node = lineage
+        .ancestors
+        .iter()
+        .find(|n| n.title == "Resource B")
+        .unwrap();
+    assert!(
+        b_node.r#ref.ends_with(&fx.b.to_string()),
+        "ref carries the uuid"
+    );
+    assert!(
+        b_node.r#ref.starts_with("resource-b-"),
+        "ref carries the slug"
+    );
 
     Ok(())
 }
@@ -219,7 +252,11 @@ async fn descendants_walk_reverse(pool: PgPool) -> sqlx::Result<()> {
 
     // And C's own ancestors follow the cycle edge C df A → A, then A df B → B.
     let anc = by_title(&lineage.ancestors);
-    assert_eq!(anc.get("Resource A"), Some(&(1, false)), "A @1 via cycle edge");
+    assert_eq!(
+        anc.get("Resource A"),
+        Some(&(1, false)),
+        "A @1 via cycle edge"
+    );
     assert!(anc.contains_key("Resource B"), "B reachable past the cycle");
 
     Ok(())

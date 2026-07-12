@@ -2919,16 +2919,28 @@ mod build_show_document_tests {
             descendants: vec![],
         };
 
-        let doc = build_show_document(metadata, "# body\n", Some(edges), Some(lineage), Some(vec![]))
-            .expect("build show document");
+        let doc = build_show_document(
+            metadata,
+            "# body\n",
+            Some(edges),
+            Some(lineage),
+            Some(vec![]),
+        )
+        .expect("build show document");
 
         // One document: content, edges, lineage, and provenance all hang off the resource object.
         assert_eq!(doc["title"], "A Node");
         assert_eq!(doc["content"], "# body\n");
         assert!(doc["edges"]["outgoing"].is_array(), "edges folded: {doc}");
         assert!(doc["edges"]["incoming"].is_array(), "edges folded: {doc}");
-        assert!(doc["lineage"]["ancestors"].is_array(), "lineage folded: {doc}");
-        assert!(doc["lineage"]["descendants"].is_array(), "lineage folded: {doc}");
+        assert!(
+            doc["lineage"]["ancestors"].is_array(),
+            "lineage folded: {doc}"
+        );
+        assert!(
+            doc["lineage"]["descendants"].is_array(),
+            "lineage folded: {doc}"
+        );
         assert!(doc["provenance"].is_array(), "provenance folded: {doc}");
 
         // And it round-trips through a single `serde_json::from_str` with no trailing data.
@@ -2939,7 +2951,8 @@ mod build_show_document_tests {
     #[test]
     fn build_show_document_omits_absent_sections() {
         let metadata = serde_json::json!({ "id": "11111111-1111-1111-1111-111111111111" });
-        let doc = build_show_document(metadata, "b", None, None, None).expect("build show document");
+        let doc =
+            build_show_document(metadata, "b", None, None, None).expect("build show document");
 
         assert_eq!(doc["content"], "b");
         assert!(

@@ -25,7 +25,6 @@ pub mod graph;
 pub mod graph_atlas;
 pub mod graph_context;
 pub mod graph_home;
-pub mod lineage;
 pub mod graph_territory;
 pub mod home;
 pub mod ids;
@@ -33,6 +32,7 @@ pub mod ingest;
 pub mod invitation;
 pub mod invocation;
 pub mod invocation_requests;
+pub mod lineage;
 pub mod machine;
 pub mod materialize;
 pub mod merge;
@@ -73,13 +73,13 @@ pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
 pub use graph_atlas::{AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest};
 pub use graph_home::{AtlasHome, HomeCogmap, HomeContext};
-pub use lineage::{LineageNode, ResourceLineage};
 pub use graph_territory::{Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationStatus, TeamInvitation,
 };
+pub use lineage::{LineageNode, ResourceLineage};
 pub use materialize::{
     MaterializeAck, MaterializeDelta, MaterializeDeltaInput, MaterializeRequest,
     MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,

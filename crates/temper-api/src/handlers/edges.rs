@@ -5,11 +5,11 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::ids::{EdgeId, ProfileId};
+use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
     ReweightRelationshipRequest,
 };
-use temper_core::types::lineage::ResourceLineage;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::{edge_service, lineage_service};
