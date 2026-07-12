@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use sqlx::{PgConnection, PgPool};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
@@ -17,6 +17,54 @@ use uuid::Uuid;
 pub struct MaterializeOutcome {
     pub regions: usize,
     pub membership_fingerprint: String,
+    /// Of the regions this act (re-)asserted, how many kept their prior id because their member set was
+    /// unchanged, vs. how many were minted fresh. A full pass re-asserts every region, so these sum to
+    /// `regions`. An incremental pass only re-asserts the CHANGED components' regions, so they sum to
+    /// fewer — a reused component's regions are not re-asserted at all, and trivially keep their ids.
+    pub regions_reused: usize,
+    pub regions_minted: usize,
+}
+
+/// The region id a cluster will be persisted under: the id of the live region whose member set is
+/// exactly this cluster's (reused — nothing about the region changed, so neither should its identity),
+/// or a freshly minted one.
+#[derive(Clone, Copy, Debug)]
+enum RegionAssignment {
+    Reuse(RegionId),
+    Mint(RegionId),
+}
+
+impl RegionAssignment {
+    fn region_id(self) -> RegionId {
+        match self {
+            RegionAssignment::Reuse(id) | RegionAssignment::Mint(id) => id,
+        }
+    }
+}
+
+/// The ids of the reused regions — the fold's `keep` list. A reused region is never folded: `id` is the
+/// primary key and the fold is SOFT (the row survives), so folding it and re-inserting the same id would
+/// be a duplicate-key violation. Reuse is survive-and-refresh, not fold-and-recreate.
+fn reused_ids(assignments: &[Vec<RegionAssignment>]) -> Vec<Uuid> {
+    assignments
+        .iter()
+        .flatten()
+        .filter_map(|a| match a {
+            RegionAssignment::Reuse(id) => Some(id.uuid()),
+            RegionAssignment::Mint(_) => None,
+        })
+        .collect()
+}
+
+/// (reused, minted) over every assignment — the churn measurement `MaterializeOutcome` reports.
+fn count_assignments(assignments: &[Vec<RegionAssignment>]) -> (usize, usize) {
+    assignments
+        .iter()
+        .flatten()
+        .fold((0, 0), |(r, m), a| match a {
+            RegionAssignment::Reuse(_) => (r + 1, m),
+            RegionAssignment::Mint(_) => (r, m + 1),
+        })
 }
 
 /// One connected component's worth of work: its node set (sorted — the component identity), the
@@ -101,10 +149,22 @@ pub async fn materialize(
     // fingerprint + region ids BEFORE the event (payload-first): the region_materialized payload
     // records the act's full identity — lens, watermark, membership fingerprint, region ids. Region
     // ids are grouped per component (aligned with each ComponentWork.clusters), plus a flat list.
+    //
+    // The payload's `region_ids` carries BOTH kinds of assignment (reused and minted), which keeps its
+    // meaning exactly what it has always been: for a full pass, the complete resulting partition. Only
+    // the freshness of the ids changes — never the set. (Nothing reconstructs regions from this field;
+    // `_project_region_materialized` reads only the anchor pair, to stamp the watermark.)
     let all_clusters: Vec<Vec<Uuid>> = comps.iter().flat_map(|c| c.clusters.clone()).collect();
     let fingerprint = membership_fingerprint(&all_clusters);
-    let region_ids = mint_region_ids(&comp_refs);
-    let flat_region_ids: Vec<RegionId> = region_ids.iter().flatten().copied().collect();
+    let live = live_regions(pool, anchor, s.lens_id).await?;
+    let assignments = resolve_region_ids(&comp_refs, &live);
+    let flat_region_ids: Vec<RegionId> = assignments
+        .iter()
+        .flatten()
+        .map(|a| a.region_id())
+        .collect();
+    let keep = reused_ids(&assignments);
+    let (regions_reused, regions_minted) = count_assignments(&assignments);
 
     let mut tx = pool.begin().await?;
     let watermark = current_watermark(&mut tx).await?;
@@ -122,13 +182,15 @@ pub async fn materialize(
     .await?
     .materialize_event()?;
 
-    // a full pass folds every prior live region AND component for this lens, then recreates them.
-    fold_live_regions(&mut tx, anchor, s.lens_id, ev).await?;
+    // a full pass folds every prior live region AND component for this lens, then recreates them —
+    // EXCEPT the regions whose member set is unchanged, which survive under their own ids and are
+    // refreshed in place.
+    fold_live_regions(&mut tx, anchor, s.lens_id, ev, &keep).await?;
     fold_live_components(&mut tx, anchor, s.lens_id, ev).await?;
 
     let zero = zero_centroid();
-    let work: Vec<(&ComponentWork, &Vec<RegionId>)> =
-        comp_refs.iter().copied().zip(&region_ids).collect();
+    let work: Vec<(&ComponentWork, &Vec<RegionAssignment>)> =
+        comp_refs.iter().copied().zip(&assignments).collect();
     assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
     // (the materialization watermark on the anchor row is set by _project_region_materialized — the
     // event's projection half — not here.)
@@ -137,6 +199,8 @@ pub async fn materialize(
     Ok(MaterializeOutcome {
         regions: all_clusters.len(),
         membership_fingerprint: fingerprint,
+        regions_reused,
+        regions_minted,
     })
 }
 
@@ -174,17 +238,31 @@ pub async fn incremental_materialize(
     let changed = changed_components(&comps, &diff);
 
     // membership fingerprint + region count are over the FULL current clustering (reused + changed),
-    // identical to what a full pass at this watermark computes. Only the CHANGED components mint new
-    // regions this act; reused regions keep their prior ids.
+    // identical to what a full pass at this watermark computes. Only the CHANGED components re-assert
+    // regions this act; an unchanged component's regions are not touched, and trivially keep their ids.
+    //
+    // Within the changed components, a cluster whose member set matches a live region REUSES that
+    // region's id — the case that matters in the context regime, where the whole anchor is ONE
+    // component, so any content edit marks it changed and re-clusters it even when the partition comes
+    // out identical. Matching against every live region of the anchor is safe: components partition the
+    // node set, so a changed component's clusters can only collide with regions of that same component.
     let all_clusters: Vec<Vec<Uuid>> = comps.iter().flat_map(|c| c.clusters.clone()).collect();
     let fingerprint = membership_fingerprint(&all_clusters);
-    let new_region_ids = mint_region_ids(&changed);
-    let flat_new_region_ids: Vec<RegionId> = new_region_ids.iter().flatten().copied().collect();
+    let live = live_regions(pool, anchor, s.lens_id).await?;
+    let assignments = resolve_region_ids(&changed, &live);
+    let flat_region_ids: Vec<RegionId> = assignments
+        .iter()
+        .flatten()
+        .map(|a| a.region_id())
+        .collect();
+    let keep = reused_ids(&assignments);
+    let (regions_reused, regions_minted) = count_assignments(&assignments);
 
     let mut tx = pool.begin().await?;
     let watermark = current_watermark(&mut tx).await?;
-    // region_ids records the regions THIS act asserted (the changed components' new regions); the full
-    // membership fingerprint records the complete resulting shape (reused regions included).
+    // region_ids records the regions THIS act (re-)asserted — the changed components' regions, reused
+    // and minted alike, exactly the set it has always recorded. The full membership fingerprint records
+    // the complete resulting shape (untouched components' regions included).
     let ev = fire(
         &mut tx,
         SeedAction::Materialize {
@@ -192,19 +270,20 @@ pub async fn incremental_materialize(
             lens: s.lens_id,
             watermark: EventId::from(watermark),
             membership_fingerprint: &fingerprint,
-            region_ids: &flat_new_region_ids,
+            region_ids: &flat_region_ids,
             emitter,
         },
     )
     .await?
     .materialize_event()?;
 
-    // fold the stale components and their regions; leave matched components + their regions live.
-    fold_components(&mut tx, &diff.stale, ev).await?;
+    // fold the stale components and their regions; leave matched components + their regions live, and
+    // leave the reused regions of the STALE components live too — their member sets did not change.
+    fold_components(&mut tx, &diff.stale, ev, &keep).await?;
 
     let zero = zero_centroid();
-    let work: Vec<(&ComponentWork, &Vec<RegionId>)> =
-        changed.iter().copied().zip(&new_region_ids).collect();
+    let work: Vec<(&ComponentWork, &Vec<RegionAssignment>)> =
+        changed.iter().copied().zip(&assignments).collect();
     assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
 
     refresh_moved_region_readouts(pool, &mut tx, anchor, &s, &zero, &diff.unchanged, ev).await?;
@@ -214,6 +293,8 @@ pub async fn incremental_materialize(
     Ok(MaterializeOutcome {
         regions: all_clusters.len(),
         membership_fingerprint: fingerprint,
+        regions_reused,
+        regions_minted,
     })
 }
 
@@ -230,15 +311,58 @@ fn changed_components<'a>(
         .collect()
 }
 
-/// Pre-generate a fresh region id (identity-as-input) for every cluster of every given component,
-/// grouped per component (aligned with each `ComponentWork.clusters`).
-fn mint_region_ids(comps: &[&ComponentWork]) -> Vec<Vec<RegionId>> {
+/// The live (non-folded) regions for (anchor, lens), keyed by their SORTED member set. The basis for
+/// region-id reuse — `drift::live_components`, one grain down.
+async fn live_regions(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    lens_id: LensId,
+) -> Result<HashMap<Vec<Uuid>, RegionId>> {
+    let rows = sqlx::query!(
+        "SELECT r.id, array_agg(m.member_id ORDER BY m.member_id) AS members \
+         FROM kb_cogmap_regions r \
+         JOIN kb_cogmap_region_members m \
+           ON m.region_id = r.id AND m.member_table = 'kb_resources' \
+         WHERE r.home_anchor_table=$1 AND r.home_anchor_id=$2 AND r.lens_id=$3 AND NOT r.is_folded \
+         GROUP BY r.id",
+        anchor.table(),
+        anchor.uuid(),
+        lens_id.uuid(),
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| r.members.map(|ms| (ms, RegionId::from(r.id))))
+        .collect())
+}
+
+/// Resolve the region id for every cluster of every given component, grouped per component (aligned
+/// with each `ComponentWork.clusters`): REUSE the live region whose member set is exactly this
+/// cluster's, else MINT a fresh id (identity-as-input — the id enters the materialization payload
+/// before the row is written).
+///
+/// A member set identifies at most one live region, because regions partition the anchor's nodes — the
+/// same disjointness `drift::classify` relies on to match components. Sorting the cluster is not
+/// decorative: `agglomerate` seeds from a sorted node list but merges by appending, so a cluster's Vec
+/// is NOT ordered by construction, while `live_regions` keys on `array_agg(… ORDER BY member_id)`.
+fn resolve_region_ids(
+    comps: &[&ComponentWork],
+    live: &HashMap<Vec<Uuid>, RegionId>,
+) -> Vec<Vec<RegionAssignment>> {
     comps
         .iter()
         .map(|c| {
             c.clusters
                 .iter()
-                .map(|_| RegionId::from(Uuid::now_v7()))
+                .map(|members| {
+                    let mut key = members.clone();
+                    key.sort();
+                    match live.get(&key) {
+                        Some(&id) => RegionAssignment::Reuse(id),
+                        None => RegionAssignment::Mint(RegionId::from(Uuid::now_v7())),
+                    }
+                })
                 .collect()
         })
         .collect()
@@ -255,18 +379,18 @@ async fn assert_component_regions(
     sub: &Substrate,
     zero_centroid: &str,
     ev: EventId,
-    work: &[(&ComponentWork, &Vec<RegionId>)],
+    work: &[(&ComponentWork, &Vec<RegionAssignment>)],
 ) -> Result<()> {
-    for &(comp, comp_region_ids) in work {
+    for &(comp, comp_assignments) in work {
         let comp_id = create_component(&mut *tx, anchor, sub.lens_id, comp, ev).await?;
-        for (members, region_id) in comp.clusters.iter().zip(comp_region_ids) {
+        for (members, assignment) in comp.clusters.iter().zip(comp_assignments) {
             assert_region(
                 &mut *tx,
                 AssertRegionCtx {
                     anchor,
                     component_id: comp_id,
                     members,
-                    region_id: region_id.uuid(),
+                    assignment: *assignment,
                     ev,
                     sub,
                     zero_centroid,
@@ -364,22 +488,28 @@ async fn last_materialize_watermark(
     .await
 }
 
-/// Fold every live region for (anchor, lens). Keyed on the ANCHOR PAIR, not `cogmap_id` — which is
-/// why `20260712000040` opens with a catch-up backfill: a region written in the T2→T3 window has a
-/// NULL anchor, would not match this predicate, and would survive the fold as a duplicate live region.
+/// Fold every live region for (anchor, lens) EXCEPT those in `keep` — the regions being reused, whose
+/// member set is unchanged. Keyed on the ANCHOR PAIR, not `cogmap_id` — which is why `20260712000040`
+/// opens with a catch-up backfill: a region written in the T2→T3 window has a NULL anchor, would not
+/// match this predicate, and would survive the fold as a duplicate live region.
+///
+/// `<> ALL('{}')` is TRUE, so an empty `keep` folds everything — the pre-reuse behavior exactly.
 async fn fold_live_regions(
     tx: &mut PgConnection,
     anchor: HomeAnchor,
     lens_id: LensId,
     ev: EventId,
+    keep: &[Uuid],
 ) -> Result<()> {
     sqlx::query!(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \
-         WHERE home_anchor_table=$2 AND home_anchor_id=$3 AND lens_id=$4 AND NOT is_folded",
+         WHERE home_anchor_table=$2 AND home_anchor_id=$3 AND lens_id=$4 AND NOT is_folded \
+           AND id <> ALL($5)",
         ev.uuid(),
         anchor.table(),
         anchor.uuid(),
         lens_id.uuid(),
+        keep,
     )
     .execute(tx)
     .await?;
@@ -406,16 +536,25 @@ async fn fold_live_components(
     Ok(())
 }
 
-/// Fold specific components by id AND their live regions (incremental's stale path).
-async fn fold_components(tx: &mut PgConnection, component_ids: &[Uuid], ev: EventId) -> Result<()> {
+/// Fold specific components by id AND their live regions (incremental's stale path), EXCEPT the regions
+/// in `keep` — reused regions of a stale component survive the fold under their own ids. The component
+/// row itself is always folded: a re-clustered component is a new component row, and `assert_region`
+/// re-parents the survivors onto it.
+async fn fold_components(
+    tx: &mut PgConnection,
+    component_ids: &[Uuid],
+    ev: EventId,
+    keep: &[Uuid],
+) -> Result<()> {
     if component_ids.is_empty() {
         return Ok(());
     }
     sqlx::query!(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \
-         WHERE component_id = ANY($2) AND NOT is_folded",
+         WHERE component_id = ANY($2) AND NOT is_folded AND id <> ALL($3)",
         ev.uuid(),
         component_ids,
+        keep,
     )
     .execute(&mut *tx)
     .await?;
@@ -458,13 +597,13 @@ async fn create_component(
     Ok(id)
 }
 
-/// Parameters for [`assert_region`]. The region id is pre-generated (identity-as-input) and already
-/// recorded in the materialization payload before this is called.
+/// Parameters for [`assert_region`]. The region id is pre-resolved (identity-as-input) and already
+/// recorded in the materialization payload before this is called — reused or minted.
 struct AssertRegionCtx<'a> {
     anchor: HomeAnchor,
     component_id: Uuid,
     members: &'a [Uuid],
-    region_id: Uuid,
+    assignment: RegionAssignment,
     ev: EventId,
     /// The whole substrate, not just the lens: `member_affinity` needs the edges and facets to score
     /// each member against its peers.
@@ -504,39 +643,101 @@ fn member_affinity(m: Uuid, members: &[Uuid], sub: &Substrate) -> f64 {
     total / peers as f64
 }
 
-/// Insert one region (linked to its component), its members (each scored by [`member_affinity`]), then
-/// populate the SQL readouts. `cogmap_id` is dual-written through the expand window — NULL for a
+/// Bring one region to its current shape — its row, its members (each scored by [`member_affinity`]),
+/// then its SQL readouts.
+///
+/// **Mint** inserts a new row. `cogmap_id` is dual-written through the expand window — NULL for a
 /// context region, which the pre-M2 code path never reads.
+///
+/// **Reuse** UPDATEs the SURVIVING row of a region whose member set is unchanged. It is an UPDATE and
+/// not a re-INSERT because `id` is the primary key and the fold is SOFT — the folded row still exists,
+/// so re-inserting its id would be a duplicate-key violation. The region was therefore never folded at
+/// all (`fold_live_regions`/`fold_components` skip it via `keep`); it is merely re-parented onto the
+/// component row this pass created. `asserted_by_event_id` is deliberately NOT touched: it records when
+/// the region came into being, which is precisely the identity reuse exists to preserve.
 async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Result<()> {
-    use sqlx::Row;
     let AssertRegionCtx {
         anchor,
         component_id,
         members,
-        region_id,
+        assignment,
         ev,
         sub,
         zero_centroid,
     } = ctx;
-    // centroid computed in SQL after members are inserted; insert a placeholder then UPDATE.
-    let region: Uuid = sqlx::query(
-        "INSERT INTO kb_cogmap_regions \
-           (id, cogmap_id, home_anchor_table, home_anchor_id, lens_id, component_id, centroid, \
-            salience, label, member_count, asserted_by_event_id, last_event_id) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7::vector, 0.0, NULL, $8, $9, $9) RETURNING id",
+    let region = assignment.region_id().uuid();
+    match assignment {
+        // centroid computed in SQL after members are written; insert a placeholder then UPDATE.
+        RegionAssignment::Mint(_) => {
+            sqlx::query(
+                "INSERT INTO kb_cogmap_regions \
+                   (id, cogmap_id, home_anchor_table, home_anchor_id, lens_id, component_id, centroid, \
+                    salience, label, member_count, asserted_by_event_id, last_event_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7::vector, 0.0, NULL, $8, $9, $9)",
+            )
+            .bind(region)
+            .bind(anchor.cogmap_id().map(|m| m.uuid()))
+            .bind(anchor.table())
+            .bind(anchor.uuid())
+            .bind(sub.lens_id)
+            .bind(component_id)
+            .bind(zero_centroid)
+            .bind(members.len() as i32)
+            .bind(ev)
+            .execute(&mut *tx)
+            .await?;
+        }
+        RegionAssignment::Reuse(_) => {
+            // `is_folded=false` is not redundant with the fold's `keep` list. `live_regions` reads
+            // BEFORE this transaction opens, so a materialize racing us on the same anchor could have
+            // folded this region in between — and an UPDATE that left `is_folded` alone would then
+            // stamp a folded row and quietly drop a region out of the live partition. Re-asserting it
+            // live states the act's intent: this region belongs to the partition I just computed.
+            let touched = sqlx::query(
+                "UPDATE kb_cogmap_regions \
+                 SET component_id=$2, member_count=$3, last_event_id=$4, is_folded=false \
+                 WHERE id=$1",
+            )
+            .bind(region)
+            .bind(component_id)
+            .bind(members.len() as i32)
+            .bind(ev)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            // A reused id comes from a row we just read. If it is gone, something hard-deleted a live
+            // region under us — fail loudly rather than return a partition that silently lost one.
+            if touched != 1 {
+                anyhow::bail!(
+                    "region {region} was reused but no longer exists ({touched} rows updated) — a \
+                     live region was deleted concurrently with this materialize"
+                );
+            }
+        }
+    }
+    write_region_members(&mut *tx, region, members, sub).await?;
+    populate_readouts(tx, region, &sub.lens, zero_centroid).await
+}
+
+/// Write a region's member rows, each scored by [`member_affinity`].
+///
+/// DELETE-then-INSERT rather than insert-only, because a REUSED region already carries member rows.
+/// Reuse proves the member SET is unchanged — but `affinity` is a function of the substrate (edges,
+/// facets, embeddings), and a region is only re-asserted because that substrate moved. Four readers
+/// `ORDER BY m.affinity DESC`, so carrying the prior scores forward would trade one silent lie for
+/// another. On a minted region the DELETE is a no-op.
+async fn write_region_members(
+    tx: &mut PgConnection,
+    region: Uuid,
+    members: &[Uuid],
+    sub: &Substrate,
+) -> Result<()> {
+    sqlx::query!(
+        "DELETE FROM kb_cogmap_region_members WHERE region_id=$1",
+        region
     )
-    .bind(region_id)
-    .bind(anchor.cogmap_id().map(|m| m.uuid()))
-    .bind(anchor.table())
-    .bind(anchor.uuid())
-    .bind(sub.lens_id)
-    .bind(component_id)
-    .bind(zero_centroid)
-    .bind(members.len() as i32)
-    .bind(ev)
-    .fetch_one(&mut *tx)
-    .await?
-    .get::<Uuid, _>("id");
+    .execute(&mut *tx)
+    .await?;
     for m in members {
         sqlx::query(
             "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
@@ -548,7 +749,7 @@ async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Resul
         .execute(&mut *tx)
         .await?;
     }
-    populate_readouts(tx, region, &sub.lens, zero_centroid).await
+    Ok(())
 }
 
 /// Re-derive a region's SQL readouts over its CURRENT members + embeddings: centroid (mean of
@@ -610,4 +811,97 @@ async fn populate_readouts(
     .execute(&mut *tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    fn work(clusters: Vec<Vec<Uuid>>) -> ComponentWork {
+        let mut members: Vec<Uuid> = clusters.iter().flatten().copied().collect();
+        members.sort();
+        ComponentWork {
+            members,
+            fingerprint: "fp".into(),
+            clusters,
+        }
+    }
+
+    fn live(entries: &[(&[Uuid], Uuid)]) -> HashMap<Vec<Uuid>, RegionId> {
+        entries
+            .iter()
+            .map(|(members, rid)| {
+                let mut key = members.to_vec();
+                key.sort();
+                (key, RegionId::from(*rid))
+            })
+            .collect()
+    }
+
+    /// The whole fix, in one assertion: a cluster whose member set matches a live region takes that
+    /// region's id back rather than minting a new one.
+    #[test]
+    fn an_unchanged_member_set_reuses_its_region_id() {
+        let comp = work(vec![vec![id(1), id(2)], vec![id(3)]]);
+        let live = live(&[(&[id(1), id(2)], id(900)), (&[id(3)], id(901))]);
+
+        let got = resolve_region_ids(&[&comp], &live);
+
+        assert!(matches!(got[0][0], RegionAssignment::Reuse(r) if r.uuid() == id(900)));
+        assert!(matches!(got[0][1], RegionAssignment::Reuse(r) if r.uuid() == id(901)));
+        assert_eq!(count_assignments(&got), (2, 0));
+        assert_eq!(reused_ids(&got), vec![id(900), id(901)]);
+    }
+
+    /// Supersession stays honest. A member set that changed at all — even by one member, even when the
+    /// region is "obviously the same region" to a human — is a NEW region and gets a new id. Anything
+    /// looser would let a consumer holding that id silently follow a region it never asked for.
+    #[test]
+    fn a_changed_member_set_mints_a_new_id() {
+        let comp = work(vec![vec![id(1), id(2), id(4)], vec![id(3)]]);
+        let live = live(&[(&[id(1), id(2)], id(900)), (&[id(3)], id(901))]);
+
+        let got = resolve_region_ids(&[&comp], &live);
+
+        // {1,2,4} is not {1,2} — mint.
+        assert!(matches!(got[0][0], RegionAssignment::Mint(_)));
+        // {3} is untouched — its id survives the re-cluster of its component.
+        assert!(matches!(got[0][1], RegionAssignment::Reuse(r) if r.uuid() == id(901)));
+        assert_eq!(count_assignments(&got), (1, 1));
+        assert_eq!(
+            reused_ids(&got),
+            vec![id(901)],
+            "only the reused region enters the fold's keep-list; the superseded one must be folded"
+        );
+    }
+
+    /// `agglomerate` seeds from a sorted node list but merges by APPENDING, so a cluster's Vec is not
+    /// ordered by construction — while `live_regions` keys on `array_agg(… ORDER BY member_id)`. If the
+    /// match key were not sorted on both sides, reuse would silently miss and every id would churn,
+    /// which is indistinguishable from having never made this change at all.
+    #[test]
+    fn the_match_key_is_order_insensitive() {
+        let comp = work(vec![vec![id(2), id(1)]]);
+        let live = live(&[(&[id(1), id(2)], id(900))]);
+
+        let got = resolve_region_ids(&[&comp], &live);
+
+        assert!(matches!(got[0][0], RegionAssignment::Reuse(r) if r.uuid() == id(900)));
+    }
+
+    /// The first materialize of an anchor: nothing live to match, so everything mints — and `keep` is
+    /// empty, which makes the fold's `id <> ALL('{}')` fold everything, exactly as before this change.
+    #[test]
+    fn no_live_regions_means_everything_mints() {
+        let comp = work(vec![vec![id(1), id(2)], vec![id(3)]]);
+
+        let got = resolve_region_ids(&[&comp], &HashMap::new());
+
+        assert_eq!(count_assignments(&got), (0, 2));
+        assert!(reused_ids(&got).is_empty());
+    }
 }
