@@ -155,13 +155,26 @@ run sqlx migrate run --source "$REPO_ROOT/migrations"
 # here must not block someone who just wants `cargo make check` to run.
 info "Code-intelligence tooling (SCIP)"
 
-# rust-analyzer is a rustup COMPONENT, not a brew formula — this keeps it version-matched to the
-# toolchain the repo builds with. Note `command -v rust-analyzer` is NOT a sufficient check: rustup
-# installs a shim that exists on PATH and then fails at runtime if the component is absent.
-if rust-analyzer --version >/dev/null 2>&1; then
-  skip "rust-analyzer present ($(rust-analyzer --version 2>/dev/null))"
+# rust-analyzer for INDEXING comes from brew (installed by the Brewfile in step 1), NOT from
+# `rustup component add`. The rustup component is pinned to the Rust release cadence and lags
+# rust-analyzer's own releases by up to SIX MONTHS — fine for an IDE, wrong for an indexer. We ran a
+# six-month-old build and it PANICKED on a sibling repo (a since-fixed salsa bug), which we nearly
+# wrote up as a defect in that repo's dependency graph. See the Brewfile for the full story.
+#
+# Note `command -v rust-analyzer` is NOT a sufficient presence check: rustup leaves a shim on PATH that
+# exists and then fails at runtime when the component is absent. Probe by RUNNING it.
+if ! rust-analyzer --version >/dev/null 2>&1; then
+  info "rust-analyzer not runnable — 'brew bundle' (step 1) installs it; check your PATH."
 else
-  run rustup component add rust-analyzer || info "rust-analyzer component install failed — 'rustup component add rust-analyzer' by hand"
+  ra_ver="$(rust-analyzer --version 2>/dev/null)"
+  skip "rust-analyzer present ($ra_ver)"
+  # A rustup-shim rust-analyzer reports the TOOLCHAIN version ("rust-analyzer 1.93.0"); the brew build
+  # reports its own ("rust-analyzer 0.0.0 (<sha> <date>)"). If you are on the former, an older brew
+  # formula may be shadowed on PATH — for indexing you want the brew one.
+  case "$ra_ver" in
+    "rust-analyzer 1."*) info "  ^ that is the RUSTUP component (toolchain-pinned, can be months stale)." ;
+                         info "    For SCIP indexing prefer the brew build: put $(brew --prefix)/bin ahead of ~/.cargo/bin." ;;
+  esac
 fi
 
 # scip CLI — pinned release binary + published-checksum verification. There is no brew formula

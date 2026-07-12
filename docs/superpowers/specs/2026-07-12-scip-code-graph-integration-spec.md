@@ -289,21 +289,52 @@ no single extraction rule.**
 whole-field comparison yields **false `signature-changed` on docstring-only edits.** Take
 `documentation[0]` **only if fenced.**
 
-### ⚠️ C5 — NEW RISK: **the indexer does not always run.** rust-analyzer PANICS on `tasker-core`.
+### ⚠️ C5 — ~~the indexer panics on `tasker-core`~~ **WITHDRAWN. It was a STALE INDEXER, and the stale indexer was our own fault.**
 
-```
-thread 'main' panicked at salsa-0.24.0/src/function/fetch.rs:271
-dependency graph cycle when querying GenericPredicates<'db>
-WARN cyclic deps: tasker_worker -> tasker_core, alternative path: tasker_core -> tasker_worker
-```
+**The original finding was wrong, and the way it was wrong is the more useful lesson.**
 
-Exit **101**, no index, **965 Rust files**. The cycle is a **legal, ordinary Cargo pattern**
-(`tasker-worker` dev-depends on `tasker-core` for a test-utils re-export; `tasker-core` depends back).
-storyteller (177 rs) indexes fine.
+S6 reported that rust-analyzer **panics** on `tasker-core` (salsa cycle in `hir_ty::lower::GenericPredicates`,
+exit 101, 965 Rust files unindexed) and attributed it to the repo's **legal Cargo dev-dependency cycles**
+(`tasker_worker ↔ tasker_core`, `tasker_orchestration ↔ tasker_core`, and a `tasker_secure` self-cycle).
 
-> **Ingest MUST model "index failed at commit C" as a first-class state.** Otherwise the steward sees
-> silence — the identical catastrophic false negative this whole design exists to prevent. This is not
-> hypothetical: **it is the primary target repo.**
+**Re-tested, and both halves of that were wrong:**
+
+| test | result |
+|---|---|
+| `SQLX_OFFLINE=true` (the hypothesis: a proc-macro failure) | **Same panic.** Not sqlx. |
+| The dev-dep cycles | **Real, plural — and rust-analyzer WARNs and CONTINUES on them.** They are not the crash. |
+| **rust-analyzer 2026-07-05 (current) instead of 1.93.0 (2026-01-19)** | **Exit 0. Zero panics. 43 MB index. 806 docs · 59,336 defs · 399,283 occurrences.** |
+
+The panic message was rust-analyzer **telling on itself**: *"set `cycle_fn`/`cycle_initial` to fixpoint
+iterate"* — an internal TODO. It was a **salsa-0.24 cycle-handling bug in the tool**, fixed upstream, and
+nothing to do with `tasker-core`'s code. **The repo builds and deploys fine, which was exactly the smell
+test that should have been applied before writing this finding down.**
+
+> ### 🔴 The real finding: `rustup component add rust-analyzer` gives you a STALE indexer, and this spec recommended it.
+>
+> The rustup component is pinned to the **Rust release cadence**, so it lags rust-analyzer's own release
+> stream by **up to six months** (we were running a January build in July). `bin/setup.sh` chose it *on
+> purpose*, with a comment arguing it "stays version-matched to the toolchain" — reasoning that is right
+> for **IDE use** and **wrong for indexing**.
+>
+> **For SCIP indexing, pin a CURRENT rust-analyzer** (brew formula, or a pinned upstream release) — and
+> **treat the indexer version as part of the index's identity** (§0.6/1, `tool_version`), because a stale
+> indexer does not merely index *worse*: **it can fail outright and look like a property of the code.**
+
+### What survives C5's withdrawal (re-verified on the CURRENT indexer)
+
+| axis | 2026-01 build | **2026-07 build** |
+|---|---|---|
+| `relationships` | 0 | **still 0** — rust-analyzer genuinely IS the outlier (C3 holds) |
+| `signature_documentation` | 100% | **still 100%** — genuinely IS Rust-only (C4 holds) |
+
+**And index-failure-as-a-first-class-state remains a REQUIREMENT** — not because of this false alarm, but
+because an indexer *can* fail (OOM, timeout, a genuine upstream bug, a toolchain the runner lacks), and a
+steward that reads silence across a failed index suffers the identical catastrophic false negative. The
+requirement was right. **The evidence offered for it was not.**
+
+*Sizing bonus: `tasker-core` at 399,283 occurrences is the largest index measured and still sits
+comfortably under the ~1M/index partitioning threshold (§0.5).*
 
 ### ❌ C6 — The `Test`-role hope is dead. Zero of four indexers populate it.
 

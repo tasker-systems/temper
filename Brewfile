@@ -31,8 +31,17 @@ brew "libpq"
 #       upstream (their go.mod carries replace directives, which `go install` refuses). bin/setup.sh
 #       fetches the pinned release binary and verifies its published sha256.
 #
-#   rust-analyzer — a *rustup component*, not a brew formula. `rustup component add rust-analyzer`
-#       keeps it version-matched to your toolchain; the brew formula is a separate install that can
-#       silently drift from the Rust version the repo builds with. Provides `rust-analyzer scip`.
-#
 #   scip-typescript (@sourcegraph/scip-typescript) — invoked via `bunx`, no install step needed.
+
+# rust-analyzer — for INDEXING, take the brew formula, NOT the rustup component.
+#
+# This reverses an earlier call in this file, and the reason is worth writing down. The rustup
+# component (`rustup component add rust-analyzer`) is pinned to the *Rust release cadence*, so it lags
+# rust-analyzer's own release stream by up to SIX MONTHS. That is fine for IDE use — it is exactly the
+# "version-matched to your toolchain" property you want there — and it is WRONG for indexing.
+#
+# We ran a January build in July and it PANICKED on a sibling repo (salsa-0.24 cycle-handling bug,
+# since fixed upstream). We very nearly wrote that up as "the indexer cannot handle a legal Cargo
+# dependency cycle" — a false architectural finding — when the truth was "our indexer was stale."
+# A stale indexer does not merely index worse; it can fail outright and look like a property of the code.
+brew "rust-analyzer"
