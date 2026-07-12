@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Paginated meta-only response for resource list endpoints.  Mirror of [`crate::types::resource::ResourceListResponse`] with the row type swapped to [`ResourceMetaResponse`]. Returned by `GET /api/resources?meta_only=true`. Facets and total are computed identically to the default list response — projection-independent.
+  # Paginated response for the `?meta_only=true` list mode.  Mirror of [`crate::types::resource::ResourceListResponse`] with the row type swapped to [`crate::types::resource::ResourceDetail`] — the full row (title, doc_type, context, owner, the stage/seq/mode/effort projections) plus both `managed_meta` and `open_meta` tiers. This is the list analogue of what `--meta-only` gives on a single `show`: everything the default list row carries **and** both meta tiers, per item — the whole view minus each resource's body. (The default list row, [`crate::types::resource::ResourceRow`], carries neither meta tier.) Returned by `GET /api/resources?meta_only=true`. Facets and total are computed identically to the default list response — projection-independent.  No `ts_rs::TS` derive: `ResourceDetail` cannot codegen (its `#[serde(flatten)]` row is unsupported by ts-rs), so this container cannot either. The SvelteKit UI types the list endpoint as `ResourceListResponse` regardless; this shape is a structural superset, so the extra keys are simply ignored there.
   class ResourceMetaListResponse < ApiModelBase
     attr_accessor :facets
 
@@ -45,7 +45,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'facets' => :'ResourceFacets',
-        :'rows' => :'Array<ResourceMetaResponse>',
+        :'rows' => :'Array<ResourceDetail>',
         :'total' => :'Integer'
       }
     end

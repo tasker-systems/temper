@@ -302,6 +302,17 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
             row.get("managed_meta").is_some(),
             "row missing managed_meta"
         );
+        // Rows are full `ResourceDetail`s now — they carry the row's identity/display
+        // fields (and the decorated `ref`), not just the meta tiers.
+        assert!(
+            row.get("title").is_some(),
+            "row missing title (should be a full detail row now): {row}"
+        );
+        assert!(
+            row.get("doc_type_name").is_some(),
+            "row missing doc_type_name: {row}"
+        );
+        assert!(row.get("ref").is_some(), "row missing decorated ref: {row}");
     }
     assert!(stdout.get("total").is_some(), "envelope missing total");
     assert!(stdout.get("facets").is_some(), "envelope missing facets");

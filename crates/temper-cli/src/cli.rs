@@ -494,8 +494,10 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Return `Vec<ResourceMetaResponse>` rows instead of
-        /// `Vec<ResourceRow>` rows. Hits GET /api/resources?meta_only=true.
+        /// Full per-row view minus the body: each row carries both the
+        /// managed and open meta tiers on top of the usual row fields
+        /// (`Vec<ResourceDetail>`, vs the default `Vec<ResourceRow>` which
+        /// carries neither tier). Hits GET /api/resources?meta_only=true.
         #[arg(long)]
         meta_only: bool,
         /// Subselect top-level response keys on each row (anchor key

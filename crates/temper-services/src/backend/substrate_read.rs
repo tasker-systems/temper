@@ -301,8 +301,9 @@ pub async fn get_meta_select(
 }
 
 /// `list_meta` — the `?meta_only=true` projection. Same WS2-scoped, filtered + sorted + paginated set as
-/// `list` (`filtered_visible_page`); each page id maps to a `ResourceMetaResponse` via `get_meta_select`
-/// (the §7 meta tier). `total`/`facets` mirror `list` (the FILTERED set).
+/// `list` (`filtered_visible_page`); each page id maps to a full [`ResourceDetail`] via `show_detail_select`
+/// (row + both meta tiers — the whole per-resource view minus the body). `total`/`facets` mirror `list`
+/// (the FILTERED set).
 pub async fn list_meta_select(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -311,7 +312,7 @@ pub async fn list_meta_select(
     let page = filtered_visible_page(pool, profile_id, &params).await?;
     let mut out = Vec::with_capacity(page.page_ids.len());
     for new_id in page.page_ids {
-        out.push(get_meta_select(pool, profile_id, ResourceId::from(new_id)).await?);
+        out.push(show_detail_select(pool, profile_id, ResourceId::from(new_id)).await?);
     }
     Ok(ResourceMetaListResponse {
         rows: out,

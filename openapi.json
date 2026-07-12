@@ -3256,7 +3256,7 @@
           {
             "name": "meta_only",
             "in": "query",
-            "description": "When true, the list endpoint returns `ResourceMetaListResponse`\n(`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`\n(`Vec<ResourceRow>` rows). Default: false.",
+            "description": "When true, the list endpoint returns `ResourceMetaListResponse`\n(`Vec<ResourceDetail>` rows — full row + both meta tiers) instead of\n`ResourceListResponse` (`Vec<ResourceRow>` rows). Default: false.",
             "required": false,
             "schema": {
               "type": [
@@ -8972,7 +8972,7 @@
       },
       "ResourceMetaListResponse": {
         "type": "object",
-        "description": "Paginated meta-only response for resource list endpoints.\n\nMirror of [`crate::types::resource::ResourceListResponse`] with the\nrow type swapped to [`ResourceMetaResponse`]. Returned by\n`GET /api/resources?meta_only=true`. Facets and total are computed\nidentically to the default list response — projection-independent.",
+        "description": "Paginated response for the `?meta_only=true` list mode.\n\nMirror of [`crate::types::resource::ResourceListResponse`] with the row type\nswapped to [`crate::types::resource::ResourceDetail`] — the full row (title,\ndoc_type, context, owner, the stage/seq/mode/effort projections) plus both\n`managed_meta` and `open_meta` tiers. This is the list analogue of what\n`--meta-only` gives on a single `show`: everything the default list row carries\n**and** both meta tiers, per item — the whole view minus each resource's body.\n(The default list row, [`crate::types::resource::ResourceRow`], carries neither\nmeta tier.) Returned by `GET /api/resources?meta_only=true`. Facets and total\nare computed identically to the default list response — projection-independent.\n\nNo `ts_rs::TS` derive: `ResourceDetail` cannot codegen (its `#[serde(flatten)]`\nrow is unsupported by ts-rs), so this container cannot either. The SvelteKit UI\ntypes the list endpoint as `ResourceListResponse` regardless; this shape is a\nstructural superset, so the extra keys are simply ignored there.",
         "required": [
           "rows",
           "total",
@@ -8985,7 +8985,7 @@
           "rows": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ResourceMetaResponse"
+              "$ref": "#/components/schemas/ResourceDetail"
             }
           },
           "total": {

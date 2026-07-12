@@ -950,11 +950,12 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// `list --meta-only`: call client.resources().list_meta() and emit
-/// the ResourceMetaListResponse shape. Applies the shared top-level
-/// projection filter to each row in the envelope when `fields` is
-/// non-empty; the envelope keys (`rows`, `total`, `facets`) are
-/// preserved untouched.
+/// `list --meta-only`: call client.resources().list_meta() and emit the
+/// meta-list envelope, whose rows are now full `ResourceDetail`s (row + both
+/// meta tiers per item — the whole view minus each body). Injects each row's
+/// decorated `ref` (rows carry a title now), then applies the shared top-level
+/// projection filter to each row when `fields` is non-empty; the envelope keys
+/// (`rows`, `total`, `facets`) are preserved untouched.
 fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
     use temper_workflow::types::resource::ResourceListParams;
@@ -1001,6 +1002,15 @@ fn list_meta_only(_config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let mut envelope = serde_json::to_value(&response)
         .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
+
+    // Identity-out: every printed row carries its decorated `ref` (parity with the
+    // full `list` path). Rows are `ResourceDetail` now, so they carry the title
+    // `inject_ref` needs.
+    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
+        for row in rows.iter_mut() {
+            inject_ref(row);
+        }
+    }
 
     // Truncation signal — parity with the full `list` path (see `inject_truncation_signal`).
     let total = envelope.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
@@ -2777,16 +2787,21 @@ mod list_meta_only_tests {
 
     #[test]
     fn list_meta_filter_applies_per_row_and_preserves_envelope() {
-        // Build a stub ResourceMetaListResponse-shaped JSON
+        // Build a stub meta-list envelope. Rows are `ResourceDetail`-shaped now
+        // (full row + both tiers), so they carry `title`/`doc_type_name` too.
         let envelope = serde_json::json!({
             "rows": [
                 {
                     "id": "11111111-1111-1111-1111-111111111111",
+                    "title": "Alpha",
+                    "doc_type_name": "task",
                     "managed_meta": {"stage": "in-progress"},
                     "open_meta": {"tags": []}
                 },
                 {
                     "id": "22222222-2222-2222-2222-222222222222",
+                    "title": "Beta",
+                    "doc_type_name": "task",
                     "managed_meta": {"stage": "done"},
                     "open_meta": null
                 }
@@ -2814,7 +2829,10 @@ mod list_meta_only_tests {
                 row.get("open_meta").is_none(),
                 "open_meta should be dropped"
             );
-            assert!(row.get("managed_hash").is_none(), "hash should be dropped");
+            assert!(
+                row.get("title").is_none(),
+                "title should be dropped by --fields managed_meta"
+            );
         }
     }
 }
