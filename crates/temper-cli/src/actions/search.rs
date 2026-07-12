@@ -48,17 +48,18 @@ pub struct CliSearchArgs<'a> {
 
 /// Build a SearchParams from CLI arguments.
 pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
-    // Mirror the server's guard (§6): `--context`, `--cogmap`, and `--wayfind` are three mutually
-    // exclusive scope-resolution paths. Reject here rather than relying solely on the server's
-    // BadRequest, so the error surfaces before any network round-trip and is symmetric with create.
-    let scope_count = [args.context.is_some(), args.cogmap.is_some(), args.wayfind]
-        .into_iter()
-        .filter(|&set| set)
-        .count();
-    if scope_count > 1 {
+    // Mirror the server's guard (`resolve_search_scope`): `--context` and `--cogmap` name two
+    // different homes and remain mutually exclusive. Reject here rather than relying solely on the
+    // server's BadRequest, so the error surfaces before any network round-trip.
+    //
+    // `--wayfind` is NO LONGER part of that exclusion (T7, spec §3.7). It now composes with either:
+    // wayfind pools regions over both anchor kinds, so `--context X --wayfind` means "wayfind within
+    // this context" and `--cogmap Y --wayfind` "wayfind within this cogmap". This client-side guard
+    // is the thing that actually gated `temper search --context @me/temper --wayfind` — the server
+    // would have accepted it, but the CLI rejected it before the round-trip.
+    if args.context.is_some() && args.cogmap.is_some() {
         return Err(TemperError::BadRequest(
-            "--context, --cogmap, and --wayfind are mutually exclusive; specify exactly one scope"
-                .into(),
+            "--context and --cogmap are mutually exclusive; specify at most one home".into(),
         ));
     }
     // `--lens` / `--regions` only modify the wayfind funnel; they are meaningless without it.
@@ -325,12 +326,16 @@ mod tests {
         assert!(params.cogmap_id.is_none());
     }
 
+    /// T7 INVERTS this test. `--context X --wayfind` used to be rejected here, client-side, before any
+    /// round-trip — which is what actually gated `temper search --context @me/temper --wayfind`, this
+    /// task's headline acceptance criterion. Wayfind now pools regions over both anchor kinds, so the
+    /// combination means "wayfind within this context" and must build a valid `SearchParams`.
     #[test]
-    fn test_build_search_params_wayfind_context_mutually_exclusive() {
+    fn test_build_search_params_wayfind_composes_with_context() {
         let args = CliSearchArgs {
             query: "q",
             embedding: None,
-            context: Some("temper"),
+            context: Some("@me/temper"),
             cogmap: None,
             wayfind: true,
             lens: None,
@@ -343,10 +348,13 @@ mod tests {
             no_graph: true,
             seed_only: false,
         };
-        let err = build_search_params(args).expect_err("context + wayfind must be rejected");
-        assert!(
-            err.to_string().contains("mutually exclusive"),
-            "error should name the mutual-exclusion guard; got {err}"
+        let params =
+            build_search_params(args).expect("--context + --wayfind must now build: T7, spec §3.7");
+        assert!(params.wayfind, "wayfind must survive onto the wire");
+        assert_eq!(
+            params.context_ref.as_deref(),
+            Some("@me/temper"),
+            "the context must ride along as the wayfind anchor, not be dropped"
         );
     }
 
