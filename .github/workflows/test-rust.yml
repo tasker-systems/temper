@@ -31,9 +31,16 @@ name: Rust Tests
 # `--exclude temper-cloud`: the repo root is BOTH the workspace manifest and the temper-cloud package,
 # and temper-cloud enables `ingest-pipeline` on temper-api, which unifies features across the build.
 #
-# `--test-threads 1`: temper-ingest holds its ONNX session behind a `Mutex<Session>` and pins inference
-# to one core (`embed.rs`), so concurrent body-bearing tests contend on it and flake `embed_texts`.
-# That is a cost we are currently paying, not a preference — task `019f57d2` owns removing it.
+# `--test-threads 1`: temper-ingest holds its ONNX session behind a `Mutex<Session>` (`embed.rs`), so
+# concurrent body-bearing tests contend on it and flake `embed_texts`. A cost we are paying, not a
+# preference — task `019f57d2` owns removing it.
+#
+# `TEMPER_ONNX_INTRA_THREADS: 0` (every test job): #401 made the ONNX intra-op thread count
+# configurable — the library still defaults to **1**, and `temper-cli`'s `main()` opts into `0`. But
+# tests call the command functions DIRECTLY and never go through `main()`, so without this env var they
+# would silently keep embedding on a single core. Setting it here is what actually gets the runner's
+# cores in play. It composes fine with `--test-threads 1`: one embed at a time, using all cores, rather
+# than one core while the rest idle.
 
 on:
   workflow_call:
@@ -43,6 +50,13 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    env:
+      # Let ORT parallelize inference across the runner's cores (#401). The library default is 1, and
+      # `temper-cli`'s `main()` opts into 0 — but tests call the command functions DIRECTLY, never
+      # through `main()`, so without this they would silently embed single-threaded. This env var is
+      # the only lever that reaches them.
+      TEMPER_ONNX_INTRA_THREADS: 0
 
     steps:
       - name: Checkout code
@@ -65,7 +79,7 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-bge-base-en-v1.5-${{ runner.os }}
 
-      - name: Warm the embedding model (serially)
+      - name: Warm the embedding model (serially, outside the test harness)
         # `embed` is a DEFAULT feature of temper-cli, and it selects `temper-ingest/embed-download` —
         # so a `--workspace` build fetches bge-base from HuggingFace at RUNTIME, not from the bundled
         # git-LFS asset (feature unification keeps `embed-download` winning, so the `include_bytes!`
@@ -75,10 +89,15 @@ jobs:
         # `test-embed` is enabled workspace-wide, N threads all race the same first download and lose:
         #   `model init: download model: Lock acquisition failed: …/blobs/….lock`
         #
-        # So do the download exactly ONCE, single-threaded, before the parallel run — every subsequent
-        # test then finds a warm cache and never touches the lock. (The integration job never hit this
+        # So do the download exactly ONCE, serially, before the parallel run — every subsequent test
+        # then finds a warm cache and never touches the lock. (The integration job never hit this
         # because it already serializes on `--test-threads 1` for the ort mutex.)
-        run: cargo nextest run -p temper-ingest --features test-embed --locked --test-threads 1 -E 'test(=embed::tests::test_embed_text_dimension)'
+        #
+        # Deliberately `cargo test`, NOT `cargo nextest`: on a COLD cache this step's whole job is to
+        # pull a ~400 MB model, which takes longer than nextest's 120s slow-timeout — so wrapping the
+        # download in the very harness that imposes that timeout just gets it killed mid-download.
+        # `cargo test` has no such timeout. (That is exactly how the first attempt at this step failed.)
+        run: cargo test -p temper-ingest --features test-embed --locked --lib embed::tests::test_embed_text_dimension -- --exact --test-threads 1
 
       - name: Run unit tests
         # `test-embed` here too — temper-ingest's and temper-cli's embedding tests need no database, so
@@ -110,6 +129,10 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+      # See the unit job: tests bypass `main()`, so the env var is the only thing that reaches them.
+      # Safe alongside `--test-threads 1` — one embed at a time, using all cores, rather than one core
+      # while the rest idle.
+      TEMPER_ONNX_INTRA_THREADS: 0
 
     steps:
       - name: Checkout code
@@ -165,6 +188,10 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+      # See the unit job: tests bypass `main()`, so the env var is the only thing that reaches them.
+      # Safe alongside `--test-threads 1` — one embed at a time, using all cores, rather than one core
+      # while the rest idle.
+      TEMPER_ONNX_INTRA_THREADS: 0
 
     steps:
       - name: Checkout code

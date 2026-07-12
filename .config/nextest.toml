@@ -16,17 +16,23 @@ fail-fast = false
 # ---------------------------------------------------------------------------
 
 # `segmented_create_roundtrips_large_body` drives a >1 MiB body (~840 chunks) through the real CLI
-# segmented-ingest path with real ONNX. **Measured: 484s. It is NOT hanging — it passes.** It is
-# CPU-bound inside native ONNX inference, which temper-ingest currently pins to a SINGLE core
-# (`embed.rs:206`: `.with_intra_threads(1)`, a bare constant with no rationale). Unpinning it takes the
-# same test to 155s (3.1×, ~500% CPU). Release mode buys 2.4% — i.e. nothing; the cost is all native C++.
+# segmented-ingest path with real ONNX. **Measured: 484s. It is NOT hanging — it passes.** The cost is
+# entirely native ONNX inference, on a SINGLE core (release mode buys 2.4%, i.e. nothing — it is all
+# native C++, so this was never a debug-build story).
+#
+# #401 made the intra-op thread count configurable, and CI now sets `TEMPER_ONNX_INTRA_THREADS=0` so
+# inference uses all of the runner's cores (~3.1× locally: 484s → 155s). That is NOT enough to retire
+# this override: CI runners have far fewer cores than the machine that was measured, and the library
+# default is still 1 — so anyone running the suite WITHOUT that env var still sees the full 484s. The
+# override has to survive the slowest honest case, not the fastest.
 #
 # The body size is not incidental padding: it is the ONLY thing that pushes the CLI past
 # `SEGMENT_BUDGET_BYTES` (256 KiB) and exercises the multi-block begin/append/finalize path at all. So
 # do NOT "fix" this by shrinking the body — that deletes the coverage instead of the cost.
 #
-# This generous timeout is a KNOWN, TEMPORARY DEBT, scoped to one test — not a blanket loosening.
-# Task `019f57d2` (ingest throughput spike) owns the real fix; restore the default when it lands.
+# Still a KNOWN, TEMPORARY DEBT scoped to ONE test — not a blanket loosening. Task `019f57d2` (ingest
+# throughput spike) owns the rest: windowed batches, and overlapping embed with block upload, which
+# today never overlap at all. Tighten this back toward the default as that lands.
 [[profile.default.overrides]]
 filter = 'test(=segmented_create_roundtrips_large_body)'
 slow-timeout = { period = "120s", terminate-after = 6 }
