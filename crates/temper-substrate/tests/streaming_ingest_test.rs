@@ -303,6 +303,111 @@ async fn finalize_validates_block_count_and_hash(pool: sqlx::PgPool) {
     assert_eq!(n, 1);
 }
 
+// ── Concurrent same-resource appends must not lose the body_hash (row-lock race) ──────────────
+//
+// Regression test for the READ COMMITTED read-modify-write race in `_recompute_resource_body_hash`
+// (fixed by migrations/20260712000110_recompute_body_hash_row_lock.sql). Two appends to the SAME
+// resource, fired genuinely concurrently, each aggregated over a snapshot that missed the other's
+// still-uncommitted block, so the later committer's stale body_hash won — leaving the resource hashing
+// a block set with a block missing, which then fails `resource_finalize`. This is the precondition for
+// the K>1 upload fan-out in the ingest throughput spike (task 019f57d2).
+//
+// PROBABILISTIC: any single concurrent pair may happen to interleave safely (the last committer sees
+// everything), so a one-shot pair does not reliably reproduce the race. We loop many rounds; on today's
+// schema *without* the row lock this goes red within the first handful of rounds, and each round's
+// post-join assert pins the exact block set that lost a member.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn concurrent_appends_preserve_body_hash(pool: sqlx::PgPool) {
+    use temper_substrate::writes::{append_block, AppendParams};
+
+    fn content_hash(text: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(text.as_bytes());
+        format!("{:x}", h.finalize())
+    }
+
+    let ctx = streaming_test_support::seed_resource_with_block0(&pool).await;
+
+    // Independent oracle for the resource merkle: block 0's single chunk hashes "first segment" (the
+    // seed's block-0 prose); each round then pushes its two concurrently-appended blocks' chunk hashes
+    // in seq order. `body_hash_from_block_chunk_hashes` reproduces `_recompute_resource_body_hash`.
+    let mut block_chunk_hashes: Vec<Vec<String>> = vec![vec![content_hash("first segment")]];
+
+    // 40 rounds × 2 concurrent appends: enough to hit the race reliably on the unfixed schema while
+    // staying well inside the test timeout (one chunk per block, so each append is cheap).
+    const ROUNDS: i32 = 40;
+    for k in 0..ROUNDS {
+        let s1 = 2 * k + 1;
+        let s2 = 2 * k + 2;
+        let t1 = format!("segment-{s1}");
+        let t2 = format!("segment-{s2}");
+        let block1 =
+            content::prepare_block_from_chunks(s1, None, streaming_test_support::one_chunk(&t1));
+        let block2 =
+            content::prepare_block_from_chunks(s2, None, streaming_test_support::one_chunk(&t2));
+
+        // Genuinely concurrent: two appends at the same resource, each `pool.begin()`-ing its own
+        // transaction on its own connection (the sqlx test pool allows >1), so their recompute tails
+        // race unless serialized in SQL. NOT sequential awaits — `tokio::join!` polls both.
+        let (r1, r2) = tokio::join!(
+            append_block(
+                &pool,
+                AppendParams {
+                    resource: ctx.resource,
+                    block: &block1,
+                    sources: vec![],
+                    emitter: ctx.emitter,
+                },
+            ),
+            append_block(
+                &pool,
+                AppendParams {
+                    resource: ctx.resource,
+                    block: &block2,
+                    sources: vec![],
+                    emitter: ctx.emitter,
+                },
+            ),
+        );
+        r1.unwrap();
+        r2.unwrap();
+
+        block_chunk_hashes.push(vec![content_hash(&t1)]);
+        block_chunk_hashes.push(vec![content_hash(&t2)]);
+
+        let expected = content::body_hash_from_block_chunk_hashes(&block_chunk_hashes);
+        let actual: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id=$1")
+            .bind(ctx.resource.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            actual,
+            expected,
+            "round {k}: body_hash lost a concurrently-appended block (expected the merkle over all {} \
+             landed blocks; a concurrent append's recompute ran against a snapshot missing a sibling)",
+            block_chunk_hashes.len()
+        );
+    }
+
+    // Capstone — the real production acceptance: a `finalize` over the full landed set succeeds only if
+    // `kb_resources.body_hash` equals the client's merkle over every segment. On the unfixed schema the
+    // last raced round leaves body_hash stale and this `RAISE`s; here it must pass.
+    let expected = content::body_hash_from_block_chunk_hashes(&block_chunk_hashes);
+    temper_substrate::writes::finalize_ingest(
+        &pool,
+        temper_substrate::writes::FinalizeParams {
+            resource: ctx.resource,
+            expected_blocks: block_chunk_hashes.len() as u32,
+            expected_body_hash: expected,
+            emitter: ctx.emitter,
+        },
+    )
+    .await
+    .expect("finalize must succeed once concurrent appends preserve the body_hash");
+}
+
 // ── Task 1.6: writes::upsert_ingestion_record ────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
