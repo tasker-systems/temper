@@ -526,8 +526,9 @@ pub enum ResourceAction {
         /// resource's content blocks was distilled from. Calls GET /provenance.
         #[arg(long, conflicts_with = "meta_only")]
         provenance: bool,
-        /// Return only the resource's meta tier (managed + open
-        /// frontmatter, hashes); no body. Calls GET /meta endpoint.
+        /// Show everything except the body: the full resource view
+        /// (title, type, context, owner, and both the managed and open
+        /// meta tiers) minus the reconstructed markdown body.
         #[arg(long, conflicts_with = "edges")]
         meta_only: bool,
         /// Subselect top-level response keys (resource_id always
