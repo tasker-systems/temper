@@ -175,15 +175,23 @@ uninformative `telos_alignment`. Prod, `@me/temper` (80 goals repo-wide, 30 in t
 
 | goal | declared | in-prog | backlog | done | cancelled | truth |
 |---|---|---|---|---|---|---|
+| Context regions and wayfinding | active | 1 | 4 | 5 | 0 | live ✓ |
 | Substrate kernel → cognitive map | active | 1 | 0 | 34 | 2 | live ✓ |
 | Graph Atlas | active | 1 | 0 | 0 | 0 | live ✓ (brand new) |
-| Maintenance | active | 0 | 3 | 68 | 13 | faintly live ✓ (a container) |
+| Maintenance | active | 0 | 3 | 71 | 13 | faintly live ✓ (a container) |
 | **Temper Cloud** | **active** | **0** | **0** | 19 | 6 | **dead — declaration is wrong** |
 | **path-to-alpha** | **active** | **0** | **0** | 17 | 1 | **dead — declaration is wrong** |
-| **temper-rb** | **completed** | **1** | 0 | 9 | 0 | **live — declaration is wrong** |
+| **Teams in Temper** | **completed** | 0 | **1** | 0 | 0 | **live — declaration is wrong** |
 
-Six goals declared `active` have zero open tasks and are unambiguously finished. One declared
-`completed` has a task in progress *today*. The declared field is stale **in both directions**.
+Six goals declared `active` have zero open tasks and are unambiguously finished. Four declared
+`completed` still carry an open task. The declared field is stale **in both directions**.
+
+> **The census above is a snapshot (re-read from prod 2026-07-12 during T5), and that is the point.**
+> The first draft of this table cited `temper-rb` as the headline "declared `completed`, one task in
+> progress" case. By the time T5 implemented it, `temper-rb` had been flipped back to `active` and had
+> *two* tasks in progress — while four other goals had drifted into the `completed`-with-open-work
+> state. The specific rows rot; the phenomenon does not. Anything downstream of this table must treat
+> it as a **frozen fixture**, never a live query — prod moved twice inside a single working session.
 
 Nor does recency rescue it. "Days since the last touch on any advancing task" fails because
 **marking a task done *touches* it** — a burst of recent `updated` timestamps under a closing goal
@@ -204,21 +212,46 @@ So read liveness off the layer that reliably terminates, and let the layer that 
 liveness(g) = status_damper(g) × sqrt( Σ  stage_weight(stage(t)) · exp(−idle_days(t)/halflife) )
                                      t advances g
 
-  stage_weight    in-progress 1.0 · backlog 0.35 · done 0.15 · cancelled 0.0
+  stage_weight    in-progress 1.0 · backlog 0.35 · done 0.0 · cancelled 0.0
   idle_days(t)    days since t was last touched
   halflife        lens column, ~30d initial
   status_damper   active/absent 1.0 · paused 0.3 · completed 0.4      ← damps, never gates
-  grace           goal created < 14d with no tasks yet → floor 0.5
 
 telos_embedding(ctx) = Σ liveness(g) · emb(g) / Σ liveness(g)   over goals homed in ctx
 ```
 
+> **`done` is weighted 0.0, and an earlier draft of this spec got that wrong.** It specified 0.15,
+> reasoning that a small weight plus decay would keep a graveyard from masquerading as a heartbeat.
+> Run against the census above — the fixture this spec nominates for exactly this purpose — 0.15
+> produces very nearly the *inverse* of the ranking demanded below: `Maintenance` ranks **1st of 32**,
+> while `Temper Cloud` and `path-to-alpha` (which must fall out entirely) outrank `Graph Atlas` (which
+> must rank at the top).
+>
+> The mechanism is arithmetic, and no decay rate fixes it. A weight of 0.15 is small; seventy-one of
+> them is not. And because *marking a task done touches it*, `exp(−idle/halflife)` is ≈1.0 for
+> precisely the tasks that just closed — so a goal that is **finishing** looks maximally alive. A
+> shorter halflife does not help, because `Maintenance` closes tasks *continuously*: no decay rate
+> distinguishes a steady drip of completed chores from live work. **The count is the problem, not the
+> age.** This was measured, not argued: `context_telos_liveness.rs` pins it as a differential test, so
+> restoring 0.15 fails loudly.
+>
+> This is not a retreat from the argument below — it is the argument below, which the number
+> contradicted: *old completed work is history, not purpose*. Closing a task is still rewarded, by
+> removing it from the open set. The lens column survives and stays tunable; only its calibration
+> changes.
+>
+> **The `grace` floor is dropped.** An earlier draft floored a goal created <14d ago with no tasks at
+> 0.5. The cold-start it protects lasts minutes in practice (tasks are created with `--goal` moments
+> after the goal), while a goal sitting two weeks with zero work is *precisely* the aspirational-not-
+> real case this section exists to exclude. It bought a knob and cost the principle.
+
 Three properties follow, none of which require anyone to groom anything:
 
-1. **`done` is weighted low (0.15) and decays, so a graveyard does not masquerade as a heartbeat.**
-   Maintenance's 68 finished tasks contribute almost nothing; its 3 fresh backlog items keep it
-   faintly warm. Temper Cloud's 19 finished tasks contribute nothing at all, and it drops out of the
-   telos despite saying `active`. Old completed work is *history*, not *purpose*.
+1. **Only OPEN work counts, so a graveyard cannot masquerade as a heartbeat.** Maintenance's 71
+   finished tasks contribute exactly nothing; its 3 fresh backlog items are the whole of what keeps it
+   faintly warm — a container, not a driver. Temper Cloud's 19 finished tasks likewise contribute
+   nothing, and it drops out of the telos entirely despite saying `active`. Old completed work is
+   *history*, not *purpose*.
 
 2. **Goal scale infers itself.** A long-lived program with continuous task flow stays in the telos
    for years; a two-day triage goal spikes and decays out within a week. Nobody declares which kind
@@ -238,13 +271,25 @@ never required.
 A context with zero live goals degrades gracefully: `telos_alignment` is NULL, `coalesce(…, 0)`
 applies, and salience falls back to reference-standing plus centrality.
 
-`anchor_telos_embedding(anchor_table, anchor_id)` is one function with two branches — the charter's
-pooled chunks for `kb_cogmaps`, the liveness-weighted goal centroid for `kb_contexts`.
+`anchor_telos_embedding(anchor_table, anchor_id, lens)` is one function with two branches — the
+charter's pooled chunks for `kb_cogmaps`, the liveness-weighted goal centroid for `kb_contexts`. (It
+takes the **lens**, which an earlier draft's signature omitted: the constants below are lens-resident,
+so a function without the lens cannot read them.) The region-level readout
+`anchor_region_telos_alignment(region, anchor_table, anchor_id, lens)` dispatches on the same pair and
+delegates the cogmap branch to the untouched `cogmap_region_telos_alignment`, which keeps the cogmap
+regime byte-identical — the regression floor of §5.
 
 **Constants are lens-resident and calibrated, not guessed.** `halflife`, the stage weights, and the
 dampers live on the lens row beside `knn_k` / `cos_floor` / `resolution`, tunable by additive
 migration (consistent with the α/β wayfind constants staying SQL-resident). The table above is the
 calibration fixture — see §5.
+
+> Lens-resident is not the same as lens-*reachable*. T2 added these columns; `_project_lens_created`
+> was never widened to project them, so until T5 a lens minted through the ledger silently took the
+> column defaults and the payload's values were dropped on the floor — tunable in the DDL, untunable
+> in practice. This was the **third** group of T2 columns to be missed by that same function (T4 fixed
+> the first two and stated in its own migration that there were only two). A column that exists is not
+> a column that is wired.
 
 ### 3.5 Two clocks: formation and salience refresh independently
 
@@ -466,9 +511,14 @@ rather than being extracted.
   `ContextDef` peer, and `Step::Materialize` needs an anchor.
 - **Liveness calibration is a labeled fixture, not an invented expectation.** The `@me/temper` goal
   census in §3.4 is the fixture. The test asserts the ranking, against real data: Temper Cloud and
-  path-to-alpha fall out of the telos entirely; Substrate-kernel and Graph-Atlas rank at the top;
-  temper-rb is present but damped; Maintenance is faintly warm. Constants get fitted to that, rather
-  than the fixture being fitted to the constants.
+  path-to-alpha fall out of the telos entirely; Substrate-kernel and Graph-Atlas rank at the top; a
+  `completed`-declared goal with an open task is present but damped; Maintenance is faintly warm.
+  Constants get fitted to that, rather than the fixture being fitted to the constants — which is how
+  `sw_done` came out at 0.0 rather than the 0.15 this spec first guessed.
+  **The fixture is FROZEN, not queried live** (`context_telos_liveness.rs`). It is still real,
+  labeled prod data — but taken as a snapshot, because prod is not stable enough to assert against:
+  during the single session that implemented T5, the census changed *twice*, and a live-query test
+  would have failed for reasons unrelated to the code under test.
 - **Determinism.** Same corpus + same lens → same `membership_fingerprint`, across repeated runs and
   a rebuilt vector index.
 - **Two-clock separation.** Closing a goal must move salience *without* changing region membership or

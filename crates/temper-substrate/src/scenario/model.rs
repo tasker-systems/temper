@@ -9,6 +9,7 @@
 //! and the loader read one source of truth.
 
 use crate::affinity::EdgeKind;
+use crate::payloads::TelosConstants;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -261,6 +262,12 @@ pub struct LensDef {
     pub knn_k: u32,
     #[serde(default = "default_cos_floor")]
     pub cos_floor: f64,
+    /// The goal-liveness calibration (spec §3.4). Defaulted as a whole, so every pre-T5 fixture YAML
+    /// stays valid and keeps meaning exactly what it meant — and so a fixture that *does* want to
+    /// probe the calibration (e.g. proving `sw_done > 0` lets a graveyard outrank live work) can say
+    /// so in one nested block.
+    #[serde(default)]
+    pub telos: TelosConstants,
     pub s_telos: f64,
     pub s_ref: f64,
     pub s_central: f64,
