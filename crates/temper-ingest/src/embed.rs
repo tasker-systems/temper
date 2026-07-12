@@ -18,6 +18,7 @@
 //!
 //! Pipeline: tokenize -> build tensors -> inference -> mean pool -> normalize
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use ndarray::{Array2, ArrayView3};
@@ -169,6 +170,72 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
     }
 }
 
+// ---- ONNX intra-op thread count ----
+//
+// ORT parallelizes a single inference across an internal "intra-op" thread
+// pool. `0` lets ORT size that pool to all cores; `N` pins it to N. This is
+// the dominant throughput lever for the embed path: the whole chunk batch is
+// one ORT run (see pipeline.rs), so the intra-op pool *is* the parallelism.
+// Measured on a 10-core box (1.2 MB body ⇒ ~840 chunks): pinning to 1 core
+// took ~473s; all cores took ~155s — 3.1× on this one knob (task 019f57d2).
+//
+// The right count differs by surface. The CLI is one user embedding one
+// document, so all cores is correct. The server (temper-api) may run N
+// concurrent ingests, where "every embed grabs every core" risks
+// oversubscription — its ideal count is an open question pending a
+// measurement under concurrent load, so the server does NOT opt in here and
+// inherits the conservative pinned default below.
+
+/// Env override for the ONNX intra-op thread count (`TEMPER_ONNX_INTRA_THREADS`).
+/// `0` = all cores, `N` = pin to N. Wins over a surface's programmatic default
+/// so a Vercel deploy (or a CLI on a shared box) can be tuned without a rebuild.
+const INTRA_THREADS_ENV: &str = "TEMPER_ONNX_INTRA_THREADS";
+
+/// Sentinel for "no surface set an explicit count"; resolution then falls
+/// through to the env var and the built-in default.
+const INTRA_THREADS_UNSET: usize = usize::MAX;
+
+/// Built-in default when nothing else is set: pin to a single core. Preserves
+/// the historical behavior for any process that never opts in (the server), so
+/// this plumbing changes no threading on its own — a surface or operator must
+/// ask for more.
+const INTRA_THREADS_DEFAULT: usize = 1;
+
+/// Process-global intra-op thread count, set once by a surface before the
+/// first embed. `INTRA_THREADS_UNSET` until then.
+static INTRA_OP_THREADS: AtomicUsize = AtomicUsize::new(INTRA_THREADS_UNSET);
+
+/// Declare this process's default ONNX intra-op thread count.
+///
+/// `0` lets ORT parallelize inference across all cores; `N` pins it to N. Call
+/// once at startup **before** the first embed — the count is read when the ORT
+/// session is lazily built and ignored afterward. The `TEMPER_ONNX_INTRA_THREADS`
+/// env var overrides whatever a surface sets here.
+///
+/// The CLI calls this with `0` (one user, one document ⇒ all cores). The server
+/// leaves it unset and inherits the conservative single-core default, pending a
+/// measurement of concurrent-ingest oversubscription (task 019f57d2).
+pub fn set_intra_op_threads(threads: usize) {
+    INTRA_OP_THREADS.store(threads, Ordering::Relaxed);
+}
+
+/// Resolve the intra-op thread count for the ORT session.
+///
+/// Precedence: `TEMPER_ONNX_INTRA_THREADS` env → [`set_intra_op_threads`] →
+/// `INTRA_THREADS_DEFAULT`. A malformed env value is ignored (falls through)
+/// rather than silently selecting a surprising count.
+fn resolve_intra_op_threads() -> usize {
+    if let Ok(raw) = std::env::var(INTRA_THREADS_ENV) {
+        if let Ok(n) = raw.trim().parse::<usize>() {
+            return n;
+        }
+    }
+    match INTRA_OP_THREADS.load(Ordering::Relaxed) {
+        INTRA_THREADS_UNSET => INTRA_THREADS_DEFAULT,
+        n => n,
+    }
+}
+
 // ---- Model management ----
 
 struct Model {
@@ -203,7 +270,7 @@ fn load_model() -> Result<&'static Model> {
 fn build_session() -> std::result::Result<Session, String> {
     Session::builder()
         .map_err(|e| format!("ort session builder: {e}"))?
-        .with_intra_threads(1)
+        .with_intra_threads(resolve_intra_op_threads())
         .map_err(|e| format!("ort threads: {e}"))?
         .commit_from_memory(MODEL_BYTES)
         .map_err(|e| format!("ort load: {e}"))
@@ -220,7 +287,7 @@ fn build_session() -> std::result::Result<Session, String> {
 
     Session::builder()
         .map_err(|e| format!("ort session builder: {e}"))?
-        .with_intra_threads(1)
+        .with_intra_threads(resolve_intra_op_threads())
         .map_err(|e| format!("ort threads: {e}"))?
         .commit_from_file(&model_path)
         .map_err(|e| format!("ort load: {e}"))
@@ -433,6 +500,40 @@ mod tests {
     }
 
     // ---- Unit tests (no model download needed) ----
+
+    #[test]
+    fn intra_op_threads_precedence() {
+        // Owns the whole precedence sequence in one test so the process-global
+        // env var + atomic are never raced by a sibling test. Saves/restores
+        // both so it leaves no residue.
+        let saved_env = std::env::var(super::INTRA_THREADS_ENV).ok();
+        let saved_atomic = super::INTRA_OP_THREADS.load(Ordering::Relaxed);
+
+        // Unset atomic + no env → built-in default (historical pinned behavior).
+        std::env::remove_var(super::INTRA_THREADS_ENV);
+        super::INTRA_OP_THREADS.store(super::INTRA_THREADS_UNSET, Ordering::Relaxed);
+        assert_eq!(resolve_intra_op_threads(), super::INTRA_THREADS_DEFAULT);
+
+        // A surface's programmatic default is honored when no env is set.
+        set_intra_op_threads(0);
+        assert_eq!(resolve_intra_op_threads(), 0);
+        set_intra_op_threads(3);
+        assert_eq!(resolve_intra_op_threads(), 3);
+
+        // Env wins over the surface default.
+        std::env::set_var(super::INTRA_THREADS_ENV, "2");
+        assert_eq!(resolve_intra_op_threads(), 2);
+
+        // A malformed env value is ignored, falling back to the surface default.
+        std::env::set_var(super::INTRA_THREADS_ENV, "not-a-number");
+        assert_eq!(resolve_intra_op_threads(), 3);
+
+        match saved_env {
+            Some(v) => std::env::set_var(super::INTRA_THREADS_ENV, v),
+            None => std::env::remove_var(super::INTRA_THREADS_ENV),
+        }
+        super::INTRA_OP_THREADS.store(saved_atomic, Ordering::Relaxed);
+    }
 
     #[test]
     fn test_l2_normalize_scales_to_unit_length() {
