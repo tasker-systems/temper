@@ -369,6 +369,73 @@ fn default_cos_floor() -> f64 {
     0.55
 }
 
+/// The goal-liveness constants (spec §3.4) — a context's telos is the liveness-weighted centroid of
+/// its goals, and these are the terms of that weighting.
+///
+/// Grouped rather than flattened onto [`LensCreated`] because they travel as one calibration, and
+/// because they are read ONLY on the context branch of the telos: a cogmap declares its telos as a
+/// charter resource and never consults them.
+///
+/// Defaulted as a whole (`#[serde(default)]` on the field) for the same append-only reason as
+/// [`LensWeights::cos`]: `kb_events` is immutable, so every `lens_created` event written before T5
+/// carries no `telos` key and must still round-trip through `replay`. The values below mirror the SQL
+/// column defaults and `_project_lens_created`'s COALESCEs — one calibration, declared in three
+/// places that must agree, so replaying an old event reproduces exactly the row that already exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct TelosConstants {
+    #[serde(default = "default_halflife_days")]
+    pub halflife_days: f64,
+    #[serde(default = "default_sw_in_progress")]
+    pub sw_in_progress: f64,
+    #[serde(default = "default_sw_backlog")]
+    pub sw_backlog: f64,
+    /// **Calibrated to 0.0**, and that is load-bearing rather than a rounding-down of 0.15. A positive
+    /// weight here is summed over EVERY closed task under a goal, and closing a task *touches* it — so
+    /// the decay term is ~1.0 for exactly the tasks that just finished. Measured on the @me/temper
+    /// census the spec nominates as its fixture (§3.4, §5), 0.15 ranked the `Maintenance` goal (68
+    /// done, 0 in progress) **first of 32**, above every arc under active development. Old completed
+    /// work is history, not purpose.
+    #[serde(default = "default_sw_done")]
+    pub sw_done: f64,
+    #[serde(default = "default_damper_paused")]
+    pub damper_paused: f64,
+    #[serde(default = "default_damper_completed")]
+    pub damper_completed: f64,
+}
+
+fn default_halflife_days() -> f64 {
+    30.0
+}
+fn default_sw_in_progress() -> f64 {
+    1.0
+}
+fn default_sw_backlog() -> f64 {
+    0.35
+}
+fn default_sw_done() -> f64 {
+    0.0
+}
+fn default_damper_paused() -> f64 {
+    0.3
+}
+fn default_damper_completed() -> f64 {
+    0.4
+}
+
+impl Default for TelosConstants {
+    fn default() -> Self {
+        TelosConstants {
+            halflife_days: default_halflife_days(),
+            sw_in_progress: default_sw_in_progress(),
+            sw_backlog: default_sw_backlog(),
+            sw_done: default_sw_done(),
+            damper_paused: default_damper_paused(),
+            damper_completed: default_damper_completed(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct LensCreated {
@@ -384,6 +451,8 @@ pub struct LensCreated {
     pub knn_k: u32,
     #[serde(default = "default_cos_floor")]
     pub cos_floor: f64,
+    #[serde(default)]
+    pub telos: TelosConstants,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

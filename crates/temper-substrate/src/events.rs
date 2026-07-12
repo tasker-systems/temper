@@ -711,6 +711,7 @@ pub async fn fire_with(
                 },
                 knn_k: lens.knn_k,
                 cos_floor: lens.cos_floor,
+                telos: lens.telos.clone(),
                 salience: payloads::SalienceWeights {
                     telos: lens.s_telos,
                     reference: lens.s_ref,
