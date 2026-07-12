@@ -7,9 +7,21 @@ native code-graph, and stake out where the code-graph is a **different thing-in-
 resource/edge knowledge graph — while remaining faithful to the event-ledger substrate and the
 "no view from nowhere" perspective.
 
-> This document is the substance of a proposed new **goal**: *Give Temper a native, event-sourced
-> code-intelligence graph, sourced from SCIP, that agents can navigate with compiler-grade precision
-> without polluting the curated knowledge graph.* §11 states the goal and a phased roadmap.
+> ### ⚠️ Framing superseded — substance stands
+>
+> This document was written for a **navigation product**: "agents navigate code with compiler-grade
+> precision." The goal was reframed the same day, after establishing the operational intention:
+> Temper does **not** compete with rust-analyzer or ripgrep on the working tree. It gives teams and
+> their steward agents an **ownership-scoped view of what has landed on `main`**, so an agent can
+> judge whether what shipped materially changes the plans in flight.
+>
+> **Read this document for the SCIP substance** — the wire format (§2), the symbol grammar, the
+> thing-in-kind argument (§1), the row shapes (§3), the sizing (§9). All of it holds.
+>
+> **Do not take its framing, its roadmap (§11), or its open questions (§10) as current.** Several of
+> those "open questions" were operational questions in architectural costume and are now settled;
+> the retention answer in §9 is sized for the wrong access pattern. The current design is
+> [`docs/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md`](../superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md).
 
 ---
 

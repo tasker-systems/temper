@@ -67,6 +67,23 @@ if [ "$(uname -s)" = "Linux" ]; then
   Cargo tooling (same as macOS):
     cargo install cargo-make cargo-nextest sqlx-cli
 
+  Code-intelligence (SCIP) tooling — same on every platform, none of it is a package-manager line:
+    # rust-analyzer is a rustup COMPONENT (stays version-matched to your toolchain):
+    rustup component add rust-analyzer
+
+    # scip CLI — no distro package, and `go install` is broken upstream (replace directives in
+    # their go.mod). Fetch the pinned release binary and verify its published sha256:
+    ver=v0.9.0; arch=$(uname -m); case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+    base=https://github.com/sourcegraph/scip/releases/download/$ver/scip-linux-$arch.tar.gz
+    curl -sSfL -o /tmp/scip.tar.gz "$base" && curl -sSfL -o /tmp/scip.sha256 "$base.sha256"
+    (cd /tmp && sha256sum -c scip.sha256) && tar xzf /tmp/scip.tar.gz -C /tmp \
+      && install -m755 /tmp/scip "$HOME/.local/bin/scip"   # ensure ~/.local/bin is on PATH
+
+    # scip-typescript needs no install — it is invoked via `bunx @sourcegraph/scip-typescript`.
+
+    # DO NOT `apt install scip` / `brew install scip`: that name belongs to the SCIP Optimization
+    # Suite (a mixed-integer-programming solver), an unrelated product. See the Brewfile.
+
   Then:
     git config core.hooksPath "$(git rev-parse --show-toplevel)/githooks"
     docker compose up -d
@@ -131,7 +148,70 @@ info "Apply migrations (sqlx migrate run)"
 export DATABASE_URL="${DATABASE_URL:-$DATABASE_URL_DEFAULT}"
 run sqlx migrate run --source "$REPO_ROOT/migrations"
 
-# ── 6. (optional) Install the temper CLI from this checkout ───────────────────────────────────────
+# ── 6. Code-intelligence (SCIP) tooling ───────────────────────────────────────────────────────────
+#
+# Feeds the code-graph work (goal: trunk-change awareness). None of these is a brew formula, and one
+# of them is an outright name trap — see the Brewfile for the full story. Non-fatal: a network hiccup
+# here must not block someone who just wants `cargo make check` to run.
+info "Code-intelligence tooling (SCIP)"
+
+# rust-analyzer for INDEXING comes from brew (installed by the Brewfile in step 1), NOT from
+# `rustup component add`. The rustup component is pinned to the Rust release cadence and lags
+# rust-analyzer's own releases by up to SIX MONTHS — fine for an IDE, wrong for an indexer. We ran a
+# six-month-old build and it PANICKED on a sibling repo (a since-fixed salsa bug), which we nearly
+# wrote up as a defect in that repo's dependency graph. See the Brewfile for the full story.
+#
+# Note `command -v rust-analyzer` is NOT a sufficient presence check: rustup leaves a shim on PATH that
+# exists and then fails at runtime when the component is absent. Probe by RUNNING it.
+if ! rust-analyzer --version >/dev/null 2>&1; then
+  info "rust-analyzer not runnable — 'brew bundle' (step 1) installs it; check your PATH."
+else
+  ra_ver="$(rust-analyzer --version 2>/dev/null)"
+  skip "rust-analyzer present ($ra_ver)"
+  # A rustup-shim rust-analyzer reports the TOOLCHAIN version ("rust-analyzer 1.93.0"); the brew build
+  # reports its own ("rust-analyzer 0.0.0 (<sha> <date>)"). If you are on the former, an older brew
+  # formula may be shadowed on PATH — for indexing you want the brew one.
+  case "$ra_ver" in
+    "rust-analyzer 1."*) info "  ^ that is the RUSTUP component (toolchain-pinned, can be months stale)." ;
+                         info "    For SCIP indexing prefer the brew build: put $(brew --prefix)/bin ahead of ~/.cargo/bin." ;;
+  esac
+fi
+
+# scip CLI — pinned release binary + published-checksum verification. There is no brew formula
+# (`brew install scip` gets you a mixed-integer-programming solver), and `go install` is broken
+# upstream by replace directives in their go.mod.
+SCIP_CLI_VERSION="v0.9.0"
+if have scip && scip --version 2>/dev/null | grep -q '^scip version'; then
+  skip "scip CLI present ($(scip --version 2>/dev/null))"
+elif have scip; then
+  info "a DIFFERENT 'scip' is on your PATH (likely the SCIP Optimization Suite, a MIP solver)."
+  info "  Sourcegraph's scip is a different product. Install it elsewhere and order your PATH."
+elif [ "$DRY_RUN" -eq 1 ]; then
+  printf '    (dry-run) download + verify scip %s into ~/.local/bin\n' "$SCIP_CLI_VERSION"
+else
+  scip_arch="$(uname -m)"; [ "$scip_arch" = "x86_64" ] && scip_arch="amd64"
+  scip_url="https://github.com/sourcegraph/scip/releases/download/${SCIP_CLI_VERSION}/scip-darwin-${scip_arch}.tar.gz"
+  scip_tmp="$(mktemp -d)"
+  if curl -sSfL -o "$scip_tmp/scip.tar.gz" "$scip_url" \
+     && curl -sSfL -o "$scip_tmp/scip.sha256" "${scip_url}.sha256" \
+     && [ "$(shasum -a 256 "$scip_tmp/scip.tar.gz" | cut -d' ' -f1)" = "$(cut -d' ' -f1 < "$scip_tmp/scip.sha256")" ] \
+     && tar xzf "$scip_tmp/scip.tar.gz" -C "$scip_tmp"; then
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 "$scip_tmp/scip" "$HOME/.local/bin/scip"
+    info "installed scip ${SCIP_CLI_VERSION} → ~/.local/bin/scip"
+    # shellcheck disable=SC2016  # $HOME/$PATH are literals we want printed verbatim to paste
+    have scip || printf '      (add to your shell profile: export PATH="$HOME/.local/bin:$PATH")\n'
+  else
+    info "scip CLI install failed (download or checksum) — fetch it by hand from"
+    info "  https://github.com/sourcegraph/scip/releases/tag/${SCIP_CLI_VERSION}"
+  fi
+  rm -rf "$scip_tmp"
+fi
+
+# scip-typescript needs no install step — invoked as `bunx @sourcegraph/scip-typescript`.
+skip "scip-typescript via bunx (no install needed)"
+
+# ── 7. (optional) Install the temper CLI from this checkout ───────────────────────────────────────
 if [ "$WITH_CLI" -eq 1 ]; then
   info "Install temper CLI from checkout (--with-cli)"
   # --locked: install against the committed Cargo.lock. Without it, `cargo install`
