@@ -1,4 +1,5 @@
 import { defineSchedule } from "eve/schedules";
+import { TEMPER_TS_VERSION } from "temper-ts";
 
 import worker from "../channels/worker.js";
 import { fetchWithRetry } from "../lib/fetch-retry.js";
@@ -48,7 +49,7 @@ export default defineSchedule({
         // BEFORE the outbound fetch so a hop that dies (cold-start 500, fetch-never-lands, a receive()
         // that throws) is still pinned to this id via the catch below.
         const correlationId = crypto.randomUUID();
-        console.log(`[steward-dispatch] tick ${correlationId} starting`);
+        console.log(`[steward-dispatch] tick ${correlationId} starting (temper-ts ${TEMPER_TS_VERSION})`);
         try {
           const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
           const token = await temperToken();
