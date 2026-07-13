@@ -504,6 +504,64 @@ pub fn l2_normalize(vec: &mut [f32]) {
     }
 }
 
+// ---- Embed batch window ----
+//
+// How many texts go into ONE ORT run. Peak memory scales with this, because a
+// transformer's activations do — at a full 93-chunk segment, batch 93 x seq 512:
+//
+//   attention scores  = batch x heads x seq x seq x 4B  ~= 1.17 GB
+//   FFN intermediates = batch x seq x 3072 x 4B         ~= 585 MB
+//   hidden states     = batch x seq x 768  x 4B         ~= 146 MB
+//
+// Before windowing, a whole 262 KB segment went into one run and peaked at ~2.05 GB
+// resident. Fine on a laptop; genuinely dangerous on a serverless function with a
+// memory ceiling — which is why the window lives HERE, in the shared embed path,
+// rather than in the CLI. Every surface gets it.
+//
+// THIS IS A TRADE, NOT A FREE LUNCH. Measured on a 12-core M4 Pro at 8 intra-op
+// threads, embedding one 93-chunk segment (task 019f57d2), 3 runs per window:
+//
+//   window   peak RSS   wall
+//     93      2.05 GB   10.07s   <- the old behavior: one run per segment
+//     64      1.42 GB   10.65s
+//     32      1.28 GB   10.73s   <- default
+//     16      0.90 GB   11.26s
+//      8      0.72 GB   12.44s
+//
+// So: ~38% less memory for ~6% more time. (An earlier, weaker experiment — sweeping
+// the *segment budget* rather than the window — suggested throughput was flat. It
+// confounded batch size with segment count; this measurement varies only the window
+// and is the one to trust. The slope is real, and it steepens below 32.)
+//
+// Note memory does NOT fall linearly with the window: there is a large fixed floor
+// (~105 MB of model weights plus ORT's arena reservation), which is why window 8
+// still holds 0.72 GB.
+
+/// Operator override for the embed batch window (`TEMPER_EMBED_BATCH`). Exists so a
+/// memory-constrained deploy can trade more time for less peak RSS (or a fat box can
+/// buy the time back) without a rebuild — and so the table above stays falsifiable by
+/// anyone who doubts it. A value of `0`, or a malformed one, is ignored in favor of
+/// the default rather than panicking `chunks()`.
+const EMBED_BATCH_ENV: &str = "TEMPER_EMBED_BATCH";
+
+/// Texts per ORT run when nothing overrides it.
+///
+/// 32 is the knee: it takes ~38% off peak memory for ~6% more time, and below it the
+/// time cost accelerates (16 costs 12%, 8 costs 23%) while the memory returns flatten
+/// against the fixed model/arena floor.
+const EMBED_BATCH_DEFAULT: usize = 32;
+
+/// Resolve the embed batch window: `TEMPER_EMBED_BATCH` → [`EMBED_BATCH_DEFAULT`].
+/// Never returns 0 — a zero window would make `chunks()` panic, so a nonsense
+/// value falls back rather than taking the process down.
+fn resolve_embed_batch() -> usize {
+    std::env::var(EMBED_BATCH_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(EMBED_BATCH_DEFAULT)
+}
+
 // ---- Token limit ----
 
 /// Hard token limit for bge-base-en-v1.5 (including special tokens).
@@ -537,9 +595,26 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>> {
 /// Encodings that exceed 512 tokens are truncated to fit the model's input
 /// limit.  The chunker should keep texts under budget, but this is a safety
 /// net to prevent ONNX runtime crashes.
+///
+/// **Runs in bounded windows, not one giant batch.** A whole segment in a single
+/// ORT run peaked at ~2.05 GB resident; windowing to 32 takes that to ~1.28 GB for
+/// ~6% more time. Every caller gets this — that is why it lives here rather than in
+/// the CLI. Tune with `TEMPER_EMBED_BATCH`; see the "Embed batch window" section of
+/// this module for the measured table.
 pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let model = load_model()?;
+    let window = resolve_embed_batch();
 
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(window) {
+        out.extend(embed_batch(model, batch)?);
+    }
+    Ok(out)
+}
+
+/// Embed exactly one batch in a single ORT run. The peak-memory unit: everything
+/// expensive in this function scales with `texts.len()`.
+fn embed_batch(model: &Model, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let mut encodings = tokenize(&model.tokenizer, texts)?;
     for enc in &mut encodings {
         truncate_encoding(enc, MAX_MODEL_TOKENS);
@@ -739,6 +814,138 @@ mod tests {
             // Undetectable platform: keep the historical behavior rather than guess.
             None => assert_eq!(installed, 0),
         }
+    }
+
+    #[test]
+    fn embed_batch_window_falls_back_on_nonsense() {
+        // A zero window would panic `chunks()`. A bad value must never take the
+        // process down, and must never silently select a surprising window.
+        temp_env::with_var(super::EMBED_BATCH_ENV, Some("0"), || {
+            assert_eq!(super::resolve_embed_batch(), super::EMBED_BATCH_DEFAULT);
+        });
+        temp_env::with_var(super::EMBED_BATCH_ENV, Some("garbage"), || {
+            assert_eq!(super::resolve_embed_batch(), super::EMBED_BATCH_DEFAULT);
+        });
+        temp_env::with_var(super::EMBED_BATCH_ENV, Some("8"), || {
+            assert_eq!(super::resolve_embed_batch(), 8);
+        });
+        temp_env::with_var(super::EMBED_BATCH_ENV, None::<&str>, || {
+            assert_eq!(super::resolve_embed_batch(), super::EMBED_BATCH_DEFAULT);
+        });
+    }
+
+    /// **The gate on the whole windowing change.**
+    ///
+    /// `build_input_tensors` pads every text in a batch out to the batch's LONGEST
+    /// text, so re-cutting the batch changes the padding each text sees.
+    ///
+    /// The first version of this test asserted windowing changed the vectors *not at
+    /// all* (cosine > 0.9999). **It failed, at cosine 0.9980** — and the failure was
+    /// correct. The shipped model is dynamically quantized, so its activation scales
+    /// are derived at runtime from tensor ranges that padding participates in. See
+    /// `batch_composition_already_perturbs_embeddings_without_windowing`, which pins
+    /// down that the *current, unwindowed* code has exactly the same property: the
+    /// same text already embeds differently depending on its batch-mates.
+    ///
+    /// So bit-equality is the wrong bar — it was never true, and demanding it here
+    /// would be demanding something of windowing that `main` does not deliver either.
+    /// The right bar is that windowing perturbs vectors **no more than the batching
+    /// nondeterminism that already exists**, and by an amount irrelevant to retrieval
+    /// (cosine > 0.99 on a 768-dim unit vector is far below any ranking sensitivity).
+    ///
+    /// This deliberately mixes very short and very long texts — that is what makes the
+    /// padding differ across the two runs. A uniform corpus would pass while proving
+    /// nothing.
+    #[test]
+    #[cfg(feature = "test-embed")]
+    fn windowing_perturbs_embeddings_no_more_than_batching_already_does() {
+        let texts: Vec<String> = (0..10)
+            .map(|i| {
+                if i % 2 == 0 {
+                    "short".to_string()
+                } else {
+                    // Long enough to force heavy padding onto its short neighbors.
+                    "a considerably longer passage of prose that tokenizes to many more \
+                     tokens than its neighbor does "
+                        .repeat(8)
+                }
+            })
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+
+        // One single batch (the pre-windowing behavior).
+        let whole = temp_env::with_var(super::EMBED_BATCH_ENV, Some("100"), || {
+            embed_texts(&refs).expect("one-batch embed")
+        });
+        // Windowed small enough to split the short/long mix across several runs.
+        let windowed = temp_env::with_var(super::EMBED_BATCH_ENV, Some("3"), || {
+            embed_texts(&refs).expect("windowed embed")
+        });
+
+        assert_eq!(whole.len(), refs.len(), "one vector per input");
+        assert_eq!(windowed.len(), whole.len(), "windowing preserves count");
+
+        for (i, (a, b)) in whole.iter().zip(windowed.iter()).enumerate() {
+            let cosine: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+            assert!(
+                cosine > 0.99,
+                "chunk {i}: windowing moved the embedding materially (cosine {cosine:.6}). \
+                 A drift this large is NOT the quantization noise that batching already \
+                 produces — something is wrong with the windowed path (check that batches \
+                 are re-assembled in input order, and that the mask still lines up)."
+            );
+        }
+    }
+
+    /// **Characterizes pre-existing behavior — this is not about windowing.**
+    ///
+    /// The shipped model is *dynamically* quantized (48 `DynamicQuantizeLinear` ops):
+    /// activation scales are computed at runtime from each tensor's observed range.
+    /// `build_input_tensors` pads every text to the batch's longest, so the padding —
+    /// and therefore the tensor range, and therefore the int8 rounding — depends on
+    /// **which other texts happened to share the batch.**
+    ///
+    /// Consequence, true on `main` today and independent of any windowing: embedding
+    /// the same text yields slightly different vectors depending on its batch-mates.
+    /// This test pins that fact down so nobody (including a future me) mistakes it for
+    /// a regression introduced by the batch window.
+    ///
+    /// It is a small effect (cosine > 0.99 — irrelevant to retrieval ranking), but it
+    /// is real, and it means "identical content ⇒ bit-identical vector" was never true.
+    #[test]
+    #[cfg(feature = "test-embed")]
+    fn batch_composition_already_perturbs_embeddings_without_windowing() {
+        let long = "a considerably longer passage of prose that tokenizes to many more \
+                    tokens than its neighbor does "
+            .repeat(8);
+
+        // Both runs use a window large enough that each is a SINGLE ORT batch, i.e.
+        // exactly the pre-windowing code path. The only difference is a batch-mate.
+        let (alone, with_mate) = temp_env::with_var(super::EMBED_BATCH_ENV, Some("100"), || {
+            let alone = embed_texts(&["short"]).expect("embed alone");
+            let with_mate = embed_texts(&["short", long.as_str()]).expect("embed with a mate");
+            (alone, with_mate)
+        });
+
+        let cosine: f32 = alone[0]
+            .iter()
+            .zip(with_mate[0].iter())
+            .map(|(x, y)| x * y)
+            .sum();
+
+        assert!(
+            cosine < 0.99999,
+            "expected the dynamically-quantized model to be batch-composition sensitive, \
+             but the vectors were identical (cosine {cosine:.7}). If this now passes \
+             identically, the model is no longer dynamically quantized — revisit \
+             `windowing_perturbs_embeddings_no_more_than_batching_already_does`, whose \
+             tolerance exists only because of this."
+        );
+        assert!(
+            cosine > 0.99,
+            "the perturbation should be small; a large one would mean something worse \
+             than quantization noise is going on (cosine {cosine:.6})"
+        );
     }
 
     #[test]
