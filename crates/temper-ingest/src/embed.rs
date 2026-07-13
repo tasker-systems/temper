@@ -184,26 +184,44 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
 // ---- ONNX intra-op thread count ----
 //
 // ORT parallelizes a single inference across an internal "intra-op" thread
-// pool. `0` lets ORT size that pool to all cores; `N` pins it to N. This is
-// the dominant throughput lever for the embed path: the whole chunk batch is
-// one ORT run (see pipeline.rs), so the intra-op pool *is* the parallelism.
-// Measured on a 10-core box (1.2 MB body ⇒ ~840 chunks): pinning to 1 core
-// took ~473s; all cores took ~155s — 3.1× on this one knob (task 019f57d2).
+// pool. `N` pins it to N; `0` asks ORT to size the pool itself. This is the
+// dominant throughput lever for the embed path: the whole chunk batch is one
+// ORT run (see pipeline.rs), so the intra-op pool *is* the parallelism.
 //
-// The right count differs by surface. The CLI is one user embedding one
-// document, so all cores is correct. The server (temper-api) may run N
-// concurrent ingests, where "every embed grabs every core" risks
-// oversubscription — its ideal count is an open question pending a
-// measurement under concurrent load, so the server does NOT opt in here and
-// inherits the conservative pinned default below.
+// `0` DOES NOT MEAN "ALL CORES". It means "ORT's guess", and on a heterogeneous
+// ARM box the guess is poor. Measured on a 12-core M4 Pro (8 performance + 4
+// efficiency), embedding one 262 KB segment (task 019f57d2):
+//
+//     0 (ORT picks) 10.77s   <- only ~598% CPU: ORT used about 6 threads
+//     4             15.64s
+//     6             11.59s
+//     8 (P-cores)    9.62s   <- best
+//    10              9.88s
+//    12 (all cores)  9.73s
+//
+// Two counterintuitive results: `0` leaves half the machine idle, and using
+// *all* 12 is also worse than 8 — the 4 efficiency cores drag every intra-op
+// barrier, since the batch can only advance as fast as its slowest thread. The
+// optimum is the PERFORMANCE-core count, not the core count. The CLI therefore
+// resolves its default by detecting performance cores
+// (`temper_cli::actions::embed_threads`) rather than passing `0`.
+//
+// The right count still differs by surface. The CLI is one user embedding one
+// document. The server (temper-api) may run N concurrent ingests, where "every
+// embed grabs every core" risks oversubscription — its ideal count is an open
+// question pending a measurement under concurrent load (task 019f5892), so the
+// server does NOT opt in here and inherits the conservative pinned default
+// below.
 
 /// Env override for the ONNX intra-op thread count (`TEMPER_ONNX_INTRA_THREADS`).
-/// `0` = all cores, `N` = pin to N. Wins over a surface's programmatic default
-/// so a Vercel deploy (or a CLI on a shared box) can be tuned without a rebuild.
+/// `0` = let ORT choose, `N` = pin to N. Wins over a surface's programmatic
+/// default so a Vercel deploy (or a CLI on a shared box) can be tuned without a
+/// rebuild — but loses to an explicit [`force_intra_op_threads`] (a user typing
+/// a flag outranks ambient environment).
 const INTRA_THREADS_ENV: &str = "TEMPER_ONNX_INTRA_THREADS";
 
-/// Sentinel for "no surface set an explicit count"; resolution then falls
-/// through to the env var and the built-in default.
+/// Sentinel for "not set at this layer"; resolution then falls through to the
+/// next one down.
 const INTRA_THREADS_UNSET: usize = usize::MAX;
 
 /// Built-in default when nothing else is set: pin to a single core. Preserves
@@ -216,26 +234,48 @@ const INTRA_THREADS_DEFAULT: usize = 1;
 /// first embed. `INTRA_THREADS_UNSET` until then.
 static INTRA_OP_THREADS: AtomicUsize = AtomicUsize::new(INTRA_THREADS_UNSET);
 
+/// Explicit user-supplied count (the CLI's `--embed-threads`). Outranks the env
+/// var. `INTRA_THREADS_UNSET` until a user actually asks for a count.
+static INTRA_OP_THREADS_FORCED: AtomicUsize = AtomicUsize::new(INTRA_THREADS_UNSET);
+
 /// Declare this process's default ONNX intra-op thread count.
 ///
-/// `0` lets ORT parallelize inference across all cores; `N` pins it to N. Call
-/// once at startup **before** the first embed — the count is read when the ORT
-/// session is lazily built and ignored afterward. The `TEMPER_ONNX_INTRA_THREADS`
-/// env var overrides whatever a surface sets here.
+/// `N` pins the intra-op pool to N; `0` defers to ORT's own sizing (which is
+/// *not* "all cores" — see the module comment above). Call once at startup
+/// **before** the first embed: the count is read when the ORT session is lazily
+/// built and ignored afterward.
 ///
-/// The CLI calls this with `0` (one user, one document ⇒ all cores). The server
-/// leaves it unset and inherits the conservative single-core default, pending a
-/// measurement of concurrent-ingest oversubscription (task 019f57d2).
+/// This is the *surface default* layer — both `TEMPER_ONNX_INTRA_THREADS` and
+/// [`force_intra_op_threads`] override it. The CLI calls this with its detected
+/// performance-core count. The server leaves it unset and inherits the
+/// conservative single-core default, pending a measurement of concurrent-ingest
+/// oversubscription (task 019f5892).
 pub fn set_intra_op_threads(threads: usize) {
     INTRA_OP_THREADS.store(threads, Ordering::Relaxed);
 }
 
+/// Force the intra-op thread count, overriding both the surface default and the
+/// `TEMPER_ONNX_INTRA_THREADS` env var.
+///
+/// This is the top of the precedence chain and exists for one reason: a user who
+/// types `--embed-threads N` must get N, even on a machine whose environment
+/// already exports the env var. Ambient config should never silently beat an
+/// explicit request.
+pub fn force_intra_op_threads(threads: usize) {
+    INTRA_OP_THREADS_FORCED.store(threads, Ordering::Relaxed);
+}
+
 /// Resolve the intra-op thread count for the ORT session.
 ///
-/// Precedence: `TEMPER_ONNX_INTRA_THREADS` env → [`set_intra_op_threads`] →
-/// `INTRA_THREADS_DEFAULT`. A malformed env value is ignored (falls through)
+/// Precedence: [`force_intra_op_threads`] (the `--embed-threads` flag) →
+/// `TEMPER_ONNX_INTRA_THREADS` env → [`set_intra_op_threads`] (surface default)
+/// → `INTRA_THREADS_DEFAULT`. A malformed env value is ignored (falls through)
 /// rather than silently selecting a surprising count.
 fn resolve_intra_op_threads() -> usize {
+    match INTRA_OP_THREADS_FORCED.load(Ordering::Relaxed) {
+        INTRA_THREADS_UNSET => {}
+        forced => return forced,
+    }
     if let Ok(raw) = std::env::var(INTRA_THREADS_ENV) {
         if let Ok(n) = raw.trim().parse::<usize>() {
             return n;
@@ -464,6 +504,64 @@ pub fn l2_normalize(vec: &mut [f32]) {
     }
 }
 
+// ---- Embed batch window ----
+//
+// How many texts go into ONE ORT run. Peak memory scales with this, because a
+// transformer's activations do — at a full 93-chunk segment, batch 93 x seq 512:
+//
+//   attention scores  = batch x heads x seq x seq x 4B  ~= 1.17 GB
+//   FFN intermediates = batch x seq x 3072 x 4B         ~= 585 MB
+//   hidden states     = batch x seq x 768  x 4B         ~= 146 MB
+//
+// Before windowing, a whole 262 KB segment went into one run and peaked at ~2.05 GB
+// resident. Fine on a laptop; genuinely dangerous on a serverless function with a
+// memory ceiling — which is why the window lives HERE, in the shared embed path,
+// rather than in the CLI. Every surface gets it.
+//
+// THIS IS A TRADE, NOT A FREE LUNCH. Measured on a 12-core M4 Pro at 8 intra-op
+// threads, embedding one 93-chunk segment (task 019f57d2), 3 runs per window:
+//
+//   window   peak RSS   wall
+//     93      2.05 GB   10.07s   <- the old behavior: one run per segment
+//     64      1.42 GB   10.65s
+//     32      1.28 GB   10.73s   <- default
+//     16      0.90 GB   11.26s
+//      8      0.72 GB   12.44s
+//
+// So: ~38% less memory for ~6% more time. (An earlier, weaker experiment — sweeping
+// the *segment budget* rather than the window — suggested throughput was flat. It
+// confounded batch size with segment count; this measurement varies only the window
+// and is the one to trust. The slope is real, and it steepens below 32.)
+//
+// Note memory does NOT fall linearly with the window: there is a large fixed floor
+// (~105 MB of model weights plus ORT's arena reservation), which is why window 8
+// still holds 0.72 GB.
+
+/// Operator override for the embed batch window (`TEMPER_EMBED_BATCH`). Exists so a
+/// memory-constrained deploy can trade more time for less peak RSS (or a fat box can
+/// buy the time back) without a rebuild — and so the table above stays falsifiable by
+/// anyone who doubts it. A value of `0`, or a malformed one, is ignored in favor of
+/// the default rather than panicking `chunks()`.
+const EMBED_BATCH_ENV: &str = "TEMPER_EMBED_BATCH";
+
+/// Texts per ORT run when nothing overrides it.
+///
+/// 32 is the knee: it takes ~38% off peak memory for ~6% more time, and below it the
+/// time cost accelerates (16 costs 12%, 8 costs 23%) while the memory returns flatten
+/// against the fixed model/arena floor.
+const EMBED_BATCH_DEFAULT: usize = 32;
+
+/// Resolve the embed batch window: `TEMPER_EMBED_BATCH` → [`EMBED_BATCH_DEFAULT`].
+/// Never returns 0 — a zero window would make `chunks()` panic, so a nonsense
+/// value falls back rather than taking the process down.
+fn resolve_embed_batch() -> usize {
+    std::env::var(EMBED_BATCH_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(EMBED_BATCH_DEFAULT)
+}
+
 // ---- Token limit ----
 
 /// Hard token limit for bge-base-en-v1.5 (including special tokens).
@@ -497,9 +595,26 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>> {
 /// Encodings that exceed 512 tokens are truncated to fit the model's input
 /// limit.  The chunker should keep texts under budget, but this is a safety
 /// net to prevent ONNX runtime crashes.
+///
+/// **Runs in bounded windows, not one giant batch.** A whole segment in a single
+/// ORT run peaked at ~2.05 GB resident; windowing to 32 takes that to ~1.28 GB for
+/// ~6% more time. Every caller gets this — that is why it lives here rather than in
+/// the CLI. Tune with `TEMPER_EMBED_BATCH`; see the "Embed batch window" section of
+/// this module for the measured table.
 pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let model = load_model()?;
+    let window = resolve_embed_batch();
 
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(window) {
+        out.extend(embed_batch(model, batch)?);
+    }
+    Ok(out)
+}
+
+/// Embed exactly one batch in a single ORT run. The peak-memory unit: everything
+/// expensive in this function scales with `texts.len()`.
+fn embed_batch(model: &Model, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let mut encodings = tokenize(&model.tokenizer, texts)?;
     for enc in &mut encodings {
         truncate_encoding(enc, MAX_MODEL_TOKENS);
@@ -647,11 +762,190 @@ mod tests {
         std::env::set_var(super::INTRA_THREADS_ENV, "not-a-number");
         assert_eq!(resolve_intra_op_threads(), 3);
 
+        // An explicit user request (`--embed-threads`) outranks BOTH the env var and the
+        // surface default. This is the layer that exists so a flag a user typed is never
+        // silently beaten by an env var their shell happens to export.
+        std::env::set_var(super::INTRA_THREADS_ENV, "2");
+        force_intra_op_threads(7);
+        assert_eq!(
+            resolve_intra_op_threads(),
+            7,
+            "an explicitly forced count must beat a valid env var"
+        );
+
+        // `--embed-threads 0` is a real request ("let ORT decide"), not "unset" — it must
+        // still beat the env var. This is the case a naive `if forced != 0` check breaks.
+        force_intra_op_threads(0);
+        assert_eq!(
+            resolve_intra_op_threads(),
+            0,
+            "a forced 0 is a request, not an absence — it must still beat env"
+        );
+
+        // Clearing the forced layer falls back through env again.
+        super::INTRA_OP_THREADS_FORCED.store(super::INTRA_THREADS_UNSET, Ordering::Relaxed);
+        assert_eq!(resolve_intra_op_threads(), 2);
+
         match saved_env {
             Some(v) => std::env::set_var(super::INTRA_THREADS_ENV, v),
             None => std::env::remove_var(super::INTRA_THREADS_ENV),
         }
         super::INTRA_OP_THREADS.store(saved_atomic, Ordering::Relaxed);
+        super::INTRA_OP_THREADS_FORCED.store(super::INTRA_THREADS_UNSET, Ordering::Relaxed);
+    }
+
+    /// The surface default the CLI actually installs must be a real, usable count on this
+    /// machine — not the `0` it used to pass, and not a fabricated number on a platform
+    /// where detection is impossible.
+    #[test]
+    fn cli_surface_default_prefers_performance_cores() {
+        let detected = crate::cpu::performance_cores();
+        let installed = detected.unwrap_or(0);
+        match detected {
+            Some(p) => {
+                assert!(p > 0, "a detected performance-core count must be positive");
+                assert_eq!(installed, p, "the CLI installs the detected count verbatim");
+                assert_ne!(
+                    installed, 0,
+                    "on a machine where detection works, the CLI must NOT fall back to \
+                     ORT's `0` guess — that is the regression this whole task removed"
+                );
+            }
+            // Undetectable platform: keep the historical behavior rather than guess.
+            None => assert_eq!(installed, 0),
+        }
+    }
+
+    #[test]
+    fn embed_batch_window_falls_back_on_nonsense() {
+        // A zero window would panic `chunks()`. A bad value must never take the
+        // process down, and must never silently select a surprising window.
+        temp_env::with_var(super::EMBED_BATCH_ENV, Some("0"), || {
+            assert_eq!(super::resolve_embed_batch(), super::EMBED_BATCH_DEFAULT);
+        });
+        temp_env::with_var(super::EMBED_BATCH_ENV, Some("garbage"), || {
+            assert_eq!(super::resolve_embed_batch(), super::EMBED_BATCH_DEFAULT);
+        });
+        temp_env::with_var(super::EMBED_BATCH_ENV, Some("8"), || {
+            assert_eq!(super::resolve_embed_batch(), 8);
+        });
+        temp_env::with_var(super::EMBED_BATCH_ENV, None::<&str>, || {
+            assert_eq!(super::resolve_embed_batch(), super::EMBED_BATCH_DEFAULT);
+        });
+    }
+
+    /// **The gate on the whole windowing change.**
+    ///
+    /// `build_input_tensors` pads every text in a batch out to the batch's LONGEST
+    /// text, so re-cutting the batch changes the padding each text sees.
+    ///
+    /// The first version of this test asserted windowing changed the vectors *not at
+    /// all* (cosine > 0.9999). **It failed, at cosine 0.9980** — and the failure was
+    /// correct. The shipped model is dynamically quantized, so its activation scales
+    /// are derived at runtime from tensor ranges that padding participates in. See
+    /// `batch_composition_already_perturbs_embeddings_without_windowing`, which pins
+    /// down that the *current, unwindowed* code has exactly the same property: the
+    /// same text already embeds differently depending on its batch-mates.
+    ///
+    /// So bit-equality is the wrong bar — it was never true, and demanding it here
+    /// would be demanding something of windowing that `main` does not deliver either.
+    /// The right bar is that windowing perturbs vectors **no more than the batching
+    /// nondeterminism that already exists**, and by an amount irrelevant to retrieval
+    /// (cosine > 0.99 on a 768-dim unit vector is far below any ranking sensitivity).
+    ///
+    /// This deliberately mixes very short and very long texts — that is what makes the
+    /// padding differ across the two runs. A uniform corpus would pass while proving
+    /// nothing.
+    #[test]
+    #[cfg(feature = "test-embed")]
+    fn windowing_perturbs_embeddings_no_more_than_batching_already_does() {
+        let texts: Vec<String> = (0..10)
+            .map(|i| {
+                if i % 2 == 0 {
+                    "short".to_string()
+                } else {
+                    // Long enough to force heavy padding onto its short neighbors.
+                    "a considerably longer passage of prose that tokenizes to many more \
+                     tokens than its neighbor does "
+                        .repeat(8)
+                }
+            })
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+
+        // One single batch (the pre-windowing behavior).
+        let whole = temp_env::with_var(super::EMBED_BATCH_ENV, Some("100"), || {
+            embed_texts(&refs).expect("one-batch embed")
+        });
+        // Windowed small enough to split the short/long mix across several runs.
+        let windowed = temp_env::with_var(super::EMBED_BATCH_ENV, Some("3"), || {
+            embed_texts(&refs).expect("windowed embed")
+        });
+
+        assert_eq!(whole.len(), refs.len(), "one vector per input");
+        assert_eq!(windowed.len(), whole.len(), "windowing preserves count");
+
+        for (i, (a, b)) in whole.iter().zip(windowed.iter()).enumerate() {
+            let cosine: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+            assert!(
+                cosine > 0.99,
+                "chunk {i}: windowing moved the embedding materially (cosine {cosine:.6}). \
+                 A drift this large is NOT the quantization noise that batching already \
+                 produces — something is wrong with the windowed path (check that batches \
+                 are re-assembled in input order, and that the mask still lines up)."
+            );
+        }
+    }
+
+    /// **Characterizes pre-existing behavior — this is not about windowing.**
+    ///
+    /// The shipped model is *dynamically* quantized (48 `DynamicQuantizeLinear` ops):
+    /// activation scales are computed at runtime from each tensor's observed range.
+    /// `build_input_tensors` pads every text to the batch's longest, so the padding —
+    /// and therefore the tensor range, and therefore the int8 rounding — depends on
+    /// **which other texts happened to share the batch.**
+    ///
+    /// Consequence, true on `main` today and independent of any windowing: embedding
+    /// the same text yields slightly different vectors depending on its batch-mates.
+    /// This test pins that fact down so nobody (including a future me) mistakes it for
+    /// a regression introduced by the batch window.
+    ///
+    /// It is a small effect (cosine > 0.99 — irrelevant to retrieval ranking), but it
+    /// is real, and it means "identical content ⇒ bit-identical vector" was never true.
+    #[test]
+    #[cfg(feature = "test-embed")]
+    fn batch_composition_already_perturbs_embeddings_without_windowing() {
+        let long = "a considerably longer passage of prose that tokenizes to many more \
+                    tokens than its neighbor does "
+            .repeat(8);
+
+        // Both runs use a window large enough that each is a SINGLE ORT batch, i.e.
+        // exactly the pre-windowing code path. The only difference is a batch-mate.
+        let (alone, with_mate) = temp_env::with_var(super::EMBED_BATCH_ENV, Some("100"), || {
+            let alone = embed_texts(&["short"]).expect("embed alone");
+            let with_mate = embed_texts(&["short", long.as_str()]).expect("embed with a mate");
+            (alone, with_mate)
+        });
+
+        let cosine: f32 = alone[0]
+            .iter()
+            .zip(with_mate[0].iter())
+            .map(|(x, y)| x * y)
+            .sum();
+
+        assert!(
+            cosine < 0.99999,
+            "expected the dynamically-quantized model to be batch-composition sensitive, \
+             but the vectors were identical (cosine {cosine:.7}). If this now passes \
+             identically, the model is no longer dynamically quantized — revisit \
+             `windowing_perturbs_embeddings_no_more_than_batching_already_does`, whose \
+             tolerance exists only because of this."
+        );
+        assert!(
+            cosine > 0.99,
+            "the perturbation should be small; a large one would mean something worse \
+             than quantization noise is going on (cosine {cosine:.6})"
+        );
     }
 
     #[test]

@@ -410,6 +410,23 @@ pub fn chunk_markdown_with_prefix(text: &str, initial_breadcrumb: &[String]) -> 
         // Try emphasis sub-splitting first (only activates if oversized).
         let sub_groups = split_at_emphasis_subheadings(&section.lines);
 
+        // `heading_depth` answers "do I BEGIN a section?", not "what section am I in?" —
+        // that second question is `header_path`'s job, and every chunk of the section
+        // carries it. Only the FIRST chunk of a section opens it; the rest are
+        // continuations and carry depth 0 (bare prose).
+        //
+        // This is the contract `temper_substrate::content::map_heading` documents and that
+        // `reconstruct_body` reads: it re-emits a `## Heading` line exactly when depth is
+        // non-zero. Stamping the section's depth onto EVERY chunk — as this did — made a
+        // size-split section re-emit its heading at every internal chunk boundary, which is
+        // the long-standing "show duplicates a line" bug: +12,990 bytes of duplicated
+        // headings on one round-trip of a 1.2 MB document.
+        //
+        // Note the segment-boundary case already behaved this way: a segment cut mid-section
+        // yields depth 0 with an inherited ancestor path. This makes the size-split case
+        // agree with it.
+        let mut section_opened = false;
+
         for group in &sub_groups {
             let group_chunks = split_oversized(group);
 
@@ -418,10 +435,16 @@ pub fn chunk_markdown_with_prefix(text: &str, initial_breadcrumb: &[String]) -> 
                 if trimmed.is_empty() {
                     continue;
                 }
+                let heading_depth = if section_opened {
+                    0
+                } else {
+                    section_opened = true;
+                    section.heading_depth
+                };
                 chunks.push(ChunkData {
                     chunk_index,
                     header_path: section.header_path.clone(),
-                    heading_depth: section.heading_depth,
+                    heading_depth,
                     content: trimmed.to_string(),
                     content_hash: sha256_hex(trimmed),
                 });
@@ -436,6 +459,77 @@ pub fn chunk_markdown_with_prefix(text: &str, initial_breadcrumb: &[String]) -> 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod heading_depth_contract_tests {
+    use super::*;
+
+    /// **`heading_depth` means "I BEGIN a section", not "I am inside one".**
+    ///
+    /// A section too long for one chunk splits into several. Only the first opens the
+    /// section; the rest are continuations and must carry depth 0, while all of them keep
+    /// the `header_path` (that is the field that answers "what section am I in?").
+    ///
+    /// Stamping the section's depth onto every chunk made `reconstruct_body` re-emit the
+    /// heading at every internal chunk boundary — the long-standing "show duplicates a
+    /// line" bug. This test FAILS on the old chunker (every chunk reported depth 2), which
+    /// is what makes it a regression test.
+    #[test]
+    fn only_the_first_chunk_of_a_split_section_opens_it() {
+        // One H2 whose body is far past the chunk budget, so it must split.
+        let body = "sentence with enough words to take up room ".repeat(200);
+        let doc = format!("## Goals\n\n{body}");
+        let chunks = chunk_markdown(&doc);
+
+        assert!(
+            chunks.len() > 1,
+            "test needs a section that actually splits; got {} chunk(s)",
+            chunks.len()
+        );
+        assert_eq!(
+            chunks[0].heading_depth, 2,
+            "the first chunk of the section opens it and carries its depth"
+        );
+        for (i, c) in chunks.iter().enumerate().skip(1) {
+            assert_eq!(
+                c.heading_depth, 0,
+                "chunk {i} is a continuation and must NOT re-open the section"
+            );
+        }
+        for (i, c) in chunks.iter().enumerate() {
+            assert_eq!(
+                c.header_path, "Goals",
+                "chunk {i} still records which section it belongs to"
+            );
+        }
+    }
+
+    /// The fix must not silence genuine headings: consecutive short sections each open.
+    #[test]
+    fn each_short_section_opens_its_own_heading() {
+        let chunks =
+            chunk_markdown("## One\n\nAlpha.\n\n## Two\n\nBravo.\n\n### Three\n\nCharlie.");
+        let depths: Vec<u8> = chunks.iter().map(|c| c.heading_depth).collect();
+        assert_eq!(
+            depths,
+            vec![2, 2, 3],
+            "three distinct sections ⇒ three opened headings"
+        );
+    }
+
+    /// Two adjacent sections with the SAME title each still open — the case a read-side-only
+    /// dedupe cannot get right, and the reason the real fix belongs in the chunker.
+    #[test]
+    fn two_adjacent_identically_titled_sections_both_open() {
+        let chunks = chunk_markdown("## Notes\n\nFirst.\n\n## Notes\n\nSecond.");
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(
+            (chunks[0].heading_depth, chunks[1].heading_depth),
+            (2, 2),
+            "identically-titled siblings are distinct sections; both must open"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {

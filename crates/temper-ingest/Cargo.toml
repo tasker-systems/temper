@@ -25,6 +25,11 @@ temper-core = { path = "../temper-core" }
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }
 
+# Performance-core detection (`cpu.rs`) reads `hw.perflevel0.logicalcpu`. macOS-only:
+# no other platform has a measured big-little story yet, so no other platform needs libc.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # Scoped env mutation for the TEMPER_ONNX_MODEL_PATH tests — the test binary is multi-threaded and
 # process env is global, so a bare set_var/remove_var races every other test that reads env.

@@ -19,16 +19,34 @@ fn main() {
         )
         .init();
 
-    // The CLI embeds one document for one user, so let ONNX Runtime spread a
-    // single inference across every core — measured 3.1× faster than the pinned
-    // default on large bodies (task 019f57d2). The server deliberately does NOT
-    // do this (concurrent ingests would oversubscribe the box); see
-    // `temper_ingest::embed::set_intra_op_threads`. Overridable per-run via
-    // `TEMPER_ONNX_INTRA_THREADS`. Must run before the first embed.
-    #[cfg(feature = "embed")]
-    temper_ingest::embed::set_intra_op_threads(0);
-
     let cli = Cli::parse();
+
+    // The CLI embeds one document for one user, so it should use the machine.
+    //
+    // It asks for the PERFORMANCE-core count, not `0` ("let ORT decide") and not the
+    // total core count — both are measurably worse. On a 12-core M4 Pro, `0` used only
+    // ~6 threads (10.77s/segment) and all 12 cores were *also* slower than the 8
+    // performance cores (9.73s vs 9.62s), because an intra-op batch advances only as
+    // fast as its slowest thread and the efficiency cores drag every barrier. See
+    // `temper_ingest::cpu` for the full table (task 019f57d2).
+    //
+    // On a platform where we cannot honestly detect performance cores, `performance_cores()`
+    // returns `None` and we keep today's behavior (`0`) rather than invent a number.
+    //
+    // The server deliberately does NOT opt in — concurrent ingests could oversubscribe the
+    // box, and that case is still unmeasured (task 019f5892).
+    //
+    // Must run before the first embed: the count is read when the ORT session is lazily built.
+    #[cfg(feature = "embed")]
+    {
+        temper_ingest::embed::set_intra_op_threads(
+            temper_ingest::cpu::performance_cores().unwrap_or(0),
+        );
+        // An explicitly typed flag outranks the ambient environment.
+        if let Some(n) = cli.embed_threads {
+            temper_ingest::embed::force_intra_op_threads(n);
+        }
+    }
 
     // Resolve global output settings once, before dispatch. Color is applied
     // before `run` so all output — including the error path below — obeys it.

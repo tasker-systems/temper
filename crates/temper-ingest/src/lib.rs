@@ -6,6 +6,7 @@
 //! - `embed-download`: same embedding, but downloads model from Hugging Face Hub at runtime
 
 pub mod chunk;
+pub mod cpu;
 pub mod error;
 pub mod extract;
 pub mod merge;
