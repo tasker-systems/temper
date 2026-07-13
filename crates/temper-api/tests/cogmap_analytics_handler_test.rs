@@ -7,9 +7,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_services::backend::substrate_read::{
-    cogmap_analytics_select, cogmap_region_metrics_select,
+    anchor_region_metrics_select, cogmap_analytics_select,
 };
 
 mod common;
@@ -20,9 +21,14 @@ const L0_TELOS: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000002);
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn l0_region_metrics_readable_empty(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "reader1@example.com").await;
-    let rows = cogmap_region_metrics_select(&pool, ProfileId::from(profile), L0_COGMAP, None)
-        .await
-        .expect("readable L0 region-metrics must be Ok");
+    let rows = anchor_region_metrics_select(
+        &pool,
+        ProfileId::from(profile),
+        HomeAnchor::Cogmap(L0_COGMAP.into()),
+        None,
+    )
+    .await
+    .expect("readable L0 region-metrics must be Ok");
     assert!(
         rows.is_empty(),
         "L0 has no materialized regions yet: {rows:?}"
@@ -54,9 +60,14 @@ async fn l0_analytics_readable_some_with_telos(pool: PgPool) {
 async fn unknown_cogmap_metrics_empty_analytics_none(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "nobody@example.com").await;
     let unknown = Uuid::now_v7();
-    let metrics = cogmap_region_metrics_select(&pool, ProfileId::from(profile), unknown, None)
-        .await
-        .expect("non-readable map metrics is empty, not an error");
+    let metrics = anchor_region_metrics_select(
+        &pool,
+        ProfileId::from(profile),
+        HomeAnchor::Cogmap(unknown.into()),
+        None,
+    )
+    .await
+    .expect("non-readable map metrics is empty, not an error");
     assert!(metrics.is_empty());
     let analytics = cogmap_analytics_select(&pool, ProfileId::from(profile), unknown)
         .await

@@ -664,23 +664,20 @@ pub async fn search_select(
     })
 }
 
-/// `cogmap_shape` — the surface-tier read of a cognitive map's materialized regions. Service-direct
-/// (reads bypass the Backend trait). The access gate lives in the SQL function: a principal who cannot
-/// read the map gets an empty vec, never an error. Maps the substrate-local row to the wire type.
-pub async fn cogmap_shape_select(
+/// `anchor_shape` — the surface-tier read of an anchor's materialized regions, for a context OR a
+/// cogmap (spec §3.7, T8). Service-direct (reads bypass the Backend trait). The access gate lives in
+/// the SQL function: a principal who cannot read the anchor gets an empty vec, never an error — and
+/// for a context that gate is `context_readable_by_profile`, so a context read-grant grants this read
+/// by construction rather than by a second hand-rolled check. Maps the substrate row to the wire type.
+pub async fn anchor_shape_select(
     pool: &PgPool,
     profile_id: ProfileId,
-    cogmap_id: uuid::Uuid,
+    anchor: HomeAnchor,
     lens_id: Option<uuid::Uuid>,
 ) -> ApiResult<Vec<CogmapRegionRow>> {
-    let rows = readback::cogmap_shape(
-        pool,
-        CogmapId::from(cogmap_id),
-        profile_id,
-        lens_id.map(LensId::from),
-    )
-    .await
-    .map_err(api_err)?;
+    let rows = readback::anchor_shape(pool, anchor, profile_id, lens_id.map(LensId::from))
+        .await
+        .map_err(api_err)?;
     Ok(rows
         .into_iter()
         .map(|r| CogmapRegionRow {
@@ -694,22 +691,17 @@ pub async fn cogmap_shape_select(
         .collect())
 }
 
-/// `cogmap_region_metrics` — the per-region analytics tier. Service-direct; gate is in the SQL
-/// (deny → empty). Maps the substrate-local row to the wire type.
-pub async fn cogmap_region_metrics_select(
+/// `anchor_region_metrics` — the per-region analytics tier, for either anchor kind (T8).
+/// Service-direct; gate is in the SQL (deny → empty). Maps the substrate row to the wire type.
+pub async fn anchor_region_metrics_select(
     pool: &PgPool,
     profile_id: ProfileId,
-    cogmap_id: uuid::Uuid,
+    anchor: HomeAnchor,
     lens_id: Option<uuid::Uuid>,
 ) -> ApiResult<Vec<CogmapRegionMetricsRow>> {
-    let rows = readback::cogmap_region_metrics(
-        pool,
-        CogmapId::from(cogmap_id),
-        profile_id,
-        lens_id.map(LensId::from),
-    )
-    .await
-    .map_err(api_err)?;
+    let rows = readback::anchor_region_metrics(pool, anchor, profile_id, lens_id.map(LensId::from))
+        .await
+        .map_err(api_err)?;
     Ok(rows
         .into_iter()
         .map(|r| CogmapRegionMetricsRow {

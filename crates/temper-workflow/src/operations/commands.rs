@@ -318,13 +318,18 @@ pub struct StewardDispatchTick {
     pub origin: Surface,
 }
 
-/// Re-materialize a cognitive map's regions when its formation delta since the last materialize
-/// clears `threshold` (T4b) — the cron-invokable trigger for the substrate's own (deterministic,
-/// non-authored) region-formation cadence. Gated on cogmap-write (`cogmap_authorable_by_profile`),
-/// auth before write. Below threshold it is a safe no-op; `threshold == None` uses the default.
+/// Re-materialize an anchor's regions when its formation delta since the last materialize clears
+/// `threshold` (T4b) — the cron-invokable trigger for the substrate's own (deterministic,
+/// non-authored) region-formation cadence. Gated on write of the anchor
+/// (`cogmap_authorable_by_profile` / `context_authorable_by_profile`), auth before write. Below
+/// threshold it is a safe no-op; `threshold == None` uses the default.
+///
+/// Anchor-addressed since T8: a context materializes exactly as a cogmap does. The only thing that
+/// differs between the two is the lens (`default_lens_for`) — a context under the declared-graph-only
+/// `telos-default` would form nothing, since it carries no facets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaterializeOnThreshold {
-    pub cogmap: CogmapId,
+    pub anchor: HomeAnchor,
     pub threshold: Option<i64>,
     pub origin: Surface,
 }

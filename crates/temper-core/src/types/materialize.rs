@@ -90,7 +90,20 @@ pub struct MaterializeTriggerInput {
     pub threshold: Option<i64>,
 }
 
-/// Request body for `POST /api/cognitive-maps/{cogmap}/materialize`.
+/// MCP tool params for `context_materialize` — re-materialize a CONTEXT's regions when its delta
+/// clears the threshold (T8). The context-addressed peer of [`MaterializeTriggerInput`].
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextMaterializeInput {
+    /// The context, by context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID).
+    pub context: String,
+    /// Materialize threshold to gate on; defaults to [`DEFAULT_MATERIALIZE_THRESHOLD`] when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<i64>,
+}
+
+/// Request body for `POST /api/cognitive-maps/{cogmap}/materialize` and
+/// `POST /api/contexts/{context}/materialize` — the anchor rides the path, so the body is the same.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct MaterializeRequest {
@@ -102,13 +115,32 @@ pub struct MaterializeRequest {
 /// Outcome of a materialize trigger. When `materialized` is false the delta was below threshold and
 /// nothing ran (the idempotent no-op); when true, `regions` + `membership_fingerprint` describe the
 /// materialize that ran.
+///
+/// ## Why `cogmap_id` survives beside the anchor pair
+///
+/// T8 made this command anchor-addressed (a context materializes too), so the target is now
+/// `anchor_table` + `anchor_id`. `cogmap_id` is kept — and still populated whenever the anchor IS a
+/// cogmap — deliberately, because this is a **wire type on a deployed instance**: the temper-rb gem
+/// `raise`s on an unknown attribute *and* on a missing required one, and the generated TS is
+/// consumed by a UI that ships on its own cadence. Dropping `cogmap_id` would hard-fail an older
+/// client on the cogmap path it already uses.
+///
+/// A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),
+/// so it never receives an ack where the field is absent. New clients read the anchor pair and
+/// ignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "materialize.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterializeAck {
-    /// The cogmap the trigger targeted.
-    pub cogmap_id: Uuid,
+    /// The anchor table the trigger targeted — `kb_contexts` or `kb_cogmaps`.
+    pub anchor_table: String,
+    /// The anchor the trigger targeted.
+    pub anchor_id: Uuid,
+    /// Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;
+    /// see the type's docs for why this is still here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cogmap_id: Option<Uuid>,
     /// Whether a materialize actually ran (`formation_events >= threshold`). False = idempotent no-op.
     pub materialized: bool,
     /// The delta observed when the gate was evaluated.
@@ -121,4 +153,35 @@ pub struct MaterializeAck {
     /// The full-clustering membership fingerprint the materialize produced — `Some` only when `materialized`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membership_fingerprint: Option<String>,
+}
+
+impl MaterializeAck {
+    /// Build an ack for `anchor`, filling the anchor pair and the legacy `cogmap_id` from one source
+    /// so the two can never disagree. The below-threshold no-op is the `materialized = false` case:
+    /// `regions` / `membership_fingerprint` stay `None`.
+    pub fn new(
+        anchor: crate::types::home::HomeAnchor,
+        materialized: bool,
+        formation_events: i64,
+        threshold: i64,
+    ) -> Self {
+        Self {
+            anchor_table: anchor.table().to_owned(),
+            anchor_id: anchor.uuid(),
+            cogmap_id: anchor.cogmap_id().map(|m| m.uuid()),
+            materialized,
+            formation_events,
+            threshold,
+            regions: None,
+            membership_fingerprint: None,
+        }
+    }
+
+    /// Attach the outcome of a materialize that actually ran.
+    #[must_use]
+    pub fn with_outcome(mut self, regions: i64, membership_fingerprint: String) -> Self {
+        self.regions = Some(regions);
+        self.membership_fingerprint = Some(membership_fingerprint);
+        self
+    }
 }

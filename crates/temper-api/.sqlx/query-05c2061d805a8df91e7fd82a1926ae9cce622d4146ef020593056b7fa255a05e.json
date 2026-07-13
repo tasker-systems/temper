@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT context_authorable_by_profile($2, $1) AS \"can_write!\",\n                           shape_materialized_event_id AS \"watermark: uuid::Uuid\"\n                      FROM kb_contexts\n                     WHERE id = $1\n                       AND anchor_readable_by_profile($2, 'kb_contexts', $1)\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "can_write!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "watermark: uuid::Uuid",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      true
+    ]
+  },
+  "hash": "05c2061d805a8df91e7fd82a1926ae9cce622d4146ef020593056b7fa255a05e"
+}

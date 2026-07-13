@@ -1241,6 +1241,224 @@
         ]
       }
     },
+    "/api/contexts/{id}/materialize": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Contexts"
+        ],
+        "operationId": "context_materialize",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterializeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Materialize ran (over threshold) or was a no-op (below)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterializeAck"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller cannot author (write) this context"
+          },
+          "404": {
+            "description": "Context not found (uniform — no existence oracle)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/contexts/{id}/region-metrics": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contexts"
+        ],
+        "operationId": "context_region_metrics",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "lens",
+            "in": "query",
+            "description": "Optional lens filter; omit for all lenses",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-region analytics-tier scalar metrics for the context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CogmapRegionMetricsRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/contexts/{id}/shape": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contexts"
+        ],
+        "operationId": "context_shape",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "lens",
+            "in": "query",
+            "description": "Optional lens filter; omit for all lenses",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The context's materialized regions (surface tier), most salient first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CogmapRegionRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/contexts/{id}/teams": {
       "parameters": [
         {
@@ -8025,18 +8243,31 @@
       },
       "MaterializeAck": {
         "type": "object",
-        "description": "Outcome of a materialize trigger. When `materialized` is false the delta was below threshold and\nnothing ran (the idempotent no-op); when true, `regions` + `membership_fingerprint` describe the\nmaterialize that ran.",
+        "description": "Outcome of a materialize trigger. When `materialized` is false the delta was below threshold and\nnothing ran (the idempotent no-op); when true, `regions` + `membership_fingerprint` describe the\nmaterialize that ran.\n\n## Why `cogmap_id` survives beside the anchor pair\n\nT8 made this command anchor-addressed (a context materializes too), so the target is now\n`anchor_table` + `anchor_id`. `cogmap_id` is kept — and still populated whenever the anchor IS a\ncogmap — deliberately, because this is a **wire type on a deployed instance**: the temper-rb gem\n`raise`s on an unknown attribute *and* on a missing required one, and the generated TS is\nconsumed by a UI that ships on its own cadence. Dropping `cogmap_id` would hard-fail an older\nclient on the cogmap path it already uses.\n\nA client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),\nso it never receives an ack where the field is absent. New clients read the anchor pair and\nignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.",
         "required": [
-          "cogmap_id",
+          "anchor_table",
+          "anchor_id",
           "materialized",
           "formation_events",
           "threshold"
         ],
         "properties": {
-          "cogmap_id": {
+          "anchor_id": {
             "type": "string",
             "format": "uuid",
-            "description": "The cogmap the trigger targeted."
+            "description": "The anchor the trigger targeted."
+          },
+          "anchor_table": {
+            "type": "string",
+            "description": "The anchor table the trigger targeted — `kb_contexts` or `kb_cogmaps`."
+          },
+          "cogmap_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;\nsee the type's docs for why this is still here."
           },
           "formation_events": {
             "type": "integer",
@@ -8110,7 +8341,7 @@
       },
       "MaterializeRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/cognitive-maps/{cogmap}/materialize`.",
+        "description": "Request body for `POST /api/cognitive-maps/{cogmap}/materialize` and\n`POST /api/contexts/{context}/materialize` — the anchor rides the path, so the body is the same.",
         "properties": {
           "threshold": {
             "type": [

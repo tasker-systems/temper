@@ -23,6 +23,7 @@ use temper_core::types::cognitive_maps::{
     CogmapRegionRow, CogmapRevokeBody, GrantCapabilityRequest, GrantOutcome,
     RevokeCapabilityRequest, RevokeOutcome, UnbindTeamOutcome,
 };
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 use temper_core::types::reconcile::{
@@ -143,10 +144,10 @@ pub async fn shape(
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
-    temper_services::backend::substrate_read::cogmap_shape_select(
+    temper_services::backend::substrate_read::anchor_shape_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
-        cogmap_id,
+        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         q.lens,
     )
     .await
@@ -211,7 +212,7 @@ pub async fn materialize(
 ) -> ApiResult<Json<MaterializeAck>> {
     // Auth-before-write + the threshold gate live inside DbBackend::materialize_on_threshold — just dispatch.
     let cmd = MaterializeOnThreshold {
-        cogmap: CogmapId::from(cogmap_id),
+        anchor: HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         threshold: req.threshold,
         origin: surface,
     };
@@ -243,10 +244,10 @@ pub async fn region_metrics(
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
-    temper_services::backend::substrate_read::cogmap_region_metrics_select(
+    temper_services::backend::substrate_read::anchor_region_metrics_select(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
-        cogmap_id,
+        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         q.lens,
     )
     .await

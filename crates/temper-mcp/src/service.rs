@@ -448,6 +448,42 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Orient in a CONTEXT by its regions: read the context's materialized regions (salience, cohesion, label, member count), most salient first. This is the region-level view of everything in a context — the fastest way to see what a context is ABOUT before reading any resource in it. Pass the context by ref (@me/<slug>, +<team>/<slug>, or a UUID)."
+    )]
+    async fn context_shape(
+        &self,
+        Parameters(input): Parameters<temper_core::types::cognitive_maps::ContextShapeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::context_shape(self, input).await
+    }
+
+    #[tool(
+        description = "Read a context's per-region analytics metrics (centrality, content cohesion, internal tension, reference standing, telos alignment) under an optional lens. Pass the context by ref (@me/<slug>, +<team>/<slug>, or a UUID)."
+    )]
+    async fn context_region_metrics(
+        &self,
+        Parameters(input): Parameters<temper_core::types::cognitive_maps::ContextShapeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::context_region_metrics(self, input).await
+    }
+
+    #[tool(
+        description = "Re-form a context's regions when enough has changed since its last materialize (below threshold this is a safe no-op). Requires write access to the context. Pass the context by ref (@me/<slug>, +<team>/<slug>, or a UUID)."
+    )]
+    async fn context_materialize(
+        &self,
+        Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::context_materialize(self, input).await
+    }
+
+    #[tool(
         description = "Read a cognitive map's telos/charter blocks (statement / questions / framing) — the steward orients on this before acting. Pass the map by ref."
     )]
     async fn cogmap_read_charter(

@@ -417,6 +417,45 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            ContextAction::Shape { context, lens } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::shape_remote(
+                            client,
+                            &context,
+                            lens.as_deref(),
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            ContextAction::RegionMetrics { context, lens } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::region_metrics_remote(
+                            client,
+                            &context,
+                            lens.as_deref(),
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            ContextAction::Materialize { context, threshold } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::materialize_remote(
+                            client,
+                            &context,
+                            threshold,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
         },
         Commands::Warmup { context } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
