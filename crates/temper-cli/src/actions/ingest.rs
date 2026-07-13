@@ -179,6 +179,66 @@ fn plan_segments(content: &str, budget: usize) -> Result<SegmentPlan> {
     })
 }
 
+/// Per-stage wall-clock accounting for a segmented create, printed to stderr when
+/// `TEMPER_INGEST_TIMING=1`.
+///
+/// This exists to make the embed→upload overlap **provable** rather than asserted. The
+/// pipeline's whole claim is that upload time hides behind the next segment's embed, and
+/// that claim is not testable by stopwatching the command: the gain (~5s) is smaller than
+/// prod's run-to-run variance (~±10s). What IS decisive is the identity
+///
+/// ```text
+/// serial:    wall ≈ embed + upload
+/// pipelined: wall ≈ embed + (one upload's worth of tail)
+/// ```
+///
+/// so if `embed + upload - wall` is close to the total upload time, the legs overlapped. The
+/// counters are summed across the concurrent halves, which is exactly what makes the
+/// comparison work — each half measures only its own blocking time.
+#[cfg(feature = "embed")]
+#[derive(Debug, Default)]
+struct StageTiming {
+    embed: std::time::Duration,
+    upload: std::time::Duration,
+    segments: usize,
+    chunks: usize,
+}
+
+#[cfg(feature = "embed")]
+impl StageTiming {
+    fn enabled() -> bool {
+        std::env::var("TEMPER_INGEST_TIMING")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn report(&self, wall: std::time::Duration) {
+        if !Self::enabled() {
+            return;
+        }
+        let (embed, upload, wall) = (
+            self.embed.as_secs_f64(),
+            self.upload.as_secs_f64(),
+            wall.as_secs_f64(),
+        );
+        // Time the pipeline actually hid: how much of the two legs' summed work did NOT show
+        // up on the clock. ~0 means they ran serially; ~upload means upload hid behind embed.
+        let overlapped = (embed + upload - wall).max(0.0);
+        eprintln!(
+            "[ingest-timing] segments={} chunks={} wall={wall:.2}s embed={embed:.2}s \
+             upload={upload:.2}s | overlapped={overlapped:.2}s of {upload:.2}s upload \
+             ({:.0}% hidden)",
+            self.segments,
+            self.chunks,
+            if upload > 0.0 {
+                overlapped / upload * 100.0
+            } else {
+                0.0
+            },
+        );
+    }
+}
+
 /// Parameters for [`run_segmented_create`], bundled per the >5-domain-params rule. Everything
 /// the segmented orchestration needs beyond the CLI's already-built `CreateResource` command:
 /// the client to dispatch through, the vault root for the resume manifest, the resolved
@@ -225,6 +285,19 @@ pub async fn run_segmented_create(
         budget,
     } = params;
 
+    let wall_start = std::time::Instant::now();
+    // Counters, not a Mutex: the two halves run concurrently and each only records its OWN
+    // blocking time, so summing them across the halves is precisely what exposes the overlap.
+    let embed_ns = std::sync::atomic::AtomicU64::new(0);
+    let upload_ns = std::sync::atomic::AtomicU64::new(0);
+    let seg_count = std::sync::atomic::AtomicUsize::new(0);
+    let chunk_count = std::sync::atomic::AtomicUsize::new(0);
+    // A plain `fn`, not a closure: it captures nothing, so BOTH concurrent halves can call it
+    // (a closure would be moved into whichever `async move` block touched it first).
+    fn bump(c: &std::sync::atomic::AtomicU64, d: std::time::Duration) {
+        c.fetch_add(d.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
     let content = cmd
         .body
         .as_ref()
@@ -259,7 +332,11 @@ pub async fn run_segmented_create(
         None => {
             // Fresh session: segment 0 always lands via begin_segmented (the create path) —
             // there is no resource to append a block to before this call returns one.
+            let embed_start = std::time::Instant::now();
             let chunks_packed = embed_and_pack(&chunked[0])?;
+            bump(&embed_ns, embed_start.elapsed());
+            seg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            chunk_count.fetch_add(chunked[0].len(), std::sync::atomic::Ordering::Relaxed);
             let segmented = SegmentedBegin {
                 total_blocks_hint: Some(segments.len() as u32),
                 block_budget: budget as u32,
@@ -272,11 +349,13 @@ pub async fn run_segmented_create(
                 chunks_packed,
                 segmented,
             )?;
+            let upload_start = std::time::Instant::now();
             let response = client
                 .ingest()
                 .begin_segmented(&payload)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
+            bump(&upload_ns, upload_start.elapsed());
             let manifest = crate::actions::ingest_manifest::IngestManifest {
                 resource_id: response.resource_id,
                 source_hash: source_hash.clone(),
@@ -293,30 +372,87 @@ pub async fn run_segmented_create(
         }
     };
 
+    // Embed (CPU) and upload (network) used to strictly alternate: embed a segment, wait for
+    // its POST, embed the next. On a 1.2 MB body that left the network idle for ~95s and the
+    // CPU idle for ~6s. Overlap them: a bounded channel hands each embedded segment to an
+    // uploader while the embedder is already grinding the next one.
+    //
+    // EXACTLY ONE APPEND IS EVER IN FLIGHT, and that is deliberate, not a limitation:
+    //   - The measured prize is small. Uploads are ~6% of wall (embed is ~94%), so the
+    //     ceiling on this overlap is `min(embed, upload)` — the *upload* leg — no matter how
+    //     many uploaders you run. Fanning out to K>1 splits a 6% pie.
+    //   - Concurrent appends to the SAME resource are a server-side hazard: the body_hash
+    //     recompute is a read-modify-write over the whole resource. That is fixed now
+    //     (row lock), but depth-1 never depended on the fix and cannot regress if it changes.
+    // A capacity-1 channel is what enforces depth-1: the embedder blocks on `send` until the
+    // uploader has taken the previous segment, so at most one segment is queued and one is
+    // being POSTed.
     let missing_seqs = crate::actions::ingest_manifest::resume_gap(&local_infos, &landed);
-    for seq in missing_seqs {
-        let idx = seq as usize;
-        let chunks_packed = embed_and_pack(&chunked[idx])?;
-        let append_payload = AppendBlockPayload {
-            seq,
-            content: segments[idx].text.clone(),
-            content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
-            // The CLI always chunks + embeds client-side; the server-chunk branch is for callers
-            // without an embedder (MCP).
-            chunks_packed: Some(chunks_packed),
-            // Whole-file streaming: the source is attributed once at begin (create-path
-            // `--sources`), not per programmatically-cut segment.
-            sources: Vec::new(),
-        };
-        let response = client
-            .ingest()
-            .append_block(resource_id, &append_payload)
-            .await
-            .map_err(crate::actions::runtime::client_err_to_temper)?;
-        manifest.blocks = response.blocks;
-        let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
-        crate::actions::ingest_manifest::store(&path, &manifest)?;
-    }
+    let mut chunked = chunked;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(u32, String)>(1);
+
+    // Producer: embed each missing segment on the blocking pool. `embed_and_pack` is a
+    // multi-second CPU call; running it directly in this async fn (as it used to) parks a
+    // tokio worker thread for the duration.
+    // Shared refs: `async move` would otherwise MOVE the atomics into the producer, leaving the
+    // consumer and the final report with nothing. `&T` is Copy, so moving a reference is fine.
+    let (embed_ns_ref, seg_count_ref, chunk_count_ref) = (&embed_ns, &seg_count, &chunk_count);
+    let embed_side = async move {
+        for seq in missing_seqs {
+            let chunks = std::mem::take(&mut chunked[seq as usize]);
+            let n_chunks = chunks.len();
+            let embed_start = std::time::Instant::now();
+            let packed = tokio::task::spawn_blocking(move || embed_and_pack(&chunks))
+                .await
+                .map_err(|e| TemperError::Extraction(format!("embed task panicked: {e}")))??;
+            bump(embed_ns_ref, embed_start.elapsed());
+            seg_count_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            chunk_count_ref.fetch_add(n_chunks, std::sync::atomic::Ordering::Relaxed);
+            // A send error means the uploader is gone (it hit an error and dropped `rx`);
+            // stop embedding rather than burn CPU on segments nobody will upload.
+            if tx.send((seq, packed)).await.is_err() {
+                break;
+            }
+        }
+        drop(tx); // closes the channel so the uploader's loop terminates
+        Ok::<(), TemperError>(())
+    };
+
+    // Consumer: POST each embedded segment as it arrives, then checkpoint the resume manifest.
+    let upload_side = async {
+        let manifest = &mut manifest;
+        while let Some((seq, chunks_packed)) = rx.recv().await {
+            let idx = seq as usize;
+            let append_payload = AppendBlockPayload {
+                seq,
+                content: segments[idx].text.clone(),
+                content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
+                // The CLI always chunks + embeds client-side; the server-chunk branch is for
+                // callers without an embedder (MCP).
+                chunks_packed: Some(chunks_packed),
+                // Whole-file streaming: the source is attributed once at begin (create-path
+                // `--sources`), not per programmatically-cut segment.
+                sources: Vec::new(),
+            };
+            let upload_start = std::time::Instant::now();
+            let response = client
+                .ingest()
+                .append_block(resource_id, &append_payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            bump(&upload_ns, upload_start.elapsed());
+            manifest.blocks = response.blocks;
+            let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
+            crate::actions::ingest_manifest::store(&path, manifest)?;
+        }
+        Ok::<(), TemperError>(())
+    };
+
+    // Both halves run to completion; surface the embed error first, since an upload failure is
+    // usually the *consequence* of one (the uploader sees a closed channel).
+    let (embed_result, upload_result) = tokio::join!(embed_side, upload_side);
+    embed_result?;
+    upload_result?;
 
     client
         .ingest()
@@ -333,6 +469,15 @@ pub async fn run_segmented_create(
     manifest.finalized = true;
     let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
     crate::actions::ingest_manifest::store(&path, &manifest)?;
+
+    use std::sync::atomic::Ordering::Relaxed;
+    StageTiming {
+        embed: std::time::Duration::from_nanos(embed_ns.load(Relaxed)),
+        upload: std::time::Duration::from_nanos(upload_ns.load(Relaxed)),
+        segments: seg_count.load(Relaxed),
+        chunks: chunk_count.load(Relaxed),
+    }
+    .report(wall_start.elapsed());
 
     client
         .resources()
