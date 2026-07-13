@@ -37,6 +37,13 @@ env_files = ["./.env"]
 # connect normally. prepare-api and prepare-e2e override this (they must introspect the live DB).
 SQLX_OFFLINE = "true"
 
+# Point ORT at the model the repo already ships, exactly as every CI test job does. A `--workspace`
+# build resolves temper-ingest to `embed-download`, which resolves the model from disk and VERIFIES
+# it — there is deliberately no network fallback any more, so without this a local embed test fails
+# with "model not found" while CI passes. Local and CI must agree on which model they embed with;
+# that they silently did not is the bug this exists to prevent.
+TEMPER_ONNX_MODEL_PATH = "${CARGO_MAKE_WORKING_DIRECTORY}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx"
+
 [config]
 default_to_workspace = false
 skip_core_tasks = true

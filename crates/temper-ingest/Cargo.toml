@@ -7,7 +7,6 @@ description = "Embedding and extraction pipeline for temper knowledge base"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
-hf-hub = { version = "0.4", optional = true }
 html-to-markdown-rs = "3.1.0"
 kreuzberg = { version = "4.6.3", features = ["tokio-runtime"], optional = true }
 ndarray = { version = "0.17", optional = true }
@@ -29,6 +28,11 @@ tokenizers = { version = "0.22", optional = true }
 # no other platform has a measured big-little story yet, so no other platform needs libc.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+
+[build-dependencies]
+# Derives the expected model sha256 at compile time (see build.rs) — from the LFS pointer when the
+# blob is not smudged, from the file itself when it is. Same hash either way.
+sha2 = "0.10"
 
 [dev-dependencies]
 # `getrusage` for the embed_bench example's peak-RSS number. Unconditional here (unlike the
@@ -53,7 +57,9 @@ required-features = ["embed"]
 [features]
 default = ["embed", "extract"]
 embed = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
-embed-download = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:tokenizers"]
+# Resolve the model from disk at runtime (next to the binary) instead of baking it in. The name is
+# historical: it no longer downloads anything. Keeps the CLI binary ~18 MB instead of ~128 MB.
+embed-download = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
 extract = ["dep:kreuzberg"]
 test-embed = ["embed"]
 
