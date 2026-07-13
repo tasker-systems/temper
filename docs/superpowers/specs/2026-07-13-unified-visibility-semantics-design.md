@@ -3,6 +3,24 @@
 **Goal:** `019f5c66-755e-7fc1-bd87-ee2de8e4cd3f` · **Task:** UV1 · **Date:** 2026-07-13
 **Children:** Graph Atlas (`019f28a1`) · The ledger as a readable surface (`019f51e3`)
 
+> **Amended 2026-07-13 by UV2**, which reconciled this spec against the Graph Atlas goal's live tasks
+> and found three things it had missed. **(a)** There are **three** region reads, not two — this spec
+> named `anchor_shape` and `graph_cogmap_territories` and never mentioned `graph_region_territories`,
+> the team panorama read, which is a third copy of the same query. D1 is corrected below, and the
+> drift evidence for it turns out to be considerably stronger than the original draft claimed.
+> **(b)** Retiring that third read onto `anchor_shape` is **not** a drop-in — it is team-scoped and
+> `anchor_shape` takes one anchor — so D1 now states the three ways to close that and rejects the one
+> that hides an N+1. **(c)** D5's empty-suppression rule was stated for the region tier and is silent
+> about the home tier, where it is currently violated. D5 is extended below.
+>
+> **Further amended 2026-07-13 by UV3**, reconciling against the ledger goal. **(d)** D4's closing
+> claim — that region provenance *"composes with the existing `element_trail` reader"* — **is false**.
+> The trail readers are keyed on a *resource* and on an *edge*; a region is neither, and no
+> event-by-id reader exists anywhere. As drafted, D4 returned two UUIDs nothing could dereference. It
+> now returns event metadata inline instead, and D6 is scoped so that the new MCP trail tool cannot
+> quietly become the event reader that would leak the materialize payload. All corrections are
+> grounded in prod reads taken 2026-07-13, cited in place.
+
 ---
 
 ## Problem
@@ -99,10 +117,51 @@ declares itself, and it offers the region field alongside as a second named lens
 
 ### D1 — The unified region read
 
-`graph_cogmap_territories` **retires onto `anchor_shape`.** Field-by-field the two are the same query
-— same joins, equivalent gate, byte-identical label LATERAL — differing only in that territories
-returns `cogmap_id` and omits `lens_id`, and does not order. They have **already been hand-resynced
-once**; the next region-semantics change re-opens the drift.
+> **Amended by UV2.** The original draft named two region reads and one prior resync. Both counts
+> were low.
+
+**There are three region reads, and all three retire onto `anchor_shape`:**
+
+| read | scope | shape |
+|---|---|---|
+| `anchor_shape` | anchor-generic | the survivor |
+| `graph_cogmap_territories` | one cogmap (`reg.cogmap_id = p_cogmap`) | + `coherence` |
+| **`graph_region_territories`** | a team (`kb_team_cogmaps` ⋈ `team_ancestors`) | salience only |
+
+`graph_region_territories` — the team panorama read — went unmentioned in the first draft. Prod
+(2026-07-13) shows it carrying a **byte-identical copy** of the same visibility-gated label LATERAL,
+the same `visible_members` count, the same `seen.visible_members > 0` filter and the same
+`cogmap_readable_by_profile` gate as `graph_cogmap_territories`. It differs only in how it selects
+which regions to consider. It is a third copy of one query, and retiring the second while leaving it
+standing would have preserved exactly the drift this decision exists to end.
+
+**The drift is not a prediction. It has already recurred, at four times the width this spec assumed.**
+The draft said the reads "have already been hand-resynced once." In fact
+`20260713000050_region_visible_member_count.sql` (PR #416, merged 2026-07-13 — the same day this spec
+was written) had to hand-apply **one** visibility fix to **four** functions in a single migration:
+`anchor_shape`, `graph_cogmap_territories`, `graph_region_territories`, and `anchor_region_metrics`.
+The label derivation, likewise, has been written three times across three functions
+(`20260706130000`, `20260713000020`, and the team read). One rule, four hand-edits, one migration.
+That is the argument for D1, and it is an empirical one.
+
+**Retiring the team read is not a drop-in, and this decision must say how.** *(UV2.)*
+`graph_cogmap_territories` is one-cogmap-scoped, so it collapses onto `anchor_shape` trivially.
+`graph_region_territories` does **not**: it is **team**-scoped, fanning out over every cogmap in team
+reach (`kb_team_cogmaps ⋈ team_ancestors(p_team)`), whereas `anchor_shape(p_anchor_table, p_anchor_id,
+…)` takes **exactly one anchor**. Three ways to close that, and the choice is load-bearing:
+
+1. **Call `anchor_shape` once per cogmap in team scope.** An N+1. Today team scope spans **4 cogmaps
+   across 3 teams**, so this would be free — *and invisible*. The Atlas goal explicitly targets
+   "hundreds of teams, 100k+ nodes." This is the pattern that hides an N+1 behind a natural-looking
+   composition; reject it.
+2. **A team-scoped SQL wrapper** that resolves the cogmap set once and unions `anchor_shape` over it
+   in one round trip. Keeps the region semantics in exactly one place — the recommended shape.
+3. **Give `anchor_shape` a set-of-anchors form** (`p_anchor_ids uuid[]`). More general; more surface.
+
+Whichever is taken, note that `anchor_shape` returns `region_id` and `lens_id` but **not the anchor
+id** — so a team panorama unioning it across cogmaps cannot say which cogmap a region came from
+(today `graph_region_territories` returns `cogmap_id` precisely for this). The unified read must
+carry the anchor identity, or the wrapper must tag it. Do not discover this at integration time.
 
 - `anchor_shape` + `anchor_region_metrics` become the one region read, at every surface.
 - `Territory` does **not** collapse into the region row. It stays the *survey* wire type, and gains a
@@ -175,8 +234,37 @@ colliding with the ledger goal:
 - It is **not the supersession cascade (L3).** A moving `last_event_id` is not a dependent-needs-
   review signal.
 
-It neither waits on those nor pre-empts them. It composes with the existing `element_trail` reader
-rather than introducing a second traversal.
+It neither waits on those nor pre-empts them.
+
+> **Amended by UV3.** The draft closed with *"it composes with the existing `element_trail` reader
+> rather than introducing a second traversal."* **It cannot.** There are exactly two trail readers —
+> `element_trail_node(p_profile, p_**resource**)` and `element_trail_edge(p_profile, p_**edge**)` — and
+> a region is neither a resource nor an edge. There is **no event-by-id reader anywhere in the
+> codebase**. So D4 as drafted returns two UUIDs that nothing in the system can dereference: a
+> correlator with no resolver.
+
+**And the obvious repair would re-open the leak D5 just closed.** The tempting fix is an event-by-id
+reader. Do not build one. Prod (2026-07-13) shows the forming event's payload carries **`region_ids`
+— the full list of regions from that materialize pass — on all 541 live regions**, alongside
+`membership_fingerprint` and `telos_centroid`. A reader that handed back that payload would let a
+caller who can see **one** region enumerate **every** region id from the pass that formed it —
+including the regions D5 deliberately withholds for having no visible members. That is the
+`member_count` leak wearing a different hat: *we decline to return the invisible region, then list
+its id in the payload.*
+
+**So: the unified region read joins `kb_events` and returns the event's *metadata* inline — its
+`occurred_at` and its topic — never its payload, and with no new reader.** Provenance becomes
+legible ("this region formed on 2 July and last changed on 11 July") instead of handing back an
+opaque uuid; it stays emphatically short of a fold; and it adds no dereference path to leak through.
+
+Both fields earn their place: `asserted_by_event_id` differs from `last_event_id` on **459 of 541**
+live regions, so "when it formed" and "when it last changed" are genuinely distinct signals, not a
+redundant pair.
+
+**The scope-creep vector, named.** Region provenance *creates demand* for L4 without providing it —
+a reader shown "last changed at event M" will immediately want "what did it look like before M," and
+that is as-of fold. That is a feature (it makes the ledger goal's value legible) and a boundary. D4
+returns two timestamps. It does not grow a fold.
 
 ### D5 — The visibility rule, stated once
 
@@ -200,6 +288,20 @@ is shown a cohesion score computed over all twelve.
   risk** — see Open Questions. Per-reader metric recomputation is the alternative and it is
   expensive; it should not be adopted without a threat model that demands it.
 
+**The rule does not stop at the region tier.** *(Amended by UV2.)* As drafted, D5 said "a region whose
+visible member set is empty is not returned at all" — and all three region reads already enforce
+exactly that (`seen.visible_members > 0`). But the **home tier** does not. `graph_home_contexts`
+returns a context whose visible resource count is zero, which is why the Atlas draws the empty
+"TEMPER" context as a large empty circle (Graph Atlas C3.1, item L3). That is the same rule one tier
+up, and it was never stated.
+
+> **Extended invariant: an anchor with no visible members is not returned at all — at *any* tier.**
+> A circle drawn for a container the caller can see nothing inside of is a cardinality leak with a
+> radius. Fix it in the read, not in the renderer.
+
+*(Checked and clean: `graph_home_contexts.resource_count` **does** join `resources_visible_to`, so it
+is not a second `member_count`-style leak. Only the empty-suppression is missing.)*
+
 Where a home-gated edge walk is needed, **lift `element_trail_edge`'s pattern** (anchor-readable plus
 both endpoints readable). Do not write a second one.
 
@@ -207,7 +309,7 @@ both endpoints readable). Do not write a second one.
 
 | gap | decision |
 |---|---|
-| MCP has **no trail tool** (CLI + HTTP both do) | **Close.** Full surface parity is always intended. |
+| MCP has **no trail tool** (CLI + HTTP both do) | **Close.** Full surface parity is always intended. **Scope it precisely** *(UV3)*: the MCP tool is **element-keyed**, exactly like its peers — CLI `temper trail <kind> <id>` and HTTP `element_trail`. Do **not** let "MCP needs a trail tool" become "MCP needs an event reader." An event-by-id reader is the payload leak described in D4, and nothing in this spec requires one. |
 | No `context_analytics` peer to `cogmap_analytics` | **Close the staleness half.** `kb_contexts` already carries `shape_materialized_event_id` — a straight port. Do **not** invent context *regulation* or a context *telos resource*: contexts have a `telos_centroid` but no telos resource and no regulation edges. Return what exists; do not fabricate a peer field. |
 | `materialize_delta` cogmap-only on every surface, typed on `cogmap_id` | **Generalize to the anchor pair.** Add the context route + MCP tool. Add a **CLI** subcommand — today neither anchor has one. |
 | `bridges` is `[]` on every shipped path | **Drop it.** Both panorama producers hardcode `Vec::new()`; `graph_territory_bridges` has zero Rust callers; and `bridgeGeometry` keys bridges by *cogmap* id against a position map keyed by *region* id, so even a non-empty list would drop every line. It is unexercised dead code that cannot work as written. Per no-premature-backward-compat: remove `BridgeRibbon`, the SQL function, and the wire field together. |
@@ -218,7 +320,7 @@ both endpoints readable). Do not write a second one.
 
 | component | change |
 |---|---|
-| `migrations/` | additive: retire `graph_cogmap_territories`; extend `anchor_shape` (provenance keys, visible member_count, anchor-kind-aware metric nulling); context staleness read; drop `graph_territory_bridges` |
+| `migrations/` | additive: retire `graph_cogmap_territories` **and `graph_region_territories`**; extend `anchor_shape` (provenance keys, visible member_count, anchor-kind-aware metric nulling); **empty-anchor suppression in `graph_home_contexts`**; context staleness read; drop `graph_territory_bridges` |
 | `temper-substrate` (`readback`) | `CogmapShapeRow` gains provenance + visible count |
 | `temper-core/types` | `CogmapRegionRow` extended; `Territory` gains lens `kind`; `TerritoryOverview.bridges` removed |
 | `temper-services` | `graph_service::cogmap_panorama` composes `anchor_shape`; shared modal-lens helper; `context_graph_service` declares its lens |

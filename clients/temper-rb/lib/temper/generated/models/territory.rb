@@ -28,6 +28,7 @@ module Temper::Generated
 
     attr_accessor :label
 
+    # Always over the members **this caller can read** (spec §D5) — for every territory kind. The container/context producers derived it that way already; since D5 the region producer does too.
     attr_accessor :member_count
 
     attr_accessor :salience

@@ -30,6 +30,8 @@ pub struct Territory {
     pub kind: TerritoryKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Always over the members **this caller can read** (spec §D5) — for every territory kind. The
+    /// container/context producers derived it that way already; since D5 the region producer does too.
     pub member_count: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub salience: Option<f64>,

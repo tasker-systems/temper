@@ -25,7 +25,7 @@ module Temper::Generated
     # The lens (perspective) that produced this region.
     attr_accessor :lens_id
 
-    # Member count (the blur the surface tier exposes; identities stay interior).
+    # Member count (the blur the surface tier exposes; identities stay interior) — over the members **this caller can read**, never all of them (spec §D5). Two readers of the same region can legitimately see different numbers; that is the point.
     attr_accessor :member_count
 
     # `kb_cogmap_regions.id` — the region's stable identity.

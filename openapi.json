@@ -6582,7 +6582,7 @@
           "member_count": {
             "type": "integer",
             "format": "int32",
-            "description": "Member count (the blur the surface tier exposes; identities stay interior)."
+            "description": "Member count (the blur the surface tier exposes; identities stay interior) — over the members\n**this caller can read**, never all of them (spec §D5). Two readers of the same region can\nlegitimately see different numbers; that is the point."
           },
           "region_id": {
             "$ref": "#/components/schemas/RegionId",
@@ -10359,7 +10359,8 @@
           },
           "member_count": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Always over the members **this caller can read** (spec §D5) — for every territory kind. The\ncontainer/context producers derived it that way already; since D5 the region producer does too."
           },
           "salience": {
             "type": [
