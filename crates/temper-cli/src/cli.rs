@@ -146,6 +146,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub format: Option<String>,
 
+    /// ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide.
+    /// Default: this machine's performance-core count (NOT its total core count —
+    /// efficiency cores measurably slow the batch down).
+    /// Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1.
+    #[arg(long, global = true, value_name = "N")]
+    pub embed_threads: Option<usize>,
+
     /// Color output: auto | always | never (default: auto).
     /// Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto.
     #[arg(long, global = true)]

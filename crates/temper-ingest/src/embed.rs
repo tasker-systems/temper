@@ -184,26 +184,44 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
 // ---- ONNX intra-op thread count ----
 //
 // ORT parallelizes a single inference across an internal "intra-op" thread
-// pool. `0` lets ORT size that pool to all cores; `N` pins it to N. This is
-// the dominant throughput lever for the embed path: the whole chunk batch is
-// one ORT run (see pipeline.rs), so the intra-op pool *is* the parallelism.
-// Measured on a 10-core box (1.2 MB body ⇒ ~840 chunks): pinning to 1 core
-// took ~473s; all cores took ~155s — 3.1× on this one knob (task 019f57d2).
+// pool. `N` pins it to N; `0` asks ORT to size the pool itself. This is the
+// dominant throughput lever for the embed path: the whole chunk batch is one
+// ORT run (see pipeline.rs), so the intra-op pool *is* the parallelism.
 //
-// The right count differs by surface. The CLI is one user embedding one
-// document, so all cores is correct. The server (temper-api) may run N
-// concurrent ingests, where "every embed grabs every core" risks
-// oversubscription — its ideal count is an open question pending a
-// measurement under concurrent load, so the server does NOT opt in here and
-// inherits the conservative pinned default below.
+// `0` DOES NOT MEAN "ALL CORES". It means "ORT's guess", and on a heterogeneous
+// ARM box the guess is poor. Measured on a 12-core M4 Pro (8 performance + 4
+// efficiency), embedding one 262 KB segment (task 019f57d2):
+//
+//     0 (ORT picks) 10.77s   <- only ~598% CPU: ORT used about 6 threads
+//     4             15.64s
+//     6             11.59s
+//     8 (P-cores)    9.62s   <- best
+//    10              9.88s
+//    12 (all cores)  9.73s
+//
+// Two counterintuitive results: `0` leaves half the machine idle, and using
+// *all* 12 is also worse than 8 — the 4 efficiency cores drag every intra-op
+// barrier, since the batch can only advance as fast as its slowest thread. The
+// optimum is the PERFORMANCE-core count, not the core count. The CLI therefore
+// resolves its default by detecting performance cores
+// (`temper_cli::actions::embed_threads`) rather than passing `0`.
+//
+// The right count still differs by surface. The CLI is one user embedding one
+// document. The server (temper-api) may run N concurrent ingests, where "every
+// embed grabs every core" risks oversubscription — its ideal count is an open
+// question pending a measurement under concurrent load (task 019f5892), so the
+// server does NOT opt in here and inherits the conservative pinned default
+// below.
 
 /// Env override for the ONNX intra-op thread count (`TEMPER_ONNX_INTRA_THREADS`).
-/// `0` = all cores, `N` = pin to N. Wins over a surface's programmatic default
-/// so a Vercel deploy (or a CLI on a shared box) can be tuned without a rebuild.
+/// `0` = let ORT choose, `N` = pin to N. Wins over a surface's programmatic
+/// default so a Vercel deploy (or a CLI on a shared box) can be tuned without a
+/// rebuild — but loses to an explicit [`force_intra_op_threads`] (a user typing
+/// a flag outranks ambient environment).
 const INTRA_THREADS_ENV: &str = "TEMPER_ONNX_INTRA_THREADS";
 
-/// Sentinel for "no surface set an explicit count"; resolution then falls
-/// through to the env var and the built-in default.
+/// Sentinel for "not set at this layer"; resolution then falls through to the
+/// next one down.
 const INTRA_THREADS_UNSET: usize = usize::MAX;
 
 /// Built-in default when nothing else is set: pin to a single core. Preserves
@@ -216,26 +234,48 @@ const INTRA_THREADS_DEFAULT: usize = 1;
 /// first embed. `INTRA_THREADS_UNSET` until then.
 static INTRA_OP_THREADS: AtomicUsize = AtomicUsize::new(INTRA_THREADS_UNSET);
 
+/// Explicit user-supplied count (the CLI's `--embed-threads`). Outranks the env
+/// var. `INTRA_THREADS_UNSET` until a user actually asks for a count.
+static INTRA_OP_THREADS_FORCED: AtomicUsize = AtomicUsize::new(INTRA_THREADS_UNSET);
+
 /// Declare this process's default ONNX intra-op thread count.
 ///
-/// `0` lets ORT parallelize inference across all cores; `N` pins it to N. Call
-/// once at startup **before** the first embed — the count is read when the ORT
-/// session is lazily built and ignored afterward. The `TEMPER_ONNX_INTRA_THREADS`
-/// env var overrides whatever a surface sets here.
+/// `N` pins the intra-op pool to N; `0` defers to ORT's own sizing (which is
+/// *not* "all cores" — see the module comment above). Call once at startup
+/// **before** the first embed: the count is read when the ORT session is lazily
+/// built and ignored afterward.
 ///
-/// The CLI calls this with `0` (one user, one document ⇒ all cores). The server
-/// leaves it unset and inherits the conservative single-core default, pending a
-/// measurement of concurrent-ingest oversubscription (task 019f57d2).
+/// This is the *surface default* layer — both `TEMPER_ONNX_INTRA_THREADS` and
+/// [`force_intra_op_threads`] override it. The CLI calls this with its detected
+/// performance-core count. The server leaves it unset and inherits the
+/// conservative single-core default, pending a measurement of concurrent-ingest
+/// oversubscription (task 019f5892).
 pub fn set_intra_op_threads(threads: usize) {
     INTRA_OP_THREADS.store(threads, Ordering::Relaxed);
 }
 
+/// Force the intra-op thread count, overriding both the surface default and the
+/// `TEMPER_ONNX_INTRA_THREADS` env var.
+///
+/// This is the top of the precedence chain and exists for one reason: a user who
+/// types `--embed-threads N` must get N, even on a machine whose environment
+/// already exports the env var. Ambient config should never silently beat an
+/// explicit request.
+pub fn force_intra_op_threads(threads: usize) {
+    INTRA_OP_THREADS_FORCED.store(threads, Ordering::Relaxed);
+}
+
 /// Resolve the intra-op thread count for the ORT session.
 ///
-/// Precedence: `TEMPER_ONNX_INTRA_THREADS` env → [`set_intra_op_threads`] →
-/// `INTRA_THREADS_DEFAULT`. A malformed env value is ignored (falls through)
+/// Precedence: [`force_intra_op_threads`] (the `--embed-threads` flag) →
+/// `TEMPER_ONNX_INTRA_THREADS` env → [`set_intra_op_threads`] (surface default)
+/// → `INTRA_THREADS_DEFAULT`. A malformed env value is ignored (falls through)
 /// rather than silently selecting a surprising count.
 fn resolve_intra_op_threads() -> usize {
+    match INTRA_OP_THREADS_FORCED.load(Ordering::Relaxed) {
+        INTRA_THREADS_UNSET => {}
+        forced => return forced,
+    }
     if let Ok(raw) = std::env::var(INTRA_THREADS_ENV) {
         if let Ok(n) = raw.trim().parse::<usize>() {
             return n;
@@ -647,11 +687,58 @@ mod tests {
         std::env::set_var(super::INTRA_THREADS_ENV, "not-a-number");
         assert_eq!(resolve_intra_op_threads(), 3);
 
+        // An explicit user request (`--embed-threads`) outranks BOTH the env var and the
+        // surface default. This is the layer that exists so a flag a user typed is never
+        // silently beaten by an env var their shell happens to export.
+        std::env::set_var(super::INTRA_THREADS_ENV, "2");
+        force_intra_op_threads(7);
+        assert_eq!(
+            resolve_intra_op_threads(),
+            7,
+            "an explicitly forced count must beat a valid env var"
+        );
+
+        // `--embed-threads 0` is a real request ("let ORT decide"), not "unset" — it must
+        // still beat the env var. This is the case a naive `if forced != 0` check breaks.
+        force_intra_op_threads(0);
+        assert_eq!(
+            resolve_intra_op_threads(),
+            0,
+            "a forced 0 is a request, not an absence — it must still beat env"
+        );
+
+        // Clearing the forced layer falls back through env again.
+        super::INTRA_OP_THREADS_FORCED.store(super::INTRA_THREADS_UNSET, Ordering::Relaxed);
+        assert_eq!(resolve_intra_op_threads(), 2);
+
         match saved_env {
             Some(v) => std::env::set_var(super::INTRA_THREADS_ENV, v),
             None => std::env::remove_var(super::INTRA_THREADS_ENV),
         }
         super::INTRA_OP_THREADS.store(saved_atomic, Ordering::Relaxed);
+        super::INTRA_OP_THREADS_FORCED.store(super::INTRA_THREADS_UNSET, Ordering::Relaxed);
+    }
+
+    /// The surface default the CLI actually installs must be a real, usable count on this
+    /// machine — not the `0` it used to pass, and not a fabricated number on a platform
+    /// where detection is impossible.
+    #[test]
+    fn cli_surface_default_prefers_performance_cores() {
+        let detected = crate::cpu::performance_cores();
+        let installed = detected.unwrap_or(0);
+        match detected {
+            Some(p) => {
+                assert!(p > 0, "a detected performance-core count must be positive");
+                assert_eq!(installed, p, "the CLI installs the detected count verbatim");
+                assert_ne!(
+                    installed, 0,
+                    "on a machine where detection works, the CLI must NOT fall back to \
+                     ORT's `0` guess — that is the regression this whole task removed"
+                );
+            }
+            // Undetectable platform: keep the historical behavior rather than guess.
+            None => assert_eq!(installed, 0),
+        }
     }
 
     #[test]

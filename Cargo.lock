@@ -5208,6 +5208,7 @@ dependencies = [
  "hf-hub",
  "html-to-markdown-rs",
  "kreuzberg",
+ "libc",
  "ndarray",
  "ort",
  "regex",
