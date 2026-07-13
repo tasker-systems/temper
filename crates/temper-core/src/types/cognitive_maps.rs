@@ -56,7 +56,9 @@ pub struct CogmapRegionRow {
     pub content_cohesion: Option<f64>,
     /// Optional agent-authored region label.
     pub label: Option<String>,
-    /// Member count (the blur the surface tier exposes; identities stay interior).
+    /// Member count (the blur the surface tier exposes; identities stay interior) — over the members
+    /// **this caller can read**, never all of them (spec §D5). Two readers of the same region can
+    /// legitimately see different numbers; that is the point.
     pub member_count: i32,
 }
 

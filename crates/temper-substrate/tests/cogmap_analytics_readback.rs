@@ -23,7 +23,7 @@ struct MetricSeed {
 }
 
 async fn insert_region_with_metrics(pool: &PgPool, s: MetricSeed) -> Uuid {
-    sqlx::query_scalar::<_, Uuid>(
+    let region = sqlx::query_scalar::<_, Uuid>(
         // Anchor pair written alongside the vestigial `cogmap_id` — see the note in
         // `cogmap_shape_readback.rs`: the reads are keyed on the pair, and so is the real producer.
         "INSERT INTO kb_cogmap_regions
@@ -42,7 +42,47 @@ async fn insert_region_with_metrics(pool: &PgPool, s: MetricSeed) -> Uuid {
     .bind(s.is_folded)
     .fetch_one(pool)
     .await
-    .expect("insert region with metrics")
+    .expect("insert region with metrics");
+
+    // The region's two members, real and homed in the cogmap. Since D5 the metrics read enumerates a
+    // region only if the caller can see SOMETHING in it — so a member-less region is no longer a
+    // region any reader is shown, and a fixture without members would be testing the empty case while
+    // claiming to test the gate.
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool)
+        .await
+        .expect("system profile");
+    for i in 0..2 {
+        let member: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, '') RETURNING id",
+        )
+        .bind(format!("metric-member-{i}"))
+        .fetch_one(pool)
+        .await
+        .expect("insert member");
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+               (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_cogmaps', $2, $3, $3)",
+        )
+        .bind(member)
+        .bind(s.cogmap)
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("home member");
+        sqlx::query(
+            "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+             VALUES ($1, 'kb_resources', $2, $3)",
+        )
+        .bind(region)
+        .bind(member)
+        .bind(0.9 - f64::from(i) * 0.1)
+        .execute(pool)
+        .await
+        .expect("add member");
+    }
+    region
 }
 
 /// Shared fixture: a genesis cogmap joined to a fresh team; p1 is a member (readable), p2 is not.

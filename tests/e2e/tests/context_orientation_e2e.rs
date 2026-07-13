@@ -40,7 +40,17 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
 /// A region homed in `context`, exactly as the producer writes one: keyed on the anchor pair, with
 /// `cogmap_id` NULL (a context region cannot carry one — the column is a FK to kb_cogmaps, which is
 /// precisely why the old cogmap-keyed reads could never see it).
-async fn insert_context_region(pool: &sqlx::PgPool, context: Uuid, label: &str) -> Uuid {
+///
+/// Four real members, homed in the same context and owned by `owner`. They are not decoration: since
+/// D5 the count is derived from the members the caller can see, and a region with no visible members
+/// is not returned at all — so a member-less region would be a fixture that no longer describes
+/// anything the producer can make.
+async fn insert_context_region(
+    pool: &sqlx::PgPool,
+    context: Uuid,
+    owner: Uuid,
+    label: &str,
+) -> Uuid {
     let lens: Uuid =
         sqlx::query_scalar("SELECT id FROM kb_cogmap_lenses WHERE name = 'workflow-default'")
             .fetch_one(pool)
@@ -51,7 +61,7 @@ async fn insert_context_region(pool: &sqlx::PgPool, context: Uuid, label: &str) 
         .await
         .expect("migrations seed at least one event");
 
-    sqlx::query_scalar::<_, Uuid>(
+    let region = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO kb_cogmap_regions
            (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, centrality,
             content_cohesion, label, member_count, asserted_by_event_id, last_event_id, is_folded)
@@ -66,7 +76,39 @@ async fn insert_context_region(pool: &sqlx::PgPool, context: Uuid, label: &str) 
     .bind(event)
     .fetch_one(pool)
     .await
-    .expect("insert context region")
+    .expect("insert context region");
+
+    for i in 0..4 {
+        let member: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, '') RETURNING id",
+        )
+        .bind(format!("{label}-member-{i}"))
+        .fetch_one(pool)
+        .await
+        .expect("insert member resource");
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+               (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(member)
+        .bind(context)
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("home member resource");
+        sqlx::query(
+            "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+             VALUES ($1, 'kb_resources', $2, $3)",
+        )
+        .bind(region)
+        .bind(member)
+        .bind(0.9 - f64::from(i) * 0.1)
+        .execute(pool)
+        .await
+        .expect("add region member");
+    }
+    region
 }
 
 /// The `kb_access_grants` READ row `context_readable_by_profile` (T1) consults.
@@ -104,7 +146,7 @@ async fn get_shape(app: &common::E2eTestApp, token: &str, context: Uuid) -> Vec<
 async fn context_shape_is_reachable_gated_and_grantable_over_http(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     let db = app.pool.clone();
-    provision_profile(&app, &app.token).await;
+    let owner = provision_profile(&app, &app.token).await;
 
     // The owner's own context, created through the real API.
     let created: serde_json::Value = app
@@ -123,13 +165,16 @@ async fn context_shape_is_reachable_gated_and_grantable_over_http(pool: sqlx::Pg
         .expect("context id")
         .parse()
         .expect("context id parse");
-    insert_context_region(&db, context, "e2e-region").await;
+    insert_context_region(&db, context, owner, "e2e-region").await;
 
     // 1. The owner sees the region — the read the arc exists to deliver.
     let rows = get_shape(&app, &app.token, context).await;
     assert_eq!(rows.len(), 1, "owner sees the context's region: {rows:?}");
     assert_eq!(rows[0]["label"], "e2e-region");
-    assert_eq!(rows[0]["member_count"], 4);
+    assert_eq!(
+        rows[0]["member_count"], 4,
+        "the owner can read all four members, so the count they are handed is all four (D5)"
+    );
 
     // 2. A stranger sees nothing — and gets a 200, not a 403/404 (deny-as-absence).
     let stranger_token =
@@ -161,7 +206,7 @@ async fn context_shape_is_reachable_gated_and_grantable_over_http(pool: sqlx::Pg
 async fn temper_context_shape_prints_the_regions(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     let db = app.pool.clone();
-    provision_profile(&app, &app.token).await;
+    let owner = provision_profile(&app, &app.token).await;
 
     let created: serde_json::Value = app
         .reqwest_client
@@ -180,7 +225,7 @@ async fn temper_context_shape_prints_the_regions(pool: sqlx::PgPool) {
         .parse()
         .expect("context id parse");
 
-    insert_context_region(&db, context, "cli-visible-region").await;
+    insert_context_region(&db, context, owner, "cli-visible-region").await;
 
     let out = common::run_temper_cli(&app, &["context", "shape", "@me/cli-orientation"])
         .await
