@@ -19,7 +19,12 @@ anchor_label: string | null, };
  * A tinted, sized territory (Tier-0 aggregate). `salience` sizes regions;
  * `member_count` sizes contexts/cogmaps.
  */
-export type Territory = { id: string, kind: TerritoryKind, label: string | null, member_count: number, salience: number | null, 
+export type Territory = { id: string, kind: TerritoryKind, label: string | null, 
+/**
+ * Always over the members **this caller can read** (spec §D5) — for every territory kind. The
+ * container/context producers derived it that way already; since D5 the region producer does too.
+ */
+member_count: number, salience: number | null, 
 /**
  * Region content cohesion (`content_cohesion`: mean member-to-centroid cosine).
  * Sizes nothing — surfaced in the region hover card. None for contexts/cogmaps.

@@ -789,6 +789,9 @@ pub struct CogmapShapeRow {
     pub salience: f64,
     pub content_cohesion: Option<f64>,
     pub label: Option<String>,
+    /// Over the members **this caller can read** (spec §D5), not the stored count — the same gate the
+    /// `label` already honors. Having declined to name a member the caller cannot see, we do not
+    /// count it either.
     pub member_count: i32,
 }
 

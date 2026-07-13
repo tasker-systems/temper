@@ -124,7 +124,9 @@ content_cohesion: number | null,
  */
 label: string | null, 
 /**
- * Member count (the blur the surface tier exposes; identities stay interior).
+ * Member count (the blur the surface tier exposes; identities stay interior) — over the members
+ * **this caller can read**, never all of them (spec §D5). Two readers of the same region can
+ * legitimately see different numbers; that is the point.
  */
 member_count: number, };
 

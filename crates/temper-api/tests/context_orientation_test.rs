@@ -83,11 +83,19 @@ async fn grant_context_read(pool: &PgPool, context: Uuid, profile: Uuid) {
 
 /// The owner of a context sees its regions — the read the arc exists to deliver, and which returned
 /// nothing (structurally) before T8.
+///
+/// Doubles as the **differential** for D5's visible-count: the caller can see all three members, so
+/// the count they are handed must equal the stored `member_count` exactly. A visible-count that
+/// changes a fully-sighted read is a bug in the fix (measured on prod: 0 of 546 live regions diverge).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn owner_sees_the_contexts_regions(pool: PgPool) {
     let (profile, context) =
         common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
-    insert_context_region(&pool, context, 0.9, Some(0.5), "region-a").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "region-a").await;
+    for (i, affinity) in [0.9_f64, 0.5, 0.1].iter().enumerate() {
+        let r = insert_resource(&pool, context, profile, &format!("member-{i}")).await;
+        add_member(&pool, region, r, *affinity).await;
+    }
 
     let rows = anchor_shape_select(
         &pool,
@@ -100,7 +108,10 @@ async fn owner_sees_the_contexts_regions(pool: PgPool) {
 
     assert_eq!(rows.len(), 1, "the context's one region surfaces: {rows:?}");
     assert_eq!(rows[0].label.as_deref(), Some("region-a"));
-    assert_eq!(rows[0].member_count, 3);
+    assert_eq!(
+        rows[0].member_count, 3,
+        "a caller who can see every member is handed the stored count, unchanged"
+    );
 }
 
 /// THE ACCEPTANCE CRITERION: "a context read-grant actually grants access to the orientation read."
@@ -110,10 +121,15 @@ async fn owner_sees_the_contexts_regions(pool: PgPool) {
 /// what gating on `context_readable_by_profile` (T1) buys; an owner-only `EXISTS` would deny them.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn context_read_grant_grants_the_orientation_read(pool: PgPool) {
-    let (_owner, context) =
+    let (owner, context) =
         common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
     let stranger = common::fixtures::create_test_profile(&pool, "stranger@example.com").await;
-    insert_context_region(&pool, context, 0.9, Some(0.5), "region-a").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "region-a").await;
+    // The region needs a member the grantee can see: the context READ grant is what makes the
+    // context's own resources visible (`resources_visible_to` → `contexts_readable_by`), so the grant
+    // carries both halves — the anchor gate AND the members it is counted over.
+    let member = insert_resource(&pool, context, owner, "a resource in the granted context").await;
+    add_member(&pool, region, member, 0.9).await;
 
     let anchor = HomeAnchor::Context(context.into());
 
@@ -162,9 +178,17 @@ async fn context_read_grant_grants_the_orientation_read(pool: PgPool) {
 async fn regions_sort_most_salient_first_and_nulls_do_not_lead(pool: PgPool) {
     let (profile, context) =
         common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
-    insert_context_region(&pool, context, 0.2, Some(0.9), "low-salience").await;
-    insert_context_region(&pool, context, 0.8, None, "high-salience-no-cohesion").await;
-    insert_context_region(&pool, context, 0.5, Some(0.4), "mid-salience").await;
+    for (salience, cohesion, label) in [
+        (0.2, Some(0.9), "low-salience"),
+        (0.8, None, "high-salience-no-cohesion"),
+        (0.5, Some(0.4), "mid-salience"),
+    ] {
+        let region = insert_context_region(&pool, context, salience, cohesion, label).await;
+        // Every region needs at least one VISIBLE member to be returned at all (D5): a region the
+        // caller can see nothing in is not a region they can see. Sorting is what's under test here.
+        let r = insert_resource(&pool, context, profile, &format!("{label}-member")).await;
+        add_member(&pool, region, r, 0.9).await;
+    }
 
     let rows = anchor_shape_select(
         &pool,
@@ -331,5 +355,90 @@ async fn an_invisible_member_can_never_become_the_regions_name(pool: PgPool) {
         label,
         Some("Deployment & Release Workflow"),
         "the name falls to the most-affine VISIBLE member"
+    );
+
+    // ...and D5: having declined to NAME the invisible member, we must not COUNT it either. The region
+    // stores `member_count = 3` and holds two members, exactly one of which this caller can read. The
+    // honest answer is 1. Anything else is a cardinality disclosure about content they have no read on.
+    assert_eq!(
+        rows[0].member_count, 1,
+        "the count is over VISIBLE members only — not the stored count, not the member rows"
+    );
+}
+
+/// A region the caller can see NOTHING in is not a region they can see — at EITHER door.
+///
+/// The shape read and the metrics read enumerate the same regions off the same anchor. If the shape
+/// read hides a region while the metrics read still answers for it, the metrics door becomes an
+/// existence oracle for exactly the regions the shape door refuses to show — and hands over its
+/// centrality and cohesion besides. Both doors drop it, or neither is closed.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_region_with_no_visible_members_is_returned_by_neither_door(pool: PgPool) {
+    let (profile, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
+    let (stranger, stranger_context) =
+        common::fixtures::create_test_profile_with_context(&pool, "stranger@example.com").await;
+
+    // A region on the caller's OWN context — the anchor gate passes — whose every member lives
+    // somewhere they cannot read. The anchor says yes; the members say there is nothing to see.
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "all-invisible").await;
+    let secret_a = insert_resource(&pool, stranger_context, stranger, "secret one").await;
+    let secret_b = insert_resource(&pool, stranger_context, stranger, "secret two").await;
+    add_member(&pool, region, secret_a, 0.9).await;
+    add_member(&pool, region, secret_b, 0.4).await;
+
+    let anchor = HomeAnchor::Context(context.into());
+
+    let shape = anchor_shape_select(&pool, ProfileId::from(profile), anchor, None)
+        .await
+        .expect("shape read must be Ok");
+    assert!(
+        shape.is_empty(),
+        "a region with no visible members must not surface in the shape read: {shape:?}"
+    );
+
+    let metrics = anchor_region_metrics_select(&pool, ProfileId::from(profile), anchor, None)
+        .await
+        .expect("metrics read must be Ok");
+    assert!(
+        metrics.is_empty(),
+        "...nor in the metrics read, which would otherwise answer for a region the shape read hides: \
+         {metrics:?}"
+    );
+}
+
+/// A SOFT-DELETED member is not a member. This is the arm of D5 that bites TODAY, on every caller
+/// including the owner: `resources_visible_to` declares a deleted resource "invisible on every axis",
+/// yet the stored `member_count` — written at materialize time — kept counting it. So a region whose
+/// member was deleted reported a count including a resource that no longer exists to anyone.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_soft_deleted_member_is_not_counted(pool: PgPool) {
+    let (profile, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "region-a").await;
+
+    let live = insert_resource(&pool, context, profile, "still here").await;
+    let deleted = insert_resource(&pool, context, profile, "deleted since materialize").await;
+    add_member(&pool, region, live, 0.5).await;
+    add_member(&pool, region, deleted, 0.9).await; // the MOST affine member, and it is gone
+
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(deleted)
+        .execute(&pool)
+        .await
+        .expect("soft-delete the member");
+
+    let rows = anchor_shape_select(
+        &pool,
+        ProfileId::from(profile),
+        HomeAnchor::Context(context.into()),
+        None,
+    )
+    .await
+    .expect("shape read must be Ok");
+
+    assert_eq!(
+        rows[0].member_count, 1,
+        "the deleted member is not counted — even for the owner, who could see it when it existed"
     );
 }
