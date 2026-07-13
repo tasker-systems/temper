@@ -56,6 +56,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # The release archive ships the embedding model, which is an LFS blob. Without this the
+          # job gets a 130-byte pointer file instead — which is exactly how the CLI ended up
+          # fetching a *different* (fp32) model from Hugging Face at runtime while the server used
+          # the quantized one, silently filling the index with vectors from two models.
+          lfs: true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -129,6 +135,19 @@ jobs:
           else
             cp "$ORT_LIB" "$STAGING/${{ matrix.target.lib_dest_dir }}/${{ matrix.target.lib_name }}"
           fi
+
+          # The embedding model rides in the archive alongside the ORT lib. The CLI resolves it
+          # binary-adjacent (`<exe_dir>/models/`) and verifies its sha256 before loading, so binary
+          # and model stay in lockstep through `temper update` — a binary and a model that disagree
+          # produce a silently corrupt semantic index.
+          MODEL_SRC="crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx"
+          if [[ ! -f "$MODEL_SRC" ]] || [[ "$(wc -c < "$MODEL_SRC")" -lt 1000000 ]]; then
+            echo "::error::$MODEL_SRC is missing or is still an LFS pointer (checkout needs lfs: true)"
+            ls -la "$(dirname "$MODEL_SRC")" || true
+            exit 1
+          fi
+          mkdir -p "$STAGING/models"
+          cp "$MODEL_SRC" "$STAGING/models/"
 
           cp LICENSE "$STAGING/"
           {

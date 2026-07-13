@@ -34,6 +34,7 @@ fn fake_chunk(content: &str, idx: u32) -> PackedChunk {
         content: content.to_string(),
         content_hash: format!("sha256:fake-{idx}"),
         embedding: vec![0.0_f32; 768],
+        embedded_with: None,
     }
 }
 

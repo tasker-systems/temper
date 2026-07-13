@@ -140,6 +140,11 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::events::cursor))
         .routes(routes!(handlers::events::element_trail))
         .routes(routes!(handlers::search::search))
+        // Operator-only re-embed trigger: enqueue embed jobs for chunks whose vector was produced by
+        // a model that is no longer the one we embed with. The per-minute drain does the work; this is
+        // only the trigger. Admin-gated on the caller's own identity, so an operator uses their normal
+        // login rather than holding the drain's deploy secret.
+        .route("/api/embed/admin/reembed", post(handlers::embed::reembed))
         // Operator-only access-gate admin surface — deliberately UNDOCUMENTED.
         // These handlers carry no `#[utoipa::path]`; plain `.route()` mounts them
         // without adding them to the OpenAPI contract.

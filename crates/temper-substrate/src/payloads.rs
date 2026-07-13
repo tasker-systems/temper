@@ -194,6 +194,19 @@ pub struct ChunkContent {
     pub header_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_depth: Option<i16>,
+    /// sha256 of the model that produced [`Self::embedding`] — persisted onto
+    /// `kb_chunks.embedded_with` by `_insert_chunk`, and the dirty flag the re-embed drain reads.
+    ///
+    /// **Declared by whoever produced the vector, never assumed by the receiver.** The CLI embeds
+    /// client-side and its chunks are stored *verbatim*, so if the server stamped these with its own
+    /// model identity it would be vouching for a vector it never computed — and an older CLI still
+    /// POSTing fp32 vectors would have them silently marked current, which is the exact bug this
+    /// column exists to make impossible.
+    ///
+    /// Absent ⇒ NULL ⇒ unknown provenance ⇒ **stale**, so the drain re-embeds it server-side. That is
+    /// the safe default: a client that says nothing gets its work redone, not trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedded_with: Option<String>,
 }
 
 /// Insert one run of prepared chunks into a `{chunk_id: {content, embedding}}` sidecar map (keyed by
@@ -213,6 +226,8 @@ pub fn content_sidecar_chunks(
                 // (skip_serializing_if), which `_insert_chunk` reads as a NULL vector — the write-side
                 // half of the async-embed path (issue #299). An embedded chunk carries its vector.
                 embedding: c.embedding.clone().map(EmbeddingRepr::Vector),
+                // Carried, not invented: whoever produced the vector already declared its model.
+                embedded_with: c.embedded_with.clone(),
                 header_path: c.header_path.clone(),
                 heading_depth: c.heading_depth,
             },
@@ -800,6 +815,7 @@ mod tests {
                 content_hash: "ab".repeat(32),
                 content: "secret prose".into(),
                 embedding: Some(vec![0.5; 4]),
+                embedded_with: None,
                 header_path: None,
                 heading_depth: None,
             }],
@@ -865,6 +881,7 @@ mod tests {
                 content_hash: "cd".repeat(32),
                 content: "the prose".into(),
                 embedding: Some(vec![1.0, 2.0]),
+                embedded_with: None,
                 header_path: None,
                 heading_depth: None,
             }],

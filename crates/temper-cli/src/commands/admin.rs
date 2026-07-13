@@ -111,3 +111,67 @@ pub async fn requests_review_remote(
     println!("{rendered}");
     Ok(())
 }
+
+/// `temper admin reembed` — trigger a re-embed for a scope of the index (admin only).
+///
+/// The *trigger*, not the engine: it enqueues embed jobs for chunks whose vector was produced by a
+/// model that is no longer the one the server embeds with, and the per-minute drain does the work.
+///
+/// Nothing is marked dirty and nothing is destroyed — staleness is derived
+/// (`embedding IS NULL OR embedded_with IS DISTINCT FROM <current model>`), and the stale vector stays
+/// searchable until a fresh one replaces it. So this is idempotent, safe to re-run, and safe to run
+/// while the drain is mid-flight.
+///
+/// Scope it small first. `--dry-run` surveys without enqueuing anything; `--resource` does one;
+/// `--context` does one context; `--all` does everything. `--limit` bounds how many resources a single
+/// call queues, so "re-embed the index" is a walk, not a leap.
+pub async fn reembed_remote(
+    client: &temper_client::TemperClient,
+    resource: Option<String>,
+    context: Option<String>,
+    all: bool,
+    limit: Option<i32>,
+    dry_run: bool,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let resource_id = match resource.as_deref() {
+        Some(r) => Some(
+            temper_workflow::operations::parse_ref(r)
+                .map_err(|e| TemperError::BadRequest(format!("invalid resource ref {r:?}: {e}")))?,
+        ),
+        None => None,
+    };
+    let context_id = match context.as_deref() {
+        Some(c) => {
+            Some(crate::commands::context_cmd::resolve_context_id_for_read(client, c).await?)
+        }
+        None => None,
+    };
+
+    // Exactly one scope — refuse to guess. "All" must be asked for by name.
+    let scopes = [resource_id.is_some(), context_id.is_some(), all]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if scopes != 1 {
+        return Err(TemperError::BadRequest(
+            "specify exactly one of --resource, --context, or --all".to_string(),
+        ));
+    }
+
+    let body = temper_core::types::admin::ReembedRequest {
+        resource_id: resource_id.map(|r| *r),
+        context_id,
+        all,
+        limit,
+        dry_run,
+    };
+    let summary = client
+        .admin()
+        .reembed(&body)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let rendered = crate::format::render(&summary, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}

@@ -150,6 +150,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         content: "# Heading A\n\nContent for chunk A.".to_string(),
         content_hash: format!("{:0>64}", "a"),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     let chunk_b = PackedChunk {
         chunk_index: 1,
@@ -158,6 +159,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         content: "# Heading B\n\nContent for chunk B.".to_string(),
         content_hash: format!("{:0>64}", "b"),
         embedding: vec![0.2_f32; 768],
+        embedded_with: None,
     };
 
     let payload = IngestPayload {
@@ -438,6 +440,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         content: "# Section A\n\nBody for A.".to_string(),
         content_hash: format!("{:0>64}", "a"),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     let chunk_b = PackedChunk {
         chunk_index: 1,
@@ -446,6 +449,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         content: "# Section B\n\nBody for B.".to_string(),
         content_hash: format!("{:0>64}", "b"),
         embedding: vec![0.2_f32; 768],
+        embedded_with: None,
     };
 
     // Property-only managed tier (identity/type travel first-class, not here).

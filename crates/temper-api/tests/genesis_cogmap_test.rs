@@ -38,6 +38,7 @@ fn telos_block(role: &str, content: &str, hash_seed: &str) -> ReconcileTelosBloc
         content: content.to_string(),
         content_hash: format!("{hash_seed:0>64}"),
         embedding: vec![0.1f32; 768],
+        embedded_with: None,
     };
     let chunks_packed = pack_chunks(std::slice::from_ref(&chunk)).expect("pack telos chunk");
     ReconcileTelosBlock {
@@ -80,6 +81,7 @@ fn entry(id: Uuid, origin_uri: &str, title: &str, body: &str, hash_seed: &str) -
         content: body.to_string(),
         content_hash: format!("{hash_seed:0>64}"),
         embedding: vec![0.1; 768],
+        embedded_with: None,
     };
     let content_hash = temper_substrate::content::body_hash_from_chunk_hashes(
         std::slice::from_ref(&chunk.content_hash),

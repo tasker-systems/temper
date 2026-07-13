@@ -54,6 +54,7 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
             content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
             content: content.to_string(),
             embedding: Some(embedding),
+            embedded_with: None,
             header_path: None,
             heading_depth: None,
         }],

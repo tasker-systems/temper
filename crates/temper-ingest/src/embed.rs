@@ -1,22 +1,35 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! THREE model-loading strategies. Two are selected at compile time by feature
-//! flags; the third overrides both at runtime:
+//! **Every surface embeds with the same model — `model_quantized.onnx`, LFS-pinned in this repo —
+//! and the model is verified against [`EXPECTED_MODEL_SHA256`] before it is loaded.** That
+//! invariant is load-bearing: nothing records which model produced a stored vector, so if two
+//! surfaces embed with different models the semantic index silently fills with vectors from two
+//! different geometries and nothing can tell them apart. It happened (the CLI ran fp32 while the
+//! server ran quantized; ~95% of the index was fp32 before it was caught), which is why the check
+//! is a hard error and not a warning.
 //!
-//! - **`embed`** (default): model bundled via `include_bytes!()` at compile
-//!   time (no runtime downloads).  Requires git-lfs checkout.
-//! - **`embed-download`**: model downloaded at runtime from Hugging Face via
-//!   hf-hub.  Safe on machines without git-lfs; used by the CLI.
-//! - **`TEMPER_ONNX_MODEL_PATH`** (runtime, wins over both): load the model from
-//!   a file on disk.  The only strategy that costs neither binary size nor
-//!   network — which is why CI uses it: the repo already ships the model, so
-//!   downloading ~400 MB from HF to test it was pure waste.  Mirrors the
-//!   existing `ORT_DYLIB_PATH`, which does the same for the runtime library.
+//! TWO model-loading strategies, selected at compile time, plus a runtime override:
 //!
-//! Note that a `--workspace` build resolves to **`embed-download`**, because
-//! temper-cli's default `embed` feature selects it and Cargo unifies features
-//! across the build — so the `include_bytes!` branch is cfg'd out of every
-//! workspace build, whether or not that is what you intended.
+//! - **`embed`**: model bundled via `include_bytes!()`. Requires a git-lfs checkout. Used by the
+//!   server (temper-substrate → temper-ingest(embed)).
+//! - **`embed-download`**: model resolved from disk at runtime — next to the `temper` binary (the
+//!   release archive stages it there, exactly as it stages `libonnxruntime`), or from the XDG
+//!   install dir. Used by the CLI, so the binary stays ~18 MB instead of ~128 MB.
+//! - **`TEMPER_ONNX_MODEL_PATH`** (runtime, wins over both): load the model from an explicit path.
+//!   Mirrors `ORT_DYLIB_PATH`, which does the same for the runtime library. **Also verified** — an
+//!   unchecked override would be a hole straight through the lock.
+//!
+//! `embed-download` deliberately has **no network fallback**. It used to fetch `onnx/model.onnx`
+//! from Hugging Face `main`, which was wrong three ways at once: that is the **fp32** model, it
+//! tracked a **mutable ref**, and upstream publishes no quantized ONNX at all — so the fetch could
+//! never have produced the artifact the server uses. Failing loudly beats embedding with the wrong
+//! model.
+//!
+//! Note that a `--workspace` build resolves to **`embed-download`**, because temper-cli's default
+//! `embed` feature selects it and Cargo unifies features across the build — so the `include_bytes!`
+//! branch is cfg'd out of every workspace build, whether or not that is what you intended. This is
+//! why a test asserting "the CLI and the server agree" must exercise a **built binary**: in a
+//! workspace test target both sides compile to the same variant and the assertion passes vacuously.
 //!
 //! ONNX session created once per process via `OnceLock`.
 //!
@@ -287,6 +300,90 @@ fn resolve_intra_op_threads() -> usize {
     }
 }
 
+// ---- Model identity ----
+
+/// sha256 of the model this build **expects**, emitted by `build.rs` from the model as committed
+/// (its git-lfs oid *is* its sha256). Not a hand-maintained constant: it cannot drift from the
+/// artifact.
+pub const EXPECTED_MODEL_SHA256: &str = env!("TEMPER_EXPECTED_MODEL_SHA256");
+
+/// Size in bytes of that same model. Checked before the hash because it is free and it is already a
+/// perfect discriminator for the bug this guards against: the fp32 model is 435 MB, the quantized
+/// one is 110 MB.
+pub const EXPECTED_MODEL_SIZE: u64 = {
+    // `env!` yields a &str; parse it in const context so a malformed value fails the build.
+    let bytes = env!("TEMPER_EXPECTED_MODEL_SIZE").as_bytes();
+    let mut acc: u64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        acc = acc * 10 + (bytes[i] - b'0') as u64;
+        i += 1;
+    }
+    acc
+};
+
+/// Verify that the model at `path` is the one this build expects.
+///
+/// **This is the lock.** The CLI and the server must embed with the same model: when they silently
+/// did not, the semantic index filled with vectors from two different models, and because nothing
+/// records which model produced a vector, the divergence was invisible until someone measured it.
+///
+/// A mismatch is a hard error, never a fallback. Loading "some other embedding model" is strictly
+/// worse than failing: it does not crash, it does not warn, it just quietly writes vectors that
+/// belong to a different geometry than everything already stored.
+///
+/// Costs ~0.2s for a 110 MB model, paid only on paths that then go on to spend *seconds* embedding.
+fn verify_model_file(path: &std::path::Path) -> std::result::Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let meta = std::fs::metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+    if meta.len() != EXPECTED_MODEL_SIZE {
+        // A git-lfs pointer is a ~130-byte text file, and it is by far the most likely wrong-size
+        // case for anyone building from a checkout. Say so, rather than talking about 435 MB.
+        let hint = if meta.len() < 1024 {
+            " That size is a git-lfs POINTER FILE, not the model — run `git lfs pull`."
+        } else {
+            " (The fp32 bge-base model is ~435 MB; the quantized model this build expects is ~110 MB.)"
+        };
+        return Err(format!(
+            "model at {} is {} bytes, expected {EXPECTED_MODEL_SIZE} — this is not the model this \
+             build embeds with.{hint} Embedding with the wrong model produces vectors that do not \
+             match the rest of the index.",
+            path.display(),
+            meta.len(),
+        ));
+    }
+
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let actual = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+
+    if actual != EXPECTED_MODEL_SHA256 {
+        return Err(format!(
+            "model at {} has sha256 {actual}, expected {EXPECTED_MODEL_SHA256} — refusing to embed \
+             with an unverified model.",
+            path.display(),
+        ));
+    }
+    Ok(())
+}
+
 // ---- Model management ----
 
 struct Model {
@@ -330,9 +427,17 @@ fn build_session() -> std::result::Result<Session, String> {
         .map_err(|e| format!("ort threads: {e}"))?;
 
     match model_path_override()? {
-        Some(path) => builder
-            .commit_from_file(&path)
-            .map_err(|e| format!("ort load: {e}")),
+        Some(path) => {
+            // The override is verified too. A path handed in by env is exactly as capable of being
+            // the wrong model as one found on disk — and an unchecked override is a hole straight
+            // through the lock.
+            verify_model_file(&path)?;
+            builder
+                .commit_from_file(&path)
+                .map_err(|e| format!("ort load: {e}"))
+        }
+        // `MODEL_BYTES` is the very file `build.rs` hashed to produce EXPECTED_MODEL_SHA256, so it
+        // is verified by construction — re-hashing it here would cost 0.2s to prove a tautology.
         None => builder
             .commit_from_memory(MODEL_BYTES)
             .map_err(|e| format!("ort load: {e}")),
@@ -374,18 +479,70 @@ fn model_path_override() -> std::result::Result<Option<std::path::PathBuf>, Stri
     Ok(Some(path))
 }
 
-/// Build ORT session from `TEMPER_ONNX_MODEL_PATH` if set, else by downloading from Hugging Face Hub.
+/// Where the model lives relative to the installed `temper` binary.
+///
+/// The release archive stages it here, exactly as it already stages `libonnxruntime` into `lib/`.
+/// One delivery vehicle, one extraction, and `temper update` keeps binary and model in lockstep —
+/// which matters, because a binary and a model that disagree produce a silently corrupt index.
+#[cfg(feature = "embed-download")]
+const MODEL_BASENAME: &str = "model_quantized.onnx";
+
+/// Candidate on-disk locations for the model, mirroring [`binary_adjacent_candidates`] for the ORT
+/// dylib: next to the binary, then the XDG install location a symlinked `temper` resolves back to.
+#[cfg(feature = "embed-download")]
+fn model_candidates() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join("models").join(MODEL_BASENAME));
+            // `temper` symlinked onto PATH from an install dir one level up.
+            if let Some(up) = dir.parent() {
+                out.push(up.join("models").join(MODEL_BASENAME));
+            }
+        }
+    }
+    if let Some(data_dir) = dirs::data_local_dir() {
+        out.push(data_dir.join("temper").join("models").join(MODEL_BASENAME));
+    }
+    // Last resort: the model in the checkout this binary was BUILT from (baked by build.rs). This is
+    // what keeps `cargo install --path crates/temper-cli` working — that binary lives in ~/.cargo/bin
+    // with no adjacent `models/`, and it is the only supported install on the platforms where
+    // `install.sh` refuses to run. Guarded by `is_file()` and sha256-verified like any other
+    // candidate, so on a machine that is not the build machine it simply misses.
+    out.push(std::path::PathBuf::from(env!("TEMPER_CHECKOUT_MODEL_PATH")));
+    out
+}
+
+/// Build the ORT session for the runtime-resolved build (the shipped CLI).
+///
+/// Resolution: `TEMPER_ONNX_MODEL_PATH` → binary-adjacent → XDG install dir. **Whatever is found is
+/// verified against [`EXPECTED_MODEL_SHA256`] before it is loaded.**
+///
+/// There is deliberately **no download fallback**. This build used to fetch `onnx/model.onnx` from
+/// Hugging Face `main` — which was wrong three ways at once: it is the **fp32** model (the server
+/// embeds with the quantized one, so the two populated one index with vectors from two models); it
+/// tracked a **mutable upstream ref**; and upstream publishes no quantized ONNX at all, so the fetch
+/// could never have produced the right artifact. Failing loudly with a fixable message beats
+/// silently embedding with the wrong model.
 #[cfg(feature = "embed-download")]
 fn build_session() -> std::result::Result<Session, String> {
     let model_path = match model_path_override()? {
         Some(path) => path,
-        None => {
-            let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
-            let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
-            repo.get("onnx/model.onnx")
-                .map_err(|e| format!("download model: {e}"))?
-        }
+        None => model_candidates()
+            .into_iter()
+            .find(|p| p.is_file())
+            .ok_or_else(|| {
+                format!(
+                    "embedding model not found. Expected {MODEL_BASENAME} next to the `temper` \
+                     binary (the release archive ships it there), or at a path given by \
+                     {MODEL_PATH_ENV}. Reinstall via scripts/install/install.sh, or point \
+                     {MODEL_PATH_ENV} at models/bge-base-en-v1.5/{MODEL_BASENAME} from a checkout \
+                     with `git lfs pull`."
+                )
+            })?,
     };
+
+    verify_model_file(&model_path)?;
 
     Session::builder()
         .map_err(|e| format!("ort session builder: {e}"))?
@@ -1130,6 +1287,66 @@ mod tests {
         assert!(
             as_str.iter().any(|s| s.contains("/temper/lib/")),
             "candidates should include ~/.local/share/temper/lib/: {as_str:?}"
+        );
+    }
+
+    /// The model this build expects, in the source tree. Present in any checkout with `git lfs
+    /// pull`; when it is only a pointer, the size check below is what trips — which is itself the
+    /// correct answer, so the test is meaningful either way.
+    fn repo_model_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("models/bge-base-en-v1.5/model_quantized.onnx")
+    }
+
+    /// `build.rs` derives the expected identity from the model **as committed** — from the git-lfs
+    /// pointer when the blob is not smudged, from the file itself when it is. Both must agree, or the
+    /// pin means nothing: assert the constants describe the file actually on disk.
+    #[test]
+    fn expected_model_identity_matches_the_committed_model() {
+        assert_eq!(
+            super::EXPECTED_MODEL_SHA256.len(),
+            64,
+            "sha256 hex should be 64 chars, got {:?}",
+            super::EXPECTED_MODEL_SHA256
+        );
+
+        let path = repo_model_path();
+        if !path.is_file() {
+            return; // no checkout of the blob; the size/hash cannot be cross-checked here
+        }
+        let on_disk = std::fs::metadata(&path).expect("stat model").len();
+        assert_eq!(
+            on_disk,
+            super::EXPECTED_MODEL_SIZE,
+            "build.rs's expected size disagrees with the committed model — the pin has drifted"
+        );
+    }
+
+    #[test]
+    fn the_repo_model_verifies_against_the_expected_identity() {
+        let path = repo_model_path();
+        if !path.is_file() {
+            return; // no checkout of the blob; nothing to assert
+        }
+        super::verify_model_file(&path).expect("the committed model must satisfy its own pin");
+    }
+
+    /// **The regression test for the bug.** The CLI shipped the fp32 model while the server used the
+    /// quantized one, and nothing objected — so the index filled with vectors from two models. Any
+    /// model that is not the expected one must now be REFUSED, not loaded.
+    #[test]
+    fn a_model_that_is_not_the_expected_one_is_refused() {
+        // Any file that is not the model stands in for "the wrong model" — the check is on identity,
+        // not on provenance. The tokenizer is conveniently to hand and is definitely not 110 MB.
+        let not_the_model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("models/bge-base-en-v1.5/tokenizer.json");
+
+        let err = super::verify_model_file(&not_the_model)
+            .expect_err("a file that is not the expected model must be rejected");
+
+        assert!(
+            err.contains("wrong model"),
+            "the error must say which way it failed, so the fix is obvious: {err}"
         );
     }
 }

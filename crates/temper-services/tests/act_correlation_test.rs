@@ -71,6 +71,7 @@ fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
         content: text.to_owned(),
         content_hash: format!("{hash_seed:0>64}"),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     pack_chunks(&[chunk]).expect("pack chunk")
 }

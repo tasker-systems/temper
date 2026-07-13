@@ -31,6 +31,130 @@ pub fn async_embed_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// What slice of the index to re-embed. Deliberately three granularities, because a re-embed is a
+/// thing you want to try on **one** resource, then a **handful**, then **everything** — in that order.
+/// A mechanism that only offers "all" is one nobody dares run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReembedScope {
+    /// Exactly one resource.
+    Resource(Uuid),
+    /// Every resource in one context.
+    Context(Uuid),
+    /// The whole index.
+    All,
+}
+
+/// Enqueue embed jobs for resources holding **stale** chunks in `scope`, up to `limit` resources.
+///
+/// This is the *trigger* for the re-embed; the drain (`dispatch_tick`, running every minute) is the
+/// engine. Staleness is not a thing we mark — it is a thing we *observe*: a chunk is stale when its
+/// `embedded_with` is not the model this build embeds with. So there is no "mark dirty" write, no
+/// backfill migration, and no window in which a chunk is unsearchable. Rows written before provenance
+/// existed are stale by definition, and any future model change re-stales the index automatically.
+///
+/// **Nothing calls this on a schedule.** The drain consumes jobs; it does not go looking for stale
+/// chunks. Re-embedding only ever begins because an operator asked for it — which is the point: you
+/// aim it at one resource before you aim it at 31,824. The corollary is that a deploy heals nothing on
+/// its own, and any write from an un-upgraded client keeps adding unstamped vectors that will sit
+/// stale until the next sweep.
+///
+/// Returns the resource ids enqueued. Resources with a live job are skipped (the underlying
+/// `ON CONFLICT DO NOTHING`), so this is safe to run repeatedly and safe to run while the drain is
+/// mid-flight — re-running it simply picks up whatever is still stale.
+pub async fn enqueue_stale(pool: &PgPool, scope: ReembedScope, limit: i32) -> ApiResult<Vec<Uuid>> {
+    let model = temper_ingest::embed::EXPECTED_MODEL_SHA256;
+
+    // One predicate, three scopes. The `$2::uuid IS NULL OR ...` shape keeps this a single prepared
+    // statement rather than three near-identical ones that can drift apart.
+    //
+    // A resource has no context COLUMN — it is *homed* in one via `kb_resource_homes`
+    // (anchor_table = 'kb_contexts'). The same table also homes cogmap nodes
+    // (anchor_table = 'kb_cogmaps'), so the anchor_table predicate is load-bearing, not decoration:
+    // without it, a context-scoped re-embed would sweep in cogmap-homed resources too.
+    let (resource_filter, context_filter) = match scope {
+        ReembedScope::Resource(id) => (Some(id), None),
+        ReembedScope::Context(id) => (None, Some(id)),
+        ReembedScope::All => (None, None),
+    };
+
+    let stale: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT r.id \
+           FROM kb_resources r \
+           JOIN kb_chunks ch ON ch.resource_id = r.id \
+           JOIN kb_content_blocks b ON b.id = ch.block_id \
+          WHERE r.is_active \
+            AND ch.is_current \
+            AND NOT b.is_folded \
+            AND ch.embedded_with IS DISTINCT FROM $1 \
+            AND ($2::uuid IS NULL OR r.id = $2::uuid) \
+            AND ($3::uuid IS NULL OR EXISTS ( \
+                    SELECT 1 FROM kb_resource_homes h \
+                     WHERE h.resource_id = r.id \
+                       AND h.anchor_table = 'kb_contexts' \
+                       AND h.anchor_id = $3::uuid)) \
+          LIMIT $4",
+    )
+    .bind(model)
+    .bind(resource_filter)
+    .bind(context_filter)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await?;
+
+    // The (persona, dispatch_type) tuple MUST be the one `dispatch_tick` claims on — a job enqueued
+    // under any other tuple is invisible to the drain and would sit pending forever, looking enqueued
+    // and doing nothing.
+    let persona = Persona::Embed.as_str();
+    let dispatch = DispatchType::Embed.as_str();
+
+    let mut enqueued = Vec::with_capacity(stale.len());
+    for resource_id in stale {
+        if workflow_job_service::enqueue_resource(pool, resource_id, persona, dispatch)
+            .await?
+            .is_some()
+        {
+            enqueued.push(resource_id);
+        }
+    }
+    Ok(enqueued)
+}
+
+/// How many resources in `scope` still hold stale chunks, and how many stale chunks in total.
+///
+/// The honest progress readout for a re-embed: "is this converging?" answered without guessing.
+pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64, u64)> {
+    let model = temper_ingest::embed::EXPECTED_MODEL_SHA256;
+    let (resource_filter, context_filter) = match scope {
+        ReembedScope::Resource(id) => (Some(id), None),
+        ReembedScope::Context(id) => (None, Some(id)),
+        ReembedScope::All => (None, None),
+    };
+
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT count(DISTINCT r.id), count(*) \
+           FROM kb_resources r \
+           JOIN kb_chunks ch ON ch.resource_id = r.id \
+           JOIN kb_content_blocks b ON b.id = ch.block_id \
+          WHERE r.is_active \
+            AND ch.is_current \
+            AND NOT b.is_folded \
+            AND ch.embedded_with IS DISTINCT FROM $1 \
+            AND ($2::uuid IS NULL OR r.id = $2::uuid) \
+            AND ($3::uuid IS NULL OR EXISTS ( \
+                    SELECT 1 FROM kb_resource_homes h \
+                     WHERE h.resource_id = r.id \
+                       AND h.anchor_table = 'kb_contexts' \
+                       AND h.anchor_id = $3::uuid))",
+    )
+    .bind(model)
+    .bind(resource_filter)
+    .bind(context_filter)
+    .fetch_one(pool)
+    .await?;
+
+    Ok((row.0 as u64, row.1 as u64))
+}
+
 /// Re-enqueue `dead` embed jobs so a following claim can drain them (issue #299, Phase 4). Returns the
 /// number of resources re-driven. `cap` bounds the resources re-driven per call (defaults to
 /// [`DEFAULT_EMBED_DISPATCH_CAP`]). A resource that already has a live job is skipped — re-drive never
@@ -95,14 +219,67 @@ pub async fn dispatch_tick(
         ..Default::default()
     };
 
+    // ONE chunk allowance for the WHOLE invocation, spent across every claimed job. Not per-resource:
+    // this loop is serial and lives inside a serverless function, so a per-resource budget would let
+    // `cap` (5) resources multiply it — 5 x 64 = 320 chunks of single-threaded ONNX in one request.
+    // That is the same timeout cliff, moved. A job that finds the allowance spent embeds nothing,
+    // reports what remains, and is re-enqueued below to resume next tick.
+    let mut budget = temper_substrate::embed::resolve_chunk_budget();
+
     for job in claimed {
-        match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id).await {
-            Ok(n) => {
-                // Clean embed → complete the job (frees the single-flight slot).
-                workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
+        match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget).await {
+            Ok(progress) => {
+                summary.chunks_embedded += progress.embedded;
+                budget -= progress.embedded as i64;
+                if progress.is_complete() {
+                    // Fully drained → complete the job (frees the single-flight slot).
+                    workflow_job_service::complete_resource(
+                        pool,
+                        job.resource_id,
+                        persona,
+                        dispatch,
+                    )
                     .await?;
-                summary.completed += 1;
-                summary.chunks_embedded += n;
+                    summary.completed += 1;
+                } else {
+                    // The resource holds more stale chunks than one pass may embed. Complete this job
+                    // and enqueue a fresh one so the next tick resumes it.
+                    //
+                    // Complete-then-enqueue rather than holding the lease: a held lease looks to the
+                    // reaper exactly like a CRASHED job, so each pass would burn an attempt and a large
+                    // resource would hit max-attempts and go `dead` long before it finished. Prod's
+                    // largest resource is 939 chunks against a 64-chunk budget — ~15 passes — so it
+                    // would reliably die. Re-enqueueing gives each pass a clean attempt count.
+                    //
+                    // The two statements are not atomic; a crash between them leaves the resource with
+                    // NO job — and there is no automatic stale sweep to notice (`enqueue_stale` is
+                    // operator-triggered, by design, so a re-embed can be aimed at one resource before
+                    // it is aimed at 31k). So be honest about the recovery path: the resource's chunks
+                    // are still stale, and the next `temper admin reembed` over any scope containing it
+                    // re-derives that and re-enqueues it. Nothing is lost; it simply waits for the
+                    // operator rather than healing on its own.
+                    workflow_job_service::complete_resource(
+                        pool,
+                        job.resource_id,
+                        persona,
+                        dispatch,
+                    )
+                    .await?;
+                    workflow_job_service::enqueue_resource(
+                        pool,
+                        job.resource_id,
+                        persona,
+                        dispatch,
+                    )
+                    .await?;
+                    tracing::info!(
+                        resource_id = %job.resource_id,
+                        embedded = progress.embedded,
+                        remaining = progress.remaining,
+                        "embed job partially drained; re-enqueued for the next tick"
+                    );
+                    summary.partial += 1;
+                }
             }
             Err(e) => {
                 // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then dead at
@@ -301,6 +478,236 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    async fn stamp(pool: &PgPool, resource: Uuid, sha: &str) {
+        sqlx::query("UPDATE kb_chunks SET embedded_with = $2 WHERE resource_id = $1")
+            .bind(resource)
+            .bind(sha)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// **The regression test for the model split.** A chunk that HAS a vector but no provenance is
+    /// exactly the shape of every row written before `embedded_with` existed — i.e. ~95% of the real
+    /// index, all of it fp32. Under the old predicate (`embedding IS NULL`) such a chunk was considered
+    /// perfectly fine and would never have been re-embedded. It must now read as stale.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_embedded_chunk_with_unknown_provenance_is_stale(pool: PgPool) {
+        let r = a_named_resource(&pool, "legacy").await;
+        let b = a_block(&pool, r, 0, false).await;
+        a_chunk(&pool, b, r, 0, true, true).await; // has a vector, no embedded_with
+
+        let (resources, chunks) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(
+            (resources, chunks),
+            (1, 1),
+            "an embedded-but-unstamped chunk must be STALE — it is the fp32 case"
+        );
+    }
+
+    /// The other half: a chunk stamped with the model this build actually embeds with is NOT stale, so
+    /// the drain converges instead of re-embedding the same rows forever.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_chunk_stamped_with_the_current_model_is_not_stale(pool: PgPool) {
+        let r = a_named_resource(&pool, "fresh").await;
+        let b = a_block(&pool, r, 0, false).await;
+        a_chunk(&pool, b, r, 0, true, true).await;
+        stamp(&pool, r, temper_ingest::embed::EXPECTED_MODEL_SHA256).await;
+
+        let (resources, chunks) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(
+            (resources, chunks),
+            (0, 0),
+            "current-model vectors are fresh"
+        );
+    }
+
+    /// A vector stamped by SOME OTHER model is stale — this is what makes a future model change
+    /// a future model change need no migration: the constant changes, the whole index re-stales itself,
+    /// and an operator sweep drains it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_chunk_stamped_with_a_different_model_is_stale(pool: PgPool) {
+        let r = a_named_resource(&pool, "other-model").await;
+        let b = a_block(&pool, r, 0, false).await;
+        a_chunk(&pool, b, r, 0, true, true).await;
+        stamp(
+            &pool,
+            r,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await;
+
+        let (resources, _) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(resources, 1, "a foreign model's vectors are stale");
+    }
+
+    /// Scoping is the whole point of the trigger: try ONE resource before you try 31,000.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enqueue_stale_scopes_to_a_single_resource(pool: PgPool) {
+        let a = a_named_resource(&pool, "a").await;
+        let ba = a_block(&pool, a, 0, false).await;
+        a_chunk(&pool, ba, a, 0, true, true).await;
+
+        let b = a_named_resource(&pool, "b").await;
+        let bb = a_block(&pool, b, 0, false).await;
+        a_chunk(&pool, bb, b, 0, true, true).await;
+
+        let (all_stale, _) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(all_stale, 2, "both resources are stale");
+
+        let enqueued = enqueue_stale(&pool, ReembedScope::Resource(a), 100)
+            .await
+            .unwrap();
+        assert_eq!(enqueued, vec![a], "only the scoped resource is enqueued");
+
+        // Idempotent: the resource now has a live job, so a second call adds nothing.
+        let again = enqueue_stale(&pool, ReembedScope::Resource(a), 100)
+            .await
+            .unwrap();
+        assert!(
+            again.is_empty(),
+            "a resource with a live job is not enqueued twice"
+        );
+    }
+
+    /// Context scoping goes through `kb_resource_homes` (a resource has no context column), and the
+    /// `anchor_table = 'kb_contexts'` predicate is load-bearing: the SAME table homes cogmap nodes, so
+    /// without it a context-scoped re-embed would silently drag in every cogmap-homed resource too.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enqueue_stale_scopes_to_a_context_and_excludes_cogmap_homes(pool: PgPool) {
+        let owner: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('scope-owner', 'Scope Owner') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, name, slug) \
+             VALUES ('kb_profiles', $1, 'scope-ctx', 'scope-ctx') RETURNING id",
+        )
+        .bind(owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // In the context.
+        let inside = a_named_resource(&pool, "inside").await;
+        let bi = a_block(&pool, inside, 0, false).await;
+        a_chunk(&pool, bi, inside, 0, true, true).await;
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+                 (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(inside)
+        .bind(ctx)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Homed in a COGMAP whose id happens to equal the context id — the exact collision the
+        // anchor_table predicate exists to reject. Without it this resource would be swept in.
+        let decoy = a_named_resource(&pool, "cogmap-homed").await;
+        let bd = a_block(&pool, decoy, 0, false).await;
+        a_chunk(&pool, bd, decoy, 0, true, true).await;
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+                 (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_cogmaps', $2, $3, $3)",
+        )
+        .bind(decoy)
+        .bind(ctx)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (stale, _) = stale_summary(&pool, ReembedScope::Context(ctx))
+            .await
+            .unwrap();
+        assert_eq!(stale, 1, "only the context-homed resource is in scope");
+
+        let enqueued = enqueue_stale(&pool, ReembedScope::Context(ctx), 100)
+            .await
+            .unwrap();
+        assert_eq!(
+            enqueued,
+            vec![inside],
+            "a cogmap-homed resource must NOT be swept into a context re-embed"
+        );
+    }
+
+    /// **The wedge test.** A blank chunk has nothing to embed. It must still CONVERGE — i.e. stop
+    /// being stale — or `remaining` never reaches zero, the drain re-enqueues that resource every
+    /// minute forever embedding nothing, and `stale_summary` never converges (destroying the
+    /// operator's only progress signal).
+    ///
+    /// This is why STALE_CHUNK_PREDICATE keys on `embedded_with` ALONE. With the redundant
+    /// `embedding IS NULL OR` disjunct it originally carried, stamping a blank chunk could never clear
+    /// it and this test would hang the drain in perpetuity.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_blank_chunk_converges_instead_of_wedging_the_drain(pool: PgPool) {
+        let r = a_named_resource(&pool, "blank").await;
+        let b = a_block(&pool, r, 0, false).await;
+
+        let chunk: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, is_current) \
+             VALUES ($1, $2, 0, 'h', true) RETURNING id",
+        )
+        .bind(b)
+        .bind(r)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, '   ')")
+            .bind(chunk)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let progress = temper_substrate::embed::embed_resource_chunks(
+            &pool,
+            r,
+            temper_substrate::embed::EMBED_CHUNK_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(progress.embedded, 0, "a blank chunk embeds nothing");
+        assert!(
+            progress.is_complete(),
+            "...but it MUST converge: remaining={} — a non-zero remaining here means the drain \
+             re-enqueues this resource every minute forever",
+            progress.remaining
+        );
+
+        let (stale, _) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(
+            stale, 0,
+            "and the operator's convergence signal reaches zero"
+        );
+    }
+
+    /// The enqueued job must be claimable by the drain — i.e. enqueued under the SAME
+    /// (persona, dispatch_type) tuple `dispatch_tick` claims on. Get this wrong and the job sits
+    /// pending forever, looking enqueued and doing nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stale_enqueued_resource_is_claimed_by_the_drain(pool: PgPool) {
+        let r = a_named_resource(&pool, "drainable").await;
+        let b = a_block(&pool, r, 0, false).await;
+        a_chunk(&pool, b, r, 0, true, true).await;
+
+        let enqueued = enqueue_stale(&pool, ReembedScope::All, 100).await.unwrap();
+        assert_eq!(enqueued, vec![r]);
+
+        let summary = dispatch_tick(&pool, Some(5), false).await.unwrap();
+        assert_eq!(
+            summary.claimed, 1,
+            "the drain must claim what enqueue_stale queued"
+        );
     }
 
     async fn set_job_status(pool: &PgPool, resource: Uuid, status: &str) {

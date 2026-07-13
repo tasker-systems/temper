@@ -7,7 +7,6 @@ description = "Embedding and extraction pipeline for temper knowledge base"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
-hf-hub = { version = "0.4", optional = true }
 html-to-markdown-rs = "3.1.0"
 kreuzberg = { version = "4.6.3", features = ["tokio-runtime"], optional = true }
 ndarray = { version = "0.17", optional = true }
@@ -30,16 +29,42 @@ tokenizers = { version = "0.22", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
+[build-dependencies]
+# Derives the expected model sha256 at compile time (see build.rs) — from the LFS pointer when the
+# blob is not smudged, from the file itself when it is. Same hash either way.
+sha2 = "0.10"
+
 [dev-dependencies]
+# `getrusage` for the embed_bench example's peak-RSS number. Unconditional here (unlike the
+# macOS-only runtime dep above) because dev-deps must resolve on every platform the examples are
+# compiled on — clippy --all-targets builds them in CI.
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Scoped env mutation for the TEMPER_ONNX_MODEL_PATH tests — the test binary is multi-threaded and
 # process env is global, so a bare set_var/remove_var races every other test that reads env.
 temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
 
+# Cross-model embedding benchmark: per-chunk cost, peak RSS, and the vector-equivalence gate for
+# the quantized-model rollout. Needs the embedding stack, so it must not be compiled into a build
+# that gates `embed` out.
+[[example]]
+name = "embed_bench"
+required-features = ["embed"]
+
 [features]
 default = ["embed", "extract"]
 embed = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
-embed-download = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:tokenizers"]
+# Resolve the model from disk at runtime (next to the binary) instead of baking it in. The name is
+# historical: it no longer downloads anything. Keeps the CLI binary ~18 MB instead of ~128 MB.
+embed-download = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
 extract = ["dep:kreuzberg"]
 test-embed = ["embed"]
+
+# Provenance recovery: which model produced each stored embedding? Reads a sampled chunk export and
+# re-embeds it to classify. Needs the embedding stack.
+[[example]]
+name = "classify_chunks"
+required-features = ["embed"]

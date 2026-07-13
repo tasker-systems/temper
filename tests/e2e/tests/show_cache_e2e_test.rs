@@ -61,6 +61,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         content: body.clone(),
         content_hash: format!("{:0>64}", "h"),
         embedding: vec![0.0_f32; 768],
+        embedded_with: None,
     };
     let payload = IngestPayload {
         segmented: None,
@@ -167,6 +168,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         content: body.clone(),
         content_hash: format!("{:0>64}", "m"),
         embedding: vec![0.0_f32; 768],
+        embedded_with: None,
     };
     let payload = IngestPayload {
         segmented: None,

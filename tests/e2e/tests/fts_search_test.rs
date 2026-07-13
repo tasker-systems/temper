@@ -40,6 +40,7 @@ async fn ingest_with_open_meta(
         content: content.to_string(),
         content_hash: format!("{:0>64x}", slug.len()),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     let payload = IngestPayload {
         segmented: None,
@@ -287,6 +288,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         content: "body".to_string(),
         content_hash: format!("{:0>64x}", 4),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     let payload = IngestPayload {
         segmented: None,
@@ -321,6 +323,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         content: "body".to_string(),
         content_hash: format!("{:0>64x}", 5),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     let ok_payload = IngestPayload {
         title: "Good Meta".to_string(),

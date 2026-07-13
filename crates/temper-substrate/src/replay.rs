@@ -186,7 +186,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                     .context("chunk_id missing")?
                     .parse()?;
                 let row = sqlx::query(
-                    "SELECT cc.content, c.embedding::text \
+                    "SELECT cc.content, c.embedding::text, c.embedded_with \
                        FROM kb_chunk_content cc JOIN kb_chunks c ON c.id = cc.chunk_id \
                       WHERE cc.chunk_id = $1",
                 )
@@ -198,9 +198,20 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                 })?;
                 let content: String = row.get(0);
                 let embedding: Option<String> = row.get(1);
+                // `embedded_with` is sidecar-only (it is NOT on the ledger payload), so replay can
+                // only recover it from the projected row — exactly as it already does for the vector
+                // itself. Omitting it would make every replayed chunk land NULL: the projection stops
+                // being byte-identical (which is what the replay-roundtrip tests assert), and a real
+                // rebuild-from-ledger would silently discard all provenance and re-stale the whole
+                // index.
+                let embedded_with: Option<String> = row.get(2);
                 side.insert(
                     chunk_id.to_string(),
-                    serde_json::json!({ "content": content, "embedding": embedding }),
+                    serde_json::json!({
+                        "content": content,
+                        "embedding": embedding,
+                        "embedded_with": embedded_with,
+                    }),
                 );
             }
         }

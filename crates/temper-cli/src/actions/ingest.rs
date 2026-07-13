@@ -113,6 +113,10 @@ fn embed_and_pack(chunks: &[temper_ingest::chunk::ChunkData]) -> Result<String> 
             content: chunk.content.clone(),
             content_hash: chunk.content_hash.clone(),
             embedding,
+            // Declare the model this CLI embedded with — the server stores these vectors verbatim and
+            // has no other way to know their provenance. `embed_texts` verified the loaded model's
+            // sha256 against this same constant, so the declaration is checked, not asserted.
+            embedded_with: Some(temper_ingest::embed::EXPECTED_MODEL_SHA256.to_owned()),
         })
         .collect();
     pack_chunks(&packed).map_err(|e| TemperError::Extraction(format!("pack segment chunks: {e}")))

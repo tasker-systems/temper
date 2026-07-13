@@ -70,6 +70,7 @@ async fn seed_session(
         content: body.to_string(),
         content_hash: content_hash.clone(),
         embedding: vec![0.0_f32; 768],
+        embedded_with: None,
     };
 
     let payload = IngestPayload {

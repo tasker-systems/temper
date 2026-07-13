@@ -7195,13 +7195,14 @@
           "claimed",
           "completed",
           "failed",
+          "partial",
           "chunks_embedded"
         ],
         "properties": {
           "chunks_embedded": {
             "type": "integer",
             "format": "int64",
-            "description": "Total chunks embedded across all completed jobs.",
+            "description": "Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.",
             "minimum": 0
           },
           "claimed": {
@@ -7220,6 +7221,12 @@
             "type": "integer",
             "format": "int32",
             "description": "Jobs whose embed errored — left in_progress for the reaper to retry (then dead at max attempts).",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were\n**re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger\nthan one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently\nnon-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.",
             "minimum": 0
           },
           "redriven": {
