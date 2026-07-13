@@ -380,30 +380,73 @@ pub struct ReadChunk {
 /// `(header_path, heading_depth)` differs from the preceding chunk's. Continuation chunks
 /// emit prose only.
 ///
-/// ## Known residual (the chunk model cannot express this)
+/// # A heading with no body of its own is re-synthesized from a descendant
+///
+/// The chunker only produces a chunk for a section that has body *lines*. A heading with no
+/// body of its own — a parent immediately followed by a deeper child (`# Doc` then `## Section`)
+/// — yields no chunk; it survives only as an **ancestor prefix** inside its descendants'
+/// `header_path` (`"Doc > Section"`). The old assembler emitted only the *innermost* breadcrumb
+/// segment, so that parent heading was silently dropped: `temper resource show` lost the H1 of
+/// every document whose title sits above its first sub-heading with no preamble.
+///
+/// This assembler re-emits such an ancestor. `opened` is the set of `header_path`s that some
+/// chunk actually *opens* (depth > 0): an ancestor whose path is in it had a body and gets its
+/// heading from its own chunk, so we must NOT duplicate it; an ancestor whose path is absent was
+/// body-less and is re-synthesized here, once, before the descendant that first needs it. Its
+/// true depth is unrecoverable (`header_path` carries titles only), so it is assigned the
+/// contiguous positional depth just below the innermost heading — **exact** for well-formed
+/// markdown (contiguous heading levels, the overwhelming common case) and an accepted
+/// approximation for a body-less ancestor that also *skips* levels (`#` then `###`), the same
+/// approximation the streaming-breadcrumb prefix already documents in `chunk_markdown_with_prefix`.
+///
+/// ## Known residual 1 — adjacent identically-breadcrumbed sections (chunk model)
 ///
 /// A chunk records `(chunk_index, header_path, heading_depth)` and **no section identity**.
 /// So "the same section, continued" is indistinguishable from "a new section that happens to
 /// have an identical breadcrumb at the same depth" — e.g. two adjacent `## Notes` sections
 /// under the same parent. This assembler treats that shape as one section and emits a single
-/// heading, losing the second heading line (the prose is preserved).
+/// heading, losing the second heading line (the prose is preserved). Fixing it for real needs
+/// the chunk to carry section identity — a `starts_section` flag or a section ordinal — a change
+/// to `PackedChunk`, `kb_chunks`, and every writer. Deliberately not smuggled into this change.
 ///
-/// That is a strictly smaller error than the one it replaces (which mangled *every*
-/// size-split section, i.e. every long document), but it is still an error. Fixing it for
-/// real needs the chunk to carry section identity — a `starts_section` flag or a section
-/// ordinal — which is a change to `PackedChunk`, `kb_chunks`, and every writer. Deliberately
-/// not smuggled into this change.
+/// ## Known residual 2 — blank lines accrete inside a size-split *paragraph* (chunk model)
+///
+/// Pieces rejoin with `"\n\n"`. A **multi-paragraph** section splits at paragraph (`"\n\n"`)
+/// boundaries, so it round-trips byte-for-byte. But a **single paragraph** larger than one
+/// chunk splits mid-paragraph at line (`"\n"`) — or, for one unwrapped line, at arbitrary char —
+/// boundaries, and those rejoin as `"\n\n"`, gaining one blank line per internal split boundary
+/// (~1 byte/chunk; ~788 bytes on a 1.2 MB doc). The chunk records no inter-chunk separator, so a
+/// read-side assembler cannot know a boundary was originally a single `"\n"`. Fixing it exactly
+/// needs the same chunk-model widening as residual 1 (carry the trailing separator / a
+/// section+offset). Named, not fixed, here — a body that is all normal-sized paragraphs is
+/// unaffected.
 pub fn reconstruct_body(chunks: &[ReadChunk]) -> String {
+    // Every section that some chunk OPENS (depth > 0), keyed by its full breadcrumb path. A
+    // heading with a body of its own produced such a chunk, so its path is in here; a body-less
+    // heading (a parent immediately followed by a deeper child) produced none, so its path is
+    // absent — which is exactly how we tell "already emitted by its own chunk" from "must be
+    // re-synthesized from a descendant's ancestor path".
+    let opened: std::collections::HashSet<&str> = chunks
+        .iter()
+        .filter(|c| c.heading_depth != 0)
+        .map(|c| c.header_path.as_str())
+        .collect();
+
     let mut pieces: Vec<String> = Vec::with_capacity(chunks.len());
-    // The (header_path, heading_depth) of the section currently open, so a continuation
-    // chunk can tell it is still inside it. `None` until the first headed chunk.
+    // The (header_path, heading_depth) of the innermost section currently open, so a continuation
+    // chunk can tell it is still inside it. `None` until the first headed chunk / after an unheaded
+    // one.
     let mut open_section: Option<(&str, i16)> = None;
+    // The body-less ancestor prefixes currently synthesized-and-open, so consecutive sibling
+    // children under the same body-less parent don't each re-emit it.
+    let mut open_synth: Vec<String> = Vec::new();
 
     for c in chunks {
         if c.heading_depth == 0 {
-            // Preamble or unheaded content — emit body only. Unheaded content also closes any
-            // open section: a later chunk carrying the same breadcrumb is genuinely re-opening
-            // it and must re-emit its heading.
+            // Preamble, unheaded content, or a size-split continuation — emit body only. Closes
+            // the open innermost section (a later chunk with the same breadcrumb is genuinely
+            // re-opening it). Does NOT close synthesized ancestors: an intervening continuation
+            // chunk of a body-less parent's child must not make the next sibling re-emit the parent.
             open_section = None;
             pieces.push(c.content.clone());
             continue;
@@ -411,22 +454,45 @@ pub fn reconstruct_body(chunks: &[ReadChunk]) -> String {
 
         let section = (c.header_path.as_str(), c.heading_depth);
         if open_section == Some(section) {
-            // Continuation of the section we already emitted a heading for.
+            // Continuation of the section we already opened (size-split), or the second of two
+            // adjacent identically-breadcrumbed sections — residual 1 (heading lost, prose kept).
             pieces.push(c.content.clone());
             continue;
         }
 
-        // Opens a section: emit the heading, then the prose.
-        // Extract the innermost heading title from the breadcrumb.
-        // rsplit always yields at least one element on non-empty input.
-        let title = if c.header_path.is_empty() {
-            "Untitled"
+        // This chunk opens a section. First re-emit any ANCESTOR heading that never got a chunk of
+        // its own (a body-less parent), then the chunk's own heading + prose.
+        let segments: Vec<&str> = if c.header_path.is_empty() {
+            Vec::new()
         } else {
-            c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path)
+            c.header_path.split(" > ").collect()
         };
+        let n = segments.len();
+
+        let mut new_synth: Vec<String> = Vec::new();
+        for i in 0..n.saturating_sub(1) {
+            // The ancestor's own breadcrumb path, exactly as a chunk of it would carry it.
+            let prefix = segments[..=i].join(" > ");
+            if opened.contains(prefix.as_str()) {
+                // The ancestor had a body → its own chunk emits (or emitted) its heading.
+                continue;
+            }
+            let already_open = open_synth.contains(&prefix);
+            new_synth.push(prefix);
+            if already_open {
+                // Still on the page from a previous sibling — don't repeat it.
+                continue;
+            }
+            // Body-less ancestor with no chunk: contiguous positional depth below the innermost.
+            let depth = ((c.heading_depth as isize) - (n - 1 - i) as isize).clamp(1, 6) as usize;
+            pieces.push(format!("{} {}", "#".repeat(depth), segments[i]));
+        }
+        open_synth = new_synth;
+
+        // The chunk's own heading + prose. Empty breadcrumb ⇒ `"Untitled"`, depth capped at 6.
+        let title = segments.last().copied().unwrap_or("Untitled");
         let depth = (c.heading_depth as usize).min(6);
-        let hashes = "#".repeat(depth);
-        pieces.push(format!("{hashes} {title}\n\n{}", c.content));
+        pieces.push(format!("{} {title}\n\n{}", "#".repeat(depth), c.content));
         open_section = Some(section);
     }
 
@@ -456,18 +522,26 @@ mod tests {
 
     #[test]
     fn headed_chunk_uses_innermost_breadcrumb_segment() {
+        // A parent that HAS a body of its own gets its heading from its own chunk; the child's
+        // heading is the innermost breadcrumb segment. The parent is not re-synthesized (its path
+        // `"Intro"` is in `opened`).
         assert_eq!(
-            reconstruct_body(&[read_chunk(0, "Intro > Goals", 2, "Body.")]),
-            "## Goals\n\nBody."
+            reconstruct_body(&[
+                read_chunk(0, "Intro", 1, "Intro body."),
+                read_chunk(1, "Intro > Goals", 2, "Body."),
+            ]),
+            "# Intro\n\nIntro body.\n\n## Goals\n\nBody."
         );
     }
 
     #[test]
     fn mixed_chunks_join_with_blank_line() {
+        // Preamble (unheaded) then a top-level `## Goals` section — the realistic shape a chunker
+        // emits for `"Task intro paragraph.\n\n## Goals\n\n…"`.
         assert_eq!(
             reconstruct_body(&[
                 read_chunk(0, "", 0, "Task intro paragraph."),
-                read_chunk(1, "Intro > Goals", 2, "Task goals section body."),
+                read_chunk(1, "Goals", 2, "Task goals section body."),
             ]),
             "Task intro paragraph.\n\n## Goals\n\nTask goals section body."
         );
@@ -485,10 +559,12 @@ mod tests {
     /// what makes it a regression test rather than decoration.
     #[test]
     fn a_section_split_across_chunks_emits_its_heading_exactly_once() {
+        // A top-level `## Goals` (no ancestor) split into three chunks: the first opens it, the
+        // rest are continuations. The heading must appear exactly once.
         let body = reconstruct_body(&[
-            read_chunk(0, "Design > Goals", 2, "First part."),
-            read_chunk(1, "Design > Goals", 2, "Second part."),
-            read_chunk(2, "Design > Goals", 2, "Third part."),
+            read_chunk(0, "Goals", 2, "First part."),
+            read_chunk(1, "Goals", 2, "Second part."),
+            read_chunk(2, "Goals", 2, "Third part."),
         ]);
         assert_eq!(
             body, "## Goals\n\nFirst part.\n\nSecond part.\n\nThird part.",
@@ -539,6 +615,136 @@ mod tests {
         assert_eq!(
             reconstruct_body(&[read_chunk(0, "", 9, "x")]),
             "###### Untitled\n\nx"
+        );
+    }
+
+    /// **The "show loses the H1" bug (temper task 019f5947).**
+    ///
+    /// A heading with no body of its own (`# Big Document` immediately followed by `## Section 0`)
+    /// gets no chunk of its own — it survives only as an ancestor prefix in its child's
+    /// `header_path`. The old assembler emitted only the innermost segment, dropping the parent.
+    /// This assembler re-synthesizes it from the child's breadcrumb.
+    #[test]
+    fn a_body_less_parent_heading_is_re_emitted_from_its_child() {
+        assert_eq!(
+            reconstruct_body(&[read_chunk(0, "Big Document > Section 0", 2, "Body.")]),
+            "# Big Document\n\n## Section 0\n\nBody.",
+            "a body-less parent heading must be reconstructed from its descendant's breadcrumb"
+        );
+    }
+
+    /// A body-less parent is emitted exactly ONCE, not once per sibling child — the sibling case
+    /// that a naive "always synthesize the ancestor" would duplicate.
+    #[test]
+    fn a_body_less_parent_is_emitted_once_across_sibling_children() {
+        let body = reconstruct_body(&[
+            read_chunk(0, "Big Document > Section 0", 2, "Zero."),
+            read_chunk(1, "Big Document > Section 1", 2, "One."),
+        ]);
+        assert_eq!(
+            body,
+            "# Big Document\n\n## Section 0\n\nZero.\n\n## Section 1\n\nOne.",
+        );
+        assert_eq!(
+            body.matches("# Big Document").count(),
+            1,
+            "the body-less parent is synthesized once, not per child"
+        );
+    }
+
+    /// Two levels of body-less ancestor (`# A` then `## B` then `### C`, only C with a body) are
+    /// both reconstructed, at their contiguous positional depths.
+    #[test]
+    fn two_body_less_ancestors_are_both_reconstructed() {
+        assert_eq!(
+            reconstruct_body(&[read_chunk(0, "A > B > C", 3, "leaf body")]),
+            "# A\n\n## B\n\n### C\n\nleaf body"
+        );
+    }
+
+    /// A body-less ancestor that ALSO skips a heading level is the named approximation: its true
+    /// depth is unrecoverable from a titles-only breadcrumb, so it renders at the contiguous
+    /// positional depth (`## A`, not `# A`). Pinned so the residual is explicit, not accidental.
+    #[test]
+    fn body_less_ancestor_that_skips_a_level_renders_at_positional_depth() {
+        // Source was `# A` (bodyless) then `### C` (body) — a level skip. `A`'s real depth (1) is
+        // not carried; it comes back at the positional depth just below `C` (2).
+        assert_eq!(
+            reconstruct_body(&[read_chunk(0, "A > C", 3, "leaf")]),
+            "## A\n\n### C\n\nleaf"
+        );
+    }
+
+    // ── Full-path round-trips: chunk_markdown → reconstruct_body ─────────────────────────────
+
+    /// Map a chunker `ChunkData` to the read-side `ReadChunk` the way `readback::body` does
+    /// (`COALESCE(header_path,'')`, `COALESCE(heading_depth,0)`) — an unheaded chunk carries `""`/`0`.
+    fn round_trip(src: &str) -> String {
+        let chunks: Vec<ReadChunk> = temper_ingest::chunk::chunk_markdown(src)
+            .into_iter()
+            .map(|c| ReadChunk {
+                chunk_index: c.chunk_index as i32,
+                header_path: c.header_path,
+                heading_depth: c.heading_depth as i16,
+                content: c.content,
+            })
+            .collect();
+        reconstruct_body(&chunks)
+    }
+
+    /// **Acceptance test — fails on the old assembler.** A document whose H1 has no body of its own
+    /// round-trips (chunk → reconstruct) **byte-identical**, H1 intact. Before the fix the `# Big
+    /// Document` line was dropped entirely.
+    #[test]
+    fn body_less_h1_document_round_trips_byte_identical() {
+        let src = "# Big Document\n\n## Section 0\n\nBody of section zero.\n\n\
+                   ## Section 1\n\nBody of section one.";
+        assert_eq!(round_trip(src), src, "the H1 must survive the round-trip");
+    }
+
+    /// A multi-paragraph section large enough to size-split round-trips byte-identical: the split
+    /// falls on paragraph (`"\n\n"`) boundaries, so no blank line accretes (residual 2 does NOT bite
+    /// the common case).
+    #[test]
+    fn multi_paragraph_size_split_round_trips_without_accretion() {
+        // Three ~800-char paragraphs (no spaces ⇒ no trailing-whitespace trim artifact); together
+        // they exceed MAX_CHARS (~1428) so the section splits, but only at paragraph boundaries.
+        let p0 = "a".repeat(800);
+        let p1 = "b".repeat(800);
+        let p2 = "c".repeat(800);
+        let src = format!("# Doc\n\n{p0}\n\n{p1}\n\n{p2}");
+        let out = round_trip(&src);
+        assert!(
+            out.matches("\n\n").count() >= 3,
+            "expected a real multi-chunk split"
+        );
+        assert_eq!(
+            out, src,
+            "paragraph-boundary splits must not accrete blank lines"
+        );
+    }
+
+    /// **Residual 2, pinned.** A single paragraph larger than one chunk splits mid-paragraph at line
+    /// boundaries; those rejoin as `"\n\n"`, so the round-trip GAINS blank lines and is not
+    /// byte-identical. The chunk model records no inter-chunk separator, so this cannot be fixed
+    /// read-side (see the `reconstruct_body` doc comment). Pinned as a known, bounded residual.
+    #[test]
+    fn oversized_single_paragraph_accretes_blank_lines_known_residual() {
+        // ~60 short lines joined by single newlines = one paragraph well over MAX_CHARS, no blank
+        // lines inside it.
+        let lines: Vec<String> = (0..60)
+            .map(|i| format!("line number {i:02} carrying a few words of content"))
+            .collect();
+        let para = lines.join("\n");
+        let src = format!("# Big\n\n{para}");
+        let out = round_trip(&src);
+        assert_ne!(
+            out, src,
+            "an oversized single paragraph does not round-trip byte-identical"
+        );
+        assert!(
+            out.matches("\n\n").count() > src.matches("\n\n").count(),
+            "the residual is specifically blank-line growth at internal split boundaries"
         );
     }
 

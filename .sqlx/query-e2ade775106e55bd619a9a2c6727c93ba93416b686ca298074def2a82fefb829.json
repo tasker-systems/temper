@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_id FROM kb_resource_homes WHERE anchor_table=$1 AND anchor_id=$2",
+  "query": "SELECT h.resource_id FROM kb_resource_homes h JOIN kb_resources r ON r.id = h.resource_id WHERE h.anchor_table=$1 AND h.anchor_id=$2 AND r.is_active",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       false
     ]
   },
-  "hash": "9c25d2203051ed911bc839b83772a46ce3526b0e8d2f19a16cc864cff538ae5c"
+  "hash": "e2ade775106e55bd619a9a2c6727c93ba93416b686ca298074def2a82fefb829"
 }

@@ -56,9 +56,23 @@ pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<
     let anchor_table = anchor.table();
     let anchor_id = anchor.uuid();
 
-    // resources homed in the anchor
+    // Resources homed in the anchor — LIVE ones only.
+    //
+    // A soft delete (`resource_delete` → `is_active = false`) deliberately leaves the `kb_resource_homes`
+    // row in place: the row is preserved, not erased. So the home table alone is NOT the active set, and
+    // joining `kb_resources` to filter tombstones is load-bearing rather than defensive. Without it a
+    // deleted resource stayed in formation forever — clustered into a region, its vector still pulling the
+    // centroid, still counted in `member_count` and `centrality`. Measured on prod: every dead-but-homed
+    // resource was still a region member (40 for 40), and six regions had no live member at all.
+    //
+    // This is the ONE place the filter belongs. `nodes` is the root of every other input the producer
+    // loads — facets, kNN/embeddings, edges, clusters, centroids — so filtering here fixes all of them at
+    // once, and membership stays written solely by the materialize projection (a projection table is never
+    // side-written; `resource_deleted` ticks the formation clock so the region re-forms promptly instead).
     let nodes: Vec<ResourceId> = sqlx::query_scalar!(
-        "SELECT resource_id FROM kb_resource_homes WHERE anchor_table=$1 AND anchor_id=$2",
+        "SELECT h.resource_id FROM kb_resource_homes h \
+           JOIN kb_resources r ON r.id = h.resource_id \
+          WHERE h.anchor_table=$1 AND h.anchor_id=$2 AND r.is_active",
         anchor_table,
         anchor_id,
     )
