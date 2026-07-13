@@ -2,41 +2,94 @@
 
 This guide covers deploying a Temper **Eve agent** — currently the team-self-cognition
 **steward** (`packages/agent-workflows/steward/`) — to Vercel: the isolated-project tooling
-rules, linking to Vercel (including a gotcha with single-team accounts), the environment
-contract, and the deploy + verify loop.
+rules, how the deploy actually reaches Vercel (by **git**, and why the CLI path is now a trap),
+the environment contract, registering the agent's machine credential, and the verify loop.
 
-It assumes the agent's target cognitive map already exists on the instance. Birthing and
-binding that map is a separate, prior step — see
-[team-self-cognition-bootstrap.md](./team-self-cognition-bootstrap.md).
+Two prerequisites, both prior and separate:
+
+- The agent's target cognitive map(s) must exist on the instance. Birthing and binding a map is
+  covered in [team-self-cognition-bootstrap.md](./team-self-cognition-bootstrap.md).
+- The agent's **machine credential must be registered before its first call.** The credential model
+  — the two mint paths, reach, rotation, revocation — lives in
+  [machine-credentials.md](./machine-credentials.md). This guide does not restate it; it tells you
+  which values the steward reads and when to register.
 
 ## The agent is a workspace-isolated Eve project
 
 Each agent under `packages/agent-workflows/` is a **self-contained Eve project** with its own
 `package.json`, npm lockfile, and TypeScript toolchain. It is deliberately **not** a Bun
 `workspaces` member, so it never collides with `temper-cloud`'s toolchain and the repo
-pre-commit never touches it. Two consequences:
+pre-commit never touches it. Three consequences:
 
 - **Run all tooling from inside the agent directory**, never the repo root:
+
   ```bash
   cd packages/agent-workflows/steward
+  npm install
   ```
+
   A root `npm install` inherits the repo's Bun `overrides` (e.g. `onnxruntime-common`) and
   fails with `EOVERRIDE`.
 
 - **Never `npx eve@latest`.** The project pins a specific `eve` version (0.18.1 at time of
-  writing). `@latest` pulls a different version *and* resolves dependencies against the
-  repo-root `package.json`, tripping the same `EOVERRIDE`. Use the locally installed binary:
+  writing, per `package.json`). `@latest` pulls a different version *and* resolves dependencies
+  against the repo-root `package.json`, tripping the same `EOVERRIDE`. Use the locally installed
+  binary:
+
   ```bash
   npx eve <command>          # resolves the local eve from inside the agent dir
   ./node_modules/.bin/eve <command>
   npm run build|dev          # the package scripts, equivalent
   ```
 
+- **The agent has tests, and they gate CI.** `npm test` (vitest, `tests/`) from inside the agent
+  dir; `npm run typecheck` for `tsc`. Both run in CI via `.github/workflows/test-agents-ts.yml`
+  (the `steward` job), alongside the `temper-ts` suite.
+
+### The `file:` dependency on `clients/temper-ts` — and what it costs
+
+The steward's M2M mint is **not** its own: it takes `temper-ts` as an npm `file:` dependency
+(`"temper-ts": "file:../../../clients/temper-ts"` in `package.json`) and composes
+`ClientCredentials` from it, so the TypeScript client and the Ruby gem cannot drift on how a
+machine token is minted. This is a deliberate bridge until `temper-ts` publishes, at which point
+the dependency becomes a normal version range.
+
+Two things follow, and both are load-bearing:
+
+- **A fresh clone just works.** `prebuild`, `pretest`, and `pretypecheck` all run `build:dep`,
+  which does `npm ci && npm run build` in `clients/temper-ts`. You never have to remember to build
+  the dependency by hand.
+- **The dependency lives OUTSIDE the Vercel Root Directory.** The `steward-agent` Vercel project's
+  root directory is `packages/agent-workflows/steward`; `clients/temper-ts` is a sibling several
+  levels up. This builds only because the project has **"Include source files outside of the Root
+  Directory"** enabled. Turn that off and the build fails to resolve `temper-ts`.
+
+## Deploying: by git, not by CLI
+
+**`steward-agent` is git-connected.** The Vercel project is wired to `github.com/tasker-systems/temper`
+with production branch `main`. So:
+
+- **A merge to `main` produces a production deployment.** The steward *does* auto-deploy on
+  monorepo merge.
+- **A push to any other branch produces a preview deployment.**
+- **Vercel env changes still require a redeploy to take effect.** Setting a new `TEMPER_M2M_*` or
+  `STEWARD_MODEL` value in the dashboard does nothing until the next deployment. A cron running
+  against stale env looks exactly like a code bug.
+
+> **Do not run `eve deploy` / `vercel deploy` from inside the agent directory.** The CLI uploads
+> only the directory it is invoked from. Since `temper-ts` is a `file:` sibling **outside** the
+> Root Directory, a deploy launched from `packages/agent-workflows/steward` **cannot carry the
+> dependency** — the upload has no `clients/temper-ts` in it and the build breaks on an
+> unresolvable import. The git path has no such problem: Vercel clones the whole repo and honors
+> "include source files outside the Root Directory".
+>
+> **Deploy by pushing.** If you genuinely must deploy from the CLI, run it from the **repo root**
+> so the sibling directory is in the upload — never from the agent directory.
+
 ## Linking to Vercel
 
-`eve deploy` deploys to a linked Vercel project. **If the directory is already linked (a
-`.vercel/project.json` exists), `eve deploy` uses that link directly.** Only when the
-directory is *unlinked* does eve run its own interactive project picker.
+You still need a link (`.vercel/project.json`) for `vercel env pull`, `vercel env add`, and
+`eve dev`. Getting one has a sharp edge.
 
 ### Gotcha: `eve link` and single-team accounts
 
@@ -44,7 +97,7 @@ directory is *unlinked* does eve run its own interactive project picker.
 **personal account**, and runs `vercel project ls --scope <account>` for each. Vercel
 **forbids** using a personal account as a scope:
 
-```
+```text
 Could not list Vercel projects in <username>. vercel project ls --format json --scope <username> exited with code 1.
 # → Error: You cannot set your Personal Account as the scope.
 ```
@@ -53,184 +106,199 @@ If your login has one team plus a personal account (the common case), eve hits t
 account and treats the failure as fatal. `vercel switch <team>` does **not** help — the picker
 enumerates the personal scope regardless.
 
-### The fix: pre-link with the Vercel CLI
+### The fix: link with the Vercel CLI
 
-Vercel's own `link` picker handles the personal account correctly. Link once, and `eve deploy`
-rides that link (skipping eve's picker):
+Vercel's own `link` picker handles the personal account correctly:
 
 ```bash
 cd packages/agent-workflows/steward
 
 vercel link
-#   → pick the TEAM scope (e.g. "your-team's projects"), then create or select a project
-#     (e.g. "temper-steward"). Writes .vercel/project.json.
+#   → pick the TEAM scope, then select the existing project (steward-agent).
+#     Writes .vercel/project.json.
 
-# non-interactive equivalent (existing project):
-vercel link --project temper-steward --team <team-slug> --yes
+# non-interactive equivalent:
+vercel link --project steward-agent --team <team-slug> --yes
 ```
 
-You do **not** need `eve link` at all: its jobs are (a) link the project — `vercel link`
-covers it — and (b) fetch an AI Gateway credential, which the deployed agent gets
-automatically via Vercel OIDC (see below).
+You do **not** need `eve link` at all: its jobs are (a) link the project — `vercel link` covers it
+— and (b) fetch an AI Gateway credential, which the deployed agent gets automatically via Vercel
+OIDC (see below).
 
-## Registering the temper-mcp connector (Vercel Connect)
+## The machine credential: register it BEFORE the first tick
 
-Production auth is **platform-carried**: the agent authenticates to temper-mcp through a
-**Vercel Connect connector** (app subject), so no token lives in code or env. temper-mcp is a
-full OAuth 2.0 server and serves the OAuth discovery endpoints (RFC 8414/9728), so Connect
-discovers everything it needs from the MCP URL — you do **not** hand it a client id/secret.
+The steward authenticates as a **machine principal** — its own agent profile, not a proxied human.
+Registration is **fail-closed**: `resolve_machine_from_claims` (`temper-services`, the single
+machine entry point for both temper-api and temper-mcp) is a lookup in `kb_machine_clients` or a
+**401**. There is **no just-in-time create branch**.
 
-Register the connector by its **full MCP endpoint URL**, from the agent directory (Connect reads
-the local project context to auto-configure project access and the connector `uid`):
+> **This invalidates the old two-phase "deploy, let the first tick create a blank profile, then
+> grant it reach" flow.** That flow does not merely no-op now — every call 401s, forever, until the
+> client id is registered. Register **first**, with **explicit reach**, then deploy.
+
+Pick the mint path by who owns the secret — the full model, including reach containment and
+rotation, is [machine-credentials.md](./machine-credentials.md):
+
+```bash
+# Auth0-fronted instance (temperkb.io today): register the Auth0 M2M app you created.
+temper admin machine provision --client-id <auth0-client-id> --label "steward" \
+  --owner-team <team> \
+  --team <team>:member \
+  --cogmap <cogmap-ref>
+
+# Instance where Temper is the Authorization Server (AS_ISSUER set): Temper mints the
+# credential itself. Prints a `tmpr_…` client id and a one-time secret.
+temper admin machine issue --label "steward" \
+  --owner-team <team> \
+  --team <team>:member \
+  --cogmap <cogmap-ref>
+```
+
+- **`issue` requires an instance whose AS is Temper's own.** An instance has exactly one issuer, so
+  a temper-minted token will not validate on an Auth0-fronted instance. Use `provision` there.
+- **Reach is explicit and plural, never inferred from `--owner-team`.** The steward needs two
+  things and both must be granted here: **read** on the sources it distills (via `--team`
+  membership) and **write** on the map(s) it tends (via `--cogmap`, which grants read+write unless
+  you suffix `:ro`). Clearing the ingest-delta threshold is not enough — the agent must be able to
+  *read* the corpus, which is a property of its profile.
+- If you need to widen reach after the fact, use `temper team add-member` and
+  `temper cogmap grant --to-profile <agent-profile-id> --write` — the profile already exists,
+  because registration created it.
+
+## Environment contract
+
+Set these on the Vercel project (dashboard, or `vercel env add <NAME>`) **before** deploying.
+Several are read at **build/discovery** time and fail fast when missing (e.g. `TEMPER_MCP_URL is
+required`, thrown by the connection's `requireEnv` guard — working as designed).
+
+| Variable | Required | Value / purpose |
+|----------|----------|-----------------|
+| `TEMPER_MCP_URL` | yes | The temper-mcp endpoint, e.g. `https://temperkb.io/mcp`. The agent's sole model-facing seam to Temper. One agent dir points at temperkb.io or a self-hosted instance by this value alone. |
+| `TEMPER_API_URL` | yes | The temper REST base, e.g. `https://temperkb.io`. Distinct from `TEMPER_MCP_URL`; used by the code schedules' direct `POST /api/steward/dispatch`, `GET /api/steward/candidates`, and `POST /api/cognitive-maps/{id}/materialize`. |
+| `TEMPER_M2M_CLIENT_ID` | prod | The machine client id — the Auth0 M2M app's id, or the `tmpr_…` id from `machine issue`. **When set, the agent mints its own `client_credentials` token** and this strategy wins over Connect and `TEMPER_TOKEN`. |
+| `TEMPER_M2M_CLIENT_SECRET` | prod | The client secret. A Vercel env var only — never in code, never seen by the model. |
+| `TEMPER_M2M_TOKEN_URL` | prod | The issuer's token endpoint: `https://<tenant>.auth0.com/oauth/token` for `provision`, or **your own instance's** `https://<instance>/oauth/token` for `issue`. |
+| `TEMPER_M2M_AUDIENCE` | **only for an external IdP** | The API audience the minted token targets (must equal the API's `AUTH_AUDIENCE`). **OMIT it for a temper-issued (`tmpr_`) credential** — Temper's AS ignores a request-supplied audience entirely and mints with its server-side `AS_AUDIENCE`. Requiring this var is exactly what previously made the steward unable to consume a temper-issued credential. |
+| `STEWARD_MODEL` | optional | The primary model, as an AI Gateway model id (same form as the default, `minimax/minimax-m3`). See below — a change needs a **redeploy**, and a typo fails the **build**. |
+| `STEWARD_MODEL_FALLBACKS` | optional | Comma-separated AI Gateway model ids, tried in order after the primary fails. Defaults to `anthropic/claude-haiku-4.5`. Deduped, and the primary is dropped from the list if repeated there. |
+| `TEMPER_CONNECT_CONNECTOR` | fallback | Vercel Connect connector id. Used **only** when `TEMPER_M2M_CLIENT_ID` is unset. **On the Auth0-fronted instance this cannot mint an app token** — see below. |
+| `TEMPER_TOKEN` | dev only | An already-OAuth-obtained temper token. Drives `eve dev`. Cannot re-mint, so a 401 on it is terminal (by design — see `temperFetch`). |
+
+The auth strategy is resolved once, in `agent/lib/temper-auth.ts`, and is **machine-identity-first**:
+
+1. `TEMPER_M2M_CLIENT_ID` present → mint via the OAuth `client_credentials` grant
+   (`ClientCredentials` from `temper-ts`). The production path.
+2. else `TEMPER_CONNECT_CONNECTOR` → a Vercel Connect app token.
+3. else `TEMPER_TOKEN` → a static bearer.
+
+The **same** helper serves both the MCP connection (`agent/connections/temper.ts`, which hands
+`mintM2mToken` to eve as `auth.getToken`) and the code schedules (via `temperFetch`), so the two
+can never drift on how they authenticate. They did once: the schedules went Connect-first while the
+connection went M2M-first, and on the Auth0-fronted instance the schedules' REST fetches silently
+failed while MCP worked.
+
+> **`temperFetch` re-mints once on a 401 and retries.** Refresh-ahead-of-expiry is not sufficient:
+> a schedule resolves a token, then fans out N fetches, and Temper's AS mints **900-second** tokens
+> by default — a tick outliving its token is ordinary, not exotic. Exactly one re-mint: a 401 that
+> survives a fresh token is a real authorization failure (revoked credential, missing reach), and
+> retrying forever would only bury it. A strategy that cannot mint (`TEMPER_TOKEN`) gets its 401
+> back untouched. `temperFetch` also carries the 5xx cold-start retry — **use it, never a bare
+> `fetch`.**
+
+### The model is config, and it is frozen at build time
+
+eve executes `agent.ts` at **BUILD** time (`compileAgentConfig`) and freezes the resolved model
+into the compiled manifest. There is no session, no request context, no DB anywhere near that
+resolution. Consequences (`agent/lib/model-config.ts`):
+
+- **Changing the model takes a REDEPLOY, not a restart.** Env is the only lever eve offers.
+- **The primary is validated against the AI Gateway catalog at compile time** — a typo in
+  `STEWARD_MODEL` **fails the build**, not a 3am cron tick.
+- **The fallbacks are not so validated.** They ride through the compile untouched inside
+  `providerOptions.gateway.models`, so a typo there surfaces at runtime, only when it is needed.
+- **Fallbacks cover availability, never quality.** The Gateway walks the list on a 5xx, a rate
+  limit, a model that is gone. No gateway can detect that a model fumbled a tool sequence — the
+  mechanism for *that* is changing `STEWARD_MODEL` and redeploying, which is what making it
+  configurable buys.
+
+The default (`minimax/minimax-m3`, falling back to `anthropic/claude-haiku-4.5`) is a cost choice
+for the dev/community tier, where the loop runs hourly. Enterprise deployments override it.
+
+### AI Gateway credential
+
+The agent's model calls run through the **Vercel AI Gateway**. On a deployed Vercel project this
+authenticates automatically via **OIDC** (`VERCEL_OIDC_TOKEN` is injected at runtime) — no
+credential to set. You only need a gateway key for **local** `eve dev`; after `vercel link`,
+`vercel env pull` writes it into `.env.local`.
+
+## Vercel Connect (the fallback path, and its dead end here)
+
+`TEMPER_CONNECT_CONNECTOR` is still a live strategy in the code, used when `TEMPER_M2M_CLIENT_ID`
+is unset. temper-mcp is a full OAuth 2.0 server and serves the discovery endpoints (RFC 8414/9728),
+so Connect discovers what it needs from the MCP URL — you do not hand it a client id/secret:
 
 ```bash
 cd packages/agent-workflows/steward
 vercel connect create https://temperkb.io/mcp --name steward
 ```
 
-- The URL is the same value as `TEMPER_MCP_URL`. For a self-hosted instance, use its MCP URL.
-- The command **opens a browser** to complete the OAuth authorization — finish it there; the CLI
-  waits until you do.
+- The URL is the same value as `TEMPER_MCP_URL`.
+- The command **opens a browser** to complete the OAuth authorization.
 - On success it prints a **connector ID** (`scl_…`) and a **UID** of the form `<host>/<name>`
-  (here `temperkb.io/steward`). Either the `scl_…` id or the `<host>/<name>` UID is a valid
-  value for `TEMPER_CONNECT_CONNECTOR` — but note the UID is `temperkb.io/steward`, **not**
-  `mcp.temperkb.io/steward`.
-- `vercel connect list` shows the connector and both forms. Note that `vercel connect token …
-  --subject app` run from the CLI (a human requester) returns *"Token subject is not accessible
-  to this requester"* — app-subject tokens are mintable only by the deployed project's runtime
-  (its Vercel OIDC), not by a user at the CLI. Use `--subject user --yes` to smoke-test the
-  connector interactively.
+  (here `temperkb.io/steward`, **not** `mcp.temperkb.io/steward`). Either form is a valid
+  `TEMPER_CONNECT_CONNECTOR` value.
+- `vercel connect token … --subject app` from the CLI returns *"Token subject is not accessible to
+  this requester"* — app-subject tokens are mintable only by the deployed project's runtime (its
+  Vercel OIDC), not by a human at the CLI. Use `--subject user --yes` to smoke-test interactively.
 
-The connection (`agent/connections/temper.ts`) authenticates **machine-identity-first**: when
-`TEMPER_M2M_CLIENT_ID` is set it mints its own token (`mintM2mToken`), else it falls back to a
-Vercel Connect connector (`TEMPER_CONNECT_CONNECTOR`), else a static `TEMPER_TOKEN` (local dev).
+> **On the Auth0-fronted instance the Connect `app` path cannot mint a token, and this is not
+> fixable from Temper's side.** Auth0 issues `client_credentials` only for a registered M2M
+> application, and the Connect connector has no Auth0 M2M app behind it — its dynamic registration
+> does not create one (confirmed: the connector produces no app in `auth0 apps list`). Advertising
+> the grant on the MCP server is necessary but not sufficient. **The `TEMPER_M2M_*` vars are the
+> real path.** Connect remains in the code for instances where it does work.
 
-### Status (2026-07-03): `app` principal via direct M2M mint — the Connect app-path is a dead end here
+## Verify
 
-Auth-seam Stage 4 shipped (`classify` + agent-profile provisioning + the
-`client_credentials` advertisement). But on the **Auth0-fronted** instance the Vercel Connect
-`app` path **cannot** mint a token: Auth0 issues `client_credentials` only for a registered
-**M2M application**, and the Connect connector has no Auth0 M2M app behind it — its dynamic
-registration does not create one (confirmed: the connector produces no app in `auth0 apps
-list`). Advertising the grant is necessary but not sufficient.
+- **Cron Jobs** (Vercel → *Settings → Cron Jobs*): every `defineSchedule` becomes a Vercel Cron
+  Job, evaluated in **UTC**. Expect two, both hourly (`0 * * * *`): the steward dispatch tick and
+  the region-materialize tick.
+- **Logs** (Vercel → *Observability → Logs*): the dispatch tick logs
+  `[steward-dispatch] tick <correlation-id> starting`, then the claimed-job count (or
+  `(no drift)`), then fans out. `[steward-materialize]` logs its candidate count. An unregistered
+  or under-reached credential shows up here as a `401` on `/dispatch`, not as silence.
+- **The DB** — see below. It is the only place a tick's actual work is visible.
 
-So the steward mints its own token **directly**: a dedicated Auth0 M2M application (`Temper
-Steward M2M`), and `agent/connections/temper.ts` performs the `client_credentials` grant itself
-(`mintM2mToken`, keyed on the `TEMPER_M2M_*` env). This is the distinct machine principal the
-design wants, without depending on Connect. Provision the M2M app + audience grant once via the
-Auth0 CLI — see the [operator runbook](../auth/machine-token-contract.md#operator-runbook-provisioning-an-auth0-m2m-agent).
-The `authorization_code + refresh_token` bridge under `user` below remains an escape hatch.
+### How a tick works now (there is no env-pinned map)
 
-### Which subject: `app` vs `user`
+The steward **fans out**. There is no single map it tends, and no env var naming one:
 
-temper-mcp resolves the caller's **profile from the token's `sub` claim**
-(`profile_service::resolve_from_claims`): a `sub` with an existing auth link loads that profile;
-a `sub` with none **creates a brand-new blank profile** (its own empty default context, no reach
-to anyone else's corpus). So the connector subject decides *who the agent is* in temper:
+- `agent/schedules/steward.ts` is a **code** handler, not a model prompt. It `POST`s
+  `/api/steward/dispatch` — a server-side reap → sweep → enqueue → claim that returns the claimed
+  jobs, each carrying its own `cogmap_id` — then starts **one isolated agent session per claimed
+  job** (`receive(worker, …)`), each tending a single map. Single-flight and lease-reaping live in
+  the server (`kb_workflow_jobs`), so a fixed hourly cadence is safe: a still-running map is not
+  re-claimed, and a crashed run's lease expires and requeues.
+- `agent/schedules/materialize.ts` enumerates `GET /api/steward/candidates` (the readable
+  team-joined maps) and POSTs a **self-gating** materialize per map — the server no-ops below its
+  formation threshold, so no lease or queue is needed.
+- Each tick mints a `correlationId`, logs it, sends it as `x-steward-correlation-id`, and the
+  server stamps it onto every claimed job; each session's `invocation_open` inherits it. So a
+  tick's runs are **queryable** (`kb_invocations.correlation_id`), not merely greppable — and the
+  trace survives a hop that dies before any DB row exists.
 
-- **`user`** (the human who authorized in the browser) → the agent acts **as that person**, with
-  their profile and read reach. Simplest reach, but it conflates agent-authored nodes with the
-  human's identity — at odds with the invocation envelope's authorship discipline.
-- **`app`** (the agent's own machine identity) → a **distinct principal**, which is the right
-  shape for authorship accountability — but its `sub` maps to a fresh empty profile, so it has
-  **no read reach** until you grant it. After the first run, find that profile and grant it read
-  on the ingest context (the same shape as sharing a context into a team during bootstrap), or
-  pre-provision + grant it before deploy.
-
-Clearing the ingest-delta gate is **not** enough — the agent must be able to *read* the sources
-it distills, which is a property of the resolved profile, not the delta.
-
-## Environment contract
-
-Set these on the Vercel project (dashboard, or `vercel env add <NAME>`) **before** deploying —
-the build reads them at discovery time and fails fast if a required one is missing (e.g.
-`TEMPER_MCP_URL is required`, thrown by the connection's guard, working as designed).
-
-| Variable | Required | Value / purpose |
-|----------|----------|-----------------|
-| `TEMPER_MCP_URL` | yes | The temper-mcp endpoint, e.g. `https://temperkb.io/mcp`. The agent's sole seam to Temper. One agent dir points at temperkb.io or a self-hosted instance by this value alone. |
-| `TEMPER_API_URL` | yes | The temper REST base, e.g. `https://temperkb.io`. Distinct from `TEMPER_MCP_URL`; used by the region-materialize schedule's direct POST. |
-| `TEMPER_SELF_COGMAP_ID` | yes | The cognitive map this agent tends, by id (minted at genesis). See the design note below. |
-| `TEMPER_M2M_CLIENT_ID` | prod | Auth0 M2M app client id. **When set, the connection mints its own `client_credentials` token (the app principal)** — the production path on the Auth0-fronted instance. Takes precedence over `TEMPER_CONNECT_CONNECTOR`. |
-| `TEMPER_M2M_CLIENT_SECRET` | prod | The M2M app client secret. A Vercel env var only — never in code, never seen by the model. |
-| `TEMPER_M2M_TOKEN_URL` | prod | The issuer's token endpoint, e.g. `https://<tenant>.auth0.com/oauth/token`. |
-| `TEMPER_M2M_AUDIENCE` | prod | The API audience the minted token targets, e.g. `https://temperkb.io/api` (== the mcp audience). |
-| `TEMPER_CONNECT_CONNECTOR` | fallback | Vercel Connect connector id (`vercel connect create`). Used only when `TEMPER_M2M_CLIENT_ID` is unset. **On the Auth0-fronted instance this cannot mint an app token** (see Status above) — the M2M vars are the real path. |
-| `TEMPER_TOKEN` | dev only | An already-OAuth-obtained temper token. Drives `eve dev`. Not for production. |
-| `TEMPER_MCP_AUDIENCE` | optional | Only when the token audience varies by target and is not discovery-derived. |
-
-### AI Gateway credential
-
-The agent's model calls run through the **Vercel AI Gateway**. On a deployed Vercel project
-this authenticates automatically via **OIDC** (`VERCEL_OIDC_TOKEN` is injected at runtime) —
-no credential to set. You only need a gateway key for **local** `eve dev`; after `vercel link`,
-`vercel env pull` writes it into `.env.local`.
-
-## Deploy and verify (two-phase, app principal)
-
-Because the agent runs as its own **app** principal, its temper profile does not exist until
-its first authenticated call creates it — so reach is granted in a second phase, after deploy.
-
-### Phase 1 — deploy
-
-Set every env var (see the contract above) on the Vercel project first, then:
-
-```bash
-cd packages/agent-workflows/steward
-eve deploy            # rides the existing .vercel link; no eve picker
-```
-
-> **Deploy is manual — the steward does NOT auto-deploy on monorepo merge.** `steward-agent` is its
-> own Vercel project; merging the monorepo `main` ships nothing here. You must `eve deploy` from the
-> agent directory (or wire GitHub auto-deploy against the `packages/agent-workflows/steward` root).
-> **Vercel env changes also require a redeploy to take effect** — setting a new `TEMPER_M2M_*` value in
-> the dashboard does nothing until the next `eve deploy`. Skipping this runs the cron against stale code
-> or stale env — a confusing tick that looks like a code bug but is a deploy gap.
-
-On the first cron tick the agent authenticates to temper-mcp; temper-mcp resolves its `sub` to
-a **new, empty profile** (`resolve_from_claims`). That tick does no useful work yet (no reach,
-no cogmap write grant), but the profile now exists.
-
-**Verify the app token actually minted** (the one open risk): check Vercel → *Observability →
-Logs* for the tick. Success = a profile was resolved / an auth line, not a token error. If the
-connector cannot issue an app token (temper-mcp's OAuth server must support the app/client-
-credentials exchange), no profile is created — pivot before granting.
-
-### Phase 2 — grant the agent's profile reach
-
-Find the just-created profile (newest row after deploy), then grant it the two capabilities it
-needs: **read** on the ingest sources (via team membership) and **write/author** on the map.
-
-```bash
-# Identify the steward profile (via neonctl → psql):
-#   SELECT p.id, p.handle, p.created, l.auth_provider_user_id AS sub
-#     FROM kb_profiles p JOIN kb_profile_auth_links l ON l.profile_id = p.id
-#    ORDER BY p.created DESC LIMIT 5;   -- the newest is the steward's
-
-# 1. Source read reach — join the team the ingest context is shared into (watcher = read-only):
-temper team add-member <team-id> <steward-profile-id> --role watcher
-#    (e.g. team personal-j-cole-taylor 019eea5e-… — the bound team from genesis)
-
-# 2. Cogmap authoring — explicit write grant (post-Q-A, authoring is not conferred by membership):
-temper cogmap grant <cogmap-ref> --to-profile <steward-profile-id> --write
-```
-
-### Verify
-
-- **Cron Jobs** (Vercel → *Settings → Cron Jobs*): every `defineSchedule` becomes a Vercel
-  Cron Job, evaluated in **UTC**. Expect the steward tick and the region-materialize tick.
-- **Execution** (Vercel → *Observability → Cron Jobs* / *Logs*): a tick that clears the ingest
-  threshold produces a **closed invocation envelope** with correlated mutation events, authored
-  by the steward's own profile; a tick under threshold opens and closes with a no-op outcome.
+Widening what the steward tends is therefore a **grant**, not a redeploy: add the agent profile to
+a team, or grant it write on a map, and the next sweep picks it up.
 
 ## Observing a tick — the DB is the source of truth, not the logs
 
 **eve markdown task-mode discards the agent's own output.** The model's reasoning and tool results
-never reach Vercel logs, so logs cannot tell you what a tick *did*. The temper DB is the source of
-truth: the **invocation envelope** (`kb_invocations` — status / outcome / `closed_at`) and its
-**acts** (`kb_events` joined on `invocation_id`). Read them with the MCP tools `invocation_show
-<id>` (envelope + acts + outcome payload) and `invocation_list --status open` (any orphaned
-envelopes), or over psql.
+never reach Vercel logs, so logs cannot tell you what a tick *did* (they tell you what was
+*dispatched*). The temper DB is the source of truth: the **invocation envelope**
+(`kb_invocations` — status / outcome / `closed_at` / `correlation_id`) and its **acts**
+(`kb_events` joined on `invocation_id`). Read them with the MCP tools `invocation_show <id>`
+(envelope + acts + outcome payload) and `invocation_list --status open` (any orphaned envelopes),
+or over psql.
 
 Three things that read as bugs but aren't:
 
@@ -245,48 +313,34 @@ Three things that read as bugs but aren't:
 
 - **An orphaned open invocation** (still `open` well after the function could have run) means a tick
   died mid-loop — a function timeout, or the model stopping after a tool call without reaching
-  `invocation_close`. It is harmless cruft (append-only), but it is a signal worth checking.
+  `invocation_close`. It is harmless cruft (append-only), but it is a signal worth checking. The
+  server's reaper expires the corresponding job's lease and requeues the map, so the next tick
+  retries it.
 
-- **A pre-grant tick's `steward_ingest_delta: cognitive map not found` is an access-scoped
-  not-found, NOT an auth failure.** Auth succeeding while read reach is missing surfaces as "not
-  found," not `401`. If you see it *before* the profile has been granted reach (Phase 2), that is
-  expected — auth works, the corpus just isn't readable yet. Don't chase it as a token bug.
+- **`steward_ingest_delta: cognitive map not found` is an access-scoped not-found, NOT an auth
+  failure.** Auth succeeding while read reach is missing surfaces as "not found," not `401`. It
+  means the credential authenticated but its profile has no reach to that map — go back and check
+  the `--team` / `--cogmap` reach you registered it with. A genuine auth failure (unregistered or
+  revoked client id) is a `401` with an explicit message naming the client id.
 
-> **Known-fixed defect (edges).** The first prod tick authored 17 nodes but **0 edges**:
+> **Historical note (edges).** An early prod tick authored 17 nodes but **0 edges**:
 > `assert_relationship` failed for every cogmap-homed source with *"no rows returned by a query that
-> expected to return at least one row."* The edge-home lookup in `DbBackend::assert_relationship`
-> hard-filtered `anchor_table='kb_contexts'`, but a steward's authored-4 nodes are **cogmap-homed**,
-> so the lookup returned zero rows. Fixed: the backend now reads the source's home anchor without
-> assuming a context and homes the edge to the map (the `assert_kernel_edge` path). **This fix must
-> be deployed to the temper-mcp/temper-api target before the steward's edges will land**; the next
-> tick after deploy should retrofit `derived_from` + inter-node edges onto any nodes authored
-> edgeless in the interim.
-
-## Design note — `TEMPER_SELF_COGMAP_ID` is an MVP binding
-
-The cognitive-map id is not intrinsically agent *config* — it is the **subject of an
-invocation**. It is already modeled that way: `invocation open --cogmap <ref>` is required,
-and every steward act (`steward_ingest_delta`, `create_resource`, `assert_relationship`,
-`facet_set`, `advance_watermark`) takes the cogmap as a first-class parameter. The env var
-simply pins that subject for a single steward tending a single map — the 1:1 MVP shape.
-
-The general agent-invocation framework has cleaner homes for it, and the MVP env var should be
-read as a temporary stand-in for one of them:
-
-- **Discovery from the principal's authorable grants.** The agent authenticates (via Connect)
-  as a principal; the access model already governs authorship by explicit write-grant. A
-  steward's targets are then "the cogmaps my principal is granted to author," queried at wake
-  and looped over — so adding a team/map is a *grant*, not a redeploy with a new env value.
-- **The invocation carries the cogmap.** A dispatcher opens the envelope against a specific map
-  and hands the agent "tend this invocation's subject," making the agent a stateless worker
-  over whatever map the run targets.
-
-Either is required for fan-out across multiple maps/teams (explicitly deferred in the steward
-MVP). When that lands, `TEMPER_SELF_COGMAP_ID` goes away in favor of grant-discovery, with the
-invocation naming the specific map per run.
+> expected to return at least one row."* The edge-home lookup hard-filtered `anchor_table='kb_contexts'`,
+> but a steward's authored-4 nodes are **cogmap-homed**, so it returned zero rows. Fixed: the backend
+> now home-detects the source and branches kernel-vs-context (`assert_edge_from_source_home` /
+> `assert_kernel_edge` in `DbBackend`). If you are looking at nodes authored edgeless in that window,
+> a later tick retrofits `derived_from` + inter-node edges onto them.
 
 ## See also
 
-- [team-self-cognition-bootstrap.md](./team-self-cognition-bootstrap.md) — birth + bind the map (prerequisite).
-- `packages/agent-workflows/steward/agent/connections/temper.ts` — the connection (env URL, dual-path auth, allow-list).
+- [machine-credentials.md](./machine-credentials.md) — the credential model: mint paths, reach,
+  rotation, revocation. **Read this before deploying** — an unregistered client id 401s.
+- [team-self-cognition-bootstrap.md](./team-self-cognition-bootstrap.md) — birth + bind a map (prerequisite).
+- `packages/agent-workflows/steward/agent/lib/temper-auth.ts` — the strategy order, `temperFetch`,
+  and why `TEMPER_M2M_AUDIENCE` is optional.
+- `packages/agent-workflows/steward/agent/lib/model-config.ts` — the model resolution and why it is
+  build-time.
+- `packages/agent-workflows/steward/agent/schedules/steward.ts` — the fan-out dispatcher.
+- `clients/temper-ts/src/credentials.ts` — the shared `ClientCredentials` mint.
 - `docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md` — the steward directory design.
+- `docs/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md` — the fan-out design.
