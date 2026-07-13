@@ -35,6 +35,7 @@ libc = "0.2"
 # macOS-only runtime dep above) because dev-deps must resolve on every platform the examples are
 # compiled on — clippy --all-targets builds them in CI.
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Scoped env mutation for the TEMPER_ONNX_MODEL_PATH tests — the test binary is multi-threaded and
 # process env is global, so a bare set_var/remove_var races every other test that reads env.
@@ -55,3 +56,9 @@ embed = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
 embed-download = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:tokenizers"]
 extract = ["dep:kreuzberg"]
 test-embed = ["embed"]
+
+# Provenance recovery: which model produced each stored embedding? Reads a sampled chunk export and
+# re-embeds it to classify. Needs the embedding stack.
+[[example]]
+name = "classify_chunks"
+required-features = ["embed"]
