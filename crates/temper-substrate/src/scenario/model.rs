@@ -19,10 +19,6 @@ fn one() -> f64 {
     1.0
 }
 
-fn home_cogmap() -> String {
-    "cogmap".into()
-}
-
 /// The seed document (`tests/fixtures/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap
 /// is born from. `name` is the cogmap name `cogmap_genesis` registers.
 #[derive(Debug, Clone, Deserialize)]
@@ -186,6 +182,12 @@ pub struct EntityDef {
     pub profile: String,
 }
 
+/// A seed resource. It has no `home` selector: a seed instantiates a *cogmap*, and every resource it
+/// declares is homed in that cogmap by construction (`loader::load_resources`). Contexts are never
+/// seeded — a context accretes from real work and its telos is *derived* from that activity — so
+/// there is nothing here to choose between. (The sibling access DSL does have a real `HomeDef`,
+/// because an access scenario stages resources across pre-existing cogmaps *and* contexts to probe
+/// the gates.)
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ResourceDef {
@@ -194,8 +196,6 @@ pub struct ResourceDef {
     #[serde(default)]
     pub title: Option<String>,
     pub origin_uri: String,
-    #[serde(default = "home_cogmap")]
-    pub home: String,
     #[serde(default)]
     pub doc_type: Option<String>,
     pub body: String,
@@ -428,8 +428,8 @@ name: t
 cogmap: { telos: { title: T, statement: S, questions: [{ question: q1 }] }, owner: alice, emitter: "agent#1" }
 world: { profiles: [{ handle: alice, display_name: Alice, system_access: approved }], entities: [{ name: "agent#1", profile: alice }] }
 resources:
-  - { key: a, origin_uri: "temper://c/a", home: cogmap, body: "hello", facets: { values: { phase: x } } }
-  - { key: b, origin_uri: "temper://c/b", home: cogmap, body: "world" }
+  - { key: a, origin_uri: "temper://c/a", body: "hello", facets: { values: { phase: x } } }
+  - { key: b, origin_uri: "temper://c/b", body: "world" }
 edges: [{ from: a, to: b, kind: leads_to, weight: 1.0 }]
 uses_lenses: [L]
 "#;
