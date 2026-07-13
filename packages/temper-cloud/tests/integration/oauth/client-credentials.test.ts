@@ -114,6 +114,7 @@ describe("client_credentials grant", () => {
       content_type: string;
       required_params: string[];
       grant_type: string;
+      response: { fields: string[]; token_type: string };
     };
 
     it("accepts a request built from the contract, exactly as a client emits it", async () => {
@@ -160,6 +161,29 @@ describe("client_credentials grant", () => {
 
       expect(res.status).toBe(400);
       expect((await res.json()).error).toBe("invalid_request");
+    });
+
+    // The response half of the contract. The client caches against an ABSOLUTE expiry derived from
+    // expires_in and re-mints on 401 — both of which are unimplementable if these fields drift.
+    it("returns exactly the response shape the contract promises, with no refresh token", async () => {
+      await seedTemperClient(sql, "tmpr_response", "s3cr3t");
+
+      const res = await handleToken(
+        tokenRequest({
+          grant_type: "client_credentials",
+          client_id: "tmpr_response",
+          client_secret: "s3cr3t",
+        }),
+        db,
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      for (const field of contract.response.fields) {
+        expect(body[field]).toBeDefined();
+      }
+      expect(body.token_type).toBe(contract.response.token_type);
+      expect(body.refresh_token).toBeUndefined();
     });
   });
 

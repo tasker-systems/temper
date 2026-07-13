@@ -123,13 +123,16 @@ if [ -n "$NON_DOC_FILES" ]; then
     HAS_NON_DOC=true
 fi
 
-# Ruby SDK: the gem's own tree, the contract it is generated from, and its CI
+# Ruby SDK: the gem's own tree, the contracts it is asserted against, and its CI
 # workflow. openapi.json is in this set precisely because a contract change must
-# be SEEN to move the gem -- that is what the codegen drift gate proves.
+# be SEEN to move the gem -- that is what the codegen drift gate proves. The same
+# logic applies to tests/contracts/: credentials_spec.rb reads
+# m2m-token-request.json and asserts the gem emits it, so a contract change that
+# does not run this job is a contract change nothing checks.
 #
 # The no-diff safety fallback must run everything, this job included.
 HAS_RUBY=false
-if changes_match '^clients/temper-rb/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^__force_full_ci__$'; then
+if changes_match '^clients/temper-rb/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^__force_full_ci__$'; then
     HAS_RUBY=true
 fi
 

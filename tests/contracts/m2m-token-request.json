@@ -11,9 +11,11 @@
     "",
     "Consumed by:",
     "  - clients/temper-rb/spec/temper/credentials_spec.rb  (the client emits this shape)",
+    "  - clients/temper-ts/tests/contract.test.ts           (the client emits this shape)",
+    "  - clients/temper-ts/src/testing/mock-issuer.ts       (the mock issuer IS this shape)",
     "  - packages/temper-cloud/tests/integration/oauth/client-credentials.test.ts  (the server accepts it)",
     "",
-    "Adding a client (temper-py, temper-ts) means pinning it against this file too."
+    "Adding a client (temper-py) means pinning it against this file too."
   ],
 
   "content_type": "application/x-www-form-urlencoded",
@@ -33,6 +35,28 @@
     "application/json": [
       "RFC 6749 §4 mandates form encoding at the token endpoint. Auth0 accepts JSON as an extension;",
       "temper's AS does not, and must answer `invalid_request` rather than throwing a 500."
+    ]
+  },
+
+  "credential_transport": {
+    "client_secret_post": [
+      "client_id and client_secret travel in the form body. Both issuers accept this, and it is what",
+      "temper's own clients emit."
+    ],
+    "client_secret_basic": [
+      "client_id:client_secret base64'd in an HTTP Basic Authorization header. RFC 6749 §2.3.1 says a",
+      "server that supports both MUST prefer Basic when it is present; temper's AS does."
+    ]
+  },
+
+  "response": {
+    "fields": ["access_token", "token_type", "expires_in"],
+    "token_type": "Bearer",
+    "no_refresh_token": [
+      "RFC 6749 §4.4.3: a client_credentials response MUST NOT include a refresh token. The credential",
+      "IS the refresh mechanism — a machine re-mints. A client therefore caches against an ABSOLUTE",
+      "expiry (expires_in is a duration, and a duration cannot survive being cached) and re-mints on a",
+      "401, because a token checked at the top of a long unit of work can die in the middle of it."
     ]
   }
 }

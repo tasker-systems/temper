@@ -196,6 +196,10 @@ run_test "no-diff fallback: test-ruby runs" \
     "__force_full_ci__" \
     "RUN_TEST_RUBY=true"
 
+run_test "contract change triggers the ruby gem spec that asserts it" \
+    "tests/contracts/m2m-token-request.json" \
+    "DOCS_ONLY=false" "RUN_TEST_RUBY=true"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]
