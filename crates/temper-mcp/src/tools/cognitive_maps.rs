@@ -1,23 +1,31 @@
 //! Cognitive-map tools. Reads: `cogmap_shape` (surface tier / materialized regions),
 //! `cogmap_region_metrics`, `cogmap_analytics`. Write: `cogmap_create` (genesis — create a new map).
+//!
+//! Also the CONTEXT orientation peers (spec §3.7, T8): `context_shape`, `context_region_metrics`,
+//! `context_materialize`. They share the region reads beneath them — the substrate read is
+//! anchor-generic, so the only thing that differs is how the anchor is addressed (a context ref, not
+//! a resource ref) and which lens it materializes under.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
-    GrantCapabilityRequest, RevokeCapabilityRequest,
+    ContextShapeInput, GrantCapabilityRequest, RevokeCapabilityRequest,
 };
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::materialize::{
-    MaterializeAck, MaterializeDeltaInput, MaterializeTriggerInput,
+    ContextMaterializeInput, MaterializeAck, MaterializeDeltaInput, MaterializeTriggerInput,
 };
 use temper_core::types::reconcile::CreateCogmapRequest;
 use temper_services::backend::DbBackend;
 use temper_services::error::ApiError;
+use temper_services::services::context_service::resolve_context_ref;
 use temper_services::services::{access_service, cogmap_service, materialize_service};
 use temper_workflow::operations::{Backend, CreateCognitiveMap, MaterializeOnThreshold, Surface};
 
@@ -42,10 +50,10 @@ pub async fn cogmap_shape(
         None => None,
     };
 
-    let rows = temper_services::backend::substrate_read::cogmap_shape_select(
+    let rows = temper_services::backend::substrate_read::anchor_shape_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
-        cogmap_id,
+        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         lens_id,
     )
     .await
@@ -75,10 +83,10 @@ pub async fn cogmap_region_metrics(
         None => None,
     };
 
-    let rows = temper_services::backend::substrate_read::cogmap_region_metrics_select(
+    let rows = temper_services::backend::substrate_read::anchor_region_metrics_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
-        cogmap_id,
+        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         lens_id,
     )
     .await
@@ -274,7 +282,7 @@ pub async fn cogmap_materialize(
         .0;
 
     let cmd = MaterializeOnThreshold {
-        cogmap: CogmapId::from(cogmap),
+        anchor: HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         threshold: input.threshold,
         origin: Surface::Mcp,
     };
@@ -498,6 +506,119 @@ pub async fn cogmap_revoke(
             .map_err(|e| map_api_error("cogmap_revoke", e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context orientation tools (spec §3.7, T8).
+//
+// The region reads beneath these are the SAME anchor-generic calls the cogmap tools above make —
+// only the addressing differs. A context is named by context ref (`@me/temper`), which is resolved
+// through `resolve_context_ref` (itself visibility-gated), not by the resource-ref parser.
+
+/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID) to its anchor.
+async fn context_anchor(
+    svc: &TemperMcpService,
+    profile_id: ProfileId,
+    context_ref: &str,
+) -> Result<HomeAnchor, rmcp::ErrorData> {
+    let cref = parse_context_ref(context_ref)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
+    let context = resolve_context_ref(&svc.api_state.pool, profile_id, &cref)
+        .await
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+    Ok(HomeAnchor::Context(context))
+}
+
+/// Optional lens ref → UUID.
+fn lens_of(lens: Option<&str>) -> Result<Option<Uuid>, rmcp::ErrorData> {
+    lens.map(|l| {
+        temper_workflow::operations::parse_ref(l)
+            .map(|p| p.0)
+            .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad lens ref: {e}"), None))
+    })
+    .transpose()
+}
+
+/// `context_shape` — the context's materialized regions (surface tier), most salient first.
+pub async fn context_shape(
+    svc: &TemperMcpService,
+    input: ContextShapeInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let profile_id = ProfileId::from(profile.id);
+    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+
+    let rows = temper_services::backend::substrate_read::anchor_shape_select(
+        &svc.api_state.pool,
+        profile_id,
+        anchor,
+        lens_of(input.lens.as_deref())?,
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("context_shape failed: {e}"), None))?;
+
+    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// `context_region_metrics` — the per-region analytics tier for a context.
+pub async fn context_region_metrics(
+    svc: &TemperMcpService,
+    input: ContextShapeInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let profile_id = ProfileId::from(profile.id);
+    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+
+    let rows = temper_services::backend::substrate_read::anchor_region_metrics_select(
+        &svc.api_state.pool,
+        profile_id,
+        anchor,
+        lens_of(input.lens.as_deref())?,
+    )
+    .await
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("context_region_metrics failed: {e}"), None)
+    })?;
+
+    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// `context_materialize` — re-form the context's regions when its formation delta clears the
+/// threshold. Below threshold it is an idempotent no-op. Gated on `context_authorable_by_profile`
+/// (write requires DIRECT membership with an authoring role), inside the backend command.
+pub async fn context_materialize(
+    svc: &TemperMcpService,
+    input: ContextMaterializeInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let profile_id = ProfileId::from(profile.id);
+    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+
+    let cmd = MaterializeOnThreshold {
+        anchor,
+        threshold: input.threshold,
+        origin: Surface::Mcp,
+    };
+    let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
+    let ack: MaterializeAck = backend
+        .materialize_on_threshold(cmd)
+        .await
+        .map_err(ApiError::from)
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("context_materialize failed: {e}"), None)
+        })?
+        .value;
+
+    let text = serde_json::to_string_pretty(&ack).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))

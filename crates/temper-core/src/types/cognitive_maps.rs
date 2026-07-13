@@ -24,6 +24,21 @@ pub struct CogmapShapeInput {
     pub lens: Option<String>,
 }
 
+/// MCP/surface input for the CONTEXT shape and region-metrics reads (spec §3.7, T8) — the peers of
+/// [`CogmapShapeInput`].
+///
+/// A context is addressed by **context ref** (`@me/temper`, `+team-slug/ctx`, or a bare UUID), NOT by
+/// the resource-ref parser the cogmap inputs use: a context is not a resource, and bare names are
+/// deliberately not accepted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ContextShapeInput {
+    /// The context to read, by context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID).
+    pub context: String,
+    /// Optional lens ref to filter regions; omit for all lenses.
+    pub lens: Option<String>,
+}
+
 /// One non-folded region of a cognitive map under a lens, as returned by `cogmap_shape`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]

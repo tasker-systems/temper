@@ -777,10 +777,11 @@ pub async fn vector_search(
     Ok(rows.iter().map(|r| r.get::<ResourceId, _>("id")).collect())
 }
 
-/// One surface-tier region of a cognitive map, as returned by `cogmap_shape`. Centroid-derived
+/// One surface-tier region of an anchor, as returned by `anchor_shape`. Centroid-derived
 /// readouts only — member identities are NEVER carried (the interior is dereferenced per-member
-/// through `resources_visible_to` elsewhere). Substrate-local because `temper-substrate` cannot
-/// depend on `temper-core`; the `temper-api` wrapper maps this to the `CogmapRegionRow` wire type.
+/// through `resources_visible_to` elsewhere). Substrate-local: the `temper-services` wrapper maps
+/// this to the `CogmapRegionRow` wire type, which is anchor-neutral in payload despite its name
+/// (the `cogmap_*` naming goes away at M3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogmapShapeRow {
     pub region_id: RegionId,
@@ -791,24 +792,30 @@ pub struct CogmapShapeRow {
     pub member_count: i32,
 }
 
-/// The surface-tier read of a cognitive map's materialized regions (spec §A surfacing; SQL
-/// `cogmap_shape`). The access gate is INSIDE the SQL: a principal who cannot read the map gets zero
-/// rows (never an error). Folded regions are excluded by the function; `lens_id = None` returns all
-/// lenses, `Some(l)` narrows to that lens.
+/// The surface-tier read of an anchor's materialized regions — a context OR a cogmap (spec §3.7,
+/// T8; SQL `anchor_shape`). The access gate is INSIDE the SQL: a principal who cannot read the
+/// anchor gets zero rows (never an error). Folded regions are excluded by the function;
+/// `lens_id = None` returns all lenses, `Some(l)` narrows to that lens. Rows come back most-salient
+/// first.
+///
+/// Anchor-generic because the region table is keyed on the anchor pair, not on the vestigial
+/// `cogmap_id` — which is NULL for every context region and so made the old cogmap-keyed read
+/// structurally blind to them.
 ///
 /// Runtime `sqlx::query` (NOT the `query!` macros) — the SQL is unqualified and self-gating; see the
 /// module-level note. Read-only.
-pub async fn cogmap_shape(
+pub async fn anchor_shape(
     pool: &PgPool,
-    cogmap_id: CogmapId,
+    anchor: HomeAnchor,
     principal: ProfileId,
     lens_id: Option<LensId>,
 ) -> Result<Vec<CogmapShapeRow>> {
     let rows = sqlx::query(
         "SELECT region_id, lens_id, salience, content_cohesion, label, member_count
-           FROM cogmap_shape($1, 'profile', $2, $3)",
+           FROM anchor_shape($1, $2, 'profile', $3, $4)",
     )
-    .bind(cogmap_id)
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(principal)
     .bind(lens_id)
     .fetch_all(pool)
@@ -879,7 +886,7 @@ pub struct InvocationListRow {
 /// The show read of one invocation envelope plus its acts. The access gate is INSIDE the SQL: the
 /// envelope row is returned ONLY when the principal can read the originating cogmap
 /// (`anchor_readable_by_profile($principal, 'kb_cogmaps', i.originating_cogmap_id)`). A denied or absent
-/// invocation yields `Ok(None)` — never an error (leak-safe, like [`cogmap_shape`]). Acts are fetched
+/// invocation yields `Ok(None)` — never an error (leak-safe, like [`anchor_shape`]). Acts are fetched
 /// ONLY after the envelope passes the gate, so an unreadable invocation never leaks its acts.
 ///
 /// Runtime `sqlx::query` (NOT the `query!` macros) — unqualified, self-gating SQL; see the module-level
@@ -1176,9 +1183,12 @@ pub async fn wayfind_scope_ids(pool: &PgPool, q: WayfindScopeQuery<'_>) -> Resul
     Ok(ids.into_iter().map(|(id,)| id).collect())
 }
 
-/// One region's analytics-tier scalar metrics, as returned by `cogmap_region_metrics`. The stored
+/// One region's analytics-tier scalar metrics, as returned by `anchor_region_metrics`. The stored
 /// readout columns of `kb_cogmap_regions` (computed once at materialization). Substrate-local; the
-/// `temper-api` wrapper maps this to the `CogmapRegionMetricsRow` wire type.
+/// `temper-services` wrapper maps this to the `CogmapRegionMetricsRow` wire type.
+///
+/// Every metric is `Option` for an honest reason: a context materialized under `workflow-default`
+/// carries no facets and no telos term, so `telos_alignment` is genuinely absent rather than zero.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogmapRegionMetricsRow {
     pub region_id: RegionId,
@@ -1190,20 +1200,22 @@ pub struct CogmapRegionMetricsRow {
     pub telos_alignment: Option<f64>,
 }
 
-/// The per-region analytics tier read (`cogmap_region_metrics`). Gate IS in the SQL (deny → empty);
-/// folded regions excluded; `lens_id = None` → all lenses, `Some(l)` → that lens. Runtime `sqlx::query`.
-pub async fn cogmap_region_metrics(
+/// The per-region analytics tier read for either anchor kind (SQL `anchor_region_metrics`, T8). Gate
+/// IS in the SQL (deny → empty); folded regions excluded; `lens_id = None` → all lenses, `Some(l)` →
+/// that lens. Rows come back most-central first. Runtime `sqlx::query`.
+pub async fn anchor_region_metrics(
     pool: &PgPool,
-    cogmap_id: CogmapId,
+    anchor: HomeAnchor,
     principal: ProfileId,
     lens_id: Option<LensId>,
 ) -> Result<Vec<CogmapRegionMetricsRow>> {
     let rows = sqlx::query(
         "SELECT region_id, lens_id, centrality, content_cohesion, internal_tension,
                 reference_standing, telos_alignment
-           FROM cogmap_region_metrics($1, 'profile', $2, $3)",
+           FROM anchor_region_metrics($1, $2, 'profile', $3, $4)",
     )
-    .bind(cogmap_id)
+    .bind(anchor.table())
+    .bind(anchor.uuid())
     .bind(principal)
     .bind(lens_id)
     .fetch_all(pool)

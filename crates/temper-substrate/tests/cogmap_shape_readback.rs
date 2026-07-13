@@ -27,10 +27,15 @@ struct RegionSeed<'a> {
 /// reads it). Returns the new region id.
 async fn insert_region(pool: &PgPool, seed: RegionSeed<'_>) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
+        // The anchor pair is written alongside the vestigial `cogmap_id` because that is what the real
+        // producer writes (M1 dual-write) and what the reads are keyed on. A fixture that set only
+        // `cogmap_id` would fabricate a row shape the system can no longer produce — prod carries zero
+        // such rows — and the anchor-keyed reads would (correctly) not see it.
         "INSERT INTO kb_cogmap_regions
-           (cogmap_id, lens_id, centroid, salience, content_cohesion, label, member_count,
-            asserted_by_event_id, last_event_id, is_folded)
-         VALUES ($1, $2, array_fill(0::double precision, ARRAY[768])::vector, $3, NULL, $4, $5, $6, $6, $7)
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience,
+            content_cohesion, label, member_count, asserted_by_event_id, last_event_id, is_folded)
+         VALUES ($1, 'kb_cogmaps', $1, $2, array_fill(0::double precision, ARRAY[768])::vector, $3,
+            NULL, $4, $5, $6, $6, $7)
          RETURNING id",
     )
     .bind(seed.cogmap)
@@ -104,9 +109,9 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
     .await;
 
     // Readable principal sees exactly the one non-folded region.
-    let rows = temper_substrate::readback::cogmap_shape(
+    let rows = temper_substrate::readback::anchor_shape(
         &pool,
-        CogmapId::from(cogmap),
+        temper_core::types::home::HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         ProfileId::from(p1),
         None,
     )
@@ -123,9 +128,9 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
     assert_eq!(rows[0].content_cohesion, None);
 
     // Non-member is denied by the in-SQL gate: zero rows, NOT an error.
-    let denied = temper_substrate::readback::cogmap_shape(
+    let denied = temper_substrate::readback::anchor_shape(
         &pool,
-        CogmapId::from(cogmap),
+        temper_core::types::home::HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         ProfileId::from(p2),
         None,
     )
@@ -138,9 +143,9 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
 
     // Lens filter: a non-matching lens id narrows to empty for the readable principal.
     let other_lens = Uuid::now_v7();
-    let filtered = temper_substrate::readback::cogmap_shape(
+    let filtered = temper_substrate::readback::anchor_shape(
         &pool,
-        CogmapId::from(cogmap),
+        temper_core::types::home::HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         ProfileId::from(p1),
         Some(LensId::from(other_lens)),
     )

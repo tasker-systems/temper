@@ -1,16 +1,23 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
+use temper_core::types::cognitive_maps::{CogmapRegionMetricsRow, CogmapRegionRow};
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
-use temper_services::error::ApiResult;
+use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
+use temper_services::backend::DbBackend;
+use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::context_service::{
     self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
     ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::state::AppState;
+use temper_workflow::operations::{Backend, MaterializeOnThreshold};
 
 #[utoipa::path(
     get,
@@ -136,4 +143,120 @@ pub async fn unshare_team(
     )
     .await?;
     Ok(Json(outcome))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context orientation reads (spec §3.7, T8) — the region-level view of a context.
+//
+// The peer of `/api/cognitive-maps/{id}/{shape,region-metrics,materialize}`, and deliberately the
+// SAME wire types: a region row carries nothing cogmap-specific, so `CogmapRegionRow` describes a
+// context's region exactly as well (the `cogmap_*` naming goes away at M3, not the shape).
+//
+// Every gate lives in the SQL (`anchor_readable_by_profile` → `context_readable_by_profile`), so a
+// caller who cannot read the context gets an empty list rather than a 403 — no existence oracle.
+
+/// Query params for the context shape / region-metrics reads.
+#[derive(Debug, Deserialize)]
+pub struct ContextShapeQuery {
+    /// Optional lens filter; omit for all lenses.
+    pub lens: Option<Uuid>,
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "context_shape",
+    path = "/api/contexts/{id}/shape",
+    tag = "Contexts",
+    params(
+        ("id" = Uuid, Path, description = "Context ID"),
+        ("lens" = Option<Uuid>, Query, description = "Optional lens filter; omit for all lenses"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The context's materialized regions (surface tier), most salient first", body = Vec<CogmapRegionRow>),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
+    )
+)]
+pub async fn shape(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+    Query(q): Query<ContextShapeQuery>,
+) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
+    temper_services::backend::substrate_read::anchor_shape_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        HomeAnchor::Context(ContextId::from(context_id)),
+        q.lens,
+    )
+    .await
+    .map(Json)
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "context_region_metrics",
+    path = "/api/contexts/{id}/region-metrics",
+    tag = "Contexts",
+    params(
+        ("id" = Uuid, Path, description = "Context ID"),
+        ("lens" = Option<Uuid>, Query, description = "Optional lens filter; omit for all lenses"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Per-region analytics-tier scalar metrics for the context", body = Vec<CogmapRegionMetricsRow>),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
+    )
+)]
+pub async fn region_metrics(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+    Query(q): Query<ContextShapeQuery>,
+) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
+    temper_services::backend::substrate_read::anchor_region_metrics_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        HomeAnchor::Context(ContextId::from(context_id)),
+        q.lens,
+    )
+    .await
+    .map(Json)
+}
+
+#[utoipa::path(
+    post,
+    operation_id = "context_materialize",
+    path = "/api/contexts/{id}/materialize",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    request_body = MaterializeRequest,
+    responses(
+        (status = 200, description = "Materialize ran (over threshold) or was a no-op (below)", body = MaterializeAck),
+        (status = 403, description = "Caller cannot author (write) this context"),
+        (status = 404, description = "Context not found (uniform — no existence oracle)"),
+    )
+)]
+pub async fn materialize(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
+    Path(context_id): Path<Uuid>,
+    Json(req): Json<MaterializeRequest>,
+) -> ApiResult<Json<MaterializeAck>> {
+    // Auth-before-write + the threshold gate live inside DbBackend::materialize_on_threshold, which is
+    // anchor-generic — the context arm gates on `context_authorable_by_profile` and materializes under
+    // `workflow-default`. Just dispatch.
+    let cmd = MaterializeOnThreshold {
+        anchor: HomeAnchor::Context(ContextId::from(context_id)),
+        threshold: req.threshold,
+        origin: surface,
+    };
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let out = backend
+        .materialize_on_threshold(cmd)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(out.value))
 }

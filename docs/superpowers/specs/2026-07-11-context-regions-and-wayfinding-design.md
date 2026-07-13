@@ -477,6 +477,50 @@ Two things must be deleted because they stop being true:
 reads (`20260709000010_graph_context_reads.sql`) supply only containment and residual counts — no
 salience.
 
+> #### ⚠️ Amended 2026-07-12, during T8's execution. Three corrections, all measured.
+>
+> The paragraph above is **kept as written**; three of its claims did not survive grounding.
+>
+> **1. The gap is worse than "no salience" — the trio is STRUCTURALLY BLIND to context regions.**
+> `cogmap_shape` / `cogmap_region_metrics` filter `WHERE reg.cogmap_id = p_cogmap`, and `cogmap_id` is
+> a FK to `kb_cogmaps` — so a context region **cannot** carry one. Measured on prod: **all 297 context
+> regions have `cogmap_id IS NULL`** (vs 0 of 2460 cogmap regions). No argument you pass makes those
+> functions return a context region. This is not an oversight to extend; it is a key that cannot work.
+>
+> **2. Do NOT mirror the trio — write it ONCE, anchor-generic.** The region table's real key has been
+> the anchor pair since M1, and the read gate `anchor_readable_by_profile(profile, table, id)` is
+> *already* anchor-generic — a literal `CASE` delegating to `cogmap_readable_by_profile` /
+> `context_readable_by_profile`. So `anchor_shape` / `anchor_region_metrics` are keyed on the pair and
+> gated on that one predicate, and the `cogmap_*` names become **thin wrappers** over them: same names,
+> same signatures, zero caller churn, one body to maintain. Cloning the trio into `context_*` twins
+> would have created two families keyed on different columns, guaranteed to drift.
+>
+> Two things fall out for free. The cogmap arm is **equivalent by construction** (the generic gate
+> calls the very predicate the old body called — verified differentially on prod: all 24 real
+> (profile, cogmap) pairs, and the full 416-row result set, zero disagreements). And "a context
+> read-grant grants the orientation read" — the acceptance criterion — is satisfied **by
+> construction**, because `context_readable_by_profile` is what consults `kb_access_grants`.
+>
+> **3. `graph_context_territories` already exists, is a different grain, and is DEAD.** Its live
+> signature is `(p_profile, p_team) → (context_id, label, member_count)`
+> (`20260703130000_graph_atlas_chunk_b_reads.sql`) — it lists *contexts within a team*, not *regions
+> within a context*. A name collision, not the peer this section wants. And it has **zero callers** —
+> Rust, SQL, views, or TS; it was created and never wired. (T8's own task text warned against
+> "breaking its existing Atlas caller"; there is no caller. Every task in this arc has carried a
+> plan-text defect, including the corrections.)
+>
+> **Also: the NULL cousin of T7's NaN trap.** These reads return **stored** scalars, not a query
+> cosine, so they do **not** inherit the NaN trap (measured: zero NaN in any stored region column on
+> prod). They inherit its cousin — those same bodyless-member regions store `content_cohesion IS NULL`
+> (11 on prod), and **Postgres sorts NULL FIRST on `ORDER BY … DESC`**, for the same reason it sorts
+> NaN first. Hence `NULLS LAST` on every DESC sort. Unlike NaN, `NULLS LAST` *does* guard NULL.
+>
+> **Shipped:** `anchor_shape`, `anchor_region_metrics` (migration `20260713000010`); the cogmap trio
+> re-pointed as wrappers; `GET /api/contexts/{id}/{shape,region-metrics}` + `POST …/materialize`; MCP
+> `context_shape` / `context_region_metrics` / `context_materialize`; CLI `temper context
+> shape|region-metrics|materialize`. **Territories deferred** — it is an Atlas/UI read, `shape` already
+> returns a superset of its columns, and the SQL is now anchor-generic so it falls out trivially.
+
 ### 3.8 Authz prerequisites
 
 > **Rewritten 2026-07-11 against the live schema, mid-execution.** This section originally claimed the

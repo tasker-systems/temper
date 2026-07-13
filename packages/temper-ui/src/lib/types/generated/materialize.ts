@@ -4,12 +4,34 @@
  * Outcome of a materialize trigger. When `materialized` is false the delta was below threshold and
  * nothing ran (the idempotent no-op); when true, `regions` + `membership_fingerprint` describe the
  * materialize that ran.
+ *
+ * ## Why `cogmap_id` survives beside the anchor pair
+ *
+ * T8 made this command anchor-addressed (a context materializes too), so the target is now
+ * `anchor_table` + `anchor_id`. `cogmap_id` is kept — and still populated whenever the anchor IS a
+ * cogmap — deliberately, because this is a **wire type on a deployed instance**: the temper-rb gem
+ * `raise`s on an unknown attribute *and* on a missing required one, and the generated TS is
+ * consumed by a UI that ships on its own cadence. Dropping `cogmap_id` would hard-fail an older
+ * client on the cogmap path it already uses.
+ *
+ * A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),
+ * so it never receives an ack where the field is absent. New clients read the anchor pair and
+ * ignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.
  */
 export type MaterializeAck = { 
 /**
- * The cogmap the trigger targeted.
+ * The anchor table the trigger targeted — `kb_contexts` or `kb_cogmaps`.
  */
-cogmap_id: string, 
+anchor_table: string, 
+/**
+ * The anchor the trigger targeted.
+ */
+anchor_id: string, 
+/**
+ * Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;
+ * see the type's docs for why this is still here.
+ */
+cogmap_id: string | null, 
 /**
  * Whether a materialize actually ran (`formation_events >= threshold`). False = idempotent no-op.
  */

@@ -87,6 +87,13 @@ cargo make openapi
 > `openapi-check` (spec) and `openapi-rb-drift` (gem — Docker-based, **skips** without Docker;
 > the `test-ruby` CI job is the never-skipping backstop). The generator pin + params live in
 > one place — `.github/scripts/generate-temper-rb.sh` — shared by cargo-make and the gem's Rakefile.
+>
+> **The drift gate compares against git, not against a fresh build.** `check-temper-rb-drift.sh`
+> regenerates the gem and then runs `git diff --exit-code` over `clients/temper-rb/…/generated`.
+> So a gem you have *just correctly regenerated* still fails `cargo make check` while it sits
+> unstaged — the error reads "generated core is out of date with openapi.json", which sounds like
+> you forgot to run `cargo make openapi` when in fact you need to `git add` (or commit) its output.
+> Stage the regenerated files, then re-run `check`.
 
 ### Running a single Rust test
 ```bash

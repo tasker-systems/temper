@@ -256,6 +256,117 @@ pub async fn unshare_remote(
     Ok(())
 }
 
+// ── Context orientation reads (spec §3.7, T8) ────────────────────────────────
+
+/// Resolve a context ref for a READ. Unlike [`resolve_context_id`] (which serves `share`/`unshare`
+/// and deliberately refuses `@me`, because an operator granting reach should name the concrete owner),
+/// the orientation reads accept `@me/<slug>` — it is the form every agent-facing surface already uses
+/// (`resource list --context @me/temper`), and refusing it here would be a gratuitous inconsistency.
+///
+/// `@me` is matched on the caller's own profile id, not on a reconstructed `@handle` string.
+pub async fn resolve_context_id_for_read(
+    client: &temper_client::TemperClient,
+    context: &str,
+) -> Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(context) {
+        return Ok(id);
+    }
+    let (owner, slug) = context.split_once('/').ok_or_else(|| {
+        TemperError::BadRequest(format!(
+            "invalid context ref {context:?}: use a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`"
+        ))
+    })?;
+
+    let contexts = client
+        .contexts()
+        .list()
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    let found = if owner == "@me" {
+        let me = client
+            .profile()
+            .get()
+            .await
+            .map_err(crate::commands::client_err)?;
+        contexts
+            .into_iter()
+            .find(|c| c.kb_owner_table == "kb_profiles" && c.kb_owner_id == me.id && c.slug == slug)
+    } else {
+        contexts
+            .into_iter()
+            .find(|c| c.owner_ref == owner && c.slug == slug)
+    };
+
+    found.map(|c| *c.id).ok_or_else(|| {
+        TemperError::Api(format!(
+            "context '{context}' not found among the contexts you can see"
+        ))
+    })
+}
+
+/// Optional lens ref → UUID (trailing-UUID-only, like every other ref on the CLI).
+fn lens_id_of(lens: Option<&str>) -> Result<Option<Uuid>> {
+    lens.map(|l| temper_workflow::operations::parse_ref(l).map(|p| p.0))
+        .transpose()
+}
+
+/// `temper context shape <context_ref> [--lens <ref>]` — the context's materialized regions.
+pub async fn shape_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    lens: Option<&str>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let lens_id = lens_id_of(lens)?;
+    let rows = client
+        .contexts()
+        .shape(context_id, lens_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let rendered = crate::format::render(&rows, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// `temper context region-metrics <context_ref> [--lens <ref>]` — the per-region analytics tier.
+pub async fn region_metrics_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    lens: Option<&str>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let lens_id = lens_id_of(lens)?;
+    let rows = client
+        .contexts()
+        .region_metrics(context_id, lens_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let rendered = crate::format::render(&rows, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
+/// `temper context materialize <context_ref> [--threshold N]` — re-form the context's regions.
+pub async fn materialize_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    threshold: Option<i64>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let ack = client
+        .contexts()
+        .materialize(context_id, threshold)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let rendered = crate::format::render(&ack, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

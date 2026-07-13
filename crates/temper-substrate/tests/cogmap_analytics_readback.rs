@@ -24,12 +24,14 @@ struct MetricSeed {
 
 async fn insert_region_with_metrics(pool: &PgPool, s: MetricSeed) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
+        // Anchor pair written alongside the vestigial `cogmap_id` — see the note in
+        // `cogmap_shape_readback.rs`: the reads are keyed on the pair, and so is the real producer.
         "INSERT INTO kb_cogmap_regions
-           (cogmap_id, lens_id, centroid, salience, centrality, content_cohesion,
-            internal_tension, reference_standing, telos_alignment, label, member_count,
-            asserted_by_event_id, last_event_id, is_folded)
-         VALUES ($1, $2, array_fill(0::double precision, ARRAY[768])::vector, 0.5, $3, 0.25,
-            $4, 7.0, 0.9, 'r', 2, $5, $5, $6)
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, centrality,
+            content_cohesion, internal_tension, reference_standing, telos_alignment, label,
+            member_count, asserted_by_event_id, last_event_id, is_folded)
+         VALUES ($1, 'kb_cogmaps', $1, $2, array_fill(0::double precision, ARRAY[768])::vector, 0.5,
+            $3, 0.25, $4, 7.0, 0.9, 'r', 2, $5, $5, $6)
          RETURNING id",
     )
     .bind(s.cogmap)
@@ -101,9 +103,9 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
     .await;
 
     // Readable principal sees exactly the non-folded region, with the stored scalars.
-    let rows = temper_substrate::readback::cogmap_region_metrics(
+    let rows = temper_substrate::readback::anchor_region_metrics(
         &pool,
-        CogmapId::from(cogmap),
+        temper_core::types::home::HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         ProfileId::from(p1),
         None,
     )
@@ -124,9 +126,9 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
     assert_eq!(rows[0].reference_standing, Some(7.0));
 
     // Non-member is denied by the in-SQL gate: zero rows, not an error.
-    let denied = temper_substrate::readback::cogmap_region_metrics(
+    let denied = temper_substrate::readback::anchor_region_metrics(
         &pool,
-        CogmapId::from(cogmap),
+        temper_core::types::home::HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         ProfileId::from(p2),
         None,
     )
@@ -135,9 +137,9 @@ async fn region_metrics_surface_gate_and_lens(pool: PgPool) {
     assert!(denied.is_empty(), "non-member sees no metrics: {denied:?}");
 
     // Wrong lens narrows to empty.
-    let filtered = temper_substrate::readback::cogmap_region_metrics(
+    let filtered = temper_substrate::readback::anchor_region_metrics(
         &pool,
-        CogmapId::from(cogmap),
+        temper_core::types::home::HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         ProfileId::from(p1),
         Some(LensId::from(Uuid::now_v7())),
     )
