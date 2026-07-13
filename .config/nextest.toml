@@ -16,15 +16,18 @@ fail-fast = false
 # ---------------------------------------------------------------------------
 
 # `segmented_create_roundtrips_large_body` drives a >1 MiB body (~840 chunks) through the real CLI
-# segmented-ingest path with real ONNX. **Measured: 484s. It is NOT hanging — it passes.** The cost is
-# entirely native ONNX inference, on a SINGLE core (release mode buys 2.4%, i.e. nothing — it is all
-# native C++, so this was never a debug-build story).
+# segmented-ingest path with real ONNX. **It is NOT hanging — it passes.** The cost is entirely native
+# ONNX inference (all native C++, so this was never a debug-build story — release buys ~2.4%).
 #
-# #401 made the intra-op thread count configurable, and CI now sets `TEMPER_ONNX_INTRA_THREADS=0` so
-# inference uses all of the runner's cores (~3.1× locally: 484s → 155s). That is NOT enough to retire
-# this override: CI runners have far fewer cores than the machine that was measured, and the library
-# default is still 1 — so anyone running the suite WITHOUT that env var still sees the full 484s. The
-# override has to survive the slowest honest case, not the fastest.
+# It used to be 484s (full HF model, single core) and this override was 120s×6 ⇒ killed at 720s. Two
+# fixes since then compounded to collapse it: #401 made the intra-op thread count configurable and CI
+# now sets `TEMPER_ONNX_INTRA_THREADS=0` so inference uses all the runner's cores, and #400 stopped
+# downloading the full HF model in favour of the repo's *quantized* copy (~1.9× faster inference). On a
+# 10-core box the test now runs 82–98s. But CI runners have far fewer cores AND — since we deleted
+# `--test-threads 1` — inference now shares them with the parallel test threads, so expect somewhere
+# around 100–155s there. The override is retuned to 60s×5 ⇒ killed at 300s: comfortably above that
+# estimate while being far tighter than the old 720s, so a genuine regression still trips it. If a real
+# CI run confirms the actual time, tighten this further toward the 120s default.
 #
 # The body size is not incidental padding: it is the ONLY thing that pushes the CLI past
 # `SEGMENT_BUDGET_BYTES` (256 KiB) and exercises the multi-block begin/append/finalize path at all. So
@@ -35,8 +38,8 @@ fail-fast = false
 # today never overlap at all. Tighten this back toward the default as that lands.
 [[profile.default.overrides]]
 filter = 'test(=segmented_create_roundtrips_large_body)'
-slow-timeout = { period = "120s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
 filter = 'test(=segmented_create_roundtrips_large_body)'
-slow-timeout = { period = "120s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 5 }

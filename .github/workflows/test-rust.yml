@@ -31,16 +31,21 @@ name: Rust Tests
 # `--exclude temper-cloud`: the repo root is BOTH the workspace manifest and the temper-cloud package,
 # and temper-cloud enables `ingest-pipeline` on temper-api, which unifies features across the build.
 #
-# `--test-threads 1`: temper-ingest holds its ONNX session behind a `Mutex<Session>` (`embed.rs`), so
-# concurrent body-bearing tests contend on it and flake `embed_texts`. A cost we are paying, not a
-# preference — task `019f57d2` owns removing it.
+# Test parallelism is ON (no `--test-threads 1`). The suite used to be serialized against a flake in
+# `embed_texts` under concurrent body-bearing tests — but that rationale was false: temper-ingest holds
+# its ONNX session behind a `Mutex<Session>` (`embed.rs`), and a mutex makes concurrent embeds BLOCK, not
+# flake. The real flake was a lock RACE — hf-hub's blob lock on the model download
+# (`Lock acquisition failed: …/blobs/….lock`) — which #400 already removed by pointing ORT at the model
+# in the checkout (`TEMPER_ONNX_MODEL_PATH`, below). With the download gone the serialization was
+# guarding a wound that was already closed. Deleting it measured ~7× on the integration job
+# (1556s → 222s), 1871/1871 passing across three full runs with zero flakes.
 #
 # `TEMPER_ONNX_INTRA_THREADS: 0` (every test job): #401 made the ONNX intra-op thread count
 # configurable — the library still defaults to **1**, and `temper-cli`'s `main()` opts into `0`. But
 # tests call the command functions DIRECTLY and never go through `main()`, so without this env var they
 # would silently keep embedding on a single core. Setting it here is what actually gets the runner's
-# cores in play. It composes fine with `--test-threads 1`: one embed at a time, using all cores, rather
-# than one core while the rest idle.
+# cores in play — inference now shares those cores with the parallel test threads rather than owning
+# them all one embed at a time.
 #
 # `TEMPER_ONNX_MODEL_PATH` (every test job) + `lfs: true`: **we ship the model; stop downloading it.**
 # A `--workspace` build pulls in temper-cli, whose default `embed` selects `temper-ingest/embed-download`,
@@ -97,7 +102,7 @@ jobs:
   integration-tests:
     name: Integration & E2E Tests
     runs-on: ubuntu-latest
-    # The entire DB-backed workspace WITH embed, serialized on ort. It is the long pole by design —
+    # The entire DB-backed workspace WITH embed, run in parallel. It is the long pole by design —
     # it is now the job that actually runs everything.
     timeout-minutes: 60
 
@@ -120,8 +125,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
       # See the unit job: tests bypass `main()`, so the env var is the only thing that reaches them.
-      # Safe alongside `--test-threads 1` — one embed at a time, using all cores, rather than one core
-      # while the rest idle.
       TEMPER_ONNX_INTRA_THREADS: 0
       # Load the model from the checkout instead of downloading it: the repo already ships it.
       TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
@@ -153,7 +156,7 @@ jobs:
           cargo nextest run \
             --workspace --exclude temper-cloud \
             --features test-db,test-embed \
-            --locked --no-fail-fast --test-threads 1
+            --locked --no-fail-fast
 
   artifact-tests:
     name: Substrate Artifact Tests
@@ -182,8 +185,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
       # See the unit job: tests bypass `main()`, so the env var is the only thing that reaches them.
-      # Safe alongside `--test-threads 1` — one embed at a time, using all cores, rather than one core
-      # while the rest idle.
       TEMPER_ONNX_INTRA_THREADS: 0
 
     steps:
@@ -210,4 +211,4 @@ jobs:
         run: cargo sqlx migrate run --source migrations
 
       - name: Run substrate artifact tests
-        run: cargo nextest run -p temper-substrate --features artifact-tests --locked --no-fail-fast --test-threads 1
+        run: cargo nextest run -p temper-substrate --features artifact-tests --locked --no-fail-fast
