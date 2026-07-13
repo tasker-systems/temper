@@ -65,8 +65,10 @@ hard-code it — `GET /.well-known/oauth-authorization-server` lists `client_cre
 `grant_types_supported` and names the `token_endpoint`.
 
 Temper's own clients read these from `TEMPER_M2M_TOKEN_URL`, `TEMPER_M2M_CLIENT_ID`,
-`TEMPER_M2M_CLIENT_SECRET`, and (Auth0 only) `TEMPER_M2M_AUDIENCE` — the same four names in the Ruby
-gem and the steward runtime. Follow the convention; it is one less thing to translate.
+`TEMPER_M2M_CLIENT_SECRET`, and (external IdP only) `TEMPER_M2M_AUDIENCE` — the same four names in
+the Ruby gem (`Temper::Credentials`), the TypeScript client (`temper-ts`'s `ClientCredentials`), and
+the steward runtime, which composes the TypeScript one. Follow the convention; it is one less thing
+to translate.
 
 An audience is not part of the `client_credentials` protocol — it is Auth0's. Temper's AS never
 reads one off the request, so sending one is inert rather than wrong (the steward reference client
@@ -292,7 +294,10 @@ temper admin machine show <machine-id>
   (`AS_ISSUER`) that a temper-issued credential requires.
 - [JWT verification](../auth/jwt-verification.md) — how a token is validated, and the one-issuer-per-instance invariant.
 - [The machine-token contract](../auth/machine-token-contract.md) — the claim shape both issuers produce.
-- **The cross-language wire contract:** `tests/contracts/m2m-token-request.json` — pin any new client against it.
+- **The cross-language wire contract:** `tests/contracts/m2m-token-request.json` — pin any new client
+  against it. Pinned today by `temper-rb` (`spec/temper/credentials_spec.rb`), `temper-ts`
+  (`tests/contract.test.ts`), and the AS itself
+  (`packages/temper-cloud/tests/integration/oauth/client-credentials.test.ts`).
 - **Design specs** — the *rationale*, not the current state. They are design records written before
   the work shipped, so where a spec and this guide disagree, trust the guide (and the code it cites):
   - Registration, rotation & revocation gate (Phase A): `docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md`
