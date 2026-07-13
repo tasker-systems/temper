@@ -107,10 +107,14 @@ Sources: [self-hosting.md § Environment variable contract](./self-hosting.md#en
 | **Eve (DEFERRED — not a step in this runbook)** | | | | |
 | `TEMPER_MCP_URL` | — | — | Yes | The temper-mcp endpoint, e.g. `https://<instance>/mcp` |
 | `TEMPER_API_URL` | — | — | Yes | The temper REST base, e.g. `https://<instance>` |
-| `TEMPER_SELF_COGMAP_ID` | — | — | Yes | The cognitive map this agent tends, minted at genesis |
-| `TEMPER_CONNECT_CONNECTOR` | — | — | Production | Vercel Connect connector id; falls back to `TEMPER_TOKEN` when unset |
-| `TEMPER_TOKEN` | — | — | Dev only | Pre-obtained token; not for production |
-| `TEMPER_MCP_AUDIENCE` | — | — | Optional | Only when token audience varies by target and isn't discovery-derived |
+| `TEMPER_M2M_CLIENT_ID` | — | — | Production | The agent's machine-principal client id. **Register it first** — authentication is fail-closed, with no just-in-time create. On this (AS-mode) install, mint it with `temper admin machine issue`, which returns a `tmpr_…` id. See [machine-credentials.md](./machine-credentials.md) |
+| `TEMPER_M2M_CLIENT_SECRET` | — | — | Production | The one-time secret from `issue`. Never in code; rotate with `rotate-secret` |
+| `TEMPER_M2M_TOKEN_URL` | — | — | Production | The issuer's token endpoint. **On this install that is your own instance's `/oauth/token`** — Temper *is* the Authorization Server (`AS_ISSUER` set) |
+| `TEMPER_M2M_AUDIENCE` | — | — | External IdP only | **Omit it here.** Auth0 requires an audience; Temper's own AS ignores a request-supplied one entirely and mints with `AS_AUDIENCE` |
+| `TEMPER_CONNECT_CONNECTOR` | — | — | Fallback | Vercel Connect connector id. Used only when `TEMPER_M2M_CLIENT_ID` is unset, and it **cannot mint an app token against an Auth0-fronted instance** |
+| `TEMPER_TOKEN` | — | — | Dev only | Pre-obtained token; drives `eve dev`. Not for production |
+| `STEWARD_MODEL` | — | — | Optional | The agent's primary model (default `minimax/minimax-m3`). Resolved at **build** time, so a change needs a **redeploy**; an unknown id fails the build |
+| `STEWARD_MODEL_FALLBACKS` | — | — | Optional | Comma-separated, tried in order after the primary fails. Covers **availability** (5xx, rate limit), never quality |
 
 ¹ Back-compat fallback: if `OIDC_*` are unset, the UI falls back to the canonical deployment's
 `AUTH0_*` variables — see [self-hosting.md](./self-hosting.md#environment-variable-contract-ui-project).
