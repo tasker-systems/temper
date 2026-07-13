@@ -3,6 +3,17 @@
 **Goal:** `019f5c66-755e-7fc1-bd87-ee2de8e4cd3f` · **Task:** UV1 · **Date:** 2026-07-13
 **Children:** Graph Atlas (`019f28a1`) · The ledger as a readable surface (`019f51e3`)
 
+> **Amended 2026-07-13 by UV2**, which reconciled this spec against the Graph Atlas goal's live tasks
+> and found three things it had missed. **(a)** There are **three** region reads, not two — this spec
+> named `anchor_shape` and `graph_cogmap_territories` and never mentioned `graph_region_territories`,
+> the team panorama read, which is a third copy of the same query. D1 is corrected below, and the
+> drift evidence for it turns out to be considerably stronger than the original draft claimed.
+> **(b)** Retiring that third read onto `anchor_shape` is **not** a drop-in — it is team-scoped and
+> `anchor_shape` takes one anchor — so D1 now states the three ways to close that and rejects the one
+> that hides an N+1. **(c)** D5's empty-suppression rule was stated for the region tier and is silent
+> about the home tier, where it is currently violated. D5 is extended below. All three corrections
+> are grounded in prod reads taken 2026-07-13, cited in place.
+
 ---
 
 ## Problem
@@ -99,10 +110,51 @@ declares itself, and it offers the region field alongside as a second named lens
 
 ### D1 — The unified region read
 
-`graph_cogmap_territories` **retires onto `anchor_shape`.** Field-by-field the two are the same query
-— same joins, equivalent gate, byte-identical label LATERAL — differing only in that territories
-returns `cogmap_id` and omits `lens_id`, and does not order. They have **already been hand-resynced
-once**; the next region-semantics change re-opens the drift.
+> **Amended by UV2.** The original draft named two region reads and one prior resync. Both counts
+> were low.
+
+**There are three region reads, and all three retire onto `anchor_shape`:**
+
+| read | scope | shape |
+|---|---|---|
+| `anchor_shape` | anchor-generic | the survivor |
+| `graph_cogmap_territories` | one cogmap (`reg.cogmap_id = p_cogmap`) | + `coherence` |
+| **`graph_region_territories`** | a team (`kb_team_cogmaps` ⋈ `team_ancestors`) | salience only |
+
+`graph_region_territories` — the team panorama read — went unmentioned in the first draft. Prod
+(2026-07-13) shows it carrying a **byte-identical copy** of the same visibility-gated label LATERAL,
+the same `visible_members` count, the same `seen.visible_members > 0` filter and the same
+`cogmap_readable_by_profile` gate as `graph_cogmap_territories`. It differs only in how it selects
+which regions to consider. It is a third copy of one query, and retiring the second while leaving it
+standing would have preserved exactly the drift this decision exists to end.
+
+**The drift is not a prediction. It has already recurred, at four times the width this spec assumed.**
+The draft said the reads "have already been hand-resynced once." In fact
+`20260713000050_region_visible_member_count.sql` (PR #416, merged 2026-07-13 — the same day this spec
+was written) had to hand-apply **one** visibility fix to **four** functions in a single migration:
+`anchor_shape`, `graph_cogmap_territories`, `graph_region_territories`, and `anchor_region_metrics`.
+The label derivation, likewise, has been written three times across three functions
+(`20260706130000`, `20260713000020`, and the team read). One rule, four hand-edits, one migration.
+That is the argument for D1, and it is an empirical one.
+
+**Retiring the team read is not a drop-in, and this decision must say how.** *(UV2.)*
+`graph_cogmap_territories` is one-cogmap-scoped, so it collapses onto `anchor_shape` trivially.
+`graph_region_territories` does **not**: it is **team**-scoped, fanning out over every cogmap in team
+reach (`kb_team_cogmaps ⋈ team_ancestors(p_team)`), whereas `anchor_shape(p_anchor_table, p_anchor_id,
+…)` takes **exactly one anchor**. Three ways to close that, and the choice is load-bearing:
+
+1. **Call `anchor_shape` once per cogmap in team scope.** An N+1. Today team scope spans **4 cogmaps
+   across 3 teams**, so this would be free — *and invisible*. The Atlas goal explicitly targets
+   "hundreds of teams, 100k+ nodes." This is the pattern that hides an N+1 behind a natural-looking
+   composition; reject it.
+2. **A team-scoped SQL wrapper** that resolves the cogmap set once and unions `anchor_shape` over it
+   in one round trip. Keeps the region semantics in exactly one place — the recommended shape.
+3. **Give `anchor_shape` a set-of-anchors form** (`p_anchor_ids uuid[]`). More general; more surface.
+
+Whichever is taken, note that `anchor_shape` returns `region_id` and `lens_id` but **not the anchor
+id** — so a team panorama unioning it across cogmaps cannot say which cogmap a region came from
+(today `graph_region_territories` returns `cogmap_id` precisely for this). The unified read must
+carry the anchor identity, or the wrapper must tag it. Do not discover this at integration time.
 
 - `anchor_shape` + `anchor_region_metrics` become the one region read, at every surface.
 - `Territory` does **not** collapse into the region row. It stays the *survey* wire type, and gains a
@@ -200,6 +252,20 @@ is shown a cohesion score computed over all twelve.
   risk** — see Open Questions. Per-reader metric recomputation is the alternative and it is
   expensive; it should not be adopted without a threat model that demands it.
 
+**The rule does not stop at the region tier.** *(Amended by UV2.)* As drafted, D5 said "a region whose
+visible member set is empty is not returned at all" — and all three region reads already enforce
+exactly that (`seen.visible_members > 0`). But the **home tier** does not. `graph_home_contexts`
+returns a context whose visible resource count is zero, which is why the Atlas draws the empty
+"TEMPER" context as a large empty circle (Graph Atlas C3.1, item L3). That is the same rule one tier
+up, and it was never stated.
+
+> **Extended invariant: an anchor with no visible members is not returned at all — at *any* tier.**
+> A circle drawn for a container the caller can see nothing inside of is a cardinality leak with a
+> radius. Fix it in the read, not in the renderer.
+
+*(Checked and clean: `graph_home_contexts.resource_count` **does** join `resources_visible_to`, so it
+is not a second `member_count`-style leak. Only the empty-suppression is missing.)*
+
 Where a home-gated edge walk is needed, **lift `element_trail_edge`'s pattern** (anchor-readable plus
 both endpoints readable). Do not write a second one.
 
@@ -218,7 +284,7 @@ both endpoints readable). Do not write a second one.
 
 | component | change |
 |---|---|
-| `migrations/` | additive: retire `graph_cogmap_territories`; extend `anchor_shape` (provenance keys, visible member_count, anchor-kind-aware metric nulling); context staleness read; drop `graph_territory_bridges` |
+| `migrations/` | additive: retire `graph_cogmap_territories` **and `graph_region_territories`**; extend `anchor_shape` (provenance keys, visible member_count, anchor-kind-aware metric nulling); **empty-anchor suppression in `graph_home_contexts`**; context staleness read; drop `graph_territory_bridges` |
 | `temper-substrate` (`readback`) | `CogmapShapeRow` gains provenance + visible count |
 | `temper-core/types` | `CogmapRegionRow` extended; `Territory` gains lens `kind`; `TerritoryOverview.bridges` removed |
 | `temper-services` | `graph_service::cogmap_panorama` composes `anchor_shape`; shared modal-lens helper; `context_graph_service` declares its lens |
