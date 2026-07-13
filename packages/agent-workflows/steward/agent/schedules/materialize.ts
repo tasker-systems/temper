@@ -1,7 +1,6 @@
 import { defineSchedule } from "eve/schedules";
 
-import { fetchWithRetry } from "../lib/fetch-retry.js";
-import { requireEnv, temperToken } from "../lib/temper-auth.js";
+import { requireEnv, temperFetch } from "../lib/temper-auth.js";
 
 /**
  * Region materialization on its OWN threshold cadence (T6 acceptance #3).
@@ -17,10 +16,12 @@ import { requireEnv, temperToken } from "../lib/temper-auth.js";
  * no-op (`MaterializeAck { materialized: false }`) below it. So a fixed cadence
  * is safe — the threshold, not the cron, decides when work actually happens.
  *
- * Auth is machine-identity-first via the shared `temperToken` (`../lib/temper-auth`), the SAME
+ * Auth is machine-identity-first via the shared `temperFetch` (`../lib/temper-auth`), the SAME
  * ordering the MCP connection uses — M2M `client_credentials` on prod, then Connect, then
  * `TEMPER_TOKEN`. (An earlier Connect-first copy here hit the dead-end connector on prod and threw
  * before any request went out, so materialize silently never ran — this fix resolves that.)
+ * `temperFetch` additionally re-mints once on a 401, since this schedule's per-map fan-out can
+ * outlive the token it started with.
  *
  * Fan-out (goal 019f3220): materialization now runs across ALL team-joined cogmaps, not one
  * env-pinned map. It enumerates candidates via `GET /api/steward/candidates` (the readable
@@ -42,13 +43,8 @@ export default defineSchedule({
 
 async function materializeTick(): Promise<void> {
   const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
-  const token = await temperToken();
 
-  const list = await fetchWithRetry(
-    `${apiUrl}/api/steward/candidates`,
-    { headers: { authorization: `Bearer ${token}` } },
-    { label: "candidates" },
-  );
+  const list = await temperFetch(`${apiUrl}/api/steward/candidates`, {}, { label: "candidates" });
   if (!list.ok) {
     throw new Error(`candidates fetch failed: ${list.status} ${await list.text()}`);
   }
@@ -57,14 +53,11 @@ async function materializeTick(): Promise<void> {
 
   await Promise.all(
     ids.map(async (id) => {
-      const res = await fetchWithRetry(
+      const res = await temperFetch(
         `${apiUrl}/api/cognitive-maps/${id}/materialize`,
         {
           method: "POST",
-          headers: {
-            authorization: `Bearer ${token}`,
-            "content-type": "application/json",
-          },
+          headers: { "content-type": "application/json" },
           // Empty body → the server applies its DEFAULT_MATERIALIZE_THRESHOLD (self-gating no-op below).
           body: "{}",
         },
