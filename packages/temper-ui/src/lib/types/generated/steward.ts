@@ -108,7 +108,14 @@ completed: number,
  */
 failed: number, 
 /**
- * Total chunks embedded across all completed jobs.
+ * Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were
+ * **re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger
+ * than one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently
+ * non-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.
+ */
+partial: number, 
+/**
+ * Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.
  */
 chunks_embedded: bigint, };
 
