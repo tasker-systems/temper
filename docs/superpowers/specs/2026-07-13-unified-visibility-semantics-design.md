@@ -11,8 +11,15 @@
 > **(b)** Retiring that third read onto `anchor_shape` is **not** a drop-in — it is team-scoped and
 > `anchor_shape` takes one anchor — so D1 now states the three ways to close that and rejects the one
 > that hides an N+1. **(c)** D5's empty-suppression rule was stated for the region tier and is silent
-> about the home tier, where it is currently violated. D5 is extended below. All three corrections
-> are grounded in prod reads taken 2026-07-13, cited in place.
+> about the home tier, where it is currently violated. D5 is extended below.
+>
+> **Further amended 2026-07-13 by UV3**, reconciling against the ledger goal. **(d)** D4's closing
+> claim — that region provenance *"composes with the existing `element_trail` reader"* — **is false**.
+> The trail readers are keyed on a *resource* and on an *edge*; a region is neither, and no
+> event-by-id reader exists anywhere. As drafted, D4 returned two UUIDs nothing could dereference. It
+> now returns event metadata inline instead, and D6 is scoped so that the new MCP trail tool cannot
+> quietly become the event reader that would leak the materialize payload. All corrections are
+> grounded in prod reads taken 2026-07-13, cited in place.
 
 ---
 
@@ -227,8 +234,37 @@ colliding with the ledger goal:
 - It is **not the supersession cascade (L3).** A moving `last_event_id` is not a dependent-needs-
   review signal.
 
-It neither waits on those nor pre-empts them. It composes with the existing `element_trail` reader
-rather than introducing a second traversal.
+It neither waits on those nor pre-empts them.
+
+> **Amended by UV3.** The draft closed with *"it composes with the existing `element_trail` reader
+> rather than introducing a second traversal."* **It cannot.** There are exactly two trail readers —
+> `element_trail_node(p_profile, p_**resource**)` and `element_trail_edge(p_profile, p_**edge**)` — and
+> a region is neither a resource nor an edge. There is **no event-by-id reader anywhere in the
+> codebase**. So D4 as drafted returns two UUIDs that nothing in the system can dereference: a
+> correlator with no resolver.
+
+**And the obvious repair would re-open the leak D5 just closed.** The tempting fix is an event-by-id
+reader. Do not build one. Prod (2026-07-13) shows the forming event's payload carries **`region_ids`
+— the full list of regions from that materialize pass — on all 541 live regions**, alongside
+`membership_fingerprint` and `telos_centroid`. A reader that handed back that payload would let a
+caller who can see **one** region enumerate **every** region id from the pass that formed it —
+including the regions D5 deliberately withholds for having no visible members. That is the
+`member_count` leak wearing a different hat: *we decline to return the invisible region, then list
+its id in the payload.*
+
+**So: the unified region read joins `kb_events` and returns the event's *metadata* inline — its
+`occurred_at` and its topic — never its payload, and with no new reader.** Provenance becomes
+legible ("this region formed on 2 July and last changed on 11 July") instead of handing back an
+opaque uuid; it stays emphatically short of a fold; and it adds no dereference path to leak through.
+
+Both fields earn their place: `asserted_by_event_id` differs from `last_event_id` on **459 of 541**
+live regions, so "when it formed" and "when it last changed" are genuinely distinct signals, not a
+redundant pair.
+
+**The scope-creep vector, named.** Region provenance *creates demand* for L4 without providing it —
+a reader shown "last changed at event M" will immediately want "what did it look like before M," and
+that is as-of fold. That is a feature (it makes the ledger goal's value legible) and a boundary. D4
+returns two timestamps. It does not grow a fold.
 
 ### D5 — The visibility rule, stated once
 
@@ -273,7 +309,7 @@ both endpoints readable). Do not write a second one.
 
 | gap | decision |
 |---|---|
-| MCP has **no trail tool** (CLI + HTTP both do) | **Close.** Full surface parity is always intended. |
+| MCP has **no trail tool** (CLI + HTTP both do) | **Close.** Full surface parity is always intended. **Scope it precisely** *(UV3)*: the MCP tool is **element-keyed**, exactly like its peers — CLI `temper trail <kind> <id>` and HTTP `element_trail`. Do **not** let "MCP needs a trail tool" become "MCP needs an event reader." An event-by-id reader is the payload leak described in D4, and nothing in this spec requires one. |
 | No `context_analytics` peer to `cogmap_analytics` | **Close the staleness half.** `kb_contexts` already carries `shape_materialized_event_id` — a straight port. Do **not** invent context *regulation* or a context *telos resource*: contexts have a `telos_centroid` but no telos resource and no regulation edges. Return what exists; do not fabricate a peer field. |
 | `materialize_delta` cogmap-only on every surface, typed on `cogmap_id` | **Generalize to the anchor pair.** Add the context route + MCP tool. Add a **CLI** subcommand — today neither anchor has one. |
 | `bridges` is `[]` on every shipped path | **Drop it.** Both panorama producers hardcode `Vec::new()`; `graph_territory_bridges` has zero Rust callers; and `bridgeGeometry` keys bridges by *cogmap* id against a position map keyed by *region* id, so even a non-empty list would drop every line. It is unexercised dead code that cannot work as written. Per no-premature-backward-compat: remove `BridgeRibbon`, the SQL function, and the wire field together. |
