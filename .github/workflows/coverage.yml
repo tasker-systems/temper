@@ -46,6 +46,12 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+      # This job runs `cargo llvm-cov` directly, NOT through cargo-make, so Makefile.toml's copy of
+      # this variable never reaches it. It used to get away with that because temper-ingest's
+      # embed-download arm silently fell back to downloading the model from HuggingFace. That fallback
+      # is gone (it fetched the WRONG model), so without this every embed test here fails to resolve a
+      # model — nightly would go red every night, forever.
+      TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
 
     steps:
       - name: Free disk space

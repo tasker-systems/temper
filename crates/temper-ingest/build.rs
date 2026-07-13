@@ -41,6 +41,24 @@ fn main() {
 
     println!("cargo:rustc-env=TEMPER_EXPECTED_MODEL_SHA256={sha}");
     println!("cargo:rustc-env=TEMPER_EXPECTED_MODEL_SIZE={size}");
+
+    // The model's absolute path *in the checkout this binary was built from*, baked in as a
+    // LAST-RESORT resolution candidate.
+    //
+    // Without it, a `cargo install --path crates/temper-cli` binary lands in ~/.cargo/bin with no
+    // adjacent `models/` dir and therefore cannot embed at all — which breaks the repo's own
+    // reinstall ritual (`bin/setup.sh --with-cli`, docs/guides/development.md) and is the ONLY
+    // supported install on Intel macOS and non-x86_64 Linux, where `install.sh` refuses to run.
+    //
+    // Safe by construction: it is only ever *tried*, it is guarded by `is_file()`, and whatever it
+    // finds is sha256-verified against EXPECTED_MODEL_SHA256 before load — exactly like every other
+    // candidate. On a release build the baked path is CI's checkout, which does not exist on a user's
+    // machine, so the candidate simply misses.
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    println!(
+        "cargo:rustc-env=TEMPER_CHECKOUT_MODEL_PATH={}",
+        abs.display()
+    );
 }
 
 /// Returns `(sha256_hex, size_bytes)` for the model, whether it is an LFS pointer or the real file.

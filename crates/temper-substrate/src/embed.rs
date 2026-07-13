@@ -47,33 +47,64 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// A chunk is **stale** when it has no vector, or when the vector it has was produced by a model that
-/// is not the one this build embeds with.
+/// A chunk is **stale** when its vector was not produced by the model this build embeds with.
 ///
-/// This single predicate does two jobs that used to need two mechanisms:
+/// One clause, and it subsumes both jobs that used to need two mechanisms:
 ///
-/// - the original async-embed backfill (`embedding IS NULL` — a deferred chunk awaiting its vector), and
+/// - the original async-embed backfill (a deferred chunk has BOTH `embedding` and `embedded_with`
+///   NULL, and `NULL IS DISTINCT FROM <sha>` is TRUE — so it is still caught), and
 /// - **re-embedding after a model change**, which previously had no mechanism at all.
 ///
 /// It is why the re-embed needs no backfill script: rows written before `embedded_with` existed carry
 /// NULL, so they are stale *by definition* the moment the column ships — and any future model change
 /// re-stales the index automatically. Marking dirty is a `NULL`, not a data migration.
 ///
+/// **There is deliberately NO `embedding IS NULL OR` disjunct**, and that is load-bearing. With it, a
+/// chunk whose content is blank — nothing to embed, so it is stamped with the current model and left
+/// with a NULL vector — would stay stale FOREVER: `remaining` would never reach zero, the drain would
+/// re-enqueue that resource every single minute in perpetuity embedding nothing, and `stale_summary`
+/// would never converge, destroying the operator's only progress signal. The disjunct is redundant
+/// (see the deferred-chunk case above) and it is a wedge. `_insert_chunk` keeps the two columns
+/// coherent (no vector ⇒ no provenance), so this clause alone is complete for every row the projector
+/// writes.
+///
 /// Scoping by `is_current` is what makes create-then-update supersede naturally: a body revise makes
 /// the new generation current and the old non-current, so a job — whenever it runs — only ever embeds
 /// the resource's *live* chunks.
-const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
+pub const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
      AND NOT b.is_folded \
-     AND (ch.embedding IS NULL OR ch.embedded_with IS DISTINCT FROM $2)";
+     AND ch.embedded_with IS DISTINCT FROM $2";
 
-/// How many chunks one call will embed before returning, leaving the rest for the next tick.
+/// Default chunk allowance for ONE dispatch invocation — **not** per resource.
 ///
-/// The drain runs inside a serverless function with a wall-clock limit, and it must not be possible
-/// for one large resource to exceed it: prod's largest holds **939** chunks, and embedding those in a
-/// single invocation would time out, retry, time out again, and land the job in `dead` — a resource
-/// that can never heal, inside a system that reports itself as healthy. Bounding the work per call and
-/// resuming on the next tick makes progress monotonic regardless of resource size.
+/// The distinction is the whole point. The drain runs inside a serverless function with a wall-clock
+/// limit, and `dispatch_tick` claims `DEFAULT_EMBED_DISPATCH_CAP` (5) resources and embeds them
+/// SERIALLY in a single invocation. A per-resource budget of 64 would therefore permit 5 x 64 = 320
+/// chunks per invocation — and the server runs ONNX single-threaded (`INTRA_THREADS_DEFAULT = 1`),
+/// with no `maxDuration` declared in vercel.json. That is not a bound; it is the same cliff, moved.
+///
+/// So the caller threads ONE allowance across the whole claimed batch (see `dispatch_tick`), and a
+/// resource that exhausts it is re-enqueued to resume next tick. Progress stays monotonic regardless
+/// of resource size — prod's largest holds **939** chunks — and the per-invocation ceiling is a number
+/// you can actually reason about against a timeout.
+///
+/// Deliberately conservative, and tunable without a rebuild via `TEMPER_EMBED_CHUNK_BUDGET`: the right
+/// value depends on the function's real wall-clock limit and the box's real ms/chunk, neither of which
+/// is measured yet (task `019f5892`). Raise it once they are.
 pub const EMBED_CHUNK_BUDGET: i64 = 64;
+
+/// Env override for the per-invocation chunk allowance.
+pub const EMBED_CHUNK_BUDGET_ENV: &str = "TEMPER_EMBED_CHUNK_BUDGET";
+
+/// Resolve the per-invocation chunk allowance. A malformed or zero value falls back to the default
+/// rather than silently disabling the bound.
+pub fn resolve_chunk_budget() -> i64 {
+    std::env::var(EMBED_CHUNK_BUDGET_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(EMBED_CHUNK_BUDGET)
+}
 
 /// One resource's drain progress: what this call embedded, and what it left behind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,8 +132,20 @@ impl EmbedProgress {
 /// Chunks are embedded in **one batched `embed_texts` call**, not one call each. The previous
 /// per-chunk loop paid the full ORT dispatch overhead 939 times for a large resource; batching is the
 /// difference between a drain that finishes inside the function's time budget and one that does not.
-pub async fn embed_resource_chunks(pool: &PgPool, resource_id: Uuid) -> Result<EmbedProgress> {
+pub async fn embed_resource_chunks(
+    pool: &PgPool,
+    resource_id: Uuid,
+    budget: i64,
+) -> Result<EmbedProgress> {
     let model = temper_ingest::embed::EXPECTED_MODEL_SHA256;
+    // A caller with nothing left to spend must still report what remains, so the job is re-enqueued
+    // rather than completed as if it were done.
+    if budget <= 0 {
+        return Ok(EmbedProgress {
+            embedded: 0,
+            remaining: count_stale_chunks(pool, resource_id).await?,
+        });
+    }
 
     let sql = format!(
         "SELECT ch.id AS chunk_id, cc.content \
@@ -116,13 +159,15 @@ pub async fn embed_resource_chunks(pool: &PgPool, resource_id: Uuid) -> Result<E
     let rows = sqlx::query(&sql)
         .bind(resource_id)
         .bind(model)
-        .bind(EMBED_CHUNK_BUDGET)
+        .bind(budget)
         .fetch_all(pool)
         .await?;
 
     // An empty/whitespace chunk has nothing to embed but must not be re-selected forever — it would
     // pin `remaining` above zero and the job would never complete. Stamp it with the current model and
-    // a NULL vector: provenance says "this build considered it", so the predicate stops matching it.
+    // leave the vector NULL: provenance now says "this build considered it and there was nothing to
+    // embed", and because the stale predicate keys on `embedded_with` ALONE (no `embedding IS NULL`
+    // disjunct — see STALE_CHUNK_PREDICATE), it genuinely stops matching.
     let mut to_embed: Vec<(Uuid, String)> = Vec::with_capacity(rows.len());
     let mut blank: Vec<Uuid> = Vec::new();
     for row in rows {
@@ -185,8 +230,12 @@ pub async fn embed_resource_chunks(pool: &PgPool, resource_id: Uuid) -> Result<E
 
 /// Stale chunks outstanding for one resource, under the same predicate the drain embeds by.
 pub async fn count_stale_chunks(pool: &PgPool, resource_id: Uuid) -> Result<u64> {
+    // Joins kb_chunk_content for the same reason the embed SELECT does — the two MUST select exactly
+    // the same rows. If this counted a chunk the embed query cannot see (one with no content row), the
+    // job's `remaining` would never reach zero and it would re-enqueue forever, embedding nothing.
     let sql = format!(
         "SELECT count(*) FROM kb_chunks ch \
+         JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
          JOIN kb_content_blocks b ON b.id = ch.block_id \
          WHERE ch.resource_id = $1 AND {STALE_CHUNK_PREDICATE}"
     );

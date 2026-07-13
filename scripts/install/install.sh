@@ -106,10 +106,19 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "  Downloading ${ARCHIVE}..."
-# Bounded timeouts + a couple of retries so a stalled/black-hole network fails
-# with an error instead of hanging forever (the archive is the large ORT-bearing
-# tarball, so a mid-stream stall is the common bad-network case).
-curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-connrefused \
+# A STALL detector, not a duration cap.
+#
+# `--max-time 300` was a hard wall-clock ceiling on the whole transfer. The archive now carries the
+# embedding model (~81 MB gzipped, ~99 MB total), which turns that ceiling into a minimum required
+# throughput of ~330 KB/s — below which curl exits 28, `set -eu` aborts, and `--retry` restarts from
+# byte 0 under a fresh 300 s budget, so it fails on EVERY attempt, permanently. A slow-but-working
+# connection would simply never be able to install.
+#
+# `--speed-limit`/`--speed-time` keep the original intent (a black-holed or stalled transfer fails
+# instead of hanging forever) without punishing a slow one: abort only if throughput stays under
+# 1 KB/s for 60 s straight. `-C -` resumes a partial file across retries rather than restarting.
+curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 60 \
+    --retry 2 --retry-connrefused -C - \
     "$ARCHIVE_URL" -o "$TMPDIR/$ARCHIVE"
 curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-connrefused \
     "$SHA_URL" -o "$TMPDIR/$ARCHIVE.sha256"

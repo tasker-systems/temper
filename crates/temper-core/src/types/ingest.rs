@@ -249,9 +249,24 @@ pub fn chunks_to_jsonb(chunks: &[PackedChunk]) -> serde_json::Value {
 }
 
 /// Encode chunks into the `chunks_packed` wire format (MessagePack → base64).
+///
+/// **`to_vec_named`, not `to_vec`** — this is a cross-version wire format, and the difference is not
+/// cosmetic. `to_vec` encodes each struct as a POSITIONAL ARRAY, so adding a field makes a new CLI
+/// emit N+1-element arrays that an older server cannot decode at all: rmp-serde raises
+/// `LengthMismatch`, `unpack_incoming_chunks` maps it to `BadRequest`, and **every** `resource create`
+/// / `update --body` from that CLI 400s with no write. `#[serde(default)]` does not save you — it buys
+/// backward compatibility (old CLI → new server) and nothing forward.
+///
+/// That direction is not hypothetical: self-hosted sites consume this repo on their own cadence
+/// (DEPLOYING.md), so a CLI is routinely newer than the server it talks to.
+///
+/// Named (map) encoding is tolerant in both directions: an old server ignores the unknown key, and a
+/// new server still accepts an old CLI's positional array (serde fills the missing field from
+/// `#[serde(default)]`). The cost is the field names on the wire, which is noise next to the chunk
+/// text and the 768-float vector.
 pub fn pack_chunks(chunks: &[PackedChunk]) -> Result<String, PackError> {
     use base64::Engine;
-    let bytes = rmp_serde::to_vec(chunks).map_err(PackError::Serialize)?;
+    let bytes = rmp_serde::to_vec_named(chunks).map_err(PackError::Serialize)?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
@@ -276,6 +291,79 @@ pub enum PackError {
 
 #[cfg(test)]
 mod tests {
+    /// The PackedChunk shape as it existed BEFORE `embedded_with` was added — i.e. what a server
+    /// running an older commit will try to decode a new CLI's payload into.
+    ///
+    /// Self-hosted sites consume this repo on their own cadence, so a CLI is routinely newer than the
+    /// server it talks to. Under positional (`to_vec`) MessagePack, adding a field made the new CLI
+    /// emit a 7-element array that this 6-field struct cannot decode — rmp-serde raises
+    /// `LengthMismatch`, the server 400s, and EVERY create/update from that CLI fails with no write.
+    #[derive(Debug, serde::Deserialize)]
+    struct LegacyPackedChunk {
+        #[allow(dead_code)]
+        chunk_index: u32,
+        #[allow(dead_code)]
+        header_path: String,
+        #[allow(dead_code)]
+        heading_depth: u8,
+        #[allow(dead_code)]
+        content: String,
+        #[allow(dead_code)]
+        content_hash: String,
+        #[allow(dead_code)]
+        embedding: Vec<f32>,
+    }
+
+    fn a_chunk() -> super::PackedChunk {
+        super::PackedChunk {
+            chunk_index: 0,
+            header_path: "Doc > Section".to_owned(),
+            heading_depth: 2,
+            content: "hello".to_owned(),
+            content_hash: "a".repeat(64),
+            embedding: vec![0.25_f32; 8],
+            embedded_with: Some("c9729cc8".to_owned()),
+        }
+    }
+
+    /// FORWARD compatibility: a NEW CLI's payload must decode on an OLD server.
+    #[test]
+    fn a_new_cli_payload_still_decodes_into_the_old_chunk_shape() {
+        use base64::Engine;
+        let packed = super::pack_chunks(&[a_chunk()]).expect("pack");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&packed)
+            .expect("base64");
+
+        let legacy: Vec<LegacyPackedChunk> = rmp_serde::from_slice(&bytes)
+            .expect("a new CLI's chunks MUST decode on a server that predates `embedded_with`");
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].content, "hello");
+    }
+
+    /// BACKWARD compatibility: an OLD CLI's positional payload must still decode on the NEW server.
+    /// `#[serde(default)]` fills the field it never sent.
+    #[test]
+    fn an_old_cli_positional_payload_still_decodes_on_the_new_server() {
+        // Exactly what an old CLI emitted: `rmp_serde::to_vec` over the 6-field struct.
+        let legacy_bytes = rmp_serde::to_vec(&vec![(
+            0_u32,
+            "Doc > Section".to_owned(),
+            2_u8,
+            "hello".to_owned(),
+            "a".repeat(64),
+            vec![0.25_f32; 8],
+        )])
+        .expect("encode legacy");
+
+        let decoded: Vec<super::PackedChunk> =
+            rmp_serde::from_slice(&legacy_bytes).expect("old CLI payload must still decode");
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0].embedded_with, None,
+            "an old CLI declares no model => unknown provenance => stale => re-embedded server-side"
+        );
+    }
     use super::*;
 
     fn sample_chunks() -> Vec<PackedChunk> {

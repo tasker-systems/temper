@@ -167,9 +167,13 @@ async fn deferred_create_is_fts_immediate_then_backfills_vectors(pool: sqlx::PgP
     );
 
     // The drain's per-resource backfill embeds every deferred chunk.
-    let embedded = temper_substrate::embed::embed_resource_chunks(&pool, r.uuid())
-        .await
-        .unwrap();
+    let embedded = temper_substrate::embed::embed_resource_chunks(
+        &pool,
+        r.uuid(),
+        temper_substrate::embed::EMBED_CHUNK_BUDGET,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         embedded.embedded, total as u64,
         "backfill embeds every deferred chunk"
@@ -189,9 +193,13 @@ async fn deferred_create_is_fts_immediate_then_backfills_vectors(pool: sqlx::PgP
 
     // Idempotent: a second backfill has nothing to do — the chunks are now stamped with THIS build's
     // model, so the stale predicate no longer matches them.
-    let again = temper_substrate::embed::embed_resource_chunks(&pool, r.uuid())
-        .await
-        .unwrap();
+    let again = temper_substrate::embed::embed_resource_chunks(
+        &pool,
+        r.uuid(),
+        temper_substrate::embed::EMBED_CHUNK_BUDGET,
+    )
+    .await
+    .unwrap();
     assert_eq!(again.embedded, 0, "re-running the backfill embeds nothing");
     assert_eq!(again.remaining, 0, "and finds nothing stale");
 }

@@ -140,7 +140,16 @@ fn packed_to_incoming(
         // vouch for it. A client that declares nothing lands as None ⇒ stale ⇒ the drain re-embeds it.
         // Defaulting here would let an older CLI's fp32 vectors pass as current and would quietly
         // recreate the very split this field exists to close.
-        embedded_with: c.embedded_with.clone(),
+        //
+        // Shape-validated, because this is unvalidated client text headed for a btree index: anything
+        // that is not a 64-char hex sha256 is discarded to None. Discarding fails SAFE — an unknown
+        // provenance is stale, so the vector is simply re-embedded server-side. (A hostile multi-KB
+        // value would otherwise overflow the index tuple and 500 the write.)
+        embedded_with: c
+            .embedded_with
+            .as_deref()
+            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(str::to_owned),
         header_path: c.header_path.clone(),
         heading_depth: c.heading_depth as i16,
     }

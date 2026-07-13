@@ -15,10 +15,16 @@
 --
 --     dirty  ⇔  embedding IS NULL  OR  embedded_with IS DISTINCT FROM <current model sha>
 --
--- Self-healing by construction. Every existing row is unstamped (NULL) ⇒ dirty ⇒ re-embedded, which
--- is correct: every one of them was produced by a model we can no longer vouch for. And any FUTURE
--- model change re-dirties the index automatically — no backfill script, no migration, ever again.
--- The drain (`/api/embed/dispatch`, already running every minute) does the work.
+-- Staleness is DERIVED, never marked. Every existing row is unstamped (NULL) ⇒ stale ⇒ eligible for
+-- re-embedding, which is correct: every one of them was produced by a model we can no longer vouch
+-- for. And any FUTURE model change re-stales the index automatically — no backfill script, no data
+-- migration, ever again.
+--
+-- The drain (`/api/embed/dispatch`, already running every minute) does the WORK, but it does not
+-- START it: nothing sweeps for stale chunks on its own. Re-embedding is **operator-triggered** —
+-- `temper admin reembed --resource|--context|--all` (POST /api/embed/admin/reembed) enqueues the jobs
+-- the drain then consumes. That is deliberate: you want to aim a re-embed at ONE resource before you
+-- aim it at 31,824. So applying this migration heals nothing by itself, and it is not supposed to.
 --
 -- NOTE this is a *flag*, not a deletion. The stale vector stays in place and stays searchable until a
 -- fresh one replaces it. Marking dirty by NULLing `embedding` would have made 31.8k chunks

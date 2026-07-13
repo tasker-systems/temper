@@ -339,10 +339,17 @@ fn verify_model_file(path: &std::path::Path) -> std::result::Result<(), String> 
 
     let meta = std::fs::metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?;
     if meta.len() != EXPECTED_MODEL_SIZE {
+        // A git-lfs pointer is a ~130-byte text file, and it is by far the most likely wrong-size
+        // case for anyone building from a checkout. Say so, rather than talking about 435 MB.
+        let hint = if meta.len() < 1024 {
+            " That size is a git-lfs POINTER FILE, not the model — run `git lfs pull`."
+        } else {
+            " (The fp32 bge-base model is ~435 MB; the quantized model this build expects is ~110 MB.)"
+        };
         return Err(format!(
-            "model at {} is {} bytes, expected {EXPECTED_MODEL_SIZE} — this is the wrong model. \
-             (The fp32 bge-base model is ~435 MB; the quantized model this build expects is ~110 MB. \
-             Embedding with the wrong model produces vectors that do not match the rest of the index.)",
+            "model at {} is {} bytes, expected {EXPECTED_MODEL_SIZE} — this is not the model this \
+             build embeds with.{hint} Embedding with the wrong model produces vectors that do not \
+             match the rest of the index.",
             path.display(),
             meta.len(),
         ));
@@ -497,6 +504,12 @@ fn model_candidates() -> Vec<std::path::PathBuf> {
     if let Some(data_dir) = dirs::data_local_dir() {
         out.push(data_dir.join("temper").join("models").join(MODEL_BASENAME));
     }
+    // Last resort: the model in the checkout this binary was BUILT from (baked by build.rs). This is
+    // what keeps `cargo install --path crates/temper-cli` working — that binary lives in ~/.cargo/bin
+    // with no adjacent `models/`, and it is the only supported install on the platforms where
+    // `install.sh` refuses to run. Guarded by `is_file()` and sha256-verified like any other
+    // candidate, so on a machine that is not the build machine it simply misses.
+    out.push(std::path::PathBuf::from(env!("TEMPER_CHECKOUT_MODEL_PATH")));
     out
 }
 

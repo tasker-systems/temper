@@ -46,12 +46,17 @@ pub enum ReembedScope {
 
 /// Enqueue embed jobs for resources holding **stale** chunks in `scope`, up to `limit` resources.
 ///
-/// This is the *trigger* for the re-embed; the drain (`dispatch_tick`, already running every minute)
-/// is the engine. Staleness is not a thing we mark — it is a thing we *observe*: a chunk is stale when
-/// it has no vector, or its `embedded_with` is not the model this build embeds with. So there is no
-/// "mark dirty" write, no backfill migration, and no window in which a chunk is unsearchable. Rows
-/// written before provenance existed are stale by definition, and any future model change re-stales the
-/// index automatically.
+/// This is the *trigger* for the re-embed; the drain (`dispatch_tick`, running every minute) is the
+/// engine. Staleness is not a thing we mark — it is a thing we *observe*: a chunk is stale when its
+/// `embedded_with` is not the model this build embeds with. So there is no "mark dirty" write, no
+/// backfill migration, and no window in which a chunk is unsearchable. Rows written before provenance
+/// existed are stale by definition, and any future model change re-stales the index automatically.
+///
+/// **Nothing calls this on a schedule.** The drain consumes jobs; it does not go looking for stale
+/// chunks. Re-embedding only ever begins because an operator asked for it — which is the point: you
+/// aim it at one resource before you aim it at 31,824. The corollary is that a deploy heals nothing on
+/// its own, and any write from an un-upgraded client keeps adding unstamped vectors that will sit
+/// stale until the next sweep.
 ///
 /// Returns the resource ids enqueued. Resources with a live job are skipped (the underlying
 /// `ON CONFLICT DO NOTHING`), so this is safe to run repeatedly and safe to run while the drain is
@@ -80,7 +85,7 @@ pub async fn enqueue_stale(pool: &PgPool, scope: ReembedScope, limit: i32) -> Ap
           WHERE r.is_active \
             AND ch.is_current \
             AND NOT b.is_folded \
-            AND (ch.embedding IS NULL OR ch.embedded_with IS DISTINCT FROM $1) \
+            AND ch.embedded_with IS DISTINCT FROM $1 \
             AND ($2::uuid IS NULL OR r.id = $2::uuid) \
             AND ($3::uuid IS NULL OR EXISTS ( \
                     SELECT 1 FROM kb_resource_homes h \
@@ -133,7 +138,7 @@ pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64
           WHERE r.is_active \
             AND ch.is_current \
             AND NOT b.is_folded \
-            AND (ch.embedding IS NULL OR ch.embedded_with IS DISTINCT FROM $1) \
+            AND ch.embedded_with IS DISTINCT FROM $1 \
             AND ($2::uuid IS NULL OR r.id = $2::uuid) \
             AND ($3::uuid IS NULL OR EXISTS ( \
                     SELECT 1 FROM kb_resource_homes h \
@@ -214,10 +219,18 @@ pub async fn dispatch_tick(
         ..Default::default()
     };
 
+    // ONE chunk allowance for the WHOLE invocation, spent across every claimed job. Not per-resource:
+    // this loop is serial and lives inside a serverless function, so a per-resource budget would let
+    // `cap` (5) resources multiply it — 5 x 64 = 320 chunks of single-threaded ONNX in one request.
+    // That is the same timeout cliff, moved. A job that finds the allowance spent embeds nothing,
+    // reports what remains, and is re-enqueued below to resume next tick.
+    let mut budget = temper_substrate::embed::resolve_chunk_budget();
+
     for job in claimed {
-        match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id).await {
+        match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget).await {
             Ok(progress) => {
                 summary.chunks_embedded += progress.embedded;
+                budget -= progress.embedded as i64;
                 if progress.is_complete() {
                     // Fully drained → complete the job (frees the single-flight slot).
                     workflow_job_service::complete_resource(
@@ -239,9 +252,12 @@ pub async fn dispatch_tick(
                     // would reliably die. Re-enqueueing gives each pass a clean attempt count.
                     //
                     // The two statements are not atomic; a crash between them leaves the resource with
-                    // no job. That is self-correcting: its chunks are still stale, so the stale-sweep
-                    // re-enqueues it. The invariant is only ever "stale chunks eventually get a job",
-                    // never "this particular job survives".
+                    // NO job — and there is no automatic stale sweep to notice (`enqueue_stale` is
+                    // operator-triggered, by design, so a re-embed can be aimed at one resource before
+                    // it is aimed at 31k). So be honest about the recovery path: the resource's chunks
+                    // are still stale, and the next `temper admin reembed` over any scope containing it
+                    // re-derives that and re-enqueues it. Nothing is lost; it simply waits for the
+                    // operator rather than healing on its own.
                     workflow_job_service::complete_resource(
                         pool,
                         job.resource_id,
@@ -509,7 +525,8 @@ mod tests {
     }
 
     /// A vector stamped by SOME OTHER model is stale — this is what makes a future model change
-    /// self-healing with no migration: the constant changes, and the whole index re-stales itself.
+    /// a future model change need no migration: the constant changes, the whole index re-stales itself,
+    /// and an operator sweep drains it.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_chunk_stamped_with_a_different_model_is_stale(pool: PgPool) {
         let r = a_named_resource(&pool, "other-model").await;
@@ -621,6 +638,56 @@ mod tests {
             enqueued,
             vec![inside],
             "a cogmap-homed resource must NOT be swept into a context re-embed"
+        );
+    }
+
+    /// **The wedge test.** A blank chunk has nothing to embed. It must still CONVERGE — i.e. stop
+    /// being stale — or `remaining` never reaches zero, the drain re-enqueues that resource every
+    /// minute forever embedding nothing, and `stale_summary` never converges (destroying the
+    /// operator's only progress signal).
+    ///
+    /// This is why STALE_CHUNK_PREDICATE keys on `embedded_with` ALONE. With the redundant
+    /// `embedding IS NULL OR` disjunct it originally carried, stamping a blank chunk could never clear
+    /// it and this test would hang the drain in perpetuity.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_blank_chunk_converges_instead_of_wedging_the_drain(pool: PgPool) {
+        let r = a_named_resource(&pool, "blank").await;
+        let b = a_block(&pool, r, 0, false).await;
+
+        let chunk: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, is_current) \
+             VALUES ($1, $2, 0, 'h', true) RETURNING id",
+        )
+        .bind(b)
+        .bind(r)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, '   ')")
+            .bind(chunk)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let progress = temper_substrate::embed::embed_resource_chunks(
+            &pool,
+            r,
+            temper_substrate::embed::EMBED_CHUNK_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(progress.embedded, 0, "a blank chunk embeds nothing");
+        assert!(
+            progress.is_complete(),
+            "...but it MUST converge: remaining={} — a non-zero remaining here means the drain \
+             re-enqueues this resource every minute forever",
+            progress.remaining
+        );
+
+        let (stale, _) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(
+            stale, 0,
+            "and the operator's convergence signal reaches zero"
         );
     }
 
