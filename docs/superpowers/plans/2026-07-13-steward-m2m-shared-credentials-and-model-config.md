@@ -238,7 +238,7 @@ While doing this, fix a live gap: `test-ruby` is path-scoped to `clients/temper-
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: contract keys `response` (`{ fields: string[], no_refresh_token: true }`) and `credential_transport` (`{ client_secret_post: string[], client_secret_basic: string[] }`), read by Task 3's mock issuer and Task 4's client tests.
+- Produces: contract keys `response` (`{ fields: string[], token_type: string, no_refresh_token: string[] }` — every explanatory value in this file is a string array, matching its house style) and `credential_transport` (`{ client_secret_post: string[], client_secret_basic: string[] }`). Tasks 3 and 4 read only `content_type`, `required_params`, `grant_type`, and `response.fields` / `response.token_type`.
 
 - [ ] **Step 1: Add the response and transport sections to the contract**
 
