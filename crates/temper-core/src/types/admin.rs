@@ -83,3 +83,48 @@ mod tests {
         assert!(back.team_id.is_none());
     }
 }
+
+// ── re-embed trigger (operator-only) ──────────────────────────────────────────
+//
+// Deliberately NOT in the OpenAPI contract: the handler is mounted with a plain `.route()`, like the
+// rest of `/api/*/admin/*`. It is an operator action, not part of the product surface.
+
+/// Body for `POST /api/embed/admin/reembed`.
+///
+/// Exactly one scope: a single resource, a whole context, or everything. Three granularities because a
+/// re-embed is a thing you try on **one**, then a **few**, then **all** — in that order. A trigger that
+/// only offers "all" is one nobody dares pull.
+///
+/// Nothing is *marked* dirty. Staleness is derived — a chunk is stale when it has no vector, or when
+/// its `embedded_with` is not the model the server embeds with — so this only ever enqueues work for
+/// chunks that genuinely need it, and it is safe to re-run at any time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReembedRequest {
+    /// Re-embed just this resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<Uuid>,
+    /// Re-embed every stale resource homed in this context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<Uuid>,
+    /// Re-embed everything stale. Must be set explicitly — an empty body is a no-op, not "all".
+    #[serde(default)]
+    pub all: bool,
+    /// Max resources to enqueue this call. Bounds blast radius: run it repeatedly to walk the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i32>,
+    /// Report what is stale without enqueuing anything. The safe first move.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Result of a re-embed trigger — and, on `dry_run`, just the survey.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReembedSummary {
+    /// Resources in scope still holding stale chunks.
+    pub stale_resources: u64,
+    /// Stale chunks in scope. Divide by the drain's per-tick throughput to estimate the drain time.
+    pub stale_chunks: u64,
+    /// Resources actually enqueued by this call. Empty on `dry_run`, and empty for any resource that
+    /// already had a live job (re-running never double-queues).
+    pub enqueued: Vec<Uuid>,
+}

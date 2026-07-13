@@ -8,7 +8,9 @@ use crate::http::HttpClient;
 use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, SystemSettings,
 };
-use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
+use temper_core::types::admin::{
+    PromoteAdminRequest, ReembedRequest, ReembedSummary, UpdateSettingsRequest,
+};
 use temper_core::types::team::TeamMemberRow;
 
 /// Sub-client for admin / system-settings operations.
@@ -64,6 +66,20 @@ impl<'a> AdminClient<'a> {
         let req = self.http.get(path);
         self.http
             .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// Trigger a re-embed for a scope of the index (admin only).
+    ///
+    /// Enqueues embed jobs for resources whose chunks were embedded with a model that is no longer the
+    /// one the server embeds with; the per-minute drain does the actual work. Idempotent and safe to
+    /// re-run — staleness is derived, not marked, so it only ever queues what genuinely needs it.
+    pub async fn reembed(&self, body: &ReembedRequest) -> Result<ReembedSummary> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/embed/admin/reembed";
+        let req = self.http.post(path).json(body);
+        self.http
+            .send_json(&Method::POST, path, req, Some(&token))
             .await
     }
 

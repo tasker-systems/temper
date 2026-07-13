@@ -772,6 +772,26 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 }
             },
+            AdminAction::Reembed {
+                resource,
+                context,
+                all,
+                limit,
+                dry_run,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::admin::reembed_remote(
+                        client,
+                        resource,
+                        context,
+                        all,
+                        limit,
+                        dry_run,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
             AdminAction::Machine { action } => match action {
                 AdminMachineAction::Provision {
                     client_id,

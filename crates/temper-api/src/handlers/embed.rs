@@ -9,10 +9,15 @@ use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 
+use temper_core::types::admin::{ReembedRequest, ReembedSummary};
+use temper_core::types::ids::ProfileId;
 use temper_core::types::workflow_job::EmbedDispatchSummary;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::embed_service;
+use temper_services::services::access_service;
+use temper_services::services::embed_service::{self, ReembedScope};
 use temper_services::state::AppState;
+
+use crate::middleware::auth::AuthUser;
 
 /// Query params for the drain: an optional per-tick cap (defaults to the service default) and an
 /// optional re-drive flag.
@@ -92,3 +97,72 @@ pub async fn dispatch(
     );
     Ok(Json(summary))
 }
+
+/// Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
+///
+/// Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute
+/// drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as
+/// the jobs are queued.
+///
+/// Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT
+/// FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is
+/// mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is
+/// skipped, so it can never double-queue.
+///
+/// Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret:
+/// this is a human operator action, and it should work with the operator's normal login instead of
+/// requiring them to hold a deploy secret.
+///
+/// Deliberately NOT in the OpenAPI contract (plain `.route()`, no `#[utoipa::path]`) — same posture as
+/// the rest of the `/api/*/admin/*` surface.
+pub async fn reembed(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<ReembedRequest>,
+) -> ApiResult<Json<ReembedSummary>> {
+    // Auth before anything else — this can enqueue work across the entire index.
+    if !access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Exactly one scope. An empty body is a no-op rather than an implicit "everything": the most
+    // destructive interpretation must never be the default one.
+    let scope = match (body.resource_id, body.context_id, body.all) {
+        (Some(id), None, false) => ReembedScope::Resource(id),
+        (None, Some(id), false) => ReembedScope::Context(id),
+        (None, None, true) => ReembedScope::All,
+        _ => {
+            return Err(ApiError::BadRequest(
+                "specify exactly one of: resource_id, context_id, all".to_string(),
+            ))
+        }
+    };
+
+    let (stale_resources, stale_chunks) = embed_service::stale_summary(&state.pool, scope).await?;
+
+    let enqueued = if body.dry_run {
+        Vec::new()
+    } else {
+        let limit = body.limit.unwrap_or(DEFAULT_REEMBED_LIMIT);
+        embed_service::enqueue_stale(&state.pool, scope, limit).await?
+    };
+
+    tracing::info!(
+        ?scope,
+        dry_run = body.dry_run,
+        stale_resources,
+        stale_chunks,
+        enqueued = enqueued.len(),
+        "re-embed trigger"
+    );
+
+    Ok(Json(ReembedSummary {
+        stale_resources,
+        stale_chunks,
+        enqueued,
+    }))
+}
+
+/// Default cap on resources enqueued per trigger call. Bounds blast radius: an operator who means to
+/// re-embed the whole index walks it in bounded steps rather than queueing thousands of jobs in one go.
+const DEFAULT_REEMBED_LIMIT: i32 = 100;

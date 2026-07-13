@@ -44,7 +44,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/machine-clients/issue
 /api/machine-clients/{id}/rotate-secret
 /internal/saml/reconcile
-/api/embed/dispatch'
+/api/embed/dispatch
+/api/embed/admin/reembed'
 
 if [ ! -f "$ROUTES_FILE" ]; then
     echo "ERROR: routes file not found: $ROUTES_FILE" >&2

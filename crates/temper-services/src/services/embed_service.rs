@@ -555,6 +555,75 @@ mod tests {
         );
     }
 
+    /// Context scoping goes through `kb_resource_homes` (a resource has no context column), and the
+    /// `anchor_table = 'kb_contexts'` predicate is load-bearing: the SAME table homes cogmap nodes, so
+    /// without it a context-scoped re-embed would silently drag in every cogmap-homed resource too.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enqueue_stale_scopes_to_a_context_and_excludes_cogmap_homes(pool: PgPool) {
+        let owner: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('scope-owner', 'Scope Owner') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, name, slug) \
+             VALUES ('kb_profiles', $1, 'scope-ctx', 'scope-ctx') RETURNING id",
+        )
+        .bind(owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // In the context.
+        let inside = a_named_resource(&pool, "inside").await;
+        let bi = a_block(&pool, inside, 0, false).await;
+        a_chunk(&pool, bi, inside, 0, true, true).await;
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+                 (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(inside)
+        .bind(ctx)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Homed in a COGMAP whose id happens to equal the context id — the exact collision the
+        // anchor_table predicate exists to reject. Without it this resource would be swept in.
+        let decoy = a_named_resource(&pool, "cogmap-homed").await;
+        let bd = a_block(&pool, decoy, 0, false).await;
+        a_chunk(&pool, bd, decoy, 0, true, true).await;
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+                 (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_cogmaps', $2, $3, $3)",
+        )
+        .bind(decoy)
+        .bind(ctx)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (stale, _) = stale_summary(&pool, ReembedScope::Context(ctx))
+            .await
+            .unwrap();
+        assert_eq!(stale, 1, "only the context-homed resource is in scope");
+
+        let enqueued = enqueue_stale(&pool, ReembedScope::Context(ctx), 100)
+            .await
+            .unwrap();
+        assert_eq!(
+            enqueued,
+            vec![inside],
+            "a cogmap-homed resource must NOT be swept into a context re-embed"
+        );
+    }
+
     /// The enqueued job must be claimable by the drain — i.e. enqueued under the SAME
     /// (persona, dispatch_type) tuple `dispatch_tick` claims on. Get this wrong and the job sits
     /// pending forever, looking enqueued and doing nothing.

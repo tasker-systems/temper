@@ -1021,6 +1021,27 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminMachineAction,
     },
+    /// Re-embed chunks whose vectors were produced by an older model (the drain does the work)
+    ///
+    /// Nothing is destroyed: a stale vector stays searchable until a fresh one replaces it. Staleness
+    /// is derived, not marked, so this is idempotent and safe to re-run. Start with --dry-run.
+    Reembed {
+        /// Re-embed just this resource (UUID or decorated ref)
+        #[arg(long)]
+        resource: Option<String>,
+        /// Re-embed every stale resource in this context (`@me/slug`, `+team/slug`, or UUID)
+        #[arg(long)]
+        context: Option<String>,
+        /// Re-embed everything stale. Must be asked for by name — never the default.
+        #[arg(long)]
+        all: bool,
+        /// Max resources to enqueue in this call (walk the index in bounded steps)
+        #[arg(long)]
+        limit: Option<i32>,
+        /// Report what is stale without enqueuing anything
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
