@@ -21,6 +21,7 @@ jobs:
       run-test-rust: ${{ steps.detect.outputs.run-test-rust }}
       run-test-typescript: ${{ steps.detect.outputs.run-test-typescript }}
       run-test-ruby: ${{ steps.detect.outputs.run-test-ruby }}
+      run-test-agents-ts: ${{ steps.detect.outputs.run-test-agents-ts }}
       scope-summary: ${{ steps.detect.outputs.scope-summary }}
     steps:
       - name: Checkout code
@@ -62,6 +63,14 @@ jobs:
     if: needs.detect-scope.outputs.run-test-ruby == 'true'
     uses: ./.github/workflows/test-ruby.yml
 
+  # Path-scoped: runs only for clients/temper-ts/**, packages/agent-workflows/**,
+  # tests/contracts/**, and its own workflow. Both projects are inert to cargo and
+  # to bun, so nothing else can reach them. See detect-ci-scope.sh.
+  test-agents-ts:
+    needs: detect-scope
+    if: needs.detect-scope.outputs.run-test-agents-ts == 'true'
+    uses: ./.github/workflows/test-agents-ts.yml
+
   # ==========================================================================
   # Stage 2: CI Success Gate
   # The single check meant for branch protection. Always runs and validates
@@ -72,7 +81,7 @@ jobs:
   # ==========================================================================
   ci-success:
     name: CI Success
-    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby]
+    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-agents-ts]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -124,6 +133,10 @@ jobs:
           check_job "test-ruby" \
             "${{ needs.test-ruby.result }}" \
             "${{ needs.detect-scope.outputs.run-test-ruby }}"
+
+          check_job "test-agents-ts" \
+            "${{ needs.test-agents-ts.result }}" \
+            "${{ needs.detect-scope.outputs.run-test-agents-ts }}"
 
           echo ""
           if [ -n "$FAILED" ]; then
