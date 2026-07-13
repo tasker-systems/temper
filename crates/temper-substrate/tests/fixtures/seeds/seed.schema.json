@@ -173,6 +173,7 @@
       ]
     },
     "ResourceDef": {
+      "description": "A seed resource. It has no `home` selector: a seed instantiates a *cogmap*, and every resource it\ndeclares is homed in that cogmap by construction (`loader::load_resources`). Contexts are never\nseeded — a context accretes from real work and its telos is *derived* from that activity — so\nthere is nothing here to choose between. (The sibling access DSL does have a real `HomeDef`,\nbecause an access scenario stages resources across pre-existing cogmaps *and* contexts to probe\nthe gates.)",
       "type": "object",
       "properties": {
         "key": {
@@ -188,10 +189,6 @@
         },
         "origin_uri": {
           "type": "string"
-        },
-        "home": {
-          "type": "string",
-          "default": "cogmap"
         },
         "doc_type": {
           "type": [
