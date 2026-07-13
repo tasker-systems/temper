@@ -59,6 +59,7 @@ mod streaming_test_support {
             content_hash,
             content: text.to_owned(),
             embedding: vec![0.1_f32; 768],
+            embedded_with: None,
             header_path: String::new(),
             heading_depth: 0,
         }]
@@ -144,6 +145,7 @@ fn block_created_payload_serializes_with_resource_and_block() {
             content_hash: "abc".into(),
             content: "hi".into(),
             embedding: vec![],
+            embedded_with: None,
             header_path: String::new(),
             heading_depth: 0,
         }],

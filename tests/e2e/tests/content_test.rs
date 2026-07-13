@@ -31,6 +31,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         content_hash: "cont0test0000000000000000000000000000000000000000000000000000000"
             .to_string(),
         embedding: vec![0.0_f32; 768],
+        embedded_with: None,
     }];
 
     let payload = IngestPayload {

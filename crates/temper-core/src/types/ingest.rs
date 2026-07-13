@@ -185,6 +185,19 @@ pub struct PackedChunk {
     pub content_hash: String,
     /// 768-dimensional embedding vector.
     pub embedding: Vec<f32>,
+    /// sha256 of the ONNX model this client embedded with (`temper_ingest::embed::EXPECTED_MODEL_SHA256`).
+    ///
+    /// The server stores client-supplied vectors **verbatim**, so it cannot know which model produced
+    /// them — the client must say. The value is persisted to `kb_chunks.embedded_with` and read by the
+    /// re-embed drain as its dirty flag.
+    ///
+    /// `#[serde(default)]` keeps this backward-compatible: an **older CLI** (which embedded with the
+    /// fp32 model and knows nothing of this field) simply omits it, lands as `None`, and is therefore
+    /// treated as unknown-provenance ⇒ stale ⇒ re-embedded server-side. That is exactly the desired
+    /// behaviour — its vectors are the ones that need healing, and they must not be able to pass as
+    /// current by staying silent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedded_with: Option<String>,
 }
 
 /// Format an embedding vector as a pgvector literal string: `[0.1,0.2,...]`
@@ -274,6 +287,7 @@ mod tests {
                 content: "Hello world".to_owned(),
                 content_hash: "abc123".to_owned(),
                 embedding: vec![0.1; 768],
+                embedded_with: None,
             },
             PackedChunk {
                 chunk_index: 1,
@@ -282,6 +296,7 @@ mod tests {
                 content: "Section content".to_owned(),
                 content_hash: "def456".to_owned(),
                 embedding: vec![0.2; 768],
+                embedded_with: None,
             },
         ]
     }
@@ -436,6 +451,7 @@ mod tests {
             content: "Hello world".to_owned(),
             content_hash: "abc123".to_owned(),
             embedding: vec![0.1, 0.2, 0.3],
+            embedded_with: None,
         };
         let row = ChunkRowJsonb::from_packed(&packed);
         assert_eq!(row.chunk_index, 0);
@@ -454,6 +470,7 @@ mod tests {
                 content: "first".into(),
                 content_hash: "h1".into(),
                 embedding: vec![0.1, 0.2],
+                embedded_with: None,
             },
             PackedChunk {
                 chunk_index: 1,
@@ -462,6 +479,7 @@ mod tests {
                 content: "second".into(),
                 content_hash: "h2".into(),
                 embedding: vec![0.3, 0.4],
+                embedded_with: None,
             },
         ];
         let json = chunks_to_jsonb(&chunks);

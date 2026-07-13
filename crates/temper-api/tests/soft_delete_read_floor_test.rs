@@ -24,6 +24,7 @@ fn synthetic_chunk(index: u32, content: &str, hash_seed: &str) -> PackedChunk {
         content: content.to_string(),
         content_hash: format!("{hash_seed:0>64}"),
         embedding: vec![0.5; 768],
+        embedded_with: None,
     }
 }
 

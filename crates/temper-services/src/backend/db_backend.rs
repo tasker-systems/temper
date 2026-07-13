@@ -135,6 +135,12 @@ fn packed_to_incoming(
         content_hash: c.content_hash.clone(),
         content: c.content.clone(),
         embedding: c.embedding.clone(),
+        // Carried through as the client declared it — deliberately NOT defaulted to this server's own
+        // model. The server never ran the model that produced this vector, so it is in no position to
+        // vouch for it. A client that declares nothing lands as None ⇒ stale ⇒ the drain re-embeds it.
+        // Defaulting here would let an older CLI's fp32 vectors pass as current and would quietly
+        // recreate the very split this field exists to close.
+        embedded_with: c.embedded_with.clone(),
         header_path: c.header_path.clone(),
         heading_depth: c.heading_depth as i16,
     }

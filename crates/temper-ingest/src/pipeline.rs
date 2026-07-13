@@ -36,6 +36,10 @@ pub fn prepare_markdown(content: &str) -> Result<Vec<PackedChunk>> {
             content: chunk.content,
             content_hash: chunk.content_hash,
             embedding,
+            // Declare the model we just embedded with. The server stores these vectors verbatim, so
+            // this is the ONLY way it can know their provenance — and `embed_texts` has already
+            // verified that the loaded model's sha256 IS this constant, so the claim is not a guess.
+            embedded_with: Some(crate::embed::EXPECTED_MODEL_SHA256.to_owned()),
         })
         .collect();
     Ok(packed)

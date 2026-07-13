@@ -171,8 +171,12 @@ async fn deferred_create_is_fts_immediate_then_backfills_vectors(pool: sqlx::PgP
         .await
         .unwrap();
     assert_eq!(
-        embedded, total as u64,
+        embedded.embedded, total as u64,
         "backfill embeds every deferred chunk"
+    );
+    assert!(
+        embedded.is_complete(),
+        "nothing stale left, so the job may be completed"
     );
     let null_after: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_chunks WHERE resource_id=$1 AND is_current AND embedding IS NULL",
@@ -183,14 +187,13 @@ async fn deferred_create_is_fts_immediate_then_backfills_vectors(pool: sqlx::PgP
     .unwrap();
     assert_eq!(null_after, 0, "all deferred chunks now carry a vector");
 
-    // Idempotent: a second backfill has nothing to do.
-    assert_eq!(
-        temper_substrate::embed::embed_resource_chunks(&pool, r.uuid())
-            .await
-            .unwrap(),
-        0,
-        "re-running the backfill embeds nothing"
-    );
+    // Idempotent: a second backfill has nothing to do — the chunks are now stamped with THIS build's
+    // model, so the stale predicate no longer matches them.
+    let again = temper_substrate::embed::embed_resource_chunks(&pool, r.uuid())
+        .await
+        .unwrap();
+    assert_eq!(again.embedded, 0, "re-running the backfill embeds nothing");
+    assert_eq!(again.remaining, 0, "and finds nothing stale");
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -655,6 +658,7 @@ async fn charter_supersede_removes_superseded_prose_from_fts(pool: sqlx::PgPool)
             content_hash: sha256_hex(prose),
             content: prose.to_string(),
             embedding: vec![0.1f32; 768],
+            embedded_with: None,
             header_path: String::new(),
             heading_depth: 0,
         };

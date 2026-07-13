@@ -29,6 +29,7 @@ async fn seed_resource(
         content: body.clone(),
         content_hash: chunk_hash,
         embedding: vec![0.0_f32; 768],
+        embedded_with: None,
     };
     let slug = title.to_lowercase().replace(' ', "-");
     let payload = IngestPayload {

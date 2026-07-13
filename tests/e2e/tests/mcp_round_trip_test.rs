@@ -27,6 +27,7 @@ fn fake_chunk(index: u32, header: &str, content: &str) -> temper_core::types::in
         content: content.to_string(),
         content_hash: hash.to_string(),
         embedding: vec![val; 768],
+        embedded_with: None,
     }
 }
 

@@ -29,6 +29,7 @@ fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
         content: format!("{title} content for testing"),
         content_hash: format!("{slug}-hash"),
         embedding: dummy_embedding,
+        embedded_with: None,
     }];
 
     IngestPayload {

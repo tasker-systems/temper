@@ -78,6 +78,7 @@ fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
         content: text.to_owned(),
         content_hash: format!("{hash_seed:0>64}"),
         embedding: vec![0.1_f32; 768],
+        embedded_with: None,
     };
     pack_chunks(&[chunk]).expect("pack chunk")
 }
@@ -398,6 +399,10 @@ fn embed_and_pack_chunks(chunks: &[temper_ingest::chunk::ChunkData]) -> String {
             content: c.content.clone(),
             content_hash: c.content_hash.clone(),
             embedding,
+            // This helper really did embed, so it declares the model — exactly as the CLI does. Leaving
+            // it None would make the e2e exercise the *undeclared* path while production exercises the
+            // declared one, which is the sort of divergence this whole field exists to prevent.
+            embedded_with: Some(temper_ingest::embed::EXPECTED_MODEL_SHA256.to_owned()),
         })
         .collect();
     pack_chunks(&packed).expect("pack_chunks")

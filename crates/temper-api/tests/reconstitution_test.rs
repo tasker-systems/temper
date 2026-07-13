@@ -37,6 +37,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
             content: "Preamble text.".to_string(),
             content_hash: "sha256:aaa".to_string(),
             embedding: fake_embedding.clone(),
+            embedded_with: None,
         },
         PackedChunk {
             chunk_index: 1,
@@ -45,6 +46,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
             content: "We chose option B.".to_string(),
             content_hash: "sha256:bbb".to_string(),
             embedding: fake_embedding.clone(),
+            embedded_with: None,
         },
         PackedChunk {
             chunk_index: 2,
@@ -53,6 +55,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
             content: "It was simpler.".to_string(),
             content_hash: "sha256:ccc".to_string(),
             embedding: fake_embedding.clone(),
+            embedded_with: None,
         },
         PackedChunk {
             chunk_index: 3,
@@ -61,6 +64,7 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
             content: "Code goes here.".to_string(),
             content_hash: "sha256:ddd".to_string(),
             embedding: fake_embedding,
+            embedded_with: None,
         },
     ];
     let chunks_packed = pack_chunks(&chunks).expect("pack_chunks failed");

@@ -66,6 +66,7 @@ fn build_charter_blocks() -> Vec<content::PreparedBlock> {
                 content_hash: sha256_hex(prose),
                 content: prose.to_string(),
                 embedding: vec![0.2f32; 768],
+                embedded_with: None,
                 header_path: String::new(),
                 heading_depth: 0,
             };

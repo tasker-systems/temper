@@ -34,6 +34,18 @@ pub struct PreparedChunk {
     /// `_insert_chunk` projector maps to a NULL `kb_chunks.embedding` (issue #299). A genuinely
     /// embedded chunk is always `Some(<768-dim>)`.
     pub embedding: Option<Vec<f32>>,
+    /// sha256 of the model that produced [`Self::embedding`], persisted onto `kb_chunks.embedded_with`
+    /// and read by the re-embed drain as its dirty flag.
+    ///
+    /// Set by **whoever actually ran the model**, never by whoever merely stores the result:
+    /// [`prepare_block`] stamps the server's own [`EXPECTED_MODEL_SHA256`] because it just called
+    /// `embed_texts`; [`prepare_block_from_chunks`] carries the *client's* declaration, because the
+    /// client embedded and the server takes the vector verbatim. Stamping a client's vector with the
+    /// server's model identity would be vouching for a computation we never performed — and would let
+    /// an old CLI's fp32 vectors pass as current, which is precisely the bug this field exists to end.
+    ///
+    /// `None` ⇒ no vector, or a producer that declared nothing ⇒ **stale** ⇒ re-embedded server-side.
+    pub embedded_with: Option<String>,
     /// Production render metadata (§8 carry-as-is): the heading breadcrumb this chunk sits under and
     /// its heading depth, persisted onto `kb_chunks` so a downstream read reconstructs headed markdown
     /// identically to production. `None` for the scenario-authoring path (no production headings) —
@@ -41,6 +53,10 @@ pub struct PreparedChunk {
     pub header_path: Option<String>,
     pub heading_depth: Option<i16>,
 }
+
+/// The sha256 of the model this build embeds with — re-exported from temper-ingest so the write path
+/// stamps exactly the identity the loader verifies. One constant, one source of truth.
+pub use temper_ingest::embed::EXPECTED_MODEL_SHA256;
 
 /// One content-block (seq-ordered within its resource) and its ordered chunks. Blocks carry **no**
 /// prose of their own (content-block-primitive β) — text lives only in the chunks. `role` is the
@@ -125,6 +141,9 @@ pub struct IncomingChunk {
     pub content_hash: String,
     pub content: String,
     pub embedding: Vec<f32>,
+    /// sha256 of the model the CLIENT embedded with, as the client declared it. `None` ⇒ the client
+    /// said nothing ⇒ unknown provenance ⇒ stale ⇒ re-embedded server-side.
+    pub embedded_with: Option<String>,
     pub header_path: String,
     pub heading_depth: i16,
 }
@@ -149,6 +168,10 @@ pub fn prepare_block_from_chunks(
                 content_hash: c.content_hash,
                 content: c.content,
                 embedding: Some(c.embedding),
+                // The CLIENT embedded this; carry its declaration verbatim. A client that declares
+                // nothing gets None ⇒ stale ⇒ the drain re-embeds it server-side, rather than the
+                // server vouching for a vector it never computed.
+                embedded_with: c.embedded_with,
                 header_path,
                 heading_depth,
             }
@@ -202,6 +225,9 @@ pub fn prepare_block_with_prefix(
                     content_hash,
                     content,
                     embedding: Some(embedding),
+                    // The SERVER just ran embed_texts, against a model whose sha256 the loader
+                    // verified. Stamp what we actually used.
+                    embedded_with: Some(EXPECTED_MODEL_SHA256.to_owned()),
                     header_path,
                     heading_depth,
                 }
@@ -251,6 +277,9 @@ pub fn prepare_block_deferred_with_prefix(
                     content,
                     // Deferred: no vector yet. Backfilled off-request; NULL at the projector.
                     embedding: None,
+                    // No vector ⇒ no provenance to record. `embedding IS NULL` already makes this
+                    // chunk dirty, so the drain picks it up regardless.
+                    embedded_with: None,
                     header_path,
                     heading_depth,
                 }
@@ -939,6 +968,7 @@ mod tests {
                     content_hash: "ab".repeat(32),
                     content: "preamble".into(),
                     embedding: vec![0.5; 4],
+                    embedded_with: None,
                     header_path: String::new(),
                     heading_depth: 0,
                 },
@@ -947,6 +977,7 @@ mod tests {
                     content_hash: "cd".repeat(32),
                     content: "headed".into(),
                     embedding: vec![0.25; 4],
+                    embedded_with: None,
                     header_path: "Intro > Goals".into(),
                     heading_depth: 2,
                 },
@@ -1011,6 +1042,7 @@ mod tests {
                 content_hash: "ab".repeat(32),
                 content: "hi".into(),
                 embedding: Some(vec![0.1, 0.2, 0.3]),
+                embedded_with: None,
                 header_path: None,
                 heading_depth: None,
             }],

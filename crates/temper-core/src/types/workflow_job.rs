@@ -95,7 +95,12 @@ pub struct EmbedDispatchSummary {
     pub completed: u32,
     /// Jobs whose embed errored — left in_progress for the reaper to retry (then dead at max attempts).
     pub failed: u32,
-    /// Total chunks embedded across all completed jobs.
+    /// Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were
+    /// **re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger
+    /// than one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently
+    /// non-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.
+    pub partial: u32,
+    /// Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.
     pub chunks_embedded: u64,
 }
 

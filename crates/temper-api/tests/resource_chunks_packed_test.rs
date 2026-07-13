@@ -30,6 +30,7 @@ fn synthetic_chunk(index: u32, content: &str, hash_seed: &str, fill: f32) -> Pac
         content: content.to_string(),
         content_hash,
         embedding: vec![fill; 768],
+        embedded_with: None,
     }
 }
 

@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Outcome of one embed-dispatch pass (issue #299): how many resource-keyed embed jobs were claimed, how many completed cleanly, how many failed (left for the reaper's retry→dead path), and the total chunks embedded. Returned by the `/api/embed/dispatch` drain so a cron/operator has observability.
   class EmbedDispatchSummary < ApiModelBase
-    # Total chunks embedded across all completed jobs.
+    # Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.
     attr_accessor :chunks_embedded
 
     # Jobs claimed this pass (bounded by the dispatch cap).
@@ -28,6 +28,9 @@ module Temper::Generated
     # Jobs whose embed errored — left in_progress for the reaper to retry (then dead at max attempts).
     attr_accessor :failed
 
+    # Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were **re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger than one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently non-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.
+    attr_accessor :partial
+
     # Dead embed jobs re-enqueued this pass (Phase 4 re-drive). Zero unless the caller asked for a re-drive (`?redrive=true`); these resources are then eligible for the same pass's claim.
     attr_accessor :redriven
 
@@ -38,6 +41,7 @@ module Temper::Generated
         :'claimed' => :'claimed',
         :'completed' => :'completed',
         :'failed' => :'failed',
+        :'partial' => :'partial',
         :'redriven' => :'redriven'
       }
     end
@@ -59,6 +63,7 @@ module Temper::Generated
         :'claimed' => :'Integer',
         :'completed' => :'Integer',
         :'failed' => :'Integer',
+        :'partial' => :'Integer',
         :'redriven' => :'Integer'
       }
     end
@@ -109,6 +114,12 @@ module Temper::Generated
         self.failed = nil
       end
 
+      if attributes.key?(:'partial')
+        self.partial = attributes[:'partial']
+      else
+        self.partial = nil
+      end
+
       if attributes.key?(:'redriven')
         self.redriven = attributes[:'redriven']
       else
@@ -153,6 +164,14 @@ module Temper::Generated
         invalid_properties.push('invalid value for "failed", must be greater than or equal to 0.')
       end
 
+      if @partial.nil?
+        invalid_properties.push('invalid value for "partial", partial cannot be nil.')
+      end
+
+      if @partial < 0
+        invalid_properties.push('invalid value for "partial", must be greater than or equal to 0.')
+      end
+
       if @redriven.nil?
         invalid_properties.push('invalid value for "redriven", redriven cannot be nil.')
       end
@@ -176,6 +195,8 @@ module Temper::Generated
       return false if @completed < 0
       return false if @failed.nil?
       return false if @failed < 0
+      return false if @partial.nil?
+      return false if @partial < 0
       return false if @redriven.nil?
       return false if @redriven < 0
       true
@@ -238,6 +259,20 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] partial Value to be assigned
+    def partial=(partial)
+      if partial.nil?
+        fail ArgumentError, 'partial cannot be nil'
+      end
+
+      if partial < 0
+        fail ArgumentError, 'invalid value for "partial", must be greater than or equal to 0.'
+      end
+
+      @partial = partial
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] redriven Value to be assigned
     def redriven=(redriven)
       if redriven.nil?
@@ -260,6 +295,7 @@ module Temper::Generated
           claimed == o.claimed &&
           completed == o.completed &&
           failed == o.failed &&
+          partial == o.partial &&
           redriven == o.redriven
     end
 
@@ -272,7 +308,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [chunks_embedded, claimed, completed, failed, redriven].hash
+      [chunks_embedded, claimed, completed, failed, partial, redriven].hash
     end
 
     # Builds the object from hash
