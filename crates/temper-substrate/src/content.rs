@@ -365,28 +365,72 @@ pub struct ReadChunk {
 /// `heading_depth == 0` ⇒ content as-is; else the innermost breadcrumb segment becomes a markdown
 /// heading (`{hashes} {title}\n\n{content}`, depth capped at 6, empty breadcrumb ⇒ `"Untitled"`). Pieces
 /// join with `"\n\n"`. The live `readback::body` read path's single body assembler.
+///
+/// # The heading is emitted once per SECTION, not once per chunk
+///
+/// The chunker strips a section's heading line out of its content (it lives only in
+/// `header_path`) and then splits a long section into **many** chunks that all carry the
+/// *same* `header_path` + `heading_depth`. Emitting a heading for every such chunk — which
+/// this function used to do — re-injected the heading once per chunk, so a body round-trip
+/// grew a duplicate `## Heading` at every chunk boundary inside a long section. On a 1.2 MB
+/// document (~840 chunks) that was **+12,990 bytes** of duplicated headings, and it is the
+/// long-standing "show duplicates a line" bug.
+///
+/// So: a chunk emits its heading only when it *opens* a section — i.e. when its
+/// `(header_path, heading_depth)` differs from the preceding chunk's. Continuation chunks
+/// emit prose only.
+///
+/// ## Known residual (the chunk model cannot express this)
+///
+/// A chunk records `(chunk_index, header_path, heading_depth)` and **no section identity**.
+/// So "the same section, continued" is indistinguishable from "a new section that happens to
+/// have an identical breadcrumb at the same depth" — e.g. two adjacent `## Notes` sections
+/// under the same parent. This assembler treats that shape as one section and emits a single
+/// heading, losing the second heading line (the prose is preserved).
+///
+/// That is a strictly smaller error than the one it replaces (which mangled *every*
+/// size-split section, i.e. every long document), but it is still an error. Fixing it for
+/// real needs the chunk to carry section identity — a `starts_section` flag or a section
+/// ordinal — which is a change to `PackedChunk`, `kb_chunks`, and every writer. Deliberately
+/// not smuggled into this change.
 pub fn reconstruct_body(chunks: &[ReadChunk]) -> String {
-    chunks
-        .iter()
-        .map(|c| {
-            if c.heading_depth == 0 {
-                // Preamble or unheaded content — emit body only.
-                c.content.clone()
-            } else {
-                // Extract the innermost heading title from the breadcrumb.
-                // rsplit always yields at least one element on non-empty input.
-                let title = if c.header_path.is_empty() {
-                    "Untitled"
-                } else {
-                    c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path)
-                };
-                let depth = (c.heading_depth as usize).min(6);
-                let hashes = "#".repeat(depth);
-                format!("{hashes} {title}\n\n{}", c.content)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    let mut pieces: Vec<String> = Vec::with_capacity(chunks.len());
+    // The (header_path, heading_depth) of the section currently open, so a continuation
+    // chunk can tell it is still inside it. `None` until the first headed chunk.
+    let mut open_section: Option<(&str, i16)> = None;
+
+    for c in chunks {
+        if c.heading_depth == 0 {
+            // Preamble or unheaded content — emit body only. Unheaded content also closes any
+            // open section: a later chunk carrying the same breadcrumb is genuinely re-opening
+            // it and must re-emit its heading.
+            open_section = None;
+            pieces.push(c.content.clone());
+            continue;
+        }
+
+        let section = (c.header_path.as_str(), c.heading_depth);
+        if open_section == Some(section) {
+            // Continuation of the section we already emitted a heading for.
+            pieces.push(c.content.clone());
+            continue;
+        }
+
+        // Opens a section: emit the heading, then the prose.
+        // Extract the innermost heading title from the breadcrumb.
+        // rsplit always yields at least one element on non-empty input.
+        let title = if c.header_path.is_empty() {
+            "Untitled"
+        } else {
+            c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path)
+        };
+        let depth = (c.heading_depth as usize).min(6);
+        let hashes = "#".repeat(depth);
+        pieces.push(format!("{hashes} {title}\n\n{}", c.content));
+        open_section = Some(section);
+    }
+
+    pieces.join("\n\n")
 }
 
 #[cfg(test)]
@@ -426,6 +470,67 @@ mod tests {
                 read_chunk(1, "Intro > Goals", 2, "Task goals section body."),
             ]),
             "Task intro paragraph.\n\n## Goals\n\nTask goals section body."
+        );
+    }
+
+    /// **The long-standing "show duplicates a line" bug.**
+    ///
+    /// A section too long for one chunk becomes several chunks that all carry the same
+    /// `header_path` + `heading_depth` (the chunker keeps the heading OUT of the content).
+    /// The old assembler emitted a heading for each of them, so the heading reappeared at
+    /// every internal chunk boundary. On a 1.2 MB doc that was +12,990 bytes of duplicated
+    /// headings on a single round-trip.
+    ///
+    /// This test FAILS on the old assembler ("## Goals" would appear three times) — that is
+    /// what makes it a regression test rather than decoration.
+    #[test]
+    fn a_section_split_across_chunks_emits_its_heading_exactly_once() {
+        let body = reconstruct_body(&[
+            read_chunk(0, "Design > Goals", 2, "First part."),
+            read_chunk(1, "Design > Goals", 2, "Second part."),
+            read_chunk(2, "Design > Goals", 2, "Third part."),
+        ]);
+        assert_eq!(
+            body, "## Goals\n\nFirst part.\n\nSecond part.\n\nThird part.",
+            "a size-split section must re-emit its heading zero times"
+        );
+        assert_eq!(
+            body.matches("## Goals").count(),
+            1,
+            "exactly one heading for one section"
+        );
+    }
+
+    /// A *different* section still gets its own heading — the fix must not over-suppress.
+    #[test]
+    fn a_new_section_after_a_split_one_still_emits_its_heading() {
+        let body = reconstruct_body(&[
+            read_chunk(0, "Design > Goals", 2, "Goals part one."),
+            read_chunk(1, "Design > Goals", 2, "Goals part two."),
+            read_chunk(2, "Design > Risks", 2, "Risks body."),
+            read_chunk(3, "Design", 1, "Back up a level."),
+        ]);
+        assert_eq!(
+            body,
+            "## Goals\n\nGoals part one.\n\nGoals part two.\n\n\
+             ## Risks\n\nRisks body.\n\n# Design\n\nBack up a level."
+        );
+    }
+
+    /// Unheaded content closes the open section: a later chunk with the same breadcrumb is
+    /// genuinely re-opening that heading and must re-emit it, not be swallowed as a
+    /// continuation.
+    #[test]
+    fn unheaded_content_between_two_same_named_sections_reopens_the_heading() {
+        let body = reconstruct_body(&[
+            read_chunk(0, "Notes", 2, "First notes."),
+            read_chunk(1, "", 0, "Interlude prose."),
+            read_chunk(2, "Notes", 2, "Second notes."),
+        ]);
+        assert_eq!(
+            body.matches("## Notes").count(),
+            2,
+            "an unheaded chunk closes the section, so the heading must be re-emitted"
         );
     }
 
