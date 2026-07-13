@@ -112,6 +112,22 @@ describe("temperFetch", () => {
     expect(api.bearers).toHaveLength(2);
   });
 
+  // Under `eve dev` the credential is a static TEMPER_TOKEN, which cannot mint. Calling refresh() on
+  // it throws "BearerToken cannot refresh" — which would REPLACE temper's real 401 (expired token,
+  // missing reach) with a message about our own plumbing, on the one path a human actually reads.
+  it("returns the 401 untouched when the credential cannot mint", async () => {
+    api = await startMockApi({ rejectFirst: 99 });
+    process.env.TEMPER_TOKEN = "dev-token";
+
+    const { temperFetch } = await import("../agent/lib/temper-auth.js");
+    const res = await temperFetch(api.url, { method: "GET" });
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+    // One attempt, and no second one carrying the same dead token.
+    expect(api.bearers).toEqual(["dev-token"]);
+  });
+
   it("does not re-mint on a 200 — the happy path mints exactly once", async () => {
     issuer = await startMockIssuer({ flavor: "temper-as", clientId: "tmpr_a", clientSecret: "s3cr3t" });
     api = await startMockApi();

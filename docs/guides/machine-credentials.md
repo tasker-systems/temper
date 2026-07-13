@@ -71,9 +71,10 @@ the steward runtime, which composes the TypeScript one. Follow the convention; i
 to translate.
 
 An audience is not part of the `client_credentials` protocol — it is Auth0's. Temper's AS never
-reads one off the request, so sending one is inert rather than wrong (the steward reference client
-sends it unconditionally, which is why it works against both). Omitting it for a `tmpr_` credential
-is simply the honest thing.
+reads one off the request, so a request-supplied audience is inert there rather than wrong. Temper's
+clients (`temper-rb`, `temper-ts`, and the steward through it) therefore send `audience` **only when
+it is configured**, and omit it entirely for a temper-issued (`tmpr_`) credential — an empty audience
+would be a lie, and a client that *required* one could not consume a `tmpr_` credential at all.
 
 > **`issue` presumes Temper is your instance's Authorization Server** — the mode `AS_ISSUER` turns
 > on (self-hosted instances; the same AS that backs SAML). A temper-minted token is signed by the AS
@@ -98,10 +99,11 @@ curl -X POST https://temper.acme.com/oauth/token \
 ```
 
 The exact wire shape — content type, required params, the optional `audience`, and the refusal of
-JSON — is pinned as a cross-language contract in **`tests/contracts/m2m-token-request.json`**, which
-both the client side (the Ruby gem's spec) and the server side (the AS's integration test) assert
-against. A new client (temper-py, temper-ts) pins itself against that file too; a contract asserted
-only against itself is not asserted at all.
+anything that is not form encoding — is pinned as a cross-language contract in
+**`tests/contracts/m2m-token-request.json`**. Three suites assert against that one file today: the
+Ruby gem's spec and `temper-ts`'s `tests/contract.test.ts` (the clients emit this shape) and the AS's
+own integration test (the server accepts it). A future client (temper-py) pins itself against it too;
+a contract asserted only against itself is not asserted at all.
 
 ### Token lifetime — short, and no refresh token
 

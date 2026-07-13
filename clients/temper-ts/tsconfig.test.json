@@ -1,0 +1,12 @@
+// The build config emits `src/` only (a consumer's `dist` has no business carrying our tests), which
+// left the tests type-checked by NOTHING — vitest transpiles without checking, and `tsc --noEmit`
+// excluded them. `npm run typecheck` runs this too.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["dist"]
+}

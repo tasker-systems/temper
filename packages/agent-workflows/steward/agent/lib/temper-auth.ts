@@ -51,6 +51,8 @@ function credentials(): Credentials {
   const connector = process.env.TEMPER_CONNECT_CONNECTOR;
   if (connector) {
     cached = {
+      // Connect can hand out a fresh app token on demand, so a 401 IS worth one retry here.
+      canRefresh: true,
       token: () => getToken(connector, { subject: { type: "app" } }),
       tokenResult: async () => ({
         token: await getToken(connector, { subject: { type: "app" } }),
@@ -93,6 +95,10 @@ export async function temperToken(): Promise<string> {
  *
  * Exactly ONE re-mint: a 401 that survives a fresh token is a real authorization failure (a revoked
  * credential, missing reach), and retrying it forever would only bury the error.
+ *
+ * A strategy that CANNOT mint (`TEMPER_TOKEN` under `eve dev`) gets its 401 back untouched. Calling
+ * `refresh()` on it would throw "BearerToken cannot refresh" — replacing temper's real answer, body
+ * and all, with a message about the client's own plumbing, on the one path a human actually reads.
  */
 export async function temperFetch(
   url: string,
@@ -104,7 +110,7 @@ export async function temperFetch(
 
   headers.set("authorization", `Bearer ${await creds.token()}`);
   const res = await fetchWithRetry(url, { ...init, headers }, opts);
-  if (res.status !== 401) {
+  if (res.status !== 401 || !creds.canRefresh) {
     return res;
   }
 
