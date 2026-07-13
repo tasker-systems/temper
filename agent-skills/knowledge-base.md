@@ -14,6 +14,9 @@ sessions, research, or wants to look up / store information across conversations
 
 | Intent | Use | Why |
 |--------|-----|-----|
+| See what a context is *about* before reading it | Tool: `context_shape` | Region-level map, most salient first — the fastest orientation move |
+| Per-region analytics for a context | Tool: `context_region_metrics` | Centrality, cohesion, tension, telos alignment under an optional lens |
+| Refresh a context's regions after big changes | Tool: `context_materialize` | Re-forms stale region shape; safe no-op below threshold; needs write access |
 | Browse what's in a context | Resource: `temper://contexts/{name}/resources` | No tool call overhead, client can cache |
 | Read a specific document | Resource: `temper://resources/{id}` | Returns metadata + full markdown |
 | Get raw markdown only | Resource: `temper://resources/{id}/content` | Lighter than full resource read |
@@ -35,13 +38,84 @@ When beginning work that involves the knowledge base:
 1. **Discover contexts** — read `temper://contexts/{name}/resources` for the
    relevant workspace, or use the `list_contexts` tool if you don't know the
    context name
-2. **Load relevant content** — read resources directly via
+2. **Orient before you read** — call `context_shape` on the context to see its
+   materialized regions (what it is *about*) before pulling individual resources.
+   This is the fastest way to understand a large context without reading every
+   document in it. See **Context Orientation** below.
+3. **Load relevant content** — read resources directly via
    `temper://resources/{id}` to build working context
-3. **Search if needed** — use the `search` tool for semantic lookup when you
+4. **Search if needed** — use the `search` tool for semantic lookup when you
    don't know what exists or need fuzzy matching
 
-Prefer resources for steps 1-2. They populate the context window without
+Prefer resources for steps 1 and 3. They populate the context window without
 consuming tool-call tokens.
+
+## Context Orientation — Read a Context's Shape Before Its Resources
+
+A context is not just a flat bag of documents. Temper continuously clusters a
+context's resources into **regions** — groups of semantically related material —
+and scores each region for salience. The orientation trio lets you read that
+region-level shape directly, so you can understand what a large context is
+*about* without reading (or listing) every resource inside it. Reach for these
+first when a context is unfamiliar or large.
+
+All three are addressed by **context ref**, not resource ref:
+
+- `@me/<slug>` — a context you own (e.g. `@me/temper`)
+- `+<team>/<slug>` — a team context
+- a bare UUID
+
+Bare names are deliberately **not** accepted — a context is not a resource, so
+the resource-ref parser is not used here.
+
+### `context_shape` — what the context is about
+
+The primary orientation read. Returns the context's materialized regions, most
+salient first, each with its salience, content cohesion, agent-authored label
+(if any), and member count. This is the fastest way to see the structure of a
+context before you commit tokens to reading its documents.
+
+```
+Tool: context_shape
+Input: { "context": "@me/temper", "lens": "<optional lens ref>" }
+```
+
+### `context_region_metrics` — the analytics tier
+
+Deeper per-region metrics for the same regions: centrality, content cohesion,
+internal tension, reference standing, and telos alignment. Use when `context_shape`
+has shown you the regions and you want to judge which are load-bearing versus
+peripheral.
+
+```
+Tool: context_region_metrics
+Input: { "context": "@me/temper", "lens": "<optional lens ref>" }
+```
+
+### `context_materialize` — refresh the shape
+
+Re-forms a context's regions when enough has changed since the last materialize.
+Below that change threshold it is a safe idempotent no-op, so it is cheap to call
+defensively before orienting a context you have just written to heavily. **Requires
+write access** to the context (direct membership with an authoring role).
+
+```
+Tool: context_materialize
+Input: { "context": "@me/temper" }
+```
+
+### The `lens` parameter
+
+`context_shape` and `context_region_metrics` take an optional `lens` ref. A lens
+is a perspective that produces its own regioning of the same context; omit `lens`
+to read across all lenses. Leave it off unless you have a specific lens ref in
+hand.
+
+> **Cognitive-map peers**: these three tools are the context-addressed peers of
+> the cognitive-map orientation tools (`cogmap_shape`, `cogmap_region_metrics`,
+> `cogmap_materialize`). The region reads beneath them are the same — only the
+> anchor differs (a context ref instead of a cogmap ref). If you are orienting on
+> a cognitive map rather than a context, use the `cogmap_*` trio instead.
 
 ## Reading Content
 
