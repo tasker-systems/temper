@@ -199,3 +199,137 @@ async fn unreadable_context_is_empty_not_error(pool: PgPool) {
     .expect("non-readable context is empty, not an error");
     assert!(rows.is_empty());
 }
+
+// ── The label fallback (T8 follow-up, migration 20260713000020) ──────────────
+//
+// `kb_cogmap_regions.label` is NULL for 100% of live regions on prod — 0 of 276 context regions AND
+// 0 of 251 cogmap regions. The producer never writes it. So the orientation read, whose entire job is
+// to answer "what is this context about", was returning anonymous UUIDs. `anchor_shape` now falls
+// back to the most-affine VISIBLE member's title (parity with `graph_cogmap_territories`).
+
+/// A resource, homed in `context` and owned by `owner`.
+async fn insert_resource(pool: &PgPool, context: Uuid, owner: Uuid, title: &str) -> Uuid {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, '') RETURNING id",
+    )
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .expect("insert resource");
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+           (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(id)
+    .bind(context)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("home resource");
+    id
+}
+
+async fn add_member(pool: &PgPool, region: Uuid, resource: Uuid, affinity: f64) {
+    sqlx::query(
+        "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+         VALUES ($1, 'kb_resources', $2, $3)",
+    )
+    .bind(region)
+    .bind(resource)
+    .bind(affinity)
+    .execute(pool)
+    .await
+    .expect("add region member");
+}
+
+/// An unlabelled region takes its name from its most-affine member — the difference between a UUID
+/// and an answer.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unlabelled_region_is_named_by_its_most_affine_member(pool: PgPool) {
+    let (profile, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "").await;
+    // Clear the label so the region is genuinely unlabelled, as every real region is.
+    sqlx::query("UPDATE kb_cogmap_regions SET label = NULL WHERE id = $1")
+        .bind(region)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let minor = insert_resource(&pool, context, profile, "a peripheral note").await;
+    let central = insert_resource(&pool, context, profile, "Deployment & Release Workflow").await;
+    add_member(&pool, region, minor, 0.2).await;
+    add_member(&pool, region, central, 0.9).await;
+
+    let rows = anchor_shape_select(
+        &pool,
+        ProfileId::from(profile),
+        HomeAnchor::Context(context.into()),
+        None,
+    )
+    .await
+    .expect("shape read must be Ok");
+
+    assert_eq!(
+        rows[0].label.as_deref(),
+        Some("Deployment & Release Workflow"),
+        "an unlabelled region is named by its MOST-AFFINE member, not just any member"
+    );
+}
+
+/// THE LEAK TEST. A region can legitimately contain a resource the caller cannot read — region
+/// membership is not resource visibility. Surfacing that resource's title as the region's label would
+/// leak it through a read whose own gate says nothing about members.
+///
+/// Here the *most affine* member is invisible to the caller and a *less* affine one is visible: the
+/// label must be the visible one. An un-gated `ORDER BY affinity DESC LIMIT 1` would name the region
+/// after the secret and this test would catch it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_invisible_member_can_never_become_the_regions_name(pool: PgPool) {
+    let (profile, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
+    // A second profile with its own context — nothing there is visible to `profile`.
+    let (stranger, stranger_context) =
+        common::fixtures::create_test_profile_with_context(&pool, "stranger@example.com").await;
+
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "").await;
+    sqlx::query("UPDATE kb_cogmap_regions SET label = NULL WHERE id = $1")
+        .bind(region)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // The most-affine member is a resource the caller CANNOT see.
+    let secret = insert_resource(
+        &pool,
+        stranger_context,
+        stranger,
+        "CONFIDENTIAL acquisition memo",
+    )
+    .await;
+    let visible = insert_resource(&pool, context, profile, "Deployment & Release Workflow").await;
+    add_member(&pool, region, secret, 0.99).await; // highest affinity
+    add_member(&pool, region, visible, 0.30).await;
+
+    let rows = anchor_shape_select(
+        &pool,
+        ProfileId::from(profile),
+        HomeAnchor::Context(context.into()),
+        None,
+    )
+    .await
+    .expect("shape read must be Ok");
+
+    let label = rows[0].label.as_deref();
+    assert_ne!(
+        label,
+        Some("CONFIDENTIAL acquisition memo"),
+        "a member the caller cannot read must NEVER become the region's name"
+    );
+    assert_eq!(
+        label,
+        Some("Deployment & Release Workflow"),
+        "the name falls to the most-affine VISIBLE member"
+    );
+}
