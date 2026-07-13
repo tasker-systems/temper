@@ -787,6 +787,37 @@ pub enum ContextAction {
         /// Team to unshare: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
+    /// Orient in a context by its REGIONS: the distilled, region-level view of everything homed
+    /// there, most salient first. The fastest way to see what a context is about without reading
+    /// any single resource in it.
+    ///
+    /// Empty means the context has not materialized regions yet — run `context materialize`.
+    Shape {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+        /// Optional lens ref to narrow the read; omit for all lenses.
+        #[arg(long)]
+        lens: Option<String>,
+    },
+    /// Per-region analytics for a context: centrality, content cohesion, internal tension,
+    /// reference standing, telos alignment.
+    #[command(name = "region-metrics")]
+    RegionMetrics {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+        /// Optional lens ref to narrow the read; omit for all lenses.
+        #[arg(long)]
+        lens: Option<String>,
+    },
+    /// Re-form a context's regions when enough has changed since the last materialize. Below the
+    /// threshold this is a safe no-op (`materialized: false`). Requires write access to the context.
+    Materialize {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+        /// Formation-event threshold to gate on; omit for the default.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

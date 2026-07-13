@@ -81,8 +81,8 @@ pub use invitation::{
 };
 pub use lineage::{LineageNode, ResourceLineage};
 pub use materialize::{
-    MaterializeAck, MaterializeDelta, MaterializeDeltaInput, MaterializeRequest,
-    MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,
+    ContextMaterializeInput, MaterializeAck, MaterializeDelta, MaterializeDeltaInput,
+    MaterializeRequest, MaterializeTriggerInput, DEFAULT_MATERIALIZE_THRESHOLD,
 };
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;

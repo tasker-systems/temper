@@ -24,7 +24,7 @@ use temper_core::types::ingest::{
     SegmentedBeginResponse,
 };
 use temper_core::types::materialize::{
-    MaterializeAck, DEFAULT_MATERIALIZE_LENS, DEFAULT_MATERIALIZE_THRESHOLD,
+    default_lens_for, MaterializeAck, DEFAULT_MATERIALIZE_THRESHOLD,
 };
 use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
@@ -2372,83 +2372,123 @@ impl Backend for DbBackend {
         &self,
         cmd: MaterializeOnThreshold,
     ) -> Result<CommandOutput<MaterializeAck>, TemperError> {
-        let row = sqlx::query!(
-            r#"
-            SELECT cogmap_authorable_by_profile($2, $1) AS "can_write!",
-                   shape_materialized_event_id AS "watermark: uuid::Uuid"
-              FROM kb_cogmaps
-             WHERE id = $1
-               AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
-            "#,
-            *cmd.cogmap,
-            *self.profile_id,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(api_err)?
-        .ok_or_else(|| {
-            TemperError::NotFound(format!("cognitive map {} not found", cmd.cogmap.uuid()))
-        })?;
-        if !row.can_write {
+        // Auth + watermark, per anchor kind. The two arms are separate `query!` macros rather than one
+        // runtime query with an interpolated table name: the table cannot be a bind parameter, and the
+        // HomeAnchor enum is closed, so matching to a literal keeps compile-time SQL checking on both
+        // arms. Each kind's WRITE predicate differs (`cogmap_authorable_by_profile` /
+        // `context_authorable_by_profile`) — write requires DIRECT membership with an authoring role,
+        // which is a different axis from the read gate in the WHERE clause. Auth before write.
+        let (can_write, watermark) = match cmd.anchor {
+            HomeAnchor::Cogmap(cogmap) => {
+                let row = sqlx::query!(
+                    r#"
+                    SELECT cogmap_authorable_by_profile($2, $1) AS "can_write!",
+                           shape_materialized_event_id AS "watermark: uuid::Uuid"
+                      FROM kb_cogmaps
+                     WHERE id = $1
+                       AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
+                    "#,
+                    *cogmap,
+                    *self.profile_id,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(api_err)?
+                .ok_or_else(|| {
+                    TemperError::NotFound(format!("cognitive map {} not found", cogmap.uuid()))
+                })?;
+                (row.can_write, row.watermark)
+            }
+            HomeAnchor::Context(context) => {
+                let row = sqlx::query!(
+                    r#"
+                    SELECT context_authorable_by_profile($2, $1) AS "can_write!",
+                           shape_materialized_event_id AS "watermark: uuid::Uuid"
+                      FROM kb_contexts
+                     WHERE id = $1
+                       AND anchor_readable_by_profile($2, 'kb_contexts', $1)
+                    "#,
+                    *context,
+                    *self.profile_id,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(api_err)?
+                .ok_or_else(|| {
+                    TemperError::NotFound(format!("context {} not found", context.uuid()))
+                })?;
+                (row.can_write, row.watermark)
+            }
+        };
+        if !can_write {
             return Err(TemperError::Forbidden);
         }
 
         let formation_events = temper_substrate::replay::formation_touched_count_since(
-            &self.pool,
-            HomeAnchor::Cogmap(cmd.cogmap),
-            row.watermark,
+            &self.pool, cmd.anchor, watermark,
         )
         .await
         .map_err(api_err)?;
         let threshold = cmd.threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
 
         if formation_events < threshold {
-            return Ok(CommandOutput::new(MaterializeAck {
-                cogmap_id: cmd.cogmap.uuid(),
-                materialized: false,
+            return Ok(CommandOutput::new(MaterializeAck::new(
+                cmd.anchor,
+                false,
                 formation_events,
                 threshold,
-                regions: None,
-                membership_fingerprint: None,
-            }));
+            )));
         }
 
-        // Attribute the materialize to the entity that seeded this cogmap — the earliest map-anchored
-        // event's emitter, a real referent (mirrors the substrate harness). At/above threshold there is
-        // at least one map-anchored formation event, so this always resolves.
-        let emitter: uuid::Uuid = sqlx::query_scalar!(
+        // Attribute the materialize to the entity that seeded this anchor — the earliest
+        // anchor-produced event's emitter, a real referent (mirrors the substrate harness).
+        //
+        // `fetch_optional`, not `fetch_one`. The old code fetched one and reasoned "at/above threshold
+        // there is at least one anchored formation event, so this always resolves" — true only while
+        // `threshold >= 1`. A caller passing `--threshold 0` makes `0 >= 0` hold on an anchor with NO
+        // events at all, and the emitter lookup then finds nothing: `fetch_one` would raise RowNotFound
+        // and surface as a 500. Pre-existing on the cogmap path; the flip would have inherited it.
+        // Absent an emitter there is nothing to attribute AND nothing to materialize, so the honest
+        // answer is the same idempotent no-op the below-threshold branch returns.
+        let emitter: Option<uuid::Uuid> = sqlx::query_scalar!(
             r#"
             SELECT emitter_entity_id AS "emitter!"
               FROM kb_events
-             WHERE producing_anchor_table = 'kb_cogmaps' AND producing_anchor_id = $1
+             WHERE producing_anchor_table = $1 AND producing_anchor_id = $2
              ORDER BY occurred_at ASC
              LIMIT 1
             "#,
-            *cmd.cogmap,
+            cmd.anchor.table(),
+            cmd.anchor.uuid(),
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .map_err(api_err)?;
+        let Some(emitter) = emitter else {
+            return Ok(CommandOutput::new(MaterializeAck::new(
+                cmd.anchor,
+                false,
+                formation_events,
+                threshold,
+            )));
+        };
 
-        // The MCP/HTTP materialize surface is cogmap-addressed today; the producer beneath it now
-        // takes any anchor (spec §3.6 M2). Exposing contexts on this command is T7's business.
+        // The lens is the ONLY thing that differs between materializing a context and a cogmap —
+        // `default_lens_for` keeps that choice in one place. A context under the declared-graph-only
+        // `telos-default` (w_cos = 0) carries no facets and would form nothing.
         let outcome = temper_substrate::write::incremental_materialize(
             &self.pool,
-            HomeAnchor::Cogmap(cmd.cogmap),
-            DEFAULT_MATERIALIZE_LENS,
+            cmd.anchor,
+            default_lens_for(cmd.anchor),
             EntityId::from(emitter),
         )
         .await
         .map_err(api_err)?;
 
-        Ok(CommandOutput::new(MaterializeAck {
-            cogmap_id: cmd.cogmap.uuid(),
-            materialized: true,
-            formation_events,
-            threshold,
-            regions: Some(outcome.regions as i64),
-            membership_fingerprint: Some(outcome.membership_fingerprint),
-        }))
+        Ok(CommandOutput::new(
+            MaterializeAck::new(cmd.anchor, true, formation_events, threshold)
+                .with_outcome(outcome.regions as i64, outcome.membership_fingerprint),
+        ))
     }
 
     async fn begin_segmented_ingest(

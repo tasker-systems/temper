@@ -242,7 +242,7 @@ mod tests {
         let backend = DbBackend::new(pool.clone(), s.member.into());
         let ack = backend
             .materialize_on_threshold(MaterializeOnThreshold {
-                cogmap: s.cogmap.into(),
+                anchor: HomeAnchor::Cogmap(s.cogmap.into()),
                 threshold: Some(5),
                 origin: Surface::ApiHttp,
             })
@@ -273,7 +273,7 @@ mod tests {
 
         let first = backend
             .materialize_on_threshold(MaterializeOnThreshold {
-                cogmap: s.cogmap.into(),
+                anchor: HomeAnchor::Cogmap(s.cogmap.into()),
                 threshold: Some(3),
                 origin: Surface::ApiHttp,
             })
@@ -291,7 +291,7 @@ mod tests {
         // now below threshold → idempotent no-op. (Robust: assert the no-op, not an exact recount.)
         let second = backend
             .materialize_on_threshold(MaterializeOnThreshold {
-                cogmap: s.cogmap.into(),
+                anchor: HomeAnchor::Cogmap(s.cogmap.into()),
                 threshold: Some(3),
                 origin: Surface::ApiHttp,
             })
@@ -310,7 +310,7 @@ mod tests {
     async fn trigger_requires_cogmap_write_grant(pool: PgPool) {
         let s = seed(&pool).await;
         let cmd = || MaterializeOnThreshold {
-            cogmap: s.cogmap.into(),
+            anchor: HomeAnchor::Cogmap(s.cogmap.into()),
             threshold: None,
             origin: Surface::ApiHttp,
         };
@@ -331,5 +331,159 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err2, TemperError::NotFound(_)), "unreadable → 404");
+    }
+
+    // ── The CONTEXT arm (T8) ────────────────────────────────────────────────
+    //
+    // `materialize_on_threshold` went anchor-generic in T8. Every test above exercises only the
+    // cogmap arm, so without these the context arm — its own write predicate
+    // (`context_authorable_by_profile`), its own watermark column (`kb_contexts`), and its own lens
+    // (`workflow-default`, since a context under the declared-graph-only `telos-default` carries no
+    // facets and would form nothing) — would ship with zero coverage.
+
+    /// A profile-owned context. The owner authors their own context
+    /// (`context_authorable_by_profile`, personal-owned arm), so `member` can materialize it.
+    async fn seed_context(pool: &PgPool, owner: Uuid) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_profiles', $1, 'ctx', 'ctx') RETURNING id",
+        )
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A synthetic formation event anchored to the CONTEXT — the scope
+    /// `formation_touched_count_since` counts, and the scope the emitter lookup resolves against.
+    async fn add_context_event(
+        pool: &PgPool,
+        entity: Uuid,
+        type_name: &str,
+        context: Uuid,
+    ) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id) \
+             VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, 'kb_contexts', $3) RETURNING id",
+        )
+        .bind(type_name)
+        .bind(entity)
+        .bind(context)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Over threshold, a CONTEXT materializes: the ack carries the context anchor pair, `cogmap_id`
+    /// is absent (a context has none — which is the whole reason the cogmap-keyed reads were blind to
+    /// context regions), and a second call no-ops because the watermark advanced on `kb_contexts`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_context_materializes_and_advances_its_own_watermark(pool: PgPool) {
+        let s = seed(&pool).await;
+        let context = seed_context(&pool, s.member).await;
+        for _ in 0..3 {
+            add_context_event(&pool, s.entity, "resource_created", context).await;
+        }
+
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+        let cmd = || MaterializeOnThreshold {
+            anchor: HomeAnchor::Context(context.into()),
+            threshold: Some(3),
+            origin: Surface::ApiHttp,
+        };
+
+        let first = backend.materialize_on_threshold(cmd()).await.unwrap().value;
+        assert!(first.materialized, "3 >= 3 → the context materializes");
+        assert_eq!(first.anchor_table, "kb_contexts");
+        assert_eq!(first.anchor_id, context);
+        assert_eq!(
+            first.cogmap_id, None,
+            "a context anchor carries no cogmap_id — the legacy field is cogmap-only"
+        );
+        assert_eq!(first.formation_events, 3);
+        assert!(first.membership_fingerprint.is_some());
+
+        // The watermark advanced on kb_contexts (not kb_cogmaps) → the same events no longer count.
+        let second = backend.materialize_on_threshold(cmd()).await.unwrap().value;
+        assert!(
+            !second.materialized,
+            "the context's own watermark advanced → idempotent no-op"
+        );
+    }
+
+    /// Auth before write, on the context arm: an outsider who cannot READ the context gets NotFound
+    /// (no existence oracle); a profile granted READ but not WRITE gets Forbidden. Read inherits, write
+    /// does not — they are different axes, and the materialize gate is the write one.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn context_materialize_requires_context_write(pool: PgPool) {
+        let s = seed(&pool).await;
+        let context = seed_context(&pool, s.member).await;
+        let cmd = || MaterializeOnThreshold {
+            anchor: HomeAnchor::Context(context.into()),
+            threshold: None,
+            origin: Surface::ApiHttp,
+        };
+
+        // Outsider: cannot even read it → NotFound, before any threshold work.
+        let err = DbBackend::new(pool.clone(), s.outsider.into())
+            .materialize_on_threshold(cmd())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, TemperError::NotFound(_)),
+            "unreadable context → 404, not a 403 (no existence oracle)"
+        );
+
+        // Reader-only: an explicit READ grant makes it visible but NOT authorable → Forbidden.
+        sqlx::query(
+            "INSERT INTO kb_access_grants \
+               (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+             VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, $2)",
+        )
+        .bind(context)
+        .bind(s.outsider)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let err = DbBackend::new(pool.clone(), s.outsider.into())
+            .materialize_on_threshold(cmd())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, TemperError::Forbidden),
+            "a READ grant must not confer materialize (write) — read and write are different axes"
+        );
+    }
+
+    /// `threshold = 0` on an anchor with NO events at all must be a no-op, not a 500.
+    ///
+    /// The pre-T8 code fetched the attributing emitter with `fetch_one`, justified by "at/above
+    /// threshold there is at least one anchored formation event" — which holds only while
+    /// `threshold >= 1`. At 0, `0 >= 0` is true on an anchor that has never emitted anything, the
+    /// emitter lookup finds no row, and `fetch_one` raises RowNotFound → a 500. Absent an emitter
+    /// there is nothing to attribute AND nothing to materialize, so the honest answer is the same
+    /// idempotent no-op the below-threshold branch returns.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn zero_threshold_on_an_eventless_anchor_is_a_noop_not_a_500(pool: PgPool) {
+        let s = seed(&pool).await;
+        let context = seed_context(&pool, s.member).await; // deliberately: zero events
+
+        let ack = DbBackend::new(pool.clone(), s.member.into())
+            .materialize_on_threshold(MaterializeOnThreshold {
+                anchor: HomeAnchor::Context(context.into()),
+                threshold: Some(0),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("an eventless anchor at threshold 0 must not error")
+            .value;
+
+        assert!(
+            !ack.materialized,
+            "nothing to attribute ⇒ nothing materialized"
+        );
+        assert_eq!(ack.formation_events, 0);
+        assert_eq!(ack.regions, None);
     }
 }

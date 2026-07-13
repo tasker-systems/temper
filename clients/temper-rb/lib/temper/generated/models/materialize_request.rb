@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Request body for `POST /api/cognitive-maps/{cogmap}/materialize`.
+  # Request body for `POST /api/cognitive-maps/{cogmap}/materialize` and `POST /api/contexts/{context}/materialize` — the anchor rides the path, so the body is the same.
   class MaterializeRequest < ApiModelBase
     # Materialize threshold to gate on; defaults to [`DEFAULT_MATERIALIZE_THRESHOLD`] when omitted.
     attr_accessor :threshold
