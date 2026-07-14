@@ -158,9 +158,9 @@ pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
 /// error. `--from` wins regardless, so the drained stdin is discarded either way.
 ///
 /// URL detection: strings with `http://` or `https://` prefix are fetched to a
-/// tempfile first, then extracted. A `file://` URI is rejected with a targeted
-/// message (unlike `--sources`, `--from` takes a plain path). Everything else is
-/// treated as a local path.
+/// tempfile first, then extracted. A `file://` URI is decoded to a local path
+/// (`resolve_from_local_path`) and read like any other local file. Everything
+/// else is treated as a plain local path.
 async fn resolve_from_input<R: std::io::Read>(
     from: Option<&str>,
     body_flag: Option<&str>,
@@ -195,25 +195,42 @@ async fn resolve_from_input<R: std::io::Read>(
         let (tmp, _name) = crate::actions::ingest::fetch_url_to_tempfile(from).await?;
         crate::extract::extract_to_markdown(tmp.as_ref()).await?
     } else {
-        if from.starts_with("file://") {
-            // `file://` is accepted in --sources (issue #353) but not in --from, where it
-            // would fall through to the local-path branch and error with a confusing "path
-            // does not exist". Give the asymmetry its own message (issue #420 docs note).
-            return Err(TemperError::Config(format!(
-                "--from does not accept file:// URIs (they are only valid in --sources); \
-                 pass a plain filesystem path instead of '{from}'"
-            )));
-        }
-        let path = std::path::Path::new(from);
+        let path = resolve_from_local_path(from)?;
         if !path.exists() {
             return Err(TemperError::Config(format!(
-                "--from path does not exist: {from}"
+                "--from path does not exist: {}",
+                path.display()
             )));
         }
-        crate::extract::extract_to_markdown(path).await?
+        crate::extract::extract_to_markdown(&path).await?
     };
 
     Ok(Some(extracted.content))
+}
+
+/// Resolve the local-file half of `--from` to a filesystem path.
+///
+/// A plain path is taken verbatim. A `file://` URI is decoded to a local path via the `url` crate —
+/// handling percent-escapes (`%20` → space) and the empty/`localhost` authority — so
+/// `--from file:///a/b%20c.pdf` "just works" the way passing the plain path does. This is deliberate
+/// forgiveness: `file://` is a spelling agents naturally reach for (it is what `--sources` accepts),
+/// and a decoded local path is exactly a plain path, so the two converge on one existence-check +
+/// extract. A `file://` URI with a non-local authority (`file://otherhost/…`) has no local path and
+/// is a hard error rather than a silent wrong target (parse-don't-validate / escalate).
+fn resolve_from_local_path(from: &str) -> Result<std::path::PathBuf> {
+    if from.starts_with("file://") {
+        let url = url::Url::parse(from).map_err(|e| {
+            TemperError::Config(format!("--from: invalid file:// URI '{from}': {e}"))
+        })?;
+        url.to_file_path().map_err(|()| {
+            TemperError::Config(format!(
+                "--from: '{from}' is not a local file:// path (a remote authority cannot be read); \
+                 pass a plain filesystem path"
+            ))
+        })
+    } else {
+        Ok(std::path::PathBuf::from(from))
+    }
 }
 
 /// CLI-derived arguments for `create`. Bundles the domain parameters parsed
@@ -2634,23 +2651,40 @@ mod from_flag_tests {
     }
 
     #[tokio::test]
-    async fn from_file_uri_is_rejected_with_a_targeted_message() {
-        // `file://` is valid in --sources but not --from; it must not fall through to the
-        // path branch and emit a confusing "path does not exist" (issue #420 docs note).
+    async fn from_file_uri_resolves_to_a_local_file() {
+        // `--from` is forgiving about the file:// spelling: it decodes to the local path
+        // (percent-escapes included — note the space in the filename) and reads it like any
+        // other local file, converging with the plain-path branch.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("from source.md");
+        std::fs::write(&file, "# hello from a file uri").unwrap();
+        let uri = url::Url::from_file_path(&file).unwrap().to_string();
+        assert!(
+            uri.starts_with("file://") && uri.contains("%20"),
+            "sanity: {uri}"
+        );
+
+        let body = resolve_from_input(Some(&uri), None, true, Cursor::new(b""), ready)
+            .await
+            .expect("file:// URI should resolve to the local file")
+            .expect("should return a body");
+        assert!(body.contains("hello from a file uri"), "got: {body}");
+    }
+
+    #[tokio::test]
+    async fn from_missing_file_uri_reports_path_not_found() {
+        // A file:// URI that resolves to a non-existent path gets the normal path-not-found
+        // error — not a bespoke "file:// not accepted" rejection.
         let err = resolve_from_input(
-            Some("file:///tmp/x.md"),
+            Some("file:///tmp/definitely_does_not_exist_420.md"),
             None,
             /*stdin_is_tty:*/ true,
             Cursor::new(b""),
             ready,
         )
         .await
-        .expect_err("should reject file:// URIs");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("file://") && !msg.contains("path does not exist"),
-            "expected a targeted file:// message, got: {msg}"
-        );
+        .expect_err("should error on the missing resolved path");
+        assert!(format!("{err}").contains("does not exist"), "got: {err}");
     }
 
     #[tokio::test]

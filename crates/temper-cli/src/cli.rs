@@ -438,9 +438,8 @@ pub enum ResourceAction {
         body: Option<String>,
         /// Source path or http(s) URL — extract markdown via temper-ingest and use as body.
         /// Supported formats: md/markdown, txt/text, html/htm (PDF is not built into this binary
-        /// — convert to text first). Mutually exclusive with --body. A URL is detected by the
-        /// http:// or https:// prefix; unlike --sources, a plain path (not a file:// URI) is used
-        /// for local files.
+        /// — convert to text first). Mutually exclusive with --body. http(s) URLs are fetched;
+        /// a local file may be given as a plain path or a file:// URI.
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
         /// Provenance sources this body was distilled from — comma-separated resource
