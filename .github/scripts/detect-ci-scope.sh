@@ -14,17 +14,23 @@
 # Two exceptions are path-scoped:
 #
 # - test-ruby: the gem (clients/temper-rb/**), the contract it is generated
-#   from (openapi.json), and its own workflow. It pulls a ~1GB
-#   openapi-generator image for the codegen drift gate, and nothing outside
-#   that set can affect it.
+#   from (openapi.json), its own workflow, and the scripts implementing its
+#   codegen drift gate. It pulls a ~1GB openapi-generator image for that gate,
+#   and nothing outside that set can affect it.
 # - test-agents-ts: the TS SDK (clients/temper-ts/**) and the eve agents that
 #   consume it (packages/agent-workflows/**), plus the wire contracts both are
-#   asserted against (tests/contracts/**), and its own workflow.
+#   asserted against (tests/contracts/**), its own workflow, and the scripts
+#   implementing its codegen drift gate.
 #
 # Both scopings are safe for the same reason: each project is inert to both
 # cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit two-entry
 # `workspaces` list) — no Rust or TS change can reach it except through a
 # contract, which is in its trigger set.
+#
+# Both trigger sets include their own gate's SCRIPTS for a sharper reason: a gate
+# can be disarmed by editing it, and a disarmed gate passes. Leave those scripts
+# out and the PR that breaks a gate is precisely the PR that never runs it — it
+# merges green and every later PR inherits a dead check.
 #
 # Keep this script conservative: for every OTHER job it only ever turns things
 # OFF for pure-docs changes, and a self-referential edit forces a full run.
@@ -130,29 +136,50 @@ if [ -n "$NON_DOC_FILES" ]; then
     HAS_NON_DOC=true
 fi
 
-# Ruby SDK: the gem's own tree, the contracts it is asserted against, and its CI
-# workflow. openapi.json is in this set precisely because a contract change must
-# be SEEN to move the gem -- that is what the codegen drift gate proves. The same
-# logic applies to tests/contracts/: credentials_spec.rb reads
-# m2m-token-request.json and asserts the gem emits it, so a contract change that
-# does not run this job is a contract change nothing checks.
+# Ruby SDK: the gem's own tree, the contracts it is asserted against, its CI
+# workflow, and the scripts that IMPLEMENT its codegen drift gate. openapi.json is
+# in this set precisely because a contract change must be SEEN to move the gem --
+# that is what the codegen drift gate proves. The same logic applies to
+# tests/contracts/: credentials_spec.rb reads m2m-token-request.json and asserts the
+# gem emits it, so a contract change that does not run this job is a contract change
+# nothing checks.
+#
+# generate-temper-rb.sh / check-temper-rb-drift.sh are here because a gate's own
+# implementation must run the gate. A gate can be silently disarmed by editing it --
+# `git diff --exit-code -- <path-that-matches-nothing>` exits 0, so one typo'd path
+# turns the check into a permanent pass. Without this key, the PR that broke the gate
+# is exactly the PR that would not run it: it merges green, and every later PR
+# inherits a dead gate.
 #
 # The no-diff safety fallback must run everything, this job included.
 HAS_RUBY=false
-if changes_match '^clients/temper-rb/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^__force_full_ci__$'; then
+if changes_match '^clients/temper-rb/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^\.github/scripts/(generate-temper-rb|check-temper-rb-drift)\.sh$|^__force_full_ci__$'; then
     HAS_RUBY=true
 fi
 
 # TypeScript SDK + agent workflows: clients/temper-ts (the TS client) and
-# packages/agent-workflows/** (the eve agents that consume it), plus the wire
-# contracts both are asserted against.
+# packages/agent-workflows/** (the eve agents that consume it), plus BOTH wire
+# contracts they are asserted against.
+#
+# openapi.json is in this set for the same reason it is in test-ruby's: temper-ts
+# commits a generated schema.ts, so a contract change that does not run this job is
+# a contract change whose drift gate never fires. tests/contracts/ is the other
+# contract (the m2m token request).
+#
+# generate-temper-ts.sh / check-temper-ts-drift.sh are here for the reason spelled
+# out above test-ruby: a gate's own implementation must run the gate, or the one PR
+# that can disarm it is the one PR that never exercises it.
+#
+# crates/** deliberately stays OUT: openapi.json is committed, and openapi-check in
+# code-quality already forces a DTO change to land a regenerated spec in the same
+# PR. The contract is therefore both sufficient and precise as the trigger key.
 #
 # Path-scoped for exactly the reason test-ruby is: these projects are inert to
 # both cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit
 # two-entry `workspaces` list), so no Rust or TS change can reach them except
 # through a contract, which is in the trigger set.
 HAS_AGENTS_TS=false
-if changes_match '^clients/temper-ts/|^packages/agent-workflows/|^tests/contracts/|^\.github/workflows/test-agents-ts\.yml$|^__force_full_ci__$'; then
+if changes_match '^clients/temper-ts/|^packages/agent-workflows/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-agents-ts\.yml$|^\.github/scripts/(generate-temper-ts|check-temper-ts-drift)\.sh$|^__force_full_ci__$'; then
     HAS_AGENTS_TS=true
 fi
 

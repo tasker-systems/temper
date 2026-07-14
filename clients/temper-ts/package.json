@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./schema": {
+      "types": "./dist/generated/schema.d.ts",
+      "default": "./dist/generated/schema.js"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
@@ -19,11 +23,16 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
+    "generate": "bash ../../.github/scripts/generate-temper-ts.sh",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
   },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
   "devDependencies": {
     "@types/node": "24.x",
+    "openapi-typescript": "7.13.0",
     "typescript": "^5.8",
     "vitest": "^3"
   },
