@@ -144,6 +144,65 @@ async fn search_by_context_ref_returns_only_that_contexts_resources(pool: PgPool
     );
 }
 
+// ─── Test 1b: plain-text query + context_ref + DEFAULT params (issue #427) ────
+
+/// The most common invocation shape — a plain-text `query` scoped by `context_ref` with **default
+/// parameters** (`graph_expand` unset ⇒ `true`, no `seed_ids`) — must return a well-formed `200`
+/// result set, never a generic execution error (issue #427).
+///
+/// This is the exact shape the MCP `search` tool sends and the one that had NO integration/e2e
+/// coverage: `search_by_context_ref_returns_only_that_contexts_resources` pins `graph_expand: false`,
+/// and the graph e2e tests always pass explicit `seed_ids` with `query: None`. Here we leave every
+/// optional param at its default so the server-side query-embed + auto-seed graph-expansion path runs
+/// end to end. It passes whether or not the ONNX runtime is present: with it, the query embeds within
+/// budget and the vector arm contributes; without it, the embed degrades to FTS + graph — either way
+/// a `200` with the lexically-matching resource, not a killed request.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn search_plain_query_with_context_ref_and_default_params_returns_ok(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("search-default-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+
+    let id = create_resource_in_context(
+        &app,
+        &token,
+        context_id,
+        "ztmpdefaultword deployment topology resource",
+    )
+    .await;
+
+    // Default params: `query` + `context_ref` only. graph_expand defaults to true; no seed_ids.
+    let resp = post_search(
+        &app,
+        &token,
+        json!({
+            "query": "ztmpdefaultword",
+            "context_ref": "@me/temper",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "plain-text query + context_ref + default params must return 200, not a generic error"
+    );
+
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("search JSON");
+    let returned_ids: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r["resource_id"].as_str())
+        .collect();
+    assert!(
+        returned_ids.contains(&id.as_str()),
+        "the lexically-matching resource must surface under default-params search; got: {returned_ids:?}"
+    );
+}
+
 // ─── Test 2: @me/no-such-slug → 404 Not Found ────────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
