@@ -24,6 +24,9 @@ export {
  */
 export type { components, operations, paths } from "./generated/schema.js";
 
+export { createAuthedFetch, type AuthedFetchOptions, type FetchLike, type Surface } from "./auth-fetch.js";
+export { createTemperClient, type TemperClientOptions } from "./client.js";
+
 /**
  * The deploy gate's evidence. The steward logs this on every dispatch tick
  * (`agent/schedules/steward.ts`), which is how we confirm from PRODUCTION logs that the deployed

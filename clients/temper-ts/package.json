@@ -27,6 +27,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
   },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
   "devDependencies": {
     "@types/node": "24.x",
     "openapi-typescript": "7.13.0",
