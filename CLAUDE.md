@@ -78,24 +78,36 @@ cargo make run
 # Generate TypeScript types from Rust structs
 cargo make generate-ts-types
 
-# Regenerate openapi.json AND the temper-rb gem (both products of the router)
+# Regenerate openapi.json AND the temper-rb gem AND temper-ts's schema.ts (all products of the router)
 cargo make openapi
 ```
 
-> **OpenAPI + the temper-rb gem are products of the router.** A new/changed response DTO
-> (a new field, a renamed type) restales **both** the committed `openapi.json` *and* the
-> generated Ruby gem under `clients/temper-rb/lib/temper/generated`. `cargo make openapi`
-> regenerates both in one step (gem regen needs Docker). `cargo make check` gates both:
-> `openapi-check` (spec) and `openapi-rb-drift` (gem — Docker-based, **skips** without Docker;
-> the `test-ruby` CI job is the never-skipping backstop). The generator pin + params live in
-> one place — `.github/scripts/generate-temper-rb.sh` — shared by cargo-make and the gem's Rakefile.
+> **OpenAPI + the temper-rb gem + temper-ts's `schema.ts` are all products of the router.** A
+> new/changed response DTO (a new field, a renamed type) restales **three** committed artifacts:
+> `openapi.json`, the generated Ruby gem under `clients/temper-rb/lib/temper/generated`, and
+> `clients/temper-ts/src/generated/schema.ts` (emitted by `openapi-typescript`, pinned exactly —
+> no caret — in temper-ts's devDependencies). `cargo make openapi` regenerates all three in one
+> step (gem regen needs Docker; the TS schema needs only Node). `cargo make check` gates all
+> three: `openapi-check` (spec), `openapi-rb-drift` (gem — Docker-based, **skips** without Docker;
+> the `test-ruby` CI job is the never-skipping backstop), and `openapi-ts-drift` (schema — and
+> unlike the gem's gate, this one **never skips**: `openapi-typescript` needs only Node, so there
+> is no environment in which `cargo make check` would rather guess than check). Never assume that
+> because one SDK's gate is best-effort, the other is too — they have different skip semantics for
+> different reasons, and `openapi-ts-drift` is the strict one. The generator pin + params for the
+> gem live in one place — `.github/scripts/generate-temper-rb.sh` — shared by cargo-make and the
+> gem's Rakefile; the TS equivalent is `.github/scripts/generate-temper-ts.sh`, shared by
+> `cargo make openapi-ts`, `check-temper-ts-drift.sh`, and the `test-agents-ts` CI job's drift
+> step. `detect-ci-scope.sh` carries `^openapi\.json$` in **both** `test-ruby`'s and
+> `test-agents-ts`'s trigger sets, for the identical reason: a contract change that does not run
+> the job whose gate catches the stale artifact is a gate that runs nowhere. (`test-agents-ts` got
+> this later than `test-ruby` did — the same rot the gem discovered in `tests/contracts/`.)
 >
-> **The drift gate compares against git, not against a fresh build.** `check-temper-rb-drift.sh`
-> regenerates the gem and then runs `git diff --exit-code` over `clients/temper-rb/…/generated`.
-> So a gem you have *just correctly regenerated* still fails `cargo make check` while it sits
-> unstaged — the error reads "generated core is out of date with openapi.json", which sounds like
-> you forgot to run `cargo make openapi` when in fact you need to `git add` (or commit) its output.
-> Stage the regenerated files, then re-run `check`.
+> **The drift gate compares against git, not against a fresh build.** Both `check-temper-rb-drift.sh`
+> and `check-temper-ts-drift.sh` regenerate their artifact and then run `git diff --exit-code` over
+> it. So an artifact you have *just correctly regenerated* still fails `cargo make check` while it
+> sits unstaged — the error reads "generated core/schema is out of date with openapi.json", which
+> sounds like you forgot to run `cargo make openapi` when in fact you need to `git add` (or commit)
+> its output. Stage the regenerated files, then re-run `check`.
 
 ### Running a single Rust test
 ```bash
