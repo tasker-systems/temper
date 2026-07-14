@@ -262,25 +262,79 @@ NOT NULL` had to be generalized. It does not. Pull-on-tick deletes that migratio
 express "declined," the delivery row can. Whether external events should also move the watermark, or
 whether the two cursors coexist, is an open question below.)
 
-### Reach — broker, do not proxy
+### Reach — brokering is an admission criterion, not a preference
 
 An agent handed a Linear-ticket event **can do nothing with it** without a Linear read tool. Reach is
-therefore part of the goal, not an adjacent concern. But the boundary must be drawn narrowly:
+therefore part of the goal, not an adjacent concern.
 
-- ❌ **Proxy** — `temper-mcp` grows `github_*`, `linear_*`, `notion_*` tools. temper becomes an
-  integration hub and reimplements Linear forever.
-- ✅ **Broker** — temper declares the connection's **tool manifest** and mints a **scoped, read-only
-  token**. The agent connects to GitHub's / Linear's own MCP server directly.
+**Two axes are easy to collapse into one, and they are independent.** Naming them separately, because
+a reader who conflates them will reach for the wrong fallback under pressure:
 
-temper's job is knowing *that* `@cool-team-name` may read repo Y read-only, and minting the token
-that proves it — not re-exposing someone else's API surface.
+| | |
+|---|---|
+| **Axis 1 — who holds and mints the remote credential** | *Buy*: managed infra (Vercel Connect) holds the GitHub App installation, handles rotation and multi-installation tenancy, mints scoped tokens. *Build*: temper stores the App private key and mints installation tokens itself. |
+| **Axis 2 — where the agent's tool call goes** | *Proxy*: the agent calls `temper-mcp`, which grows a `linear_get_issue` tool, which calls Linear. *Broker*: temper declares reach, mints the token proving it, and the agent calls **Linear's own MCP server** directly. |
 
-[Vercel Connect](https://vercel.com/docs/connect) is a strong candidate for both halves: it verifies
-inbound GitHub/Linear/Slack webhooks and forwards them as signed OIDC requests (no per-webhook HMAC
-secrets stored), *and* mints app-scoped tokens with rotation and multi-installation tenancy handled
-server-side. The counter-argument is Vercel coupling (self-hosted instances) and that we already own
-HMAC discipline in `internal_sig.rs`. **This is a spike decision, not a settled one** — but the
-verification seam should be abstract enough to swap either way.
+They are orthogonal. One could buy the credential from Connect **and still proxy** — `temper-mcp`
+wrapping Linear with a Connect-minted token. That is the wrong call, and "use managed infra" does not
+protect against it. "Broker" is a claim about **axis 2**.
+
+#### The rule
+
+> **Proxy is not an option.** If a remote system cannot be reached through an API, an MCP server, or a
+> CLI tool that we can make available, with credentials handed to us correctly — **we do not integrate
+> with that system.**
+
+This is a **provider admission criterion**, not an implementation lean. temper's job is knowing *that*
+`@cool-team-name` may read repo Y read-only, and minting the token that proves it — never re-exposing
+someone else's API surface. `temper-mcp` does not grow `github_*` / `linear_*` / `notion_*` tools.
+Not now, not as an exception, not "just this once for the one provider that doesn't fit."
+
+**What this buys:** temper's MCP surface stays **fixed**. Proxying makes it grow without bound — one
+tool family per provider, forever, chasing their API changes. The rule is what permanently forecloses
+temper becoming an integration hub.
+
+**What it costs, and this is the uncomfortable half:** it **removes the fallback**. An earlier draft
+said that if per-subscription dynamic reach proved unworkable, "the design changes shape" — meaning we
+would proxy. That escape hatch is now closed by construction. **S1 does not get to *prefer* dynamic
+brokering; it must *prove* it.** If it cannot be proven, the agent-reach half of this goal is
+**blocked and must be solved**, not routed around.
+
+#### Structural unbrokerability rejects a provider; temporary absence of reach does not
+
+The two capability tiers survive this rule and are sharpened by it:
+
+- A connection may legitimately be **ledger-only** — credential not yet provisioned, or reach not yet
+  granted to a given team. That is a **visible, legal state**. Events still land; judgment is simply
+  not yet possible, and says so (invariant 6).
+- A provider that is **structurally** unreachable — no API, no MCP server, no CLI, or a credential
+  model we cannot hold — is **rejected**. We do not integrate with it.
+
+*Temporary absence of reach is a state. Structural unbrokerability is a rejection.* The connection's
+**tool manifest** is therefore not decorative metadata: it is the **evidence that the provider is
+admissible at all.**
+
+#### The open risk this rule concentrates
+
+Brokering assumes an agent can acquire an MCP connection **per subscription, at runtime**. But Eve
+declares connections **statically, in code** — the steward's `agent/connections/temper.ts` is a source
+file with a fixed 24-tool allowlist. If a new subscription to a new Linear workspace demands an agent
+**redeploy** to reach it, brokering is operationally worse than the thing we have forbidden.
+
+[Vercel Connect](https://vercel.com/docs/connect)'s connector types include **"MCP servers — any MCP
+server (`mcp.<host>/<path>`)"**, so Connect is plausibly the brokering *mechanism* and not merely the
+credential store — which is where axis 1 and axis 2 converge in practice. **This is unverified.** It is
+a **hard gate on S1**, not an assumption, and — because the proxy fallback is closed — it is the single
+highest-risk unknown in the goal.
+
+#### Axis 1, separately
+
+Connect is a strong candidate on the credential axis too: it verifies inbound GitHub/Linear/Slack
+webhooks and forwards them as signed OIDC requests (no per-webhook HMAC secrets stored), *and* mints
+app-scoped tokens with rotation and tenancy handled server-side. The counter-argument is Vercel
+coupling (self-hosted instances) and that we already own HMAC discipline in `internal_sig.rs`. **This
+one *is* a spike decision** — and the verification seam should stay abstract enough to swap either
+way. Note the asymmetry: **axis 2 is settled by rule; axis 1 is open.**
 
 ---
 
@@ -338,7 +392,9 @@ should not be waved through.
 - **Not a sync engine.** A Linear ticket does not become a temper task. A PR does not become a
   document. Remote resources are **cited, not copied** (`kb_remote_sources` gives them a UUID
   handle).
-- **Not an integration hub.** temper brokers scoped tokens; it does not re-expose remote APIs.
+- **Not an integration hub — and this is enforced by rule, not by restraint.** temper brokers scoped
+  tokens; it does not re-expose remote APIs. A provider that cannot be brokered is **not integrated**.
+  `temper-mcp` never grows `github_*` / `linear_*` / `notion_*` tools.
 - **Not a notification firehose.** Radius is declared. A payload nobody subscribed to routes nowhere.
 - **Not eager indexing.** Intake never fetches. Enrichment fetches narrowly and only when a selector
   requires it.
@@ -352,15 +408,21 @@ should not be waved through.
    watermark cannot. Do they coexist, or does the delivery table become the sole cursor for
    subscribed events? Getting this wrong reintroduces the exact ambiguity the delivery row exists to
    remove.
-2. **Vercel Connect vs. own the credential + HMAC.** Strong lean to Connect (it does both halves), but
-   the self-hosting coupling could overturn it.
-3. **What does a remote binding look like, if we want one?** An edge cannot point at a
+2. **Can an agent acquire an MCP connection per subscription, at runtime?** *(highest risk in the
+   goal)* Eve declares connections statically in code. If a new subscription demands an agent
+   redeploy, brokering is operationally worse than proxying — **and proxying is forbidden by rule, so
+   there is no fallback.** This must be *proven* in S1, not assumed. Connect's "any MCP server"
+   connector type is the likely mechanism and is **unverified**.
+3. **Vercel Connect vs. own the credential + HMAC** *(axis 1 only)*. Strong lean to Connect (it does
+   both halves), but the self-hosting coupling could overturn it. Note the asymmetry: the *brokering*
+   axis is settled by rule; only the *credential* axis is open.
+4. **What does a remote binding look like, if we want one?** An edge cannot point at a
    `kb_remote_sources` row (`kb_edges` endpoints are resources/cogmaps only). Binding a temper task to
    a Linear ticket would need a stub resource, a property/facet, or a widened edge. **Not decided.**
-4. **Selector language.** Per-provider and per-grain, and it must declare its own capability. What is
+5. **Selector language.** Per-provider and per-grain, and it must declare its own capability. What is
    the minimum expressive selector that covers "CODEOWNERS paths in repo Y" and "Linear project P"
    without becoming a query language?
-5. **What distillation actually means in practice.** Named by the goal's author as undefined. What a
+6. **What distillation actually means in practice.** Named by the goal's author as undefined. What a
    steward *does* with a subscribed event under its telos — and specifically what edges, if any, get
    authored into a cogmap, and by whom.
 
@@ -378,9 +440,14 @@ temper's own machine credential (a machine authenticating *to* temper) shipped i
 done. What a connection also needs is the **remote** credential — the token temper presents *to*
 GitHub/Linear — plus a way to hand a *scoped, read-only* version of it to an agent. Those are
 different objects with different lifecycles, and conflating them is the most likely way to get this
-wrong. Vercel Connect is a candidate for the second (it brokers app-scoped tokens with rotation and
-multi-installation tenancy, and verifies inbound webhooks for the same providers); owning it
-ourselves is the alternative.
+wrong.
+
+**S1 carries a hard gate, and it can fail.** Because proxying is forbidden by rule, S1 must **prove**
+that an agent can acquire an MCP connection **per subscription, at runtime** — not merely prefer it.
+Eve declares connections statically in code. If a new subscription demands an agent redeploy to reach
+its remote system, **there is no fallback**, and the agent-reach half of this goal is blocked until
+that is solved. This is the goal's highest-risk unknown and S1 exists partly to retire it early,
+while it is still cheap to be wrong.
 
 **Dogfoods the M2M work** — prod has exactly one machine client today (the steward). This is what
 makes the second one exist.
