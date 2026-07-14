@@ -137,6 +137,33 @@ mod tests {
         assert_eq!(r.mime_type, "text/markdown");
     }
 
+    #[cfg(feature = "extract")]
+    #[tokio::test]
+    async fn extracts_a_text_layer_pdf_verbatim() {
+        // A real text-layer PDF (pdf-lib producer, base-14 Helvetica/WinAnsi). Every line of the
+        // source text must come back character-for-character: a lossy extraction is a bug, not a
+        // reason to loosen this assertion.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/simple.pdf");
+        let r = extract_to_markdown(&path).await.expect("pdf must extract");
+
+        assert_eq!(r.mime_type, "application/pdf");
+
+        // pdfium separates lines with CRLF. That is the extractor's real output, so assert it
+        // rather than normalizing it away.
+        let expected = [
+            "Temper Cloud Architecture",
+            "The upload pipeline processes files through four stages:",
+            "1. Extract text content from uploaded files",
+            "2. Chunk the extracted text by markdown headers",
+            "3. Generate 768-dimensional vector embeddings",
+            "4. Store chunks with embeddings in PostgreSQL",
+            "Each chunk includes a content hash for deduplication",
+            "and a header path for hierarchical context.",
+        ]
+        .join("\r\n");
+        assert_eq!(r.content.trim(), expected);
+    }
+
     #[tokio::test]
     #[cfg(not(feature = "extract"))]
     async fn test_non_text_without_feature() {

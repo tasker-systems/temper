@@ -8,7 +8,7 @@ description = "Embedding and extraction pipeline for temper knowledge base"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 html-to-markdown-rs = "3.1.0"
-kreuzberg = { version = "4.6.3", features = ["tokio-runtime"], optional = true }
+kreuzberg = { version = "4.6.3", features = ["tokio-runtime", "bundled-pdfium"], optional = true }
 ndarray = { version = "0.17", optional = true }
 ort = { version = "2.0.0-rc.12", default-features = false, features = [
   "api-18",
