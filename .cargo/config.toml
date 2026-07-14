@@ -1,6 +1,37 @@
 [env]
 WORKSPACE_PATH = { value = ".", relative = true }
 
+# Pin the pdfium binary that kreuzberg's build.rs embeds (temper-ingest, `bundled-pdfium`).
+#
+# Left unset, build.rs resolves the version by querying the GitHub API for the LATEST release of
+# bblanchon/pdfium-binaries — and when that call fails (rate limit, no egress) it does NOT fail the
+# build: it prints a warning and falls back to a hardcoded "7568". So an unpinned build silently
+# links whichever pdfium the network mood of the day produced, and still goes green. Two release
+# builds of the same tag could embed different PDF parsers.
+#
+# Pinned here rather than in each workflow's `env:` because EVERY cargo invocation that compiles
+# temper-cli with `extract` runs that build script — release, CI tests, clippy, and local dev. The
+# ONNX install already taught this repo what happens when one setting is copy-pasted across five
+# workflow files. One line, one source of truth.
+#
+# Bumping: pdfium parses untrusted input, so track releases rather than letting this rot.
+#
+#   1. Verify the tag publishes all three release targets, or CI dies on the one you didn't check:
+#      https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/<VER>/pdfium-{mac-arm64,linux-x64,win-x64}.tgz
+#   2. Edit the value below, then **`cargo clean -p kreuzberg`**. This is not optional.
+#
+# Step 2 is load-bearing: kreuzberg's build.rs does NOT emit `cargo:rerun-if-env-changed=PDFIUM_VERSION`,
+# and that directive is the *only* way cargo tracks a build script's env dependencies. It also
+# short-circuits the download outright if a pdfium already sits in OUT_DIR. So on any warm cache —
+# including the release job, which uses Swatinem/rust-cache — editing this line alone changes
+# nothing: the build script never re-runs, the old pdfium stays, CI goes green, and the binary ships
+# the version you thought you replaced. The bump silently no-ops and the pin's whole purpose fails.
+#
+# Note this pin fixes the version *string*, not the *bytes*: unlike the ONNX model (whose sha256 is
+# verified at build time, a hard error on mismatch), nothing verifies the pdfium we actually linked.
+# Closing that gap is the hermetic-vendoring follow-up.
+PDFIUM_VERSION = "7947"
+
 [profile.dev]
 incremental = true
 split-debuginfo = "unpacked"

@@ -10,7 +10,9 @@ temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-substrate = { path = "../temper-substrate" }
 # The embedder is already linked transitively via temper-substrate → temper-ingest(embed);
 # naming it directly lets the search read-path embed a text-only query server-side (issue #297).
-temper-ingest = { path = "../temper-ingest", features = ["embed"] }
+# `default-features = false` for the same reason as temper-substrate: the default set drags in
+# `extract` → kreuzberg → pdfium, which no server code path calls.
+temper-ingest = { path = "../temper-ingest", default-features = false, features = ["embed"] }
 anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["json"] }

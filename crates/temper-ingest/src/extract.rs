@@ -51,39 +51,14 @@ async fn extract_with_kreuzberg(path: &Path) -> Result<ExtractionResult> {
     use kreuzberg::{extract_file, ExtractionConfig};
 
     let config = ExtractionConfig::default();
-    let result = extract_file(path, None, &config)
-        .await
-        .map_err(|e| map_kreuzberg_error(path, &e.to_string()))?;
+    let result = extract_file(path, None, &config).await.map_err(|e| {
+        EmbedError::Extraction(format!("failed to extract '{}': {}", path.display(), e))
+    })?;
 
     Ok(ExtractionResult {
         content: result.content,
         mime_type: result.mime_type.into_owned(),
     })
-}
-
-/// Turn a kreuzberg extraction failure into a legible `EmbedError`.
-///
-/// The bundled extractor is built without the PDF capability, so a `.pdf` source fails with a
-/// generic "Unsupported format: application/pdf" — which gives the caller no hint that PDF simply
-/// isn't compiled into this binary (issue #420 item 2). Detect that specific case and say so, with
-/// an actionable workaround; every other failure keeps its original message. The guard is narrow
-/// (extension `pdf` AND an unsupported-format error) so that once PDF support lands, a genuinely
-/// corrupt PDF still surfaces its real error rather than this one.
-#[cfg(feature = "extract")]
-fn map_kreuzberg_error(path: &Path, err: &str) -> EmbedError {
-    let is_pdf = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
-    if is_pdf && err.to_ascii_lowercase().contains("unsupported") {
-        return EmbedError::Extraction(format!(
-            "PDF support is not built into this binary: cannot extract '{}'. \
-             Convert it to text or markdown first (e.g. `pdftotext file.pdf out.txt`) \
-             and pass that with --from, or provide the text via --body.",
-            path.display()
-        ));
-    }
-    EmbedError::Extraction(format!("failed to extract '{}': {}", path.display(), err))
 }
 
 #[cfg(not(feature = "extract"))]
@@ -137,6 +112,33 @@ mod tests {
         assert_eq!(r.mime_type, "text/markdown");
     }
 
+    #[cfg(feature = "extract")]
+    #[tokio::test]
+    async fn extracts_a_text_layer_pdf_verbatim() {
+        // A real text-layer PDF (pdf-lib producer, base-14 Helvetica/WinAnsi). Every line of the
+        // source text must come back character-for-character: a lossy extraction is a bug, not a
+        // reason to loosen this assertion.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/simple.pdf");
+        let r = extract_to_markdown(&path).await.expect("pdf must extract");
+
+        assert_eq!(r.mime_type, "application/pdf");
+
+        // pdfium separates lines with CRLF. That is the extractor's real output, so assert it
+        // rather than normalizing it away.
+        let expected = [
+            "Temper Cloud Architecture",
+            "The upload pipeline processes files through four stages:",
+            "1. Extract text content from uploaded files",
+            "2. Chunk the extracted text by markdown headers",
+            "3. Generate 768-dimensional vector embeddings",
+            "4. Store chunks with embeddings in PostgreSQL",
+            "Each chunk includes a content hash for deduplication",
+            "and a header path for hierarchical context.",
+        ]
+        .join("\r\n");
+        assert_eq!(r.content.trim(), expected);
+    }
+
     #[tokio::test]
     #[cfg(not(feature = "extract"))]
     async fn test_non_text_without_feature() {
@@ -145,46 +147,43 @@ mod tests {
     }
 
     #[cfg(feature = "extract")]
-    #[test]
-    fn pdf_unsupported_format_gets_a_legible_message() {
-        // A .pdf failing with an unsupported-format error means PDF isn't compiled in.
-        let err = map_kreuzberg_error(
-            Path::new("/tmp/report.pdf"),
-            "Unsupported format: application/pdf",
-        );
+    #[tokio::test]
+    async fn corrupt_pdf_surfaces_its_real_error() {
+        // A PDF that pdfium cannot parse must report why, naming the file. Driven through the
+        // public path rather than a helper fed a fabricated message, so it can only pass if
+        // production really behaves this way.
+        let mut f = NamedTempFile::with_suffix(".pdf").unwrap();
+        write!(f, "%PDF-1.7\nnot actually a pdf").unwrap();
+        f.flush().unwrap();
+
+        let err = extract_to_markdown(f.path())
+            .await
+            .expect_err("a corrupt pdf must not extract");
         let msg = err.to_string();
         assert!(
-            msg.contains("PDF support is not built into this binary"),
-            "expected the PDF-not-built message, got: {msg}"
-        );
-        assert!(
-            msg.contains("pdftotext"),
-            "should suggest a workaround: {msg}"
+            msg.contains("failed to extract") && msg.contains(&f.path().display().to_string()),
+            "a corrupt PDF must surface its real error and name the file, got: {msg}"
         );
     }
 
     #[cfg(feature = "extract")]
-    #[test]
-    fn pdf_non_unsupported_error_keeps_its_real_message() {
-        // A different .pdf failure (e.g. once PDF support lands and a file is corrupt) must keep
-        // its own error, not be mislabeled as "not built in".
-        let err = map_kreuzberg_error(Path::new("/tmp/corrupt.pdf"), "xref table is damaged");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("xref table is damaged") && !msg.contains("not built into this binary"),
-            "corrupt-PDF error must survive verbatim, got: {msg}"
-        );
-    }
+    #[tokio::test]
+    async fn genuinely_unsupported_format_reports_itself() {
+        let mut f = NamedTempFile::with_suffix(".xyz").unwrap();
+        write!(f, "\x00\x01\x02 not a document").unwrap();
+        f.flush().unwrap();
 
-    #[cfg(feature = "extract")]
-    #[test]
-    fn non_pdf_unsupported_error_is_not_pdf_labeled() {
-        // An unsupported non-PDF format must not borrow the PDF message.
-        let err = map_kreuzberg_error(Path::new("/tmp/thing.xyz"), "Unsupported format: xyz");
+        let err = extract_to_markdown(f.path())
+            .await
+            .expect_err("an unknown binary format must not extract");
         let msg = err.to_string();
+        assert!(msg.contains("failed to extract"), "got: {msg}");
+        // Name the file, same as the corrupt-PDF case — without this the assertion above would
+        // still pass if the path were dropped from the message, which is what a user needs most
+        // when a bulk `--from` sweep fails on one file out of hundreds.
         assert!(
-            !msg.contains("PDF support"),
-            "non-PDF unsupported format must not claim to be PDF, got: {msg}"
+            msg.contains(f.path().to_str().unwrap()),
+            "must name the offending file, got: {msg}"
         );
     }
 }
