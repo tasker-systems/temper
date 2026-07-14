@@ -22,6 +22,8 @@ description = "Run all quality checks (Rust + TypeScript)"
 # `openapi-rb-drift` extends that same reasoning to the temper-rb generated gem (a product of
 # openapi.json), whose drift gate is otherwise CI-only — the exact gap that bit #354. It needs
 # Docker and skips without it (the test-ruby CI job is the never-skipping backstop).
+# `openapi-ts-drift` does the same for temper-ts's generated schema.ts, and unlike the
+# gem's gate it never skips: openapi-typescript needs only Node.
 dependencies = [
   "rust-fmt-check",
   "rust-clippy",
@@ -30,6 +32,7 @@ dependencies = [
   "openapi-check",
   "openapi-routes-check",
   "openapi-rb-drift",
+  "openapi-ts-drift",
   "ts-check"
 ]
 
@@ -227,7 +230,7 @@ script = [
 ]
 
 [tasks.openapi]
-description = "Emit the OpenAPI contract + regenerate the temper-rb gem (both products of the router)"
+description = "Emit the OpenAPI contract + regenerate the temper-rb gem and temper-ts schema (all products of the router)"
 # openapi.json AND the temper-rb generated core are both products of the router: a
 # new DTO field restales both. Regenerating them together is what keeps the two in
 # lockstep, so following openapi-check's "run cargo make openapi" remedy fixes the
@@ -238,7 +241,8 @@ script = [
   "cargo run --quiet -p temper-api --bin emit-openapi > \"$out\"",
   "if [ ! -s \"$out\" ]; then echo 'ERROR: openapi.json is missing or empty'; exit 1; fi",
   "echo \"OpenAPI spec written: $out ($(wc -c < \"$out\" | tr -d ' ') bytes)\"",
-  "if docker info >/dev/null 2>&1; then bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh && echo 'temper-rb gem regenerated'; else echo 'NOTE: Docker unavailable — skipped temper-rb gem regen; run cargo make openapi-rb once Docker is up.'; fi"
+  "if docker info >/dev/null 2>&1; then bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh && echo 'temper-rb gem regenerated'; else echo 'NOTE: Docker unavailable — skipped temper-rb gem regen; run cargo make openapi-rb once Docker is up.'; fi",
+  "bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-ts.sh && echo 'temper-ts schema regenerated'"
 ]
 
 [tasks.openapi-rb]
@@ -251,6 +255,17 @@ description = "Fail if the committed temper-rb generated core drifts from openap
 # change cannot pass a green local gate and then redden Ruby CI. Skips (does not
 # fail) when Docker is absent; the CI ruby job is the never-skipping backstop.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-rb-drift.sh"]
+
+[tasks.openapi-ts]
+description = "Regenerate temper-ts's schema.ts from openapi.json (needs Node)"
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-ts.sh"]
+
+[tasks.openapi-ts-drift]
+description = "Fail if the committed temper-ts schema drifts from openapi.json"
+# The local mirror of the temper-ts CI job's drift step, and the sibling of
+# openapi-rb-drift. Unlike that one it NEVER skips: openapi-typescript needs only
+# Node, so there is no environment in which we would rather guess than check.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-ts-drift.sh"]
 
 [tasks.openapi-check]
 description = "Verify the committed openapi.json matches a fresh emission from the router"

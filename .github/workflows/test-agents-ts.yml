@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The never-skipping backstop for the generated schema — the role `test-ruby`'s
+      # `rake drift` plays for the gem. `detect-ci-scope.sh` runs this job for an
+      # openapi.json change precisely so this step fires on the PR that would break it.
+      - name: Schema drift (schema.ts vs openapi.json)
+        run: bash ../../.github/scripts/check-temper-ts-drift.sh
+
       - name: Type-check
         run: npm run typecheck
 
