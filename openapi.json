@@ -7717,6 +7717,14 @@
         ],
         "description": "Wire payload for POST /api/ingest — resource + pre-processed chunks.\n\nThe CLI performs extract → chunk → embed locally and sends everything\nin a single request. `chunks_packed` is a base64-encoded MessagePack\nblob containing `Vec<PackedChunk>`. Both `content_hash` and `chunks_packed`\nare optional: if absent the server computes them via the ingest pipeline."
       },
+      "IngestState": {
+        "type": "string",
+        "description": "A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.",
+        "enum": [
+          "in_progress",
+          "complete"
+        ]
+      },
       "InvitationStatus": {
         "type": "string",
         "description": "Invitation status — lifecycle of a team invitation.\n\nMaps directly to the `invitation_status` Postgres enum.",
@@ -9351,11 +9359,15 @@
             "$ref": "#/components/schemas/ResourceId"
           },
           "ingest_state": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Is the whole body here? `\"complete\"` for every ordinary (atomic) create; `\"in_progress\"` for a\nsegmented ingest that has begun but not yet been finalized — its remaining blocks have not\nlanded, so it is **excluded from list and search** and readable only by `show`.\n\nOrthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the\nvectors ready?* This one asks *are the bytes all here?*\n\n`Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server\nalways sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\"."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IngestState",
+                "description": "Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only\nby the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete`\nfor every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not\nyet been finalized (remaining blocks not landed), which is **excluded from list and search** and\nreadable only by `show`.\n\nOrthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the\nvectors ready?* This one asks *are the bytes all here?*\n\n`Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server\nalways sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\"."
+              }
+            ]
           },
           "is_active": {
             "type": "boolean"

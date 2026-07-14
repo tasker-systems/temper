@@ -55,16 +55,57 @@ pub struct ResourceRow {
     /// `None` when no manifest row exists (resource created via POST without a
     /// body trio, or the manifest join returned NULL).
     pub body_hash: Option<String>,
-    /// Is the whole body here? `"complete"` for every ordinary (atomic) create; `"in_progress"` for a
-    /// segmented ingest that has begun but not yet been finalized — its remaining blocks have not
-    /// landed, so it is **excluded from list and search** and readable only by `show`.
+    /// Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only
+    /// by the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete`
+    /// for every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not
+    /// yet been finalized (remaining blocks not landed), which is **excluded from list and search** and
+    /// readable only by `show`.
     ///
     /// Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the
     /// vectors ready?* This one asks *are the bytes all here?*
     ///
     /// `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
     /// always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
-    pub ingest_state: Option<String>,
+    pub ingest_state: Option<IngestState>,
+}
+
+/// A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+/// (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
+/// The ledger is the state machine; this is its materialized current-state view, kept as a column so
+/// list/search can filter it with a cheap read instead of scanning events.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum IngestState {
+    /// A segmented ingest has begun but not been finalized — the body is incomplete. Hidden from
+    /// list/search, still resumable and readable via `show`.
+    InProgress,
+    /// The whole body is present: every atomic create, and every finalized segmented ingest.
+    Complete,
+}
+
+impl IngestState {
+    /// The canonical wire/DB string (matches the `ck_kb_resources_ingest_state` CHECK values).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IngestState::InProgress => "in_progress",
+            IngestState::Complete => "complete",
+        }
+    }
+
+    /// Parse the DB/wire string. The `ck_kb_resources_ingest_state` CHECK constrains the column to
+    /// these two values, so an unrecognized string is a schema/version violation, not ordinary input —
+    /// returned as `None` for the caller to handle rather than silently coerced.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "in_progress" => Some(IngestState::InProgress),
+            "complete" => Some(IngestState::Complete),
+            _ => None,
+        }
+    }
 }
 
 impl ResourceRow {
@@ -401,7 +442,7 @@ mod resource_detail_tests {
             mode: None,
             effort: None,
             body_hash: None,
-            ingest_state: Some("complete".to_string()),
+            ingest_state: Some(IngestState::Complete),
         }
     }
 

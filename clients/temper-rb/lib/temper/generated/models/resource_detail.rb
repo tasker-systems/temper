@@ -42,7 +42,7 @@ module Temper::Generated
     # A `kb_resources.id` value.
     attr_accessor :id
 
-    # Is the whole body here? `\"complete\"` for every ordinary (atomic) create; `\"in_progress\"` for a segmented ingest that has begun but not yet been finalized — its remaining blocks have not landed, so it is **excluded from list and search** and readable only by `show`.  Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the vectors ready?* This one asks *are the bytes all here?*  `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server always sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".
+    # Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only by the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete` for every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not yet been finalized (remaining blocks not landed), which is **excluded from list and search** and readable only by `show`.  Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the vectors ready?* This one asks *are the bytes all here?*  `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server always sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".
     attr_accessor :ingest_state
 
     attr_accessor :is_active
@@ -74,6 +74,28 @@ module Temper::Generated
     attr_accessor :managed_meta
 
     attr_accessor :open_meta
+
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
@@ -128,7 +150,7 @@ module Temper::Generated
         :'doc_type_name' => :'String',
         :'effort' => :'String',
         :'id' => :'String',
-        :'ingest_state' => :'String',
+        :'ingest_state' => :'IngestState',
         :'is_active' => :'Boolean',
         :'kb_context_id' => :'String',
         :'mode' => :'String',

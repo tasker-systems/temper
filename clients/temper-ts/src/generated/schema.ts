@@ -2319,6 +2319,14 @@ export interface components {
             title: string;
         };
         /**
+         * @description A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+         *     (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
+         *     The ledger is the state machine; this is its materialized current-state view, kept as a column so
+         *     list/search can filter it with a cheap read instead of scanning events.
+         * @enum {string}
+         */
+        IngestState: "in_progress" | "complete";
+        /**
          * @description Invitation status — lifecycle of a team invitation.
          *
          *     Maps directly to the `invitation_status` Postgres enum.
@@ -3220,18 +3228,7 @@ export interface components {
             doc_type_name: string;
             effort?: string | null;
             id: components["schemas"]["ResourceId"];
-            /**
-             * @description Is the whole body here? `"complete"` for every ordinary (atomic) create; `"in_progress"` for a
-             *     segmented ingest that has begun but not yet been finalized — its remaining blocks have not
-             *     landed, so it is **excluded from list and search** and readable only by `show`.
-             *
-             *     Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the
-             *     vectors ready?* This one asks *are the bytes all here?*
-             *
-             *     `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
-             *     always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
-             */
-            ingest_state?: string | null;
+            ingest_state?: null | components["schemas"]["IngestState"];
             is_active: boolean;
             kb_context_id?: null | components["schemas"]["ContextId"];
             mode?: string | null;

@@ -26,6 +26,14 @@ managed_meta: ManagedMeta | null,
 open_meta: JsonValue | null, };
 
 /**
+ * A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+ * (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
+ * The ledger is the state machine; this is its materialized current-state view, kept as a column so
+ * list/search can filter it with a cheap read instead of scanning events.
+ */
+export type IngestState = "in_progress" | "complete";
+
+/**
  * Request body for annotating a resource's block with provenance sources (issue #355) —
  * `POST /api/resources/{id}/provenance`. The annotate-only write: attach sources WITHOUT a body
  * revise (no re-chunk/re-embed). Carries no content — that is the whole point.
@@ -103,9 +111,11 @@ cogmap_name: string | null, stage: string | null, seq: number | null, mode: stri
  */
 body_hash: string | null, 
 /**
- * Is the whole body here? `"complete"` for every ordinary (atomic) create; `"in_progress"` for a
- * segmented ingest that has begun but not yet been finalized — its remaining blocks have not
- * landed, so it is **excluded from list and search** and readable only by `show`.
+ * Is the whole body here? A projection of the ingest lifecycle held in `kb_events` — written only
+ * by the `resource_created` / `resource_finalized` projectors, never mutated directly. `complete`
+ * for every ordinary (atomic) create; `in_progress` for a segmented ingest that has begun but not
+ * yet been finalized (remaining blocks not landed), which is **excluded from list and search** and
+ * readable only by `show`.
  *
  * Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the
  * vectors ready?* This one asks *are the bytes all here?*
@@ -113,7 +123,7 @@ body_hash: string | null,
  * `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
  * always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
  */
-ingest_state: string | null, };
+ingest_state: IngestState | null, };
 
 /**
  * Sort field for resource listing.

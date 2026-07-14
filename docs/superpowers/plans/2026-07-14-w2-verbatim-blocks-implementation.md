@@ -182,11 +182,27 @@ list. The projector takes **two** args (no content sidecar) — unlike its conte
     not shape the ranking of documents that are. (No top-k here, so no starvation concern — the
     predicate sits plainly in the WHERE. The asymmetry with the vector arm is deliberate.)
 
+  > **⚠ Re-derive each search function from its LIVE body — this bit me.** `search_fts_candidates`'s live
+  > definition is `20260711000020_search_fts_websearch_tsquery.sql` (`websearch_to_tsquery`, issue #356),
+  > **not** the original `20260626000002` (`plainto_tsquery`). Copying the older body into the
+  > `CREATE OR REPLACE` silently reverts phrase-adjacency and `search_surface_a::
+  > fts_candidates_supports_quoted_phrase` fails — caught only by `test-artifacts`, which
+  > `test-db`/`test-e2e-embed` do **not** cover. **Run `cargo make test-artifacts` after any
+  > search-function edit** (my verification gap: I ran the other two suites but not this one).
+
 - [ ] **Step 6: Surface `ingest_state`** on the resource detail row so `show` can say a resource is
   incomplete. It stays **addressable and readable** by its owner — hidden from list/search, never from
-  `show`. Regenerate the contract artifacts: `cargo make openapi` (openapi.json + temper-rb gem +
-  temper-ts `schema.ts`) and `cargo make generate-ts-types`. **Stage them** or `cargo make check` fails
-  on drift.
+  `show`.
+  - **Type it, don't stringly-type it.** The wire/Rust field is a real `enum IngestState { InProgress,
+    Complete }` (serde `rename_all = "snake_case"` + ts-rs/utoipa/schemars), not `Option<String>` — the
+    DB column stays `text` (this is a *projection* of the ledger, consistent with how `stage` /
+    `embedding_status` model lifecycle; the ledger is the state machine, not a transitions table). It
+    lives in `temper-workflow` beside `ResourceRow`; `ResourceRowParity` (in temper-substrate, which
+    cannot depend on temper-workflow) keeps decoding `String`, and the temper-services boundary converts
+    via `IngestState::from_wire`.
+  - Regenerate the contract artifacts: `cargo make openapi` (openapi.json + temper-rb gem — a new
+    `ingest_state.rb` enum model — + temper-ts `schema.ts`) and `cargo make generate-ts-types`. **Stage
+    them** or `cargo make check` fails on drift.
 
 - [ ] **Step 7: Failing test — an interrupted ingest is not a document.**
 

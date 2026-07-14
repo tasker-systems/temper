@@ -424,7 +424,9 @@ pub(crate) async fn native_resource_row(
         mode: p.mode,
         effort: p.effort,
         body_hash: p.body_hash,
-        ingest_state: Some(p.ingest_state),
+        // The column is CHECK-constrained to {in_progress, complete}, so `from_wire` is total in
+        // practice; an unparseable value would be a schema violation, surfaced (not coerced) as None.
+        ingest_state: temper_workflow::types::IngestState::from_wire(&p.ingest_state),
     })
 }
 

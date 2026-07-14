@@ -143,8 +143,12 @@ $$;
 -- (20260711000050_search_vector_scope_aware.sql). Re-deriving these by hand is how you silently delete
 -- the search index; the ONLY edits are the added predicates, marked ← NEW.
 
--- search_fts_candidates: the lexical arm. Body copied VERBATIM from its live definition
--- (20260626000002_search_beat2_surface_a.sql); the ONLY edit is the added predicate.
+-- search_fts_candidates: the lexical arm. Body copied VERBATIM from its LIVE definition —
+-- 20260711000020_search_fts_websearch_tsquery.sql (issue #356: `websearch_to_tsquery`, NOT the
+-- `plainto_tsquery` of the original 20260626000002). Re-deriving from the older migration silently
+-- reverts phrase-adjacency support and `search_surface_a::fts_candidates_supports_quoted_phrase`
+-- fails — which is exactly what "re-derive from the LIVE body, not the canonical one" guards against.
+-- The ONLY edit vs the live body is the added predicate.
 --
 -- The `corpus` CTE below would already keep a partial out of the RESULTS, so this is not needed for
 -- visibility. It is needed because `blend0` (fts ∪ vec) feeds `seeds`, and `seeds` anchors the graph
@@ -158,14 +162,14 @@ CREATE OR REPLACE FUNCTION search_fts_candidates(p_principal uuid, p_query text)
 RETURNS TABLE (resource_id uuid, fts_norm real)
 LANGUAGE sql STABLE AS $$
   SELECT r.id,
-         (ts_rank(si.search_vector, plainto_tsquery('english', p_query), 32))::real
+         (ts_rank(si.search_vector, websearch_to_tsquery('english', p_query), 32))::real
     FROM kb_resource_search_index si
     JOIN kb_resources r                       ON r.id = si.resource_id
     JOIN resources_visible_to(p_principal) v   ON v.resource_id = r.id
    WHERE p_query IS NOT NULL AND p_query <> ''
      AND r.is_active
      AND r.ingest_state = 'complete'                                        -- ← NEW
-     AND si.search_vector @@ plainto_tsquery('english', p_query);
+     AND si.search_vector @@ websearch_to_tsquery('english', p_query);
 $$;
 
 -- search_vector_candidates: the ANTI-STARVATION beat. The `corpus` CTE below is already a sufficient

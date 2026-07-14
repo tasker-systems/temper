@@ -686,8 +686,8 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .expect("show the whole resource")
         .row;
     assert_eq!(
-        whole_row.ingest_state.as_deref(),
-        Some("complete"),
+        whole_row.ingest_state,
+        Some(temper_workflow::types::IngestState::Complete),
         "a one-shot create is atomic and must be born `complete`"
     );
 
@@ -797,8 +797,8 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .expect("show must still work on a partial — hidden is not deleted")
         .row;
     assert_eq!(
-        shown.ingest_state.as_deref(),
-        Some("in_progress"),
+        shown.ingest_state,
+        Some(temper_workflow::types::IngestState::InProgress),
         "`show` must say the resource is incomplete, so a reader can tell a partial from a document"
     );
 
@@ -845,8 +845,8 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
         .expect("show after finalize")
         .row;
     assert_eq!(
-        shown.ingest_state.as_deref(),
-        Some("complete"),
+        shown.ingest_state,
+        Some(temper_workflow::types::IngestState::Complete),
         "finalize must project `complete` — the event is no longer projection-less"
     );
     assert!(
