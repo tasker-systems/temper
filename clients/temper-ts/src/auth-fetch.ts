@@ -2,9 +2,15 @@ import type { Credentials } from "./credentials.js";
 
 /**
  * `openapi-fetch`'s `ClientOptions["fetch"]` — a `Request` in, a `Response` out. NOT the
- * `(url, init)` shape of global `fetch`. Matching it exactly is what lets an authed fetch
- * drop straight into `createClient` with no adapter, and what lets a caller compose one
- * (the steward wraps its 5xx cold-start retry this way).
+ * `(url, init)` shape of global `fetch`. Matching it exactly is what lets an authed fetch drop
+ * straight into `createClient` with no adapter.
+ *
+ * It is also the seam a caller wraps to keep its own retry/backoff underneath the auth layer. The
+ * steward has such a retry (`agent/lib/temper-auth.ts`'s `fetchWithRetry`, for Vercel cold starts)
+ * and does NOT yet compose it here — that migration is its own task, and it is not a rename: the
+ * steward's is `(url, init)`-shaped and must be reshaped to this signature first. Until then the
+ * steward keeps its own hand-rolled 401 re-mint, which is one of the two things temper-ts exists to
+ * end.
  */
 export type FetchLike = (input: Request) => Promise<Response>;
 

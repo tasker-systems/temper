@@ -107,23 +107,37 @@ second, worse spelling of something already correct.
 
 **Generate what can be generated; hand-write only what cannot.** What cannot is auth and attribution:
 
-- **`src/auth-fetch.ts`** — `createAuthedFetch({ credentials, surface, fetch? })` returns a
-  `fetch`-shaped function that sets `Authorization: Bearer <token>` and `X-Temper-Surface: sdk`, and
-  re-mints **once** on a 401 when `credentials.canRefresh`. This is the steward's `temperFetch`
+- **`src/auth-fetch.ts`** — `createAuthedFetch({ credentials, fetch? })` returns a `fetch`-shaped
+  function that sets `Authorization: Bearer <token>` and `X-Temper-Surface: sdk`, and re-mints
+  **once** on a 401 when `credentials.canRefresh`. This is the steward's `temperFetch`
   (`agent/lib/temper-auth.ts`) lifted out of the steward, minus what is genuinely eve's: the env
-  names, the Vercel Connect strategy, and the 5xx cold-start retry. It takes an **inner `fetch`**, so
-  the steward keeps its cold-start retry by composing —
-  `createAuthedFetch({ credentials, fetch: fetchWithRetry })` — which is what eventually lets
-  `temperFetch` shrink to nothing.
-- **`src/client.ts`** — `createTemperClient({ baseUrl, credentials, surface? })`, handing that fetch to
+  names, the Vercel Connect strategy, and the 5xx cold-start retry. It takes an **inner `fetch`** so a
+  caller can keep its own retry underneath the auth layer.
+
+  **The surface is hardcoded `sdk`, with no override.** The server trusts `{sdk, cli}` and attributes
+  a `cli` write to the `<handle>@cli` emitter — so an override would be a knob for writing a lie into
+  the event ledger, and there is no TypeScript CLI to tell the truth with. The gem hardcodes it too.
+
+  **The steward's migration onto this is a follow-up, not a rename.** Its `fetchWithRetry` is
+  `(url, init)`-shaped while `FetchLike` is `(Request)`-shaped, so composing them needs the steward's
+  retry reshaped first — `createAuthedFetch({ credentials, fetch: fetchWithRetry })` does not compile
+  as written. Until that lands the steward keeps its own hand-rolled 401 re-mint (which carries the
+  same over-minting bug fixed here, and sends no surface header at all).
+
+- **`src/client.ts`** — `createTemperClient({ baseUrl, credentials, fetch? })`, handing that fetch to
   `createClient<paths>`.
 
 `canRefresh` — the `Credentials` member the publish task flags as "must settle before first publish" —
 is precisely what the 401 branch consumes. Building this client is what *validates* it.
 
-**No error hierarchy.** `openapi-fetch` does not throw; it returns `{ data, error, response }` with
-`error` typed per-status **from the spec**. The gem needs `errors.rb` because Faraday raises. Our error
-model is the contract's, and inventing one alongside it would be inventing drift.
+**No error hierarchy — but the client is not throw-free, and the difference matters.** `openapi-fetch`
+returns `{ data, error, response }` with `error` typed per-status **from the spec**, so HTTP status
+errors need no hierarchy of ours; the gem needs `errors.rb` only because Faraday raises. What does NOT
+arrive in `error` is anything the *auth layer* throws: `openapi-fetch` registers no `onError`
+middleware, so a `TokenMintError` (a wrong client secret — the single most common M2M
+misconfiguration) or a network `TypeError` propagates out of the call. Callers need a `try` as well as
+an `if (error)`, and the docs say so. Inventing a hierarchy would be inventing drift; pretending
+nothing throws would be inventing a lie.
 
 **One new runtime dependency:** `openapi-fetch` (~6kb, zero deps of its own). temper-ts has zero
 runtime deps today and the steward bundles it into a serverless function, so this is stated rather
@@ -187,3 +201,14 @@ Evidence, not assertion:
   deliberately is not), which is the publish task's business.
 - **`refs.ts` (`parse_ref`), the `Act` authorship/correlation sugar, and the domain modules** — shapes
   that the incoming callers should name, not shapes we should guess.
+- **The steward's migration onto `createAuthedFetch`** — surfaced by review, deliberately not bundled.
+  It is not a rename (its `fetchWithRetry` must be reshaped to `FetchLike` first), and it changes a
+  *deployed* agent's provenance: today the steward's REST writes carry **no** `X-Temper-Surface` and
+  therefore attribute to `web`; composing this client would move them to `sdk`. That is a real change
+  to the event ledger's authorship history and wants a deliberate decision, not a drive-by. It also
+  carries the same over-minting bug fixed here (its hand-rolled 401 handler calls `refresh()`
+  unconditionally), which is the substantive reason to do it soon.
+- **Hardening `check-temper-rb-drift.sh`** — it has the same weakness the TS gate was hardened against
+  (`git diff --exit-code` exits 0 over a path matching nothing), and is *more* exposed: it diffs a
+  whole directory, so a generator config change that relocated the output would silently empty the
+  gate rather than fail it. Left alone here to keep this PR's blast radius on the TS side.
