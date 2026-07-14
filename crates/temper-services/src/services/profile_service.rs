@@ -411,6 +411,41 @@ pub(crate) async fn create_agent_profile_and_link(
     Ok((profile_id, handle))
 }
 
+/// Create the dedicated profile a connection needs in order to own an emitter entity.
+///
+/// **Deliberately NOT [`create_agent_profile_and_link`]**, and the difference is the whole
+/// point: that helper writes a `kb_profile_auth_links` row keyed `(auth0-m2m, client_id)`,
+/// which is how a machine authenticates *to* temper. A connection is the opposite direction —
+/// it is temper authenticating to a *remote* system. GitHub holds no temper token, so a
+/// connection has no `client_id`, no auth link, and no `kb_machine_clients` row.
+///
+/// The profile exists for exactly one reason: `kb_events.emitter_entity_id` is NOT NULL and
+/// FKs to `kb_entities`, which FKs to `kb_profiles`. No profile, no entity; no entity, no
+/// emitted event. Email is SQL NULL — a connection has none.
+pub(crate) async fn create_connection_profile(
+    conn: &mut sqlx::PgConnection,
+    provider: &str,
+    name: &str,
+) -> ApiResult<(Uuid, String)> {
+    let display_name = format!("connection-{provider}-{name}");
+    let handle = generate_profile_handle_conn(&mut *conn, &display_name).await?;
+    let profile_id = Uuid::now_v7();
+
+    sqlx::query!(
+        r#"
+        INSERT INTO kb_profiles (id, handle, display_name, email, preferences)
+        VALUES ($1, $2, $3, NULL, '{}')
+        "#,
+        profile_id,
+        &handle,
+        &display_name,
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    Ok((profile_id, handle))
+}
+
 /// Phase 5b: provision the per-surface emitter entities and the default context
 /// a freshly created profile needs.
 pub(crate) async fn provision_profile_entities(

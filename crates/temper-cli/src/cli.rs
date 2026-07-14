@@ -1023,6 +1023,11 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminMachineAction,
     },
+    /// Provision connections — temper's authed link to a remote system (GitHub, Linear)
+    Connection {
+        #[command(subcommand)]
+        action: AdminConnectionAction,
+    },
     /// Re-embed chunks whose vectors were produced by an older model (the drain does the work)
     ///
     /// Nothing is destroyed: a stale vector stays searchable until a fresh one replaces it. Staleness
@@ -1116,6 +1121,46 @@ pub enum AdminMachineAction {
     /// Show one machine client
     Show { id: String },
     /// Revoke a machine client. Denies authentication; grants and memberships survive.
+    Revoke { id: String },
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum AdminConnectionAction {
+    /// Provision a connection: creates its profile, its `<handle>@webhook` emitter entity, and
+    /// the context that homes it. Born `needs_credential` — attach the credential separately.
+    ///
+    /// Declaring the reach is not overhead, it IS the declaration. A connector is a reach
+    /// declaration: you cannot have 50 teams with 50 distinct reaches and fewer than 50
+    /// declarations. Silence must never encode absence of capability — and never excess of it.
+    Provision {
+        /// The remote system: `github` | `linear`
+        #[arg(long)]
+        provider: String,
+        /// Human-facing name. The addressable slug is derived from it.
+        #[arg(long)]
+        name: String,
+        /// Team recorded as this connection's OWNER. Not its reach. Omitting it means teamless,
+        /// which is admin-only and fails closed.
+        #[arg(long = "owner-team")]
+        owner_team: Option<String>,
+        /// The grain the credential is scoped at, in the PROVIDER's terms:
+        /// `org` | `workspace` | `installation` | `repo-set` | `project`.
+        #[arg(long)]
+        reach: Option<String>,
+        /// What the credential can ACTUALLY see, in provider terms (e.g. `acme/temper`).
+        #[arg(long)]
+        covers: Option<String>,
+    },
+    /// List connections
+    List {
+        /// Include revoked connections
+        #[arg(long = "include-revoked")]
+        include_revoked: bool,
+    },
+    /// Show one connection
+    Show { id: String },
+    /// Revoke a connection. Its profile, emitter entity, and home context survive — events
+    /// already attributed to the emitter must keep resolving.
     Revoke { id: String },
 }
 

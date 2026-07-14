@@ -9,6 +9,7 @@ pub mod admin;
 pub mod auth;
 pub mod cognitive_maps;
 pub mod config;
+pub mod connection;
 pub mod contexts;
 pub mod error;
 pub mod events;
@@ -167,6 +168,11 @@ impl TemperClient {
     /// Operator-only machine-principal registration.
     pub fn machine_clients(&self) -> machine::MachineClientsClient<'_> {
         machine::MachineClientsClient::new(&self.http)
+    }
+
+    /// Operator-only connection provisioning (temper's authed link to a remote system).
+    pub fn connections(&self) -> connection::ConnectionsClient<'_> {
+        connection::ConnectionsClient::new(&self.http)
     }
 
     /// Team lifecycle sub-client (create / add-member / list).

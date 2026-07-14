@@ -16,6 +16,7 @@ pub mod authorship;
 pub mod cognitive_maps;
 pub mod config;
 pub mod conflict;
+pub mod connection;
 pub mod context;
 pub mod device;
 pub mod element_trail;

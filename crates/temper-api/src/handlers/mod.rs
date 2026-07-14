@@ -1,5 +1,6 @@
 pub mod access;
 pub mod cognitive_maps;
+pub mod connections;
 pub mod contexts;
 pub mod edges;
 pub mod embed;
