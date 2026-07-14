@@ -316,6 +316,16 @@ pub async fn run_segmented_create(
         expected_body_hash,
     } = plan_segments(content, budget)?;
 
+    // Progress to stderr (issue #420 item 4): a large ingest can run for minutes at 99% CPU with
+    // no output, which is indistinguishable from a hang — the very thing that provoked the
+    // kill-mid-upload in item 3. The segmented path only runs for large bodies, so a handful of
+    // lines is proportionate. stderr, never stdout — stdout carries the JSON document.
+    let total_segments = segments.len();
+    crate::output::progress_line(format!(
+        "ingesting large document: {total_segments} segments (~{} KB) — streaming to server",
+        content.len() / 1024
+    ));
+
     let existing =
         crate::actions::ingest_manifest::find_resumable(vault_root, &source_hash, budget as u32)?;
 
@@ -331,6 +341,10 @@ pub async fn run_segmented_create(
                 .map_err(crate::actions::runtime::client_err_to_temper)?
                 .blocks;
             manifest.blocks = landed.clone();
+            crate::output::progress_line(format!(
+                "  resuming: {}/{total_segments} segments already present",
+                landed.len()
+            ));
             (resource_id, manifest, landed)
         }
         None => {
@@ -372,6 +386,10 @@ pub async fn run_segmented_create(
                 &crate::actions::ingest_manifest::manifest_path(vault_root, response.resource_id),
                 &manifest,
             )?;
+            crate::output::progress_line(format!(
+                "  uploaded segment {}/{total_segments} (resource created)",
+                response.blocks.len()
+            ));
             (response.resource_id, manifest, response.blocks)
         }
     };
@@ -446,6 +464,10 @@ pub async fn run_segmented_create(
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             bump(&upload_ns, upload_start.elapsed());
             manifest.blocks = response.blocks;
+            crate::output::progress_line(format!(
+                "  uploaded segment {}/{total_segments}",
+                manifest.blocks.len()
+            ));
             let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
             crate::actions::ingest_manifest::store(&path, manifest)?;
         }
@@ -473,6 +495,7 @@ pub async fn run_segmented_create(
     manifest.finalized = true;
     let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
     crate::actions::ingest_manifest::store(&path, &manifest)?;
+    crate::output::progress_line(format!("  finalized: {total_segments} segments committed"));
 
     use std::sync::atomic::Ordering::Relaxed;
     StageTiming {
