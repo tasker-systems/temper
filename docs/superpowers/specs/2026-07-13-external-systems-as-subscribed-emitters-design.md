@@ -104,6 +104,12 @@ it recurs here in **four** independent places:
    *"I could not see whether anything you subscribe to was touched."* Capability is **declared** —
    per provider, per event type, per radius grain — and its absence is **loud**.
 
+   **The dual holds too: over-broad reach must never be silent.** Because brokering keeps temper out
+   of the call path, an agent's *remote* reach is bounded by the **provider's** scoping granularity,
+   not by temper's finer authz. Where an agent's remote reach is **coarser** than its temper reach,
+   the connection **declares it**. A coarse app-level connector is acceptable; an *undeclared* one is
+   not.
+
 **7. Nothing is auto-created.** No document appears in a context, no node appears in a cognitive map,
 because a webhook arrived. Ever.
 
@@ -281,24 +287,69 @@ protect against it. "Broker" is a claim about **axis 2**.
 
 #### The rule
 
-> **Proxy is not an option.** If a remote system cannot be reached through an API, an MCP server, or a
-> CLI tool that we can make available, with credentials handed to us correctly — **we do not integrate
-> with that system.**
+> **Proxy is out of scope, by default and by design.** If a remote system cannot be reached through an
+> API, an MCP server, or a CLI tool that we can make available, with credentials handed to us
+> correctly — **we do not integrate with that system.**
 
 This is a **provider admission criterion**, not an implementation lean. temper's job is knowing *that*
 `@cool-team-name` may read repo Y read-only, and minting the token that proves it — never re-exposing
 someone else's API surface. `temper-mcp` does not grow `github_*` / `linear_*` / `notion_*` tools.
-Not now, not as an exception, not "just this once for the one provider that doesn't fit."
 
-**What this buys:** temper's MCP surface stays **fixed**. Proxying makes it grow without bound — one
-tool family per provider, forever, chasing their API changes. The rule is what permanently forecloses
-temper becoming an integration hub.
+**The rule stands as the target.** Revisiting it requires a **named system or business need** and an
+explicit decision. What it forbids is an implementer *quietly* reaching for proxying as a fallback when
+brokering gets hard. The door is closed by decision, not welded shut — but it is not a hatch anyone
+opens on their own.
 
-**What it costs, and this is the uncomfortable half:** it **removes the fallback**. An earlier draft
-said that if per-subscription dynamic reach proved unworkable, "the design changes shape" — meaning we
-would proxy. That escape hatch is now closed by construction. **S1 does not get to *prefer* dynamic
-brokering; it must *prove* it.** If it cannot be proven, the agent-reach half of this goal is
+**What it buys:** temper's MCP surface stays **fixed**. Proxying makes it grow without bound — one tool
+family per provider, forever, chasing their API changes. This is what forecloses temper becoming an
+integration hub.
+
+**What it costs:** the fallback is gone. An earlier draft said that if per-subscription dynamic reach
+proved unworkable, "the design changes shape" — meaning we would proxy. **S1 does not get to *prefer*
+dynamic brokering; it must *prove* it.** If it cannot be proven, the agent-reach half of this goal is
 **blocked and must be solved**, not routed around.
+
+#### The rule *causes* a privilege asymmetry, and that is the thing to review
+
+This is entailed by brokering, not incidental to it, and it is the sharpest open risk in the design:
+
+**If temper does not mediate remote calls, temper cannot enforce remote scope.** Enforcement must live
+in the **token** — so the fidelity of an agent's remote reach is bounded by the **provider's own
+scoping granularity**, and temper's authz model is far finer than most providers'.
+
+```
+temper says:   this steward may read team A's cogmaps and contexts.     (precise)
+the token says: this app may read the org.                              (coarse)
+```
+
+**The danger runs inward, not outward.** It is not a temper data leak. It is that an agent can **fetch
+remote content its team never subscribed to and author it into that team's cogmap**, where it arrives
+wearing legitimate provenance and looks clean on the way in.
+
+Fidelity is **per-provider**: GitHub can scope to a repo set (an App installation, or a fine-grained
+PAT); Linear is likely workspace-level. So "how closely can remote reach track temper reach" is a
+capability that differs by provider — which means, for the fifth time in this design, **it must be
+declared, never assumed.** Hence the dual of invariant 6:
+
+> **Silence must never encode absence of capability — and over-broad reach must never be silent
+> either.** If an agent's remote reach is **coarser** than its temper reach, the connection **says so,
+> out loud.**
+
+That does not fix the asymmetry. It makes it a **declared, reviewable property of a connection**
+instead of a latent surprise — which is the most an honest brokering design can offer.
+
+**Two things materially shrink the blast radius:**
+
+- **Human-driven sessions are naturally 1:1.** A human working through Claude Desktop (or equivalent)
+  carries **their own** GitHub/Linear credentials, so their remote reach already matches what they may
+  see. **The asymmetry bites only unattended machine agents** — a much smaller and more reviewable
+  surface than "all agent tooling."
+- **Team-minted M2M credentials make the coarse connector a floor, not a ceiling.** Where a provider
+  supports team-scoped credentials, a team stands up its own connection and the gap narrows or closes.
+
+**A single app-level MCP connector is therefore acceptable** — it is the same shape as
+"infra is provisioned by admin," which this design already accepts for webhooks. What is *not*
+acceptable is it being **undeclared**.
 
 #### Structural unbrokerability rejects a provider; temporary absence of reach does not
 
@@ -413,16 +464,24 @@ should not be waved through.
    redeploy, brokering is operationally worse than proxying — **and proxying is forbidden by rule, so
    there is no fallback.** This must be *proven* in S1, not assumed. Connect's "any MCP server"
    connector type is the likely mechanism and is **unverified**.
-3. **Vercel Connect vs. own the credential + HMAC** *(axis 1 only)*. Strong lean to Connect (it does
+3. **How closely can remote reach track temper reach, per provider?** *(the review this design most
+   needs)* Brokering keeps temper out of the call path, so scope must be enforced in the token — and
+   the provider's scoping granularity, not temper's authz, sets the ceiling. An agent could fetch
+   remote content its team never subscribed to and author it into that team's cogmap with clean
+   provenance. Mitigations already identified: human-driven sessions are naturally 1:1 (the asymmetry
+   bites **only unattended machine agents**); team-minted M2M credentials make a coarse connector a
+   floor rather than a ceiling. **A coarse app-level connector is acceptable; an undeclared one is
+   not.** What is the minimum declaration that makes this reviewable rather than latent?
+4. **Vercel Connect vs. own the credential + HMAC** *(axis 1 only)*. Strong lean to Connect (it does
    both halves), but the self-hosting coupling could overturn it. Note the asymmetry: the *brokering*
    axis is settled by rule; only the *credential* axis is open.
-4. **What does a remote binding look like, if we want one?** An edge cannot point at a
+5. **What does a remote binding look like, if we want one?** An edge cannot point at a
    `kb_remote_sources` row (`kb_edges` endpoints are resources/cogmaps only). Binding a temper task to
    a Linear ticket would need a stub resource, a property/facet, or a widened edge. **Not decided.**
-5. **Selector language.** Per-provider and per-grain, and it must declare its own capability. What is
+6. **Selector language.** Per-provider and per-grain, and it must declare its own capability. What is
    the minimum expressive selector that covers "CODEOWNERS paths in repo Y" and "Linear project P"
    without becoming a query language?
-6. **What distillation actually means in practice.** Named by the goal's author as undefined. What a
+7. **What distillation actually means in practice.** Named by the goal's author as undefined. What a
    steward *does* with a subscribed event under its telos — and specifically what edges, if any, get
    authored into a cogmap, and by whom.
 
