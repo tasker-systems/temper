@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod auth_config;
 pub mod backend;
+pub mod broker;
 pub mod config;
 pub mod error;
 pub mod services;

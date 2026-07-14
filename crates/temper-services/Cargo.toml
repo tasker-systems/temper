@@ -32,6 +32,9 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
+# Path-segment encoding for the Connect mint URL — a connector uid is one
+# url-encoded path segment (`github/acme` → `github%2Facme`).
+percent-encoding = "2"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
 [features]
