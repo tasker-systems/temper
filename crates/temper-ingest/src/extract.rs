@@ -176,6 +176,14 @@ mod tests {
         let err = extract_to_markdown(f.path())
             .await
             .expect_err("an unknown binary format must not extract");
-        assert!(err.to_string().contains("failed to extract"), "got: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("failed to extract"), "got: {msg}");
+        // Name the file, same as the corrupt-PDF case — without this the assertion above would
+        // still pass if the path were dropped from the message, which is what a user needs most
+        // when a bulk `--from` sweep fails on one file out of hundreds.
+        assert!(
+            msg.contains(f.path().to_str().unwrap()),
+            "must name the offending file, got: {msg}"
+        );
     }
 }

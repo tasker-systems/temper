@@ -205,6 +205,28 @@ async fn resolve_from_input<R: std::io::Read>(
         crate::extract::extract_to_markdown(&path).await?
     };
 
+    // An extractor that finds no text does not error — it returns Ok(""). A scanned or image-only
+    // PDF is the common case: structurally valid, opens fine, has no text layer to give.
+    //
+    // Left alone, that empty string is filtered to None downstream and the backend synthesizes
+    // `# {title}` in its place, so the command would exit 0, print a ref, and store a title-only
+    // resource with the document silently gone. That is the same class of bug as #420 item 3
+    // (a silently-partial ingest), and it is worse than the failure it replaced: before PDF
+    // support, this input failed loudly and told you to convert the file.
+    //
+    // Refuse, the way an explicit empty `--body` already does.
+    if extracted.content.trim().is_empty() {
+        let remedy = if extracted.mime_type == "application/pdf" {
+            "it has no text layer — a scanned or image-only PDF. Run it through OCR first \
+             (e.g. `ocrmypdf in.pdf out.pdf`), or pass the text with --body"
+        } else {
+            "it yielded no text"
+        };
+        return Err(TemperError::Config(format!(
+            "--from extracted no text from '{from}': {remedy}"
+        )));
+    }
+
     Ok(Some(extracted.content))
 }
 
@@ -2669,6 +2691,44 @@ mod from_flag_tests {
             .expect("file:// URI should resolve to the local file")
             .expect("should return a body");
         assert!(body.contains("hello from a file uri"), "got: {body}");
+    }
+
+    #[tokio::test]
+    async fn from_a_pdf_with_no_text_layer_refuses_rather_than_ingesting_nothing() {
+        // A scanned / image-only PDF is structurally valid, so the extractor opens it happily and
+        // returns Ok("") — it has no text to give. That empty body used to flow straight through:
+        // it was filtered to None and the backend synthesized `# {title}` in its place, so the
+        // command exited 0, printed a ref, and stored a title-only resource. The document was
+        // silently gone. Refuse instead — a knowledge base must not swallow a document (#420).
+        //
+        // The fixture is a valid one-page PDF with no text operators. It must fail HERE, on the
+        // empty extraction — not as a parse error, which would make this test pass for the wrong
+        // reason.
+        let pdf = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/no-text-layer.pdf");
+        let err = resolve_from_input(
+            Some(pdf.to_str().unwrap()),
+            None,
+            /*stdin_is_tty:*/ true,
+            Cursor::new(b""),
+            ready,
+        )
+        .await
+        .expect_err("a PDF with no text layer must not ingest as an empty body");
+
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("no text"),
+            "must say the PDF had no text to extract, got: {msg}"
+        );
+        assert!(
+            msg.contains("no-text-layer.pdf"),
+            "must name the offending file, got: {msg}"
+        );
+        assert!(
+            msg.contains("ocrmypdf"),
+            "must point at a way forward (OCR), got: {msg}"
+        );
     }
 
     #[tokio::test]

@@ -14,9 +14,22 @@ WORKSPACE_PATH = { value = ".", relative = true }
 # ONNX install already taught this repo what happens when one setting is copy-pasted across five
 # workflow files. One line, one source of truth.
 #
-# Bumping: pdfium parses untrusted input, so track releases rather than letting this rot. Verify the
-# tag exists for all three release targets before bumping:
-#   https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/<VER>/pdfium-{mac-arm64,linux-x64,win-x64}.tgz
+# Bumping: pdfium parses untrusted input, so track releases rather than letting this rot.
+#
+#   1. Verify the tag publishes all three release targets, or CI dies on the one you didn't check:
+#      https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/<VER>/pdfium-{mac-arm64,linux-x64,win-x64}.tgz
+#   2. Edit the value below, then **`cargo clean -p kreuzberg`**. This is not optional.
+#
+# Step 2 is load-bearing: kreuzberg's build.rs does NOT emit `cargo:rerun-if-env-changed=PDFIUM_VERSION`,
+# and that directive is the *only* way cargo tracks a build script's env dependencies. It also
+# short-circuits the download outright if a pdfium already sits in OUT_DIR. So on any warm cache —
+# including the release job, which uses Swatinem/rust-cache — editing this line alone changes
+# nothing: the build script never re-runs, the old pdfium stays, CI goes green, and the binary ships
+# the version you thought you replaced. The bump silently no-ops and the pin's whole purpose fails.
+#
+# Note this pin fixes the version *string*, not the *bytes*: unlike the ONNX model (whose sha256 is
+# verified at build time, a hard error on mismatch), nothing verifies the pdfium we actually linked.
+# Closing that gap is the hermetic-vendoring follow-up.
 PDFIUM_VERSION = "7947"
 
 [profile.dev]
