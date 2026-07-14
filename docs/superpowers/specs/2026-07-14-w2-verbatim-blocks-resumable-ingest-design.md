@@ -1,4 +1,4 @@
-# W2 — Content blocks own their content: byte-exact round-trip and an ingest that completes honestly
+# W2 — Block revisions own their content: byte-exact round-trip and an ingest that completes honestly
 
 **Task:** `019f5fef-bc3a-7851-8e7a-6fbc1a1cb265` (#420 set 3) · **Branch:** `jct/server-side-embed-drop-cli-onnx`
 **Status:** design — approved · **Date:** 2026-07-14
@@ -24,35 +24,32 @@ A `kb_content_block` is **not** a text container that happens to be badly named.
 **Chunks live deliberately beneath that layer**: they are the units of *what is embeddable and
 tsvector-able*. Derived, retrieval-oriented, replaceable.
 
-So the block owning its own text is not a naming fix — it is **the natural completion of what a block
-already is**. A discrete semantic unit that carries its own provenance and can be updated in place
-should own the content that provenance is *about*. Today it does not, and that is the defect.
+So a block owning its own text is not a naming fix — it is **the natural completion of what a block
+already is**. The unit that carries provenance should own the content that provenance is *about*.
 
 > **Today's reality, named honestly.** The segmented ingest cuts blocks on a **256 KB size budget**, so
-> a large raw ingest becomes arbitrary byte-cuts (and a small one, a single giant block). Those are
-> poor attribution anchors — an artifact of the *transport*, not the model. This design does **not**
-> cement that: `body = concat(blocks ORDER BY seq)` holds whether blocks are size-cuts *or* real
-> semantic units, so re-blocking a document later is a pure restructure of boundaries over the same
-> bytes, and the body is invariant under it. The wart stays cheap to fix.
+> a large raw ingest becomes arbitrary byte-cuts (and a small one, a single giant block). Those are poor
+> attribution anchors — an artifact of the *transport*, not the model. This design does **not** cement
+> that: `body = concat(blocks ORDER BY seq)` holds whether blocks are size-cuts *or* real semantic
+> units, so re-blocking later is a pure restructure of boundaries over unchanged bytes.
 
 ## The problem
 
 **The resource's text is not stored where it belongs.** It lives only in `kb_chunk_content`, and the
-body is *reconstructed* from chunks on read. Two consequences, both live in production:
+body is *reconstructed* from chunks on read. Three consequences, all live in production:
 
 1. **Round-trip is lossy.** `content::reconstruct_body` ends in `pieces.join("\n\n")`, so a chunk
    boundary falling mid-paragraph returns an inserted blank line. Measured: a 1,202,908-byte body reads
-   back as 1,203,710 (+802). A differential across **both** write paths (client-embedded and
-   server-embedded) returns **byte-identical, equally lossy** output — pre-existing and
-   path-independent, not a regression. The heading-duplication bug (task `019f4694`) is its sibling:
-   same root cause, because `reconstruct_body` must *re-synthesize* headings that chunk text strips.
-2. **`body_hash` cannot detect any of it.** It is `body_hash_from_chunk_hashes` — a merkle over *chunk*
-   hashes. It attests "the chunks you sent are the chunks I stored", and is structurally blind to a
-   corruption introduced *after* the chunks are already correct.
+   back as 1,203,710 (+802). A differential across **both** write paths returns **byte-identical,
+   equally lossy** output — pre-existing and path-independent, not a regression. The heading-duplication
+   bug (task `019f4694`) is its sibling: `reconstruct_body` must *re-synthesize* headings that chunk
+   text strips.
+2. **`body_hash` cannot detect any of it.** It is a merkle over *chunk* hashes — it attests "the chunks
+   you sent are the chunks I stored", and is structurally blind to a corruption introduced *after* the
+   chunks are already correct.
 3. **An interrupted segmented ingest is indistinguishable from a complete document.** The resource is
    created at `begin`, so a killed upload leaves it listed, searchable, and `status: ok` holding 93% of
-   its content. `kb_ingestion_records` has **no state column**; nothing in the schema can say "not
-   finished".
+   its content. Nothing in the schema can say "not finished".
 
 The same failure shape runs through all of it — the silently-**partial** document (set 3), the
 silently-**empty** one (the PDF session's F1), the silently-**unembedded** one. **A knowledge base that
@@ -63,53 +60,73 @@ cannot tell you what it does not have is worse than one that fails loudly.**
 | Question | Decision |
 |---|---|
 | What must round-trip guarantee? | **Byte-exact.** `sha256(PUT) == sha256(GET)`. |
-| Where does text live? | **On the block.** One home. Chunks reference it by offset. |
-| Existing rows, whose original bytes were never kept? | **Mark them honestly.** A `body_storage` discriminator; no laundering backfill of bytes nobody kept. |
+| Where does text live? | **On the block *revision*.** One home, immutable once written. |
+| Existing rows, whose original bytes were never kept? | **Mark them honestly.** A `body_storage` discriminator; no laundering backfill. |
 | A pre-finalize partial? | **Invisible until finalized.** Excluded from search and list; `show` works and says it is incomplete. |
 | Adopt `salvo-tus`? | **No.** We already have TUS's *shape*; we lack its *guarantees*. |
 
-## Architecture: move the text, do not copy it
+## Architecture: the revision owns the content
 
-**Chunking has no overlap**, so chunk text is already a partition of the body — storing raw block text
-*alongside* it would be a straight 2× duplication for nothing. So the text **moves**:
+The schema is already most of the way here — this design **finishes a model that exists** rather than
+imposing a new one. Verified against production:
 
-- **`kb_block_content(block_id, content, content_hash)`** — a sidecar (same shape as the existing
-  `kb_chunk_content`) and the single home for text. The block now owns the content its provenance
-  refers to.
-- **`kb_chunks` gains `start_char` / `end_char`** — offsets into its block's content.
+- **`kb_block_revisions` already records `block_body_hash` + `chunk_count` per revision.** It is a
+  **content-shaped record with no content** — a hash with nothing to attest.
+- **`kb_chunks.version` already lines up 1:1 with a block's revision count**, exactly, at every N
+  (blocks with 2 revisions have max chunk version 2; with 9 revisions, version 9).
+- **Every block has a revision row** (2,442 of 2,442). No special cases.
+- A mutation **re-versions the whole chunk cohort** of a block, so today the *entire* old block's text
+  is already retained as superseded chunk rows.
+
+So: **give the revision its content.**
+
+- **`kb_block_content(block_revision_id, content, content_hash)`** — the single home for text.
+  **Immutable once written**, because a revision is immutable.
+- **`kb_chunks` gains `block_revision_id` + `start_char` / `end_char`** — a character range into the
+  revision it belongs to.
+- **`kb_content_blocks.current_revision_id`** — the anchor points at its current state.
 - **`kb_chunk_content` is retired** for `verbatim` rows.
 
-Net storage is roughly **flat**: the body is added once, the chunk copy removed once. **No row holds
-its text twice in either state.**
+### Why this is the coherent choice
+
+Because revision content is **immutable**, a chunk's offsets are **always valid** — for current *and*
+superseded chunks, forever. That kills the whole problem class:
+
+- **No freeze-on-supersession copy step**, and therefore no new silent-loss failure mode. (The rejected
+  alternative — materialize superseded chunk prose into a sidecar at mutation time — would have added a
+  fresh instance of exactly the bug class this task exists to eliminate: miss the write, lose the prose,
+  silently.)
+- **One mechanism, not two.** No branch on `is_current` to find a chunk's text.
+- **Replay's proof obligation survives verbatim** — *"fold/supersede affect visibility, never
+  existence"* stays literally true, because the revision's content row still exists. Nothing is
+  reworded, nothing weakened.
+- **Point-in-time block content, for free.** *What did this block say when that citation was anchored to
+  it?* — answerable. For a system where provenance for agent-made statements of fact is first-class,
+  that is not a bonus; it is the point.
+
+**Storage is a wash.** Today already retains the whole superseded cohort's text; this retains the same
+bytes in one row per revision instead of scattered across dozens — plus the gap characters (headings)
+that today are simply thrown away.
 
 ### Offsets are CHARACTER offsets, and that is load-bearing
 
-**Postgres `substr()` on `text` counts characters, not bytes.** Had the offsets been *bytes*, SQL could
-not slice a chunk safely (multibyte content would corrupt), which would have forced FTS to aggregate
-**block** content instead — quietly demoting chunks out of their role and, as a side effect, pulling
-heading text into the search vector for the first time.
+**Postgres `substr()` on `text` counts characters, not bytes.** Byte offsets would leave SQL unable to
+slice a chunk safely (multibyte content corrupts), which would force FTS to aggregate *block* content —
+quietly demoting chunks out of their role and pulling heading text into the search vector for the first
+time.
 
-Character offsets avoid all of that:
-
-- **Chunks remain the embeddable and tsvector-able units, exactly as today.** `_rebuild_resource_search_vector`
-  keeps aggregating chunk text; it just derives that text by `substr` instead of reading a stored copy.
-- **No search behavior change.** No re-embed. Existing vectors stay valid.
-
-The layering is preserved: **block = addressable semantic unit that owns its content and its
-provenance; chunk = the derived retrieval unit beneath it.**
+Character offsets avoid all of it: **chunks remain the embeddable and tsvector-able units exactly as
+today.** `_rebuild_resource_search_vector` still aggregates chunk text; it merely *derives* that text by
+`substr` instead of reading a stored copy. **No search behavior change. No re-embed. Existing vectors
+stay valid.**
 
 ### Chunk ranges are a *gappy* index, not a partition
 
-Today a headed chunk's text has its `## Title` line **stripped** — precisely why `reconstruct_body` has
-to re-synthesize headings, and precisely why the heading-duplication bug exists.
-
-So chunk ranges deliberately **do not cover** heading lines. Those characters live in the block and
-belong to no chunk. Therefore:
-
-- **Chunk text stays byte-identical to today** (heading-stripped) — same slice. **No re-embed.**
-- **The body is byte-exact** — headings live in the block, where they belong.
-- **`reconstruct_body` is deleted, not fixed.** Both fidelity bugs die with it, because nothing
-  reconstructs anything any more.
+A headed chunk's text has its `## Title` line **stripped** — precisely why `reconstruct_body` has to
+re-synthesize headings, and precisely why the heading-duplication bug exists. So chunk ranges
+deliberately **do not cover** heading lines: those characters live in the revision's content and belong
+to no chunk. Therefore chunk text stays byte-identical to today, the body becomes byte-exact, and
+**`reconstruct_body` is deleted, not fixed** — both fidelity bugs die with it.
 
 ### The body is `concat(blocks)` with **no** separator
 
@@ -125,38 +142,53 @@ test must assert `join("") == doc`.
 
 Grounded against the **live** schema (`\d`), not the origin migrations.
 
-### 1. The block owns its content
+### 1. The revision owns its content — immutable
 
 ```sql
 CREATE TABLE kb_block_content (
-    block_id     uuid PRIMARY KEY REFERENCES kb_content_blocks(id) ON DELETE CASCADE,
+    block_revision_id uuid PRIMARY KEY
+        REFERENCES kb_block_revisions(id) ON DELETE CASCADE,
     content      text NOT NULL,
-    content_hash text NOT NULL   -- sha256 hex of the content's raw bytes
+    content_hash text NOT NULL   -- sha256 hex of content's RAW BYTES
 );
 ```
 
-`content_hash` is the block's raw-bytes sha256 — **the same value the client already sends** as
-`AppendBlockPayload.content_hash`, and which the server currently checks and then discards along with
-the bytes. Storing it makes the resume diff a direct comparison and removes a recompute.
+`content_hash` is the **raw-bytes** sha256 — the value the client already sends as
+`AppendBlockPayload.content_hash` and which the server currently checks and then discards along with the
+bytes. It is deliberately **distinct** from the sibling `kb_block_revisions.block_body_hash`, which is
+the *chunk merkle*. Two hashes over the same content, answering different questions: "are these the
+bytes?" and "are these the chunks?"
 
-### 2. Chunks become a gappy character-range index into their block
+### 2. The anchor points at its current state
+
+```sql
+ALTER TABLE kb_content_blocks
+    ADD COLUMN current_revision_id uuid REFERENCES kb_block_revisions(id);
+```
+
+The block-mutation path already `UPDATE`s this row (it maintains `last_event_id`), so this rides along
+on a write that already happens. It also removes any dependence on "latest revision by `created`" for
+correctness.
+
+### 3. Chunks index into the revision they belong to
 
 ```sql
 ALTER TABLE kb_chunks
-    ADD COLUMN start_char integer,
-    ADD COLUMN end_char   integer;
+    ADD COLUMN block_revision_id uuid REFERENCES kb_block_revisions(id),
+    ADD COLUMN start_char        integer,
+    ADD COLUMN end_char          integer;
 
 ALTER TABLE kb_chunks
     ADD CONSTRAINT ck_kb_chunks_char_range CHECK (
-        (start_char IS NULL AND end_char IS NULL)      -- legacy: text lives in kb_chunk_content
-     OR (start_char >= 0 AND end_char > start_char)    -- verbatim: half-open [start_char, end_char)
+        (block_revision_id IS NULL AND start_char IS NULL AND end_char IS NULL)  -- legacy: kb_chunk_content
+     OR (block_revision_id IS NOT NULL AND start_char >= 0 AND end_char > start_char)
     );
 ```
 
-NULL offsets are the discriminator at chunk grain. Ranges are **half-open** and need **not** cover the
-block — heading lines are the gaps.
+The three columns move together — the CHECK makes "half-migrated chunk" unrepresentable. Ranges are
+**half-open** and need **not** cover the revision; heading lines are the gaps.
 
-### 3. The two discriminators, both defaulting to the honest legacy answer
+### 4. The two discriminators, both defaulting to the honest legacy answer
 
 ```sql
 ALTER TABLE kb_resources
@@ -169,7 +201,6 @@ ALTER TABLE kb_resources
     ADD CONSTRAINT ck_kb_resources_ingest_state
         CHECK (ingest_state IN ('in_progress', 'complete'));
 
--- The owner's "what did I leave half-uploaded?" query.
 CREATE INDEX idx_kb_resources_incomplete
     ON kb_resources (owner_profile_id)
     WHERE ingest_state = 'in_progress';
@@ -180,33 +211,34 @@ server** — are labelled honestly; only the new write path opts *up* to `verbat
 defaults to `complete` because existing rows genuinely are. Both are `ADD COLUMN … NOT NULL DEFAULT`,
 catalog-only on PG11+ — **no table rewrite** on PG17 (Neon prod) or PG18 (local/CI).
 
-### 4. Readback: concat, with **no** separator
+### 5. Readback: concat, with **no** separator
 
 ```sql
 SELECT string_agg(bc.content, '' ORDER BY b.seq) AS body
   FROM kb_content_blocks b
-  JOIN kb_block_content  bc ON bc.block_id = b.id
+  JOIN kb_block_content  bc ON bc.block_revision_id = b.current_revision_id
  WHERE b.resource_id = $1 AND NOT b.is_folded;
 ```
 
 The `''` separator *is* the fix. `reconstruct_body` is then deleted.
 
-### 5. Chunk text is derived — and chunks keep their job
+### 6. Chunk text is derived — with no `is_current` branch
 
 ```sql
 SELECT c.id,
        substr(bc.content, c.start_char + 1, c.end_char - c.start_char) AS content
   FROM kb_chunks c
-  JOIN kb_block_content bc ON bc.block_id = c.block_id
- WHERE c.resource_id = $1 AND c.is_current AND c.start_char IS NOT NULL;
+  JOIN kb_block_content bc ON bc.block_revision_id = c.block_revision_id
+ WHERE c.resource_id = $1 AND c.is_current;
 ```
 
-`substr` is character-based, and so are the offsets — correct for multibyte content. The embed path and
-`_rebuild_resource_search_vector` both switch from *reading* `kb_chunk_content` to *deriving* the same
-text this way, for `verbatim` rows; `derived` rows keep the existing query unchanged. **The FTS vector
-and the embeddings see exactly the text they see today.**
+Drop the `is_current` filter and it works identically for **superseded** chunks — their revision's
+content is still there, unchanged. That is the coherence win, in one line. The embed path and
+`_rebuild_resource_search_vector` both switch from *reading* `kb_chunk_content` to *deriving* text this
+way for `verbatim` rows; `derived` rows keep the existing query. **FTS and embeddings see exactly the
+text they see today.**
 
-### 6. Search and list exclude partials
+### 7. Search and list exclude partials
 
 ```sql
   AND r.ingest_state = 'complete'
@@ -216,27 +248,23 @@ In the list/search query builders — **not** in `resources_visible_to`. Visibil
 predicate; completeness is a *content* predicate. Folding one into the other would quietly change who
 can see what.
 
-### Consequence of in-place block revision — state it, don't discover it
+### 8. Replay
 
-Blocks are revised **in place** (2,627 revisions across 2,442 live blocks; `kb_block_revisions` records
-`block_body_hash` + `chunk_count` per revision, **not** content). So `kb_block_content` holds the
-block's **current** content, and offsets are meaningful **only for `is_current` chunks**.
-
-A superseded `verbatim` chunk therefore keeps its `content_hash` (its identity) but has **no retrievable
-text** — its offsets would point into content that has since changed. This is consistent with block
-history already being hash-only. **It is a real difference from today**, where `kb_chunk_content` retains
-text for superseded chunks. Implementation must first confirm nothing reads it (`replay.rs` references
-`kb_chunk_content`). If something does, superseded chunks keep their sidecar row and only current chunks
-move to offsets.
+`kb_block_content` joins `PROJECTION_DUMPS` in `replay.rs`. The event sidecar lookup (which reconstructs
+chunk prose + embedding from storage so the ledger diff stays total without re-running ONNX) swaps
+`kb_chunk_content` for the `substr`-over-revision derivation. **The invariant is unchanged**, not
+reworded: every chunk a content-bearing payload references still has its content, because its revision
+still has it.
 
 ## The integrity chain becomes real
 
-- **Per block:** `content_hash = sha256(raw block bytes)`.
-- **Per resource:** `body_hash = sha256(concat(block content))` — the hash of the actual document.
+- **Per revision:** `content_hash = sha256(raw content bytes)`.
+- **Per resource:** `body_hash = sha256(concat(current revision content ORDER BY seq))` — the hash of the
+  actual document.
 - **At finalize:** the server recomputes over stored content and compares to the client's
   `expected_body_hash`. **A mismatch fails the finalize.**
-- **`body_storage`** discriminates the guarantee: `verbatim` (byte-exact; `body_hash` is a true
-  integrity check) vs `derived` (legacy; reconstructed; `body_hash` attests chunks only).
+- **`body_storage`** discriminates the guarantee: `verbatim` (byte-exact; `body_hash` is a true integrity
+  check) vs `derived` (legacy; reconstructed; `body_hash` attests chunks only).
 
 ## Ingest lifecycle
 
@@ -273,7 +301,7 @@ Its value was comparative, and the comparison says we already have the shape.
 
 Same handshake; our unit is a *semantic segment with a `seq`* rather than a byte offset. `salvo-tus`
 does not drop in regardless (we are **Axum**, not Salvo), and **vanilla TUS models an opaque byte
-stream** — it has no notion of our blocks-as-attribution-anchors, provenance, chunks, or embeddings.
+stream** — it has no notion of blocks-as-attribution-anchors, provenance, chunks, or embeddings.
 Adopting it would mean uploading an opaque blob and re-deriving everything server-side, which the
 companion measurement shows is ~10× slower.
 
@@ -284,17 +312,17 @@ safe. Today the unique index on `(resource_id, seq)` would simply reject it. It 
 
 ## Migration
 
-**Additive-only on `main`** (DEPLOYING.md). New table `kb_block_content`; new nullable
-`kb_chunks.start_char`/`end_char`; `kb_resources.body_storage` (default `derived`) and `ingest_state`
-(default `complete`). Use `uuid_generate_v7()`, never native `uuidv7()` — the latter passes PG18
-dev/CI and breaks Neon's PG17.
+**Additive-only on `main`** (DEPLOYING.md). One new table (`kb_block_content`); four new nullable columns
+(`kb_content_blocks.current_revision_id`, `kb_chunks.block_revision_id`/`start_char`/`end_char`); two new
+defaulted columns on `kb_resources`. Use `uuid_generate_v7()`, never native `uuidv7()` — the latter passes
+PG18 dev/CI and breaks Neon's PG17.
 
-Legacy `derived` rows keep `kb_chunk_content` and their embeddings, with NULL offsets, and continue to
-read back through `reconstruct_body`. They **heal on their next write**, not by migration.
+**No backfill.** Legacy rows keep `kb_chunk_content` and their embeddings, with NULL offsets, and continue
+to read back through `reconstruct_body`. They are labelled `derived` and **heal on their next write**.
 
-Accepted cost: for a period, two text mechanisms coexist (offsets for `verbatim`, sidecar text for
-`derived`). `kb_chunk_content` can only be dropped once no `derived` rows remain — possibly not without
-a deliberate cutover. That is the price of not laundering unrecoverable data, and it is worth paying.
+Accepted cost: for a period, two text mechanisms coexist (revision content for `verbatim`, sidecar text for
+`derived`). `kb_chunk_content` can only be dropped once no `derived` rows remain — possibly not without a
+deliberate cutover. That is the price of not laundering unrecoverable data, and it is worth paying.
 
 Wire contracts stay additive (a deployed instance must not hard-fail across version skew): new response
 fields are optional.
@@ -304,23 +332,26 @@ fields are optional.
 - **Byte-exact round-trip property test** — the hand-run differential, promoted. Random bodies including
   **CRLF**, **trailing newline**, **no trailing newline**, and multibyte unicode: PUT → GET → assert
   `sha256` identity.
-- **Chunk text is unchanged** — for a `verbatim` resource, the `substr`-derived chunk text must equal
-  what the old `kb_chunk_content` path produced. This is the guard that "no re-embed needed" is true and
-  that search behavior did not move.
-- **Kill-mid-ingest** — leaves an `in_progress` resource: absent from search, absent from list, readable
-  via `show`, clearly incomplete. Resume completes it.
+- **Chunk text is unchanged** — for a `verbatim` resource, `substr`-derived chunk text must equal what the
+  old `kb_chunk_content` path produced. This is the guard that "no re-embed needed" is true and that search
+  behavior did not move.
+- **Superseded chunks still resolve** — mutate a block, then read a superseded chunk's text and assert it
+  is the *old* revision's slice, not the new one. This is the invariant Option 3 buys, so it gets a test.
+- **Kill-mid-ingest** — leaves an `in_progress` resource: absent from search, absent from list, readable via
+  `show`, clearly incomplete. Resume completes it.
 - **Bad `expected_body_hash` at finalize** → fails; the resource stays `in_progress` and resumable.
 - **Idempotent append** — same `seq` + same `content_hash` is a no-op; a different hash conflicts.
 - **Legacy regression guard** — `derived` rows still read back through the old path.
+- **Replay equivalence** — unchanged, with `kb_block_content` in the projection diff.
 - E2E driven through the **CLI**, the production caller.
 
 ## Open questions
 
-- **Does anything read superseded (`is_current = false`) chunk text?** If yes, superseded chunks keep
-  their `kb_chunk_content` row and only current chunks move to offsets. Must be settled before the
-  migration — `replay.rs` first.
 - Whether `derived` rows ever get a deliberate cutover, or simply age out.
-- **Semantic blocking is out of scope, and deliberately unblocked by this design.** Today's size-cut
-  blocks are a transport artifact. When the tooling learns to cut blocks on semantic boundaries, the
-  `body = concat(blocks)` invariant means re-blocking is a restructure of boundaries over unchanged
-  bytes.
+- **Semantic blocking is out of scope, and deliberately unblocked.** Today's size-cut blocks are a
+  transport artifact. When the tooling learns to cut on semantic boundaries, the `body = concat(blocks)`
+  invariant makes re-blocking a restructure of boundaries over unchanged bytes.
+
+*(Resolved during design: "does anything read superseded chunk text?" — yes, `replay.rs` does, as a stated
+proof obligation. Option 3 makes the question moot: superseded chunks resolve against their own immutable
+revision, so nothing is lost and the obligation holds verbatim.)*
