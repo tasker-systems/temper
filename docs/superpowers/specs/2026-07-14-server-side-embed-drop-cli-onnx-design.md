@@ -1,93 +1,104 @@
-# Moving embedding server-side, and dropping ONNX from the CLI
+# Where embeddings get computed: the measurement, and why ONNX stays in the CLI
 
 **Task:** `019f5fef-bc3a-7851-8e7a-6fbc1a1cb265` (#420 set 3) · **Branch:** `jct/server-side-embed-drop-cli-onnx`
 **Status:** plan · **Date:** 2026-07-14
 
-The task's second section proposed inverting a documented invariant: today the CLI is the primary
-embed path and the server stores client-supplied chunks verbatim, embedding only when chunks are
-absent. The proposal is to let the server embed large bodies via the existing per-minute drain, so
-the CLI returns as soon as the bytes land — and, if that holds, to remove ONNX from the CLI entirely
-and reduce the client to a TUS-style chunked upload with verified round-trip.
+#420 set 3's second section proposed inverting a documented invariant: let the server embed large
+bodies via the per-minute drain, so the CLI returns as soon as the bytes land — and, if that held,
+**remove ONNX from the CLI entirely** and reduce the client to a TUS-style resumable upload.
 
-This document records what was **measured in production** before any of that was designed, and the
-plan that follows from it.
+We drove it end-to-end in production before designing anything. **The proposal's premise did not
+survive the measurement.** This document records what was measured, the decision that follows, and
+the three workstreams that replace it.
+
+> **Decision: ONNX stays in the CLI.** Dropping it was only ever on the table because server-side
+> embedding was *estimated* to be profoundly faster. It is not — it is **~10× slower in wall-clock**.
+> We already bind ONNX today and it works. Removing it would buy a smaller binary at the cost of
+> making every ingest an order of magnitude slower to become searchable.
 
 ## What was measured (2026-07-14, prod)
 
-The task made the plan conditional on one thing: *"any plan that leans on the server cron must first
-confirm `/api/embed/dispatch` actually fires and does work in production."* It does.
+### The drain is live and healthy — the cron gate is cleared
 
-### The drain is live and healthy
+Task `019f6043`'s open Q2 ("deploying a cron ≠ the cron running") is answered:
 
-- **320 embed jobs, all `done`.** Zero pending, zero `dead`, zero `waiting_for_retry`.
-- **`avg_attempts = 1.00`** across all 320 — not one embed has ever needed a retry.
-- **0 of 33,760 chunks index-wide have a NULL embedding.** Nothing has ever been stranded.
-- All three switches are already on in prod: jobs are *enqueued* (so `TEMPER_ASYNC_EMBED=1`),
-  *claimed* (so the Vercel cron's `CRON_SECRET` bearer matches `EMBED_DISPATCH_SECRET`), and
-  *completed* (so the drain does work). This answers Q2 of task `019f6043-4668-7423-b6d0-14595592f5e9`.
+- **320 embed jobs, all `done`** — zero pending, zero `dead`, zero `waiting_for_retry`.
+- **`avg_attempts = 1.00`** — not one embed has ever needed a retry.
+- **0 of 33,760 chunks index-wide un-embedded.** Nothing has ever been stranded.
+- All three switches are already on in prod: jobs are enqueued (`TEMPER_ASYNC_EMBED=1`), claimed (the
+  cron's `CRON_SECRET` bearer matches `EMBED_DISPATCH_SECRET`), and completed.
 
-### Server embed throughput — measured, not extrapolated
+### The large-document path works — and the partial re-enqueue design holds at size
 
-From `leased_at → completed_at` on real prod jobs: 58 chunks in 9s, 57 in 7s, 44 in 8s.
+A 1,202,908-byte body (**939 chunks**) was POSTed to `/api/ingest` with **`chunks_packed` absent** —
+the exact path a no-ONNX CLI would use, and one the drain had **never run at size** (its largest real
+job was 58 chunks; p50 = 1, p95 = 8). It converged with nothing stranded, `attempts` pinned at 1
+throughout. `dispatch_tick`'s complete-then-enqueue works exactly as its comment claims.
 
-> **~6.4 chunks/sec ≈ 156 ms/chunk.**
+### …but the server is ~10× slower than the client, and that kills the premise
 
-This is the number `EMBED_CHUNK_BUDGET`'s own comment blocks on — *"the right value depends on the
-function's real wall-clock limit and the box's real ms/chunk, neither of which is measured yet (task
-`019f5892`). Raise it once they are."* It is now measured.
+**The correction that changed the plan.** An early read of `leased_at → completed_at` on *small* jobs
+suggested ~156 ms/chunk, implying the server was ~1.6× faster than the CLI. That was **wrong**, and
+the error is instructive: per-chunk cost *falls* with document size —
 
-### The large-document path, driven end-to-end in prod
+| chunks in resource | jobs | ms/chunk |
+|---|---|---|
+| 1–4 | 270 | 1633 |
+| 5–16 | 30 | 678 |
+| 17–64 | 21 | **176** ← where the bogus estimate came from |
 
-A 1,202,908-byte body (**939 chunks** — the same count as the existing `BENCH` rows, so this is the
-real large-doc case) was POSTed to `/api/ingest` with **`chunks_packed` deliberately absent**, which
-is exactly the code path a no-ONNX CLI would use. The drain had never once run at this size: its
-largest real job to date was 58 chunks (p50 = 1, p95 = 8). Every 939-chunk doc in the index had been
-client-embedded.
+— which is **fixed per-invocation overhead being amortized**, not economy of scale. Small documents
+have *short* chunks; BERT inference cost scales with sequence length. Measured on real **full-size**
+chunks (two clean passes of the 939-chunk probe, from the job rows):
 
-| | |
-|---|---|
-| Client wait (upload returns) | **16.9 s** |
-| Drain convergence | **15 passes × 64 chunks**, exactly linear |
-| `attempts` throughout | **1** — never retried, never `dead` |
-| Chunks stranded | **0** — 939/939 embedded |
-| Time to fully searchable | **~15.5 min** (default 64-chunk budget) |
+| pass | chunks | work (leased→completed) | ms/chunk |
+|---|---|---|---|
+| 1 | 512 | **288.5 s** | 563 |
+| 2 | 427 | **241.5 s** | 566 |
 
-Two findings from this:
+> **~565 ms per full-size chunk, single-threaded.** The 939-chunk doc costs **~530 s (~8.8 min) of
+> serial server compute.**
 
-1. **The partial re-enqueue design works at size.** `dispatch_tick`'s complete-then-enqueue keeps the
-   attempt count clean instead of burning toward `dead`, exactly as its comment claims.
-2. **Throughput is linear.** Issue #420 item 4 observed "superlinear-looking cost" on large bodies.
-   That **does not reproduce server-side** — every pass embedded precisely 64 chunks.
-
-### The real trade is not the one the task assumed
-
-The task framed this as "the user waits on single-core embedding." Measured on this laptop, the
-release CLI embeds the same body in **55.3 s wall (208 s CPU, 378% — it is multi-core)**. The
-"~4 minutes / single-core / 94% of wall" figure in the task came from the **e2e test on CI** (debug
-build), not the release binary.
-
-So the honest trade:
+The same body on the release CLI: **55.3 s wall, 208 s CPU, 378% — it is multi-core.** (The task's
+"~4 min / single-core / 94% of wall" figure came from a **debug-build CI e2e**, not the release
+binary.)
 
 | | client-side (today) | server-side (measured) |
 |---|---|---|
-| CLI returns in | 55.3 s | **16.9 s** |
-| Fully searchable after | 55.3 s (immediate) | **~15.5 min** (at 64-chunk budget) |
+| CLI returns in | 55.3 s | ~3 s |
+| **Fully searchable after** | **55.3 s** | **~10 min** |
+| Server CPU per 1.2 MB doc | 0 | **~530 s** |
 
-Server-side wins the *client wait* by ~3.3×, but **loses search freshness by ~17×** at the current
-budget. That is not an argument against the move — it is an argument that **the budget is the thing
-to fix, and it is the cheapest fix available.** Each pass does ~10 s of work inside a function that
-gets 300 s, then idles ~50 s waiting for the next cron tick: **~84% of the wall is idle.** At
-156 ms/chunk, a budget near **1,200 chunks ≈ 187 s** fits one pass comfortably inside the timeout and
-collapses a 939-chunk doc to a **single pass**. `TEMPER_EMBED_CHUNK_BUDGET` is an env var — no
-rebuild, no migration.
+Server-side wins the *client wait* and loses *time-to-searchable* by ~10×, while adding real compute
+spend. **And it is not tunable away: we are compute-bound, not cron-bound.** The clean budget-512 run
+took 9.9 min wall against ~8.8 min of pure compute — there is almost no idle left to reclaim. Raising
+the chunk budget only rearranges the same work.
 
-### Round-trip consistency is already broken — on both paths
+### Root cause of the 10×: the server pins ONNX to one core, on purpose
 
-`readback::body` does not return stored bytes. **The body is never stored raw**; it is *reconstructed
-from chunks* via `content::reconstruct_body`, which joins pieces with `pieces.join("\n\n")`. Wherever
-the chunker split mid-paragraph, a `\n` comes back as `\n\n`.
+`temper-ingest/src/embed.rs` already carries the full intra-op threading lever
+(`TEMPER_ONNX_INTRA_THREADS`, `set_intra_op_threads`, the CLI's `--embed-threads`), and says plainly:
 
-The differential (same 1.2 MB body through both paths, read back through the CLI's `resource show`):
+> *"The right count still differs by surface… The server (temper-api) may run N concurrent ingests,
+> where 'every embed grabs every core' risks oversubscription — its ideal count is an open question
+> pending a measurement under concurrent load (task `019f5892`), so **the server does NOT opt in here
+> and inherits the conservative pinned default below**."* → `INTRA_THREADS_DEFAULT: usize = 1`
+
+So the server is single-threaded **by choice**, pending exactly the measurement above. The CLI, by
+contrast, resolves its default from the detected **performance-core** count — and that file already
+documents why the optimum is P-cores, not all cores (efficiency cores drag the intra-op barrier).
+
+**Vercel sells cores by the gigabyte: 2048 MB of memory per vCPU.** So server multi-core is not a free
+env toggle — it needs provisioned memory (`functions.memory`), and Vercel's Active-CPU pricing bills
+provisioned memory *and* active CPU.
+
+### Round-trip consistency is already broken — on both paths, identically
+
+`readback::body` does **not** return stored bytes. **The body is never stored raw**; it is
+*reconstructed from chunks* by `content::reconstruct_body`, which ends in `pieces.join("\n\n")`. Where
+the chunker split mid-paragraph, a `\n` returns as `\n\n`.
+
+Differential — the same 1.2 MB body through both paths, read back via the CLI's `resource show`:
 
 | | bytes | sha256 | faithful |
 |---|---|---|---|
@@ -95,92 +106,59 @@ The differential (same 1.2 MB body through both paths, read back through the CLI
 | **server**-embed readback | 1,203,710 | `9527442c67f26157` | ✗ |
 | **client**-embed readback | 1,203,710 | `9527442c67f26157` | ✗ |
 
-**Both paths produce byte-identical readback.** So:
+**Both paths read back byte-identical and equally lossy.** So this is *pre-existing*, not a regression
+— but it is the load-bearing finding for the TUS work: **because the body is derived rather than
+stored, `body_hash` can never be a true end-to-end integrity check.** It is a sibling of the known
+heading-duplication bug (task `019f4694`): same root cause — `reconstruct_body` is not an exact
+inverse of the chunker.
 
-- Moving embedding server-side **does not change the stored document** — fidelity is not a regression
-  and does not block this plan.
-- But round-trip infidelity **already exists today**, on both paths, and it is squarely inside the
-  "round trip consistency" half of what we want to build. It is a sibling of the known heading-
-  duplication bug (task `019f4694`): same root cause — `reconstruct_body` is not an exact inverse of
-  the chunker.
+## Decision
 
-For a knowledge base this is the load-bearing observation: **because the body is derived rather than
-stored, `body_hash` can never be a true end-to-end integrity check.** That is the strongest argument
-for the TUS-shaped design storing content blocks verbatim and treating chunks as a *derived index*.
+**Keep client-side embedding. ONNX stays in the CLI.** The three prerequisites that a removal would
+have needed (the drain's non-atomic complete-then-enqueue; the uncounted `cogmap create`/`reconcile`
+embed consumers; server-side parallelism) are all real, but they were only worth paying for if the
+server were faster. It isn't.
 
-## What blocks dropping ONNX (and what doesn't)
+Effort redirects to three workstreams.
 
-Three CLI consumers of `temper-ingest/embed`, not one:
+## Workstreams
 
-| consumer | status |
-|---|---|
-| `resource create` / `update` (ingest) | ✅ **Covered** — the drain handles it; proven above. |
-| `search` | ✅ **Free** — the server already embeds text-only queries (#297), and *surfaces* the degraded case ("vector ranking was unavailable… FTS + graph only") rather than silently returning keyword hits. |
-| `cogmap create` (genesis) + `cogmap reconcile` | ❌ **Not covered.** These PUT/POST *pre-embedded* payloads; the code states the server "stays embed-free on the PUT path." Nobody had counted these. |
+### W1 — Make client-side embedding faster and more effective
 
-And one durability hole, named in `dispatch_tick`'s own comment: the partial path's
-**complete-then-enqueue is not atomic**. A crash between the two statements leaves the resource with
-**no job**, and there is no automatic stale sweep (`enqueue_stale` is operator-triggered by design).
-The chunks simply sit stale until an operator runs `reembed`.
+The client is now confirmed as the *right* place for this, so make it good. The CLI already resolves
+intra-op threads from detected performance cores and pipelines embed→upload at depth 1. Open ground:
+per-chunk cost is dominated by sequence length, so chunking strategy is a throughput lever, not just a
+retrieval one; and `embed_and_pack` still runs one segment at a time on a single `spawn_blocking`.
 
-That is tolerable *today* precisely because the CLI embeds client-side and the drain is a fallback.
-**Drop ONNX and the drain becomes the only embed path — and that hole becomes a document that is
-stored, `status: ok`, listed, and silently unsearchable.** Which is the exact bug class this task
-exists to kill:
+### W2 — TUS-style resumable upload + genuine round-trip consistency
 
-- set 3 = a silently **partial** document,
-- the PDF session's F1 = a silently **empty** one,
-- this would be a silently **unembedded** one.
+The client's job is "get the bytes there, and verify what came back." That is the natural home for the
+TUS-shaped resumable upload #420 set 3 proposes, and for **fixing the fidelity gap above** — storing
+content blocks verbatim and treating chunks as a *derived index*, so `body_hash` means something.
+This also carries set 3's original goal: an interrupted ingest must be **detectable**, never presented
+as a complete, authoritative, searchable document.
 
-So "drop ONNX" is not a deletion. It has a prerequisite.
+### W3 — Server-side multi-core ONNX (for the fallback path)
 
-## Plan
+With the CLI keeping ONNX, the server embed path serves MCP and embedder-less clients — lower stakes,
+but 565 ms/chunk is still bad. The lever exists (`TEMPER_ONNX_INTRA_THREADS`, no rebuild); what it
+needs is cores (memory) and the concurrent-load measurement task `019f5892` already names. Weigh
+against Active-CPU spend.
 
-### P1 — Raise the chunk budget, and measure (no code, no migration)
+## Immediate operational items
 
-Set `TEMPER_EMBED_CHUNK_BUDGET` in prod (start ~512, step toward ~1,200) and re-run the 939-chunk
-probe, watching passes and the function's wall time. Deliverable: the budget that keeps a single pass
-comfortably inside the function timeout, plus the resulting **time-to-searchable SLO** the task asks
-for. This alone takes a large doc from ~15.5 min to ~2–3 min and is reversible by an env edit.
-
-Also worth resolving here: the lease (`DEFAULT_EMBED_LEASE_SECONDS = 600`) is longer than the
-function timeout (300 s), so a timed-out pass sits leased for 10 minutes before the reaper can retry.
-
-### P2 — Close the durability hole (**prerequisite for P4**)
-
-Make the partial path's complete-then-enqueue durable — a transactional hand-off, or a stale sweep
-that heals without an operator. Until this lands, the drain is not safe as the *only* embed path.
-Pair it with a detectable-partial signal so an un-embedded resource is never presented as a complete,
-authoritative, searchable document (this is the same completeness marker set 3 already wants, and
-`embedding_status` (`pending`/`ready`) is already on the wire to carry it).
-
-### P3 — Server-side embed for the cogmap genesis / reconcile paths
-
-Extend deferred embedding to the two paths that today assume a pre-embedded payload, or route them
-through the drain. Without this, ONNX cannot leave the CLI.
-
-### P4 — Drop ONNX from the CLI
-
-Remove the `embed` feature and its consumers, `embed-download`, and the model-sha-drift machinery
-(`temper-ingest/build.rs`'s hash gate exists to keep *two* embedders in lockstep; with one embedder
-the whole class of problem disappears). Shrinks the binary and deletes a maintenance burden.
-
-Note this **re-adds server compute spend** — the cost the client-side choice was made to avoid. That
-trade is now quantified: ~156 ms/chunk of server CPU per ingested chunk.
-
-### P5 — TUS-style chunked upload + genuine round-trip consistency
-
-With embedding gone from the client, the CLI's job collapses to "get the bytes there and verify what
-came back." That is the natural home for the TUS-shaped resumable upload the task proposes — and for
-fixing `reconstruct_body` so that what you read back is what you wrote, byte for byte, which is the
-prerequisite for `body_hash` meaning anything at all.
+- **`TEMPER_EMBED_CHUNK_BUDGET=512` is unsafe and is live in prod right now.** Pass 1 of the probe ran
+  **288.5 s** against a presumed **300 s** default ceiling — **96% of the limit**, surviving on luck.
+  When a pass does blow the timeout the failure is *slow and quiet*: `DEFAULT_EMBED_LEASE_SECONDS` is
+  600 s, so the job outlives the dead function and sits leased for ten minutes before the reaper can
+  retry it. **Reduced to 256 (~145 s/pass); pending the next deploy to take effect.**
+- **Pin `maxDuration` (and `memory`) explicitly in `vercel.json`.** Nothing in the repo sets either —
+  the entire safety margin above rests on an *assumed* platform default we never chose. Whatever value
+  we pick, it should be ours and it should be visible.
 
 ## Open questions
 
-- **P1's budget ceiling.** 156 ms/chunk is measured, but the function's *real* wall-clock limit under
-  Fluid Compute is assumed (300 s default), not verified. Verify before committing a budget.
-- **Server spend.** Re-adding embed cost to the server is the thing client-side embedding was chosen
-  to avoid. The per-chunk figure is now known; the monthly figure is not.
-- **Small bodies.** Even with ONNX gone, a small doc embedded by the drain is not searchable until the
-  next tick (≤60 s), versus instantly today. Probably fine — but it is a real regression in freshness
-  for the common case, and should be stated rather than discovered.
+- The 300 s ceiling is assumed, not verified. Pinning `maxDuration` resolves this by construction.
+- The lease (600 s) outliving the function timeout (~300 s) is a latent slow-failure mode independent
+  of budget. Worth fixing on its own.
+- Server-side embed spend, if W3 proceeds: cores cost memory, memory costs money.
