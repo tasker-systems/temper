@@ -23,6 +23,9 @@ sessions, research, or wants to look up / store information across conversations
 | Find something by topic | Tool: `search` | Semantic vector search, can't do with resources |
 | Create a new resource (with or without content) | Tool: `create_resource` | Mutation — tools only |
 | Update title/metadata/content | Tool: `update_resource` | Mutation — tools only |
+| Build a large / resumable body as ordered blocks | Tools: `ingest_begin` → `ingest_append` → `ingest_finalize` | Segmented lifecycle; `ingest_blocks` reads landed segments to resume |
+| Attach provenance sources without rewriting the body | Tool: `annotate_resource` | Provenance-only backfill — body_hash + embeddings unchanged |
+| Read a resource's per-block provenance | Tool: `get_block_provenance` | Which sources each content block was distilled from |
 | Read a resource with content via tool | Tool: `get_resource` with `include_content: true` | When resource browsing isn't available |
 | Delete a resource | Tool: `delete_resource` | Soft-delete, tools only |
 | Create a new context | Tool: `create_context` | Mutation — tools only |
@@ -220,6 +223,81 @@ Input: { "id": "<resource UUID>" }
 ```
 
 This is a soft-delete — the resource is deactivated, not permanently removed.
+
+## Block-Grain Ingest & Attribution
+
+A resource body is not always one opaque blob. The ingest surface lets you build it as an
+**enumerated sequence of distinctly addressable, individually attributable content blocks**,
+attach **per-block provenance** (which sources each block was distilled from), and record
+**per-act authorship** (confidence + the model/persona that wrote it). Reach for this when
+constructing a large or citation-graded document rather than defaulting to a single
+whole-body `create_resource`.
+
+> **Boundary — what this is NOT.** These tools *build* and *attribute* blocks; they do **not**
+> surgically rewrite one existing block's text in a finalized resource. An in-place text edit
+> is still a whole-body `update_resource`. `annotate_resource` is **provenance-only** — it
+> never touches block text, `body_hash`, or embeddings.
+
+### Per-block provenance & authorship (on any write)
+
+`create_resource` and `update_resource` both accept:
+
+- `sources` — an array of **resource refs** (UUID or decorated `slug-<uuid>`) and/or **http(s)
+  URLs**. Each becomes a block-provenance record on the body block. A URL may carry a
+  `#L<start>-L<end>` span locator (e.g. `https://ex.com/doc.md#L120-L180`) — preserved verbatim
+  and surfaced by `get_block_provenance`. On `update_resource`, `sources` requires `content`
+  (no body update → nothing to attribute).
+- `content_block` — which block (a block UUID) the body revise + `sources` target. Omit to
+  address the resource's sole body block; **required** once a resource has more than one block.
+- Authorship/correlation (flattened top-level keys): `confidence`
+  (`tentative|probable|confident`), `reasoning`, `rationale`, `persona`, `model`,
+  `invocation_id`, `correlation_id`. `confidence` is **required** whenever any other authorship
+  field is supplied.
+
+### `annotate_resource` — provenance backfill, no body revise
+
+Attach provenance `sources` to a block **without** re-chunking or re-embedding — `body_hash`
+and embeddings are unchanged. This is the cheap way to make a corpus imported without sources
+citation-grade after the fact.
+
+```
+Tool: annotate_resource
+Input: {
+  "id": "<resource UUID>",
+  "sources": ["<resource-ref-or-url>", "https://ex.com/doc.md#L120-L180"],
+  "content_block": "<block UUID>",   // omit for a single-block resource; required for multi-block
+  "confidence": "probable"           // optional; required if you also pass reasoning/model/etc.
+}
+```
+
+`sources` is required and non-empty (an annotate with nothing to attribute is an error). Verify
+the result with `get_block_provenance`.
+
+### `get_block_provenance` — read per-block provenance
+
+```
+Tool: get_block_provenance
+Input: { "resource": "<resource UUID>" }
+```
+
+Returns each content block's provenance in (block, accretion) order — the sources each block
+was distilled from, including any preserved span-locator fragments.
+
+### Segmented ingest lifecycle (large / resumable builds)
+
+An MCP caller has no chunker or embedder, so it omits `chunks_packed` and the server chunks the
+segment text itself (carrying the heading breadcrumb across block boundaries). Use the lifecycle
+when a body is too large for one `create_resource` call, or when a build must be resumable:
+
+| Tool | Role |
+|------|------|
+| `ingest_begin` | Lands segment 0 and creates the resource. Takes every `create_resource` field plus a bare-hex `content_hash` of segment 0, and optional `block_budget` / `total_blocks_hint` / `source_hash`. Returns `resource_id`, the landed block set, and an opaque `body_hash`. |
+| `ingest_append` | Lands segment N. `seq` starts at **1** (segment 0 landed at begin) and must go in order. **Idempotent** — re-appending an already-landed `seq` is a safe no-op, so retry/resume is safe. Pass `content` + its `content_hash`; optional per-segment `sources`. |
+| `ingest_blocks` | Reads the landed segment set back for a resource — how a stateless caller resumes after an interruption before continuing to append. |
+| `ingest_finalize` | Declares the session complete. Pass `expected_blocks` (counting segment 0) and **echo the `body_hash` back verbatim** from your most recent `ingest_append`/`ingest_blocks` response — it is opaque; never parse or recompute it. Fails loudly on a gap. |
+
+Each segment's `content_hash` is a per-segment transit-integrity check (bare-hex sha256 of that
+segment's text), verified server-side; a mismatch is rejected before anything lands.
 
 ## Context Navigation
 

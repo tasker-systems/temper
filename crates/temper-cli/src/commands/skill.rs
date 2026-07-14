@@ -173,6 +173,107 @@ temper resource create --type task --show-template
 temper resource create --type research --show-template
 ```
 
+## Body Source (`resource create` / `resource update`)
+
+Where the markdown body comes from on a write is resolved by a **first-match-wins
+precedence**. Get this wrong and you silently clobber a body — so it is spelled
+out here.
+
+| Precedence | Form | Behavior |
+|-----------|------|----------|
+| 1 | `--body @<path>` | Read the file. **stdin is ignored entirely.** Empty file → error (refuses to write an empty body). |
+| 2 | `--body -` | Read stdin explicitly. Blocks until EOF. Errors on a TTY or on empty input. |
+| 3 | implicit (no `--body`) | Read stdin **only** when it is a non-TTY that has input *ready* and non-empty — the `cat new.md \| temper resource update <ref>` case. An open-but-idle pipe, or empty stdin, is treated as **no body**. |
+| 4 | none of the above | Body is left unchanged; on `update`, only frontmatter is PATCHed. |
+
+> **Footgun — implicit stdin is a body rewrite.** `resource update` treats an
+> implicit non-TTY stdin as a full-body replace. Two ways this bites an agent:
+>
+> - **Redirected loop inheritance.** Inside
+>   `while read n ref; do temper resource update "$ref" --title "…"; done < refs.txt`,
+>   every `update` inherits the loop's redirected stdin (`refs.txt`) and rewrites
+>   the resource body with the *leftover loop lines* — clobbering one resource and
+>   consuming the remaining iterations, with no error.
+> - **`< /dev/null` "safety".** Redirecting from `/dev/null` used to set the body
+>   to empty. (Current CLI treats empty implicit stdin as *no body* — but relying
+>   on that is fragile; older installed binaries still clobber.)
+>
+> **Rules of thumb:**
+> - To change **frontmatter only** (e.g. `--title`, `--stage`), invoke `update`
+>   **one resource per call with stdin untouched** — never inside a
+>   `while read … done < file` loop.
+> - To rewrite a **body**, do it with an explicit, intended
+>   `cat file.md | temper resource update <ref>` (or `--body @file.md`).
+> - `--body @<path>` always wins over stdin — reach for it when you want to be
+>   unambiguous.
+
+## Block-Grain Ingest & Attribution
+
+A resource body is not always one opaque blob. The ingest surface lets you build
+it as an **enumerated sequence of distinctly addressable, individually
+attributable content blocks**, and attach **per-block provenance** (which
+sources each block was distilled from) and **per-act authorship** (confidence,
+reasoning, the model that wrote it). Reach for this when constructing a large or
+citation-graded document instead of defaulting to a whole-body `create`/`update`.
+
+**Boundary — what this is NOT.** These verbs *build* and *attribute* blocks; they
+do **not** surgically rewrite one existing block's text in a finalized resource.
+An in-place text edit is still a whole-body `resource update`. `annotate` is
+**provenance-only** — it never touches block text, `body_hash`, or embeddings.
+
+### Per-block provenance & authorship (on any write)
+
+`resource create` and `resource update` both take:
+
+- `--sources <a,b,…>` — comma-separated **resource refs** (UUID or decorated
+  `slug-<uuid>`) and/or **http(s) URLs**. Each becomes a block-provenance record
+  on the body block. A URL may carry a `#L<start>-L<end>` span locator (e.g.
+  `https://ex.com/doc.md#L120-L180`) — preserved verbatim end-to-end and surfaced
+  in provenance reads. On `update`, `--sources` requires a body update (there is
+  no block to attribute otherwise).
+- `--content-block <block-uuid>` — which block the body revise + `--sources`
+  target. Omit to address the resource's sole body block; **required** once a
+  resource has more than one block.
+- Authorship/correlation flags (`--confidence <tentative|probable|confident>`,
+  `--reasoning`, `--rationale`, `--persona`, `--model`, `--invocation`,
+  `--correlation`). `--confidence` is **required** whenever any other authorship
+  flag is supplied.
+
+`resource create` also has `--from <url|path>` (extract markdown from a source,
+which by default seeds a Remote provenance record — `--no-source` opts out) and
+`--sources-as-edges` (also assert a `derived_from` edge to each resource-valued
+source).
+
+### `resource annotate <ref> --sources … [--content-block <uuid>]`
+
+The **annotate-only backfill**: attach provenance sources to a block **without a
+body revise**. `body_hash` and embeddings are unchanged, so a corpus imported
+without sources can be made citation-grade cheaply. At least one `--sources`
+entry is required; `--content-block` is required for a multi-block resource.
+Verify with `resource show --provenance`.
+
+### Reading provenance
+
+- `temper resource show <ref> --provenance` — itemized per-block provenance: the
+  sources each of the resource's content blocks was distilled from, in
+  (block, accretion) order.
+
+### Segmented ingest lifecycle (large / resumable builds)
+
+For a body too large for one call, the CLI streams it automatically (the
+`resource create` path segments internally past ~256 KB and resumes an
+interrupted upload). The **MCP** surface exposes the lifecycle explicitly for
+programmatic callers:
+
+| Tool | Role |
+|------|------|
+| `ingest_begin` | Lands segment 0, creates the resource, returns `resource_id` + landed block set + an opaque `body_hash`. Takes every `create_resource` field plus `content_hash`. |
+| `ingest_append` | Lands segment N (`seq` starts at **1**, in order). **Idempotent** — a re-append of an already-landed seq is a safe no-op, so retry/resume is safe. Optional per-segment `sources`. |
+| `ingest_blocks` | Reads the landed segment set back — how a stateless caller resumes after an interruption. |
+| `ingest_finalize` | Declares the session complete: pass `expected_blocks` and **echo the `body_hash` verbatim** (opaque — never parse or recompute it). Fails loudly on a gap. |
+
+See `knowledge-base.md` for the MCP tool details.
+
 ## Skill-Only Commands
 
 These commands are handled by the skill routing layer, not the temper CLI directly.
