@@ -338,6 +338,51 @@ declared, never assumed.** Hence the dual of invariant 6:
 That does not fix the asymmetry. It makes it a **declared, reviewable property of a connection**
 instead of a latent surprise — which is the most an honest brokering design can offer.
 
+##### 🔴 PROBE FINDING (2026-07-14) — the asymmetry is WORSE than this section assumes, and the platform hides it
+
+> Executed against **live Vercel Connect**, not read. Full evidence: vault research
+> `019f6295-ce45-70e0-b2c1-5a218e0acdf4`. Two claims above are wrong, and the correction is
+> security-relevant. **Read this before implementing any reach logic.**
+
+**1. "GitHub can scope to a repo set" is true of GitHub and FALSE of Vercel Connect.** Connect's unit
+of tenancy for GitHub is the **org** (`installation` = one GitHub org). There is **no repo-subset knob
+anywhere in its API or CLI.** Repo-limiting is a choice made on **GitHub's install screen** — invisible
+to, and unmanaged by, Connect.
+
+**2. Mint-time narrowing is a SILENT NO-OP.** Five live mints against a real GitHub connector —
+baseline, `scopes:['read']`, `scopes:['contents:read']`, `resources:[<one repo>]`, and
+`authorizationDetails` (RAR) — **all returned `HTTP 200` and a byte-identical token**:
+
+```
+permissions:          11 × write (incl. contents:write, workflows:write), metadata:read
+repository_selection: "all"
+```
+
+The API **accepts the narrowing request and ignores it**. An implementer who passes `scopes: ['read']`
+gets a `200 OK` and ships a **write-capable** agent — one that can rewrite GitHub Actions workflows on
+every repository — believing it read-only.
+
+> **This is the dual of invariant 6, and *the platform* is the violator: silence encoding EXCESS of
+> capability.** This design named that exact failure mode two paragraphs ago and Connect commits it
+> anyway. So the invariant cannot be satisfied by *our* discipline alone — it must be **enforced against
+> the provider**, by reading what was actually minted.
+
+**Worse, the operator is never asked.** `vercel connect create github` (the managed flow) sets
+`autoinstall=true`, which **removes the repository-selection screen entirely** — one click, no review,
+`all` repos, and no warning that a choice was skipped. **A design that expects an admin to "declare
+reach at provision" must reckon with a provider whose provisioning flow will not let them.**
+
+**What actually buys read-only:** a **custom (non-managed) connector backed by our own read-only GitHub
+App**. The App is the *only* enforcement point that exists. That is chunk **B5**.
+
+**And the finding that repays the damage — reach fidelity is VERIFIABLE, not merely declarable.** The
+mint response returns `metadata.permissions` and `metadata.repository_selection`: the credential's
+**actual** reach, from the provider. The temper side of the comparison stays incommensurable, but the
+remote side is now **readable** — which buys a **declaration-vs-reality drift check at attach time**. A
+connection claiming `reach_covers: acme/temper` while backed by an all-repos-write credential is
+**caught by minting**, not merely trusted. **This is stronger than what this section proposes**, and it
+is what "declared, reviewable" should now mean.
+
 **Two things materially shrink the blast radius:**
 
 - **Human-driven sessions are naturally 1:1.** A human working through Claude Desktop (or equivalent)
@@ -501,12 +546,38 @@ GitHub/Linear — plus a way to hand a *scoped, read-only* version of it to an a
 different objects with different lifecycles, and conflating them is the most likely way to get this
 wrong.
 
-**S1 carries a hard gate, and it can fail.** Because proxying is forbidden by rule, S1 must **prove**
+~~**S1 carries a hard gate, and it can fail.** Because proxying is forbidden by rule, S1 must **prove**
 that an agent can acquire an MCP connection **per subscription, at runtime** — not merely prefer it.
 Eve declares connections statically in code. If a new subscription demands an agent redeploy to reach
 its remote system, **there is no fallback**, and the agent-reach half of this goal is blocked until
 that is solved. This is the goal's highest-risk unknown and S1 exists partly to retire it early,
-while it is still cheap to be wrong.
+while it is still cheap to be wrong.~~
+
+**✅ GATE RESOLVED (2026-07-14) — NOT BLOCKED, and it was posed wrong.** Eve resolves the **token** per
+invocation, not the **connection**: `url` is static on `McpClientConnectionDefinition`, but `auth` and
+`headers` take the live `SessionContext`. So **one static connection per *provider*** suffices, and
+connector + subject + scopes are chosen at runtime. **A new subscription needs no code change and no
+redeploy.** A new *provider* needs a deploy — which is a code change anyway. *The no-proxy rule stands,
+and was never tested.*
+
+**And minting works from Rust — proven by execution, not docs** (research
+`019f6295-ce45-70e0-b2c1-5a218e0acdf4`). An app-subject GitHub installation token was minted from a
+**non-TypeScript, non-Vercel-runtime** process via two plain HTTPS hops:
+
+```
+POST /v1/projects/{projectId}/token   Bearer <static Vercel access token>  -> project OIDC JWT
+POST /v1/connect/token/{connector}    Bearer <that OIDC JWT>               -> provider token
+```
+
+> **The docs are wrong about the one-hop shortcut.** They claim a plain access token can request
+> `{type:'app'}` from anywhere. Live, it refuses — *"Token subject is not accessible to this
+> requester."* A human's token does not represent the app; it can only **buy** the OIDC token that
+> does. **Two hops, not one.** (Both need `Content-Type: application/json` even with an empty body, or
+> they 415; and the connector uid is **one url-encoded path segment**.)
+
+**What the gate did NOT settle, and what replaced it:** read-only reach is **unobtainable** from
+Connect's *managed* GitHub connector — see the PROBE FINDING under *Reach*, above. That is the goal's
+new highest-risk unknown, and it is chunk **B5**.
 
 ~~**Dogfoods the M2M work** — prod has exactly one machine client today (the steward). This is what
 makes the second one exist.~~
