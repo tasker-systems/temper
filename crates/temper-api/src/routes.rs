@@ -190,6 +190,19 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/machine-clients/{id}/rotate-secret",
             post(handlers::machine_clients::rotate_secret),
         )
+        // Operator-only connection provisioning (external systems as subscribed emitters, S1).
+        // Same shape as machine-clients above and for the same reasons: plain `.route()`, out of
+        // the OpenAPI contract, allowlisted in `.github/scripts/check-openapi-routes.sh`, and
+        // gated inside the service (`machine_authz::authorize`, verbatim — a connection is a
+        // machine principal wearing an integration's clothes).
+        .route(
+            "/api/connections",
+            get(handlers::connections::list).post(handlers::connections::provision),
+        )
+        .route(
+            "/api/connections/{id}",
+            get(handlers::connections::get).delete(handlers::connections::revoke),
+        )
 }
 
 /// Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.

@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod admin_connection;
 pub mod admin_machine;
 pub mod admin_saml;
 pub mod auth;

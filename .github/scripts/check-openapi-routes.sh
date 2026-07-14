@@ -43,6 +43,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/machine-clients/{id}/rebind
 /api/machine-clients/issue
 /api/machine-clients/{id}/rotate-secret
+/api/connections
+/api/connections/{id}
 /internal/saml/reconcile
 /api/embed/dispatch
 /api/embed/admin/reembed'
