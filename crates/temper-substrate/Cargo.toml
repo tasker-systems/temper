@@ -15,7 +15,11 @@ scenario-schema = ["schemars", "temper-core/scenario-schema"]
 
 [dependencies]
 temper-core = { path = "../temper-core" }
-temper-ingest = { path = "../temper-ingest", features = ["embed"] }
+# `default-features = false`: temper-ingest's default is ["embed", "extract"], and `extract` pulls
+# kreuzberg (and, since PDF support landed, a 7 MB embedded pdfium). Nothing server-side calls
+# `temper_ingest::extract` — extraction is the CLI's job — so the server would carry it as dead
+# weight and bloat the Vercel serverless bundle. Take `embed` only.
+temper-ingest = { path = "../temper-ingest", default-features = false, features = ["embed"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros", "migrate", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
