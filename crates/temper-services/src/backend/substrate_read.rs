@@ -136,6 +136,14 @@ async fn filtered_visible_page(
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
           WHERE r.is_active
+            -- An interrupted segmented ingest is NOT a document. It is excluded from list (and from
+            -- search, in `unified_search`'s corpus CTE) until `resource_finalize` says the last block
+            -- landed. It stays addressable and readable via `show`, which reports `ingest_state`.
+            --
+            -- Deliberately HERE and not in `resources_visible_to`: visibility is an *authorization*
+            -- predicate, completeness is a *content* predicate. Folding one into the other would
+            -- quietly change who can see what.
+            AND r.ingest_state = 'complete'
             AND ($2::uuid IS NULL OR c.id = $2)
             AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
             AND ($4::text IS NULL OR wp.stage = $4)

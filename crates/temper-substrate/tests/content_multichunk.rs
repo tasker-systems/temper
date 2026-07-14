@@ -91,6 +91,7 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting(pool: sqlx::Pg
             blocks: &blocks,
             doc_type: Some("concept"),
             emitter: EntityId::from(emitter),
+            segmented: false,
         },
     )
     .await

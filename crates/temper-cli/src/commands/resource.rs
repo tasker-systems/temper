@@ -2417,6 +2417,7 @@ mod action_result_tests {
             mode: None,
             effort: None,
             body_hash: None,
+            ingest_state: Some("complete".to_string()),
         }
     }
 
@@ -2798,6 +2799,7 @@ mod resource_list_render_tests {
             mode: None,
             effort: None,
             body_hash: Some("abc123deadbeef".to_string()),
+            ingest_state: Some("complete".to_string()),
         }];
 
         let out =

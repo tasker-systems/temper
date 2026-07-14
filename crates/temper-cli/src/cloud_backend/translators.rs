@@ -652,6 +652,7 @@ mod tests {
             mode: None,
             effort: None,
             body_hash: Some("abc123".to_string()),
+            ingest_state: Some("complete".to_string()),
         }
     }
 

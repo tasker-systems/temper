@@ -42,6 +42,9 @@ module Temper::Generated
     # A `kb_resources.id` value.
     attr_accessor :id
 
+    # Is the whole body here? `\"complete\"` for every ordinary (atomic) create; `\"in_progress\"` for a segmented ingest that has begun but not yet been finalized — its remaining blocks have not landed, so it is **excluded from list and search** and readable only by `show`.  Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the vectors ready?* This one asks *are the bytes all here?*  `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server always sends it; `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".
+    attr_accessor :ingest_state
+
     attr_accessor :is_active
 
     # Home context — `Some` for a context-homed resource, `None` when the resource is homed in a cognitive map (Surface B). Mutually exclusive with the `cogmap_*` fields below.
@@ -80,6 +83,7 @@ module Temper::Generated
         :'doc_type_name' => :'doc_type_name',
         :'effort' => :'effort',
         :'id' => :'id',
+        :'ingest_state' => :'ingest_state',
         :'is_active' => :'is_active',
         :'kb_context_id' => :'kb_context_id',
         :'mode' => :'mode',
@@ -117,6 +121,7 @@ module Temper::Generated
         :'doc_type_name' => :'String',
         :'effort' => :'String',
         :'id' => :'String',
+        :'ingest_state' => :'String',
         :'is_active' => :'Boolean',
         :'kb_context_id' => :'String',
         :'mode' => :'String',
@@ -141,6 +146,7 @@ module Temper::Generated
         :'context_owner_ref',
         :'context_slug',
         :'effort',
+        :'ingest_state',
         :'kb_context_id',
         :'mode',
         :'seq',
@@ -208,6 +214,10 @@ module Temper::Generated
         self.id = attributes[:'id']
       else
         self.id = nil
+      end
+
+      if attributes.key?(:'ingest_state')
+        self.ingest_state = attributes[:'ingest_state']
       end
 
       if attributes.key?(:'is_active')
@@ -449,6 +459,7 @@ module Temper::Generated
           doc_type_name == o.doc_type_name &&
           effort == o.effort &&
           id == o.id &&
+          ingest_state == o.ingest_state &&
           is_active == o.is_active &&
           kb_context_id == o.kb_context_id &&
           mode == o.mode &&
@@ -471,7 +482,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, cogmap_id, cogmap_name, context_name, context_owner_ref, context_slug, created, doc_type_name, effort, id, is_active, kb_context_id, mode, origin_uri, originator_profile_id, owner_handle, owner_profile_id, seq, stage, title, updated].hash
+      [body_hash, cogmap_id, cogmap_name, context_name, context_owner_ref, context_slug, created, doc_type_name, effort, id, ingest_state, is_active, kb_context_id, mode, origin_uri, originator_profile_id, owner_handle, owner_profile_id, seq, stage, title, updated].hash
     end
 
     # Builds the object from hash

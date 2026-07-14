@@ -143,13 +143,21 @@ today. Thread a flag:
 
 - [ ] **Step 4: Replay must see the finalize event.**
 
-> `replay.rs:134`'s event scan is a **whitelist**:
-> `('cogmap_seeded','resource_created','block_created','block_mutated','charter_set')` — it **omits**
-> `resource_finalized`. A replayed DB would leave a segmented resource stuck at `in_progress` and the
-> projection diff would fail.
+> **The field guide is wrong about the mechanism here, and the truth is worse.** It says "replay's event
+> scan is a whitelist … it omits `resource_finalized`". That conflates two different scans. The
+> **sidecar** scan (`replay.rs:134`) *is* a whitelist, and correctly excludes `resource_finalized` —
+> that event carries no content. The **replay** scan (`replay.rs:250`) has **no whitelist at all**: it
+> reads every event and dispatches on `EventKind::from_canonical_name`.
+>
+> The actual defect is that **`EventKind` had no `ResourceFinalized` variant**, so
+> `from_canonical_name` returned `None` and replay bailed with *"replay: no projector for event type
+> resource_finalized"* — **against any database that had ever run a segmented ingest.** That is a
+> latent break today, independent of this work; PR 1 makes the event load-bearing, so it must be fixed
+> here regardless.
 
-Add `resource_finalized` to the scan and dispatch it to `_project_resource_finalized`. Note it takes
-**two** args (no content sidecar) — unlike its neighbours.
+Add the `EventKind::ResourceFinalized` variant (both name mappings), a `replay` dispatch arm to
+`_project_resource_finalized`, and an arm in the sidecar-scan's explicit "carries no chunk manifests"
+list. The projector takes **two** args (no content sidecar) — unlike its content-bearing neighbours.
 
 - [ ] **Step 5: Exclude partials from list and search.**
 
@@ -157,18 +165,22 @@ Add `resource_finalized` to the scan and dispatch it to `_project_resource_final
   `substrate_read::filtered_visible_page` (`:138`). One edit covers `list_select` **and**
   `list_meta_select`. **Not** in `resources_visible_to`: visibility is *authorization*, completeness is
   *content*. Folding one into the other would quietly change who can see what.
-- **Search** — a **migration**, not a Rust edit: `unified_search` and `search_vector_candidates` are
-  SQL functions.
-  - The **`corpus` CTE** is the sufficient gate — everything scored passes through it, from all four
-    arms (fts, vec, graph, seed).
-  - Also add it to **`search_vector_candidates`** (both branches), so an `in_progress` resource cannot
-    eat slots in the global top-k ANN and starve complete ones out of the candidate set.
-
-  **The rule to follow: `ingest_state = 'complete'` goes exactly where `r.is_active` already goes.**
-  Same semantics (a row that exists but must not surface), same placement, same trade-off — including
-  that in the unscoped ANN branch the predicate is applied *after* the `LIMIT p_k`, because applying it
-  inside would force a seq-scan and defeat `idx_kb_chunks_embedding`. That is precisely how `is_active`
-  is already handled there.
+- **Search** — a **migration**, not a Rust edit: `unified_search`, `search_vector_candidates` and
+  `search_fts_candidates` are all SQL functions. **The rule: `ingest_state = 'complete'` goes exactly
+  where `r.is_active` already goes.** Same semantics (a row that exists but must not surface), same
+  placement. That rule lands it in three places, each for its own reason:
+  - **`unified_search`'s `corpus` CTE** — the *sufficient* gate. Everything scored funnels through it,
+    from all four arms (fts, vec, graph, seed), so this alone keeps a partial out of the results.
+  - **`search_vector_candidates`** (both branches) — *anti-starvation*. Without it an `in_progress`
+    resource's chunks can occupy slots in the global top-k ANN and crowd complete ones out of the
+    candidate set. Note the predicate lands *after* `LIMIT p_k`, not inside the `ann` CTE: applying it
+    inside would force a seq-scan and defeat `idx_kb_chunks_embedding` — precisely how `is_active` is
+    already handled there.
+  - **`search_fts_candidates`** — *seed hygiene*. `blend0` (fts ∪ vec) feeds `seeds`, and `seeds`
+    anchors graph expansion, so a partial left in the lexical arm can consume auto-seed slots and lend
+    `graph_score` to its neighbours while never surfacing itself. A document that is not here yet must
+    not shape the ranking of documents that are. (No top-k here, so no starvation concern — the
+    predicate sits plainly in the WHERE. The asymmetry with the vector arm is deliberate.)
 
 - [ ] **Step 6: Surface `ingest_state`** on the resource detail row so `show` can say a resource is
   incomplete. It stays **addressable and readable** by its owner — hidden from list/search, never from

@@ -61,6 +61,14 @@ pub enum EventKind {
     /// The (now fired) `block_created` event — one appended segment of a segmented ingest
     /// (`SeedAction::BlockAppend`). Was seeded but dormant before streaming ingestion (Beat 1).
     BlockCreated,
+    /// The `resource_finalized` event — a segmented ingest declares itself complete
+    /// (`resource_finalize`, after validating `expected_blocks` + `expected_body_hash`).
+    ///
+    /// It was **projection-less** until W2 PR 1, and — because no `EventKind` variant existed —
+    /// `from_canonical_name` returned `None` for it, so `replay` bailed with "no projector for event
+    /// type resource_finalized" against any database that had ever run a segmented ingest. Now it
+    /// projects `kb_resources.ingest_state = 'complete'`, and replay reproduces it like any other act.
+    ResourceFinalized,
     CharterSet,
     DelegatedLaunch,
     InvocationClosed,
@@ -88,6 +96,7 @@ impl EventKind {
             EventKind::BlockMutated => "block_mutated",
             EventKind::BlockProvenanceAnnotated => "block_provenance_annotated",
             EventKind::BlockCreated => "block_created",
+            EventKind::ResourceFinalized => "resource_finalized",
             EventKind::CharterSet => "charter_set",
             EventKind::DelegatedLaunch => "delegated_launch",
             EventKind::InvocationClosed => "invocation_closed",
@@ -120,6 +129,7 @@ impl EventKind {
             "block_mutated" => EventKind::BlockMutated,
             "block_provenance_annotated" => EventKind::BlockProvenanceAnnotated,
             "block_created" => EventKind::BlockCreated,
+            "resource_finalized" => EventKind::ResourceFinalized,
             "charter_set" => EventKind::CharterSet,
             "delegated_launch" => EventKind::DelegatedLaunch,
             "invocation_closed" => EventKind::InvocationClosed,
@@ -183,6 +193,11 @@ pub enum SeedAction<'a> {
         blocks: &'a [PreparedBlock],
         doc_type: Option<&'a str>,
         emitter: EntityId,
+        /// This create OPENS a segmented ingest (`begin_segmented_ingest`) — the resource is born
+        /// `ingest_state = 'in_progress'` and only `resource_finalize` may complete it. `false` for
+        /// every ordinary create: a one-shot create is atomic, so there is no interruption window and
+        /// nothing to finalize. See `payloads::ResourceCreated::segmented`.
+        segmented: bool,
     },
     RelationshipAssert {
         src: ResourceId,
@@ -569,6 +584,7 @@ pub async fn fire_with(
             blocks,
             doc_type,
             emitter,
+            segmented,
         } => {
             let payload = payloads::ResourceCreated {
                 resource_id: resource_id.unwrap_or_else(|| ResourceId::from(Uuid::now_v7())),
@@ -579,6 +595,7 @@ pub async fn fire_with(
                 originator_profile_id: originator,
                 doc_type: doc_type.map(str::to_owned),
                 blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
+                segmented,
             };
             let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
             let id = sqlx::query_scalar!(

@@ -424,6 +424,7 @@ pub(crate) async fn native_resource_row(
         mode: p.mode,
         effort: p.effort,
         body_hash: p.body_hash,
+        ingest_state: Some(p.ingest_state),
     })
 }
 
@@ -1176,13 +1177,15 @@ impl DbBackend {
         }
         Ok(())
     }
-}
 
-#[async_trait]
-impl Backend for DbBackend {
-    async fn create_resource(
+    /// The create body, shared by [`Backend::create_resource`] (`segmented = false`) and
+    /// [`Backend::begin_segmented_ingest`] (`segmented = true`) — the only caller that needs a resource
+    /// born `ingest_state = 'in_progress'`, because its body arrives across many acts and only
+    /// `resource_finalize` can say the last one landed.
+    async fn create_resource_inner(
         &self,
         cmd: CreateResource,
+        segmented: bool,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         // Resolve the caller's synthesized identity (natural-key).
         // `cmd.home` is a pre-resolved HomeAnchor — surfaces parse+resolve the ref
@@ -1303,12 +1306,10 @@ impl Backend for DbBackend {
             chunks: incoming_chunks,
             sources,
         };
-        let new_id = if defer {
-            writes::create_resource_deferred_with(&self.pool, params, act_ctx.clone()).await
-        } else {
-            writes::create_resource_with(&self.pool, params, act_ctx.clone()).await
-        }
-        .map_err(api_err)?;
+        let mode = writes::CreateMode { defer, segmented };
+        let new_id = writes::create_resource_with_mode(&self.pool, params, act_ctx.clone(), mode)
+            .await
+            .map_err(api_err)?;
 
         // Project the first-class goal link to a live `advances`→goal edge (issue 019f3d55). The
         // new resource is the source (owned by the caller, so the shared assert helper's "auth is
@@ -1356,6 +1357,18 @@ impl Backend for DbBackend {
         let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
             .await?;
         Ok(CommandOutput::new(row))
+    }
+}
+
+#[async_trait]
+impl Backend for DbBackend {
+    async fn create_resource(
+        &self,
+        cmd: CreateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        // An ordinary create is ATOMIC — the whole body lands in one act, so there is no interruption
+        // window and nothing to finalize. It is born `ingest_state = 'complete'`.
+        self.create_resource_inner(cmd, false).await
     }
 
     async fn show_resource(
@@ -2517,7 +2530,12 @@ impl Backend for DbBackend {
         // Block 0 lands via the ordinary create path — segmented ingest changes how the *rest* of
         // the body arrives, not how a resource is created. Auth, home resolution, and doc-type
         // defaults all come along with it.
-        let out = self.create_resource(cmd).await?;
+        //
+        // `segmented = true` is the ONE difference, and it is the whole point of W2 PR 1: the resource
+        // is born `ingest_state = 'in_progress'`, so if this upload is killed before `finalize` it is
+        // excluded from list and search rather than sitting there looking like a whole document. It
+        // stays addressable by `show` (and resumable) throughout.
+        let out = self.create_resource_inner(cmd, true).await?;
         let resource_id = out.value.id;
 
         // The per-resource source-provenance row, written at begin (design §4 point 4).

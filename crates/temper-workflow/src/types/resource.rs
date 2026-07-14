@@ -55,6 +55,16 @@ pub struct ResourceRow {
     /// `None` when no manifest row exists (resource created via POST without a
     /// body trio, or the manifest join returned NULL).
     pub body_hash: Option<String>,
+    /// Is the whole body here? `"complete"` for every ordinary (atomic) create; `"in_progress"` for a
+    /// segmented ingest that has begun but not yet been finalized — its remaining blocks have not
+    /// landed, so it is **excluded from list and search** and readable only by `show`.
+    ///
+    /// Orthogonal to `embedding_status` (`pending`/`ready`), which asks a different question: *are the
+    /// vectors ready?* This one asks *are the bytes all here?*
+    ///
+    /// `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
+    /// always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
+    pub ingest_state: Option<String>,
 }
 
 impl ResourceRow {
@@ -391,6 +401,7 @@ mod resource_detail_tests {
             mode: None,
             effort: None,
             body_hash: None,
+            ingest_state: Some("complete".to_string()),
         }
     }
 
