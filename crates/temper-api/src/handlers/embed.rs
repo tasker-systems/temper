@@ -7,7 +7,7 @@
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use temper_core::types::admin::{ReembedRequest, ReembedSummary};
 use temper_core::types::ids::ProfileId;
@@ -46,6 +46,31 @@ fn secret_matches(presented: &str, expected: &str) -> bool {
     diff == 0
 }
 
+/// Shared fail-closed bearer-secret gate for the cron-invoked embed endpoints (`/api/embed/dispatch`,
+/// `/api/embed/warm`). No secret configured ⇒ the endpoint is *disabled* (401), never open: both run
+/// server-side work (a drain pass, an ONNX warmup) fed by trust, not user auth, so an unconfigured
+/// deploy must refuse rather than expose them. `label` names the endpoint in the rejection log and the
+/// error so a misconfigured cron is diagnosable.
+fn require_dispatch_secret(state: &AppState, headers: &HeaderMap, label: &str) -> ApiResult<()> {
+    let expected = match state.config.embed_dispatch_secret.as_deref() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::warn!("{label}: rejected (endpoint disabled — secret unset)");
+            return Err(ApiError::Unauthorized(format!("{label} disabled")));
+        }
+    };
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !secret_matches(presented, expected) {
+        tracing::warn!("{label}: rejected (bad or missing bearer secret)");
+        return Err(ApiError::Unauthorized(format!("invalid {label} secret")));
+    }
+    Ok(())
+}
+
 // GET (not POST): Vercel Cron invokes its target with a GET carrying the `CRON_SECRET` as a bearer.
 // The route also accepts POST for manual ops. The pass is effectively idempotent — a re-run just
 // claims whatever is still pending — so a GET trigger is safe here.
@@ -65,26 +90,7 @@ pub async fn dispatch(
     Query(q): Query<DispatchQuery>,
 ) -> ApiResult<Json<EmbedDispatchSummary>> {
     // Fail-closed when unconfigured: no secret ⇒ endpoint disabled.
-    let expected = match state.config.embed_dispatch_secret.as_deref() {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            tracing::warn!("embed dispatch: rejected (endpoint disabled — secret unset)");
-            return Err(ApiError::Unauthorized(
-                "embed dispatch disabled".to_string(),
-            ));
-        }
-    };
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if !secret_matches(presented, expected) {
-        tracing::warn!("embed dispatch: rejected (bad or missing bearer secret)");
-        return Err(ApiError::Unauthorized(
-            "invalid embed dispatch secret".to_string(),
-        ));
-    }
+    require_dispatch_secret(&state, &headers, "embed dispatch")?;
 
     let summary = embed_service::dispatch_tick(&state.pool, q.cap, q.redrive).await?;
     tracing::info!(
@@ -96,6 +102,52 @@ pub async fn dispatch(
         "embed dispatch pass complete"
     );
     Ok(Json(summary))
+}
+
+/// One-line summary of an embedder-warm pass, returned by [`warm`].
+#[derive(Debug, Serialize)]
+pub struct WarmSummary {
+    /// Always `true` on success — the embedder loaded and produced a vector.
+    warmed: bool,
+    /// Embedding dimensionality (768 for bge-base) — a liveness signal that inference really ran.
+    dims: usize,
+    /// Wall-clock the warm took. The FIRST call on a cold instance pays the full model load — the
+    /// cost this endpoint exists to move OFF the search request path; later calls on the same warm
+    /// instance are a cheap cached inference.
+    ms: u64,
+}
+
+// GET (not POST): Vercel Cron invokes its target with a GET carrying the secret as a bearer, same as
+// `dispatch`.
+/// Cold-start warmup for server-side query embedding: `GET /api/embed/warm`.
+///
+/// A search whose caller can't precompute an embedding (MCP, web UI, `--text-only`) is embedded
+/// server-side inside the request. On a cold instance that pays a one-time ONNX model load which, run
+/// inline, can exceed the query-embed budget (`TEMPER_QUERY_EMBED_BUDGET_MS`, default 8s) and silently
+/// drop the vector arm (issue #427). This endpoint loads and exercises the embedder so the process's
+/// model cache is hot before a real search arrives; a periodic cron (`vercel.json`) keeps the serving
+/// instance warm on a low-traffic deploy.
+///
+/// Same gate as [`dispatch`]: bearer-secret (`EMBED_DISPATCH_SECRET`), fail-closed when unset — the
+/// warm path runs ONNX and must never be an open trigger. Idempotent and cheap after the first load.
+/// Deliberately OUT of the OpenAPI contract (plain `.route()`, no `#[utoipa::path]`), same posture as
+/// `dispatch`.
+pub async fn warm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<WarmSummary>> {
+    require_dispatch_secret(&state, &headers, "embed warm")?;
+
+    let started = std::time::Instant::now();
+    let dims = embed_service::warm_embedder().await?;
+    let ms = started.elapsed().as_millis() as u64;
+
+    tracing::info!(dims, ms, "embed warm pass complete");
+    Ok(Json(WarmSummary {
+        warmed: true,
+        dims,
+        ms,
+    }))
 }
 
 /// Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
@@ -166,3 +218,40 @@ pub async fn reembed(
 /// Default cap on resources enqueued per trigger call. Bounds blast radius: an operator who means to
 /// re-embed the whole index walks it in bounded steps rather than queueing thousands of jobs in one go.
 const DEFAULT_REEMBED_LIMIT: i32 = 100;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shared cron gate compares the presented bearer against the configured secret in constant
+    /// time. It must accept ONLY an exact match and reject on any length or content difference — a
+    /// truthy-on-prefix or truthy-on-empty bug here would open the ONNX/drain endpoints to anyone.
+    #[test]
+    fn secret_matches_is_true_only_on_exact_equality() {
+        assert!(secret_matches("s3cret-value", "s3cret-value"));
+        assert!(!secret_matches("s3cret-value", "s3cret-valuE")); // one byte differs
+        assert!(!secret_matches("s3cret-valu", "s3cret-value")); // presented is a prefix
+        assert!(!secret_matches("s3cret-valuex", "s3cret-value")); // presented is longer
+        assert!(!secret_matches("", "s3cret-value")); // missing bearer vs a real secret
+
+        // Two empty strings compare equal here, but the gate rejects an empty CONFIGURED secret
+        // before ever calling this (the `!s.is_empty()` guard in `require_dispatch_secret`), so an
+        // unconfigured deploy still fails closed.
+        assert!(secret_matches("", ""));
+    }
+
+    /// The warm summary is the cron/operator-facing JSON; pin its field names so a rename that would
+    /// break a monitoring probe is caught here rather than in production.
+    #[test]
+    fn warm_summary_serializes_expected_fields() {
+        let json = serde_json::to_value(WarmSummary {
+            warmed: true,
+            dims: 768,
+            ms: 1234,
+        })
+        .expect("serialize WarmSummary");
+        assert_eq!(json["warmed"], serde_json::json!(true));
+        assert_eq!(json["dims"], serde_json::json!(768));
+        assert_eq!(json["ms"], serde_json::json!(1234));
+    }
+}

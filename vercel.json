@@ -8,8 +8,13 @@
     }
   },
   "crons": [
-    { "path": "/api/embed/dispatch", "schedule": "* * * * *" }
+    { "path": "/api/embed/dispatch", "schedule": "* * * * *" },
+    { "path": "/api/embed/warm", "schedule": "*/2 * * * *" }
   ],
+  "functions": {
+    "api/axum.rs": { "memory": 3009, "maxDuration": 60 },
+    "api/mcp.rs": { "memory": 3009, "maxDuration": 60 }
+  },
   "routes": [
     { "handle": "filesystem" },
     { "src": "/mcp", "dest": "/api/mcp" },
