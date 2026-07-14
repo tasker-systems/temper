@@ -21,6 +21,43 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 
 use crate::service::TemperMcpService;
 
+/// Schemars `schema_with` for every `open_meta` input field.
+///
+/// `open_meta` is a free-form JSON object, held as `serde_json::Value` at
+/// runtime. The default `JsonSchema` impl for `Value` advertises **no type** at
+/// all, and some MCP clients, seeing no `type`, serialize the object as a JSON
+/// **string** (`"{}"`) instead of an object — which the server then rejects with
+/// `open_meta: "{}" is not of type "object"`. Advertising `type: object` fixes
+/// the encoding at the client while `additionalProperties: true` keeps the tier
+/// genuinely free-form (any key is allowed and stored).
+///
+/// We reuse the canonical recognized-conventions schema — the same
+/// `open_meta.schema.json` that `describe_open_meta` serves — so the recognized
+/// keys (`tags`, `keywords`, `descriptor`, `date`, …) are advertised as hints
+/// from a single source of truth, with no risk of drift. `$schema`/`$id` are
+/// stripped: they identify a standalone schema document, not an inlined
+/// subschema, and would only confuse a client's schema resolution. A hardcoded
+/// `type: object` fallback guarantees the load-bearing part of the fix even if
+/// the canonical schema ever failed to parse.
+fn open_meta_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    fn recognized_conventions() -> Option<schemars::Schema> {
+        let mut value = temper_workflow::schema::open_meta_schema_value().ok()?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("$schema");
+            obj.remove("$id");
+        }
+        schemars::Schema::try_from(value).ok()
+    }
+
+    recognized_conventions().unwrap_or_else(|| {
+        schemars::json_schema!({
+            "type": "object",
+            "description": "Open (caller-defined) frontmatter as a JSON object. Free-form: any key is allowed and stored.",
+            "additionalProperties": true,
+        })
+    })
+}
+
 // ── Input structs ──────────────────────────────────────────────────
 
 /// MCP input for create_resource.
@@ -67,8 +104,11 @@ pub struct CreateResourceInput {
     /// caller-defined ("bring-your-own") fields belong in `open_meta`.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
-    /// Open frontmatter (user-owned fields) as JSON.
+    /// Open (caller-defined) frontmatter as a free-form JSON **object**. Any key
+    /// is allowed and stored; recognized keys (`tags`, `keywords`, `descriptor`,
+    /// `date`, …) are advertised for shape/ranking but not required.
     #[serde(default)]
+    #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: Option<serde_json::Value>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship
     /// (`reasoning`/`confidence`/`rationale`/`persona`/`model`). Flattened as top-level keys;
@@ -193,8 +233,11 @@ pub struct UpdateResourceInput {
     /// caller-defined ("bring-your-own") fields belong in `open_meta`.
     #[serde(default)]
     pub managed_meta: Option<ManagedMeta>,
-    /// Open frontmatter (user-owned fields) as JSON.
+    /// Open (caller-defined) frontmatter as a free-form JSON **object**. Any key
+    /// is allowed and stored; recognized keys (`tags`, `keywords`, `descriptor`,
+    /// `date`, …) are advertised for shape/ranking but not required.
     #[serde(default)]
+    #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: Option<serde_json::Value>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
@@ -213,7 +256,9 @@ pub struct UpdateResourceInput {
 /// llm-model/llm-run/provenance). Unknown keys are rejected; this path is
 /// Property-only — identity (`title`/`slug`), type, and home are NOT accepted
 /// here (change them via `update_resource`). `open_meta` stays a free-form JSON
-/// value by design — the open tier is intentionally untyped.
+/// object by design — the open tier accepts any key, and is advertised to
+/// clients as `type: object` with `additionalProperties: true` (see
+/// [`open_meta_input_schema`]).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateResourceMetaInput {
     /// UUID of the resource to update.
@@ -222,7 +267,10 @@ pub struct UpdateResourceMetaInput {
     /// vocabulary**. Only the typed temper-* keys are accepted; an unknown key
     /// is rejected. Caller-defined fields belong in `open_meta`.
     pub managed_meta: ManagedMeta,
-    /// New open (user-defined) frontmatter as JSON.
+    /// New open (caller-defined) frontmatter as a free-form JSON **object**. Any
+    /// key is allowed and stored; recognized keys (`tags`, `keywords`,
+    /// `descriptor`, `date`, …) are advertised for shape/ranking but not required.
+    #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: serde_json::Value,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
