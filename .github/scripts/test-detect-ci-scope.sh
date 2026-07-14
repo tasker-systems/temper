@@ -66,7 +66,7 @@ CLAUDE.md" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false" \
     "RUN_TEST_RUBY=false" \
-    "SCOPE_SUMMARY=docs-only: skipping code-quality, test-rust, test-typescript, test-ruby"
+    "SCOPE_SUMMARY=docs-only: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
 
 # --- per-crate doc files are still docs-only ---
 run_test "crate-dir docs only: docs-only scope" \
@@ -84,7 +84,7 @@ run_test "rust source change: full CI" \
     "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=true" \
     "RUN_TEST_TYPESCRIPT=true" \
-    "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline (test-ruby=false)"
+    "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline (test-ruby=false, test-agents-ts=false)"
 
 # --- typescript source change: full CI ---
 run_test "typescript source change: full CI" \
@@ -195,6 +195,30 @@ run_test "detect script changed: test-ruby runs too" \
 run_test "no-diff fallback: test-ruby runs" \
     "__force_full_ci__" \
     "RUN_TEST_RUBY=true"
+
+run_test "contract change triggers the ruby gem spec that asserts it" \
+    "tests/contracts/m2m-token-request.json" \
+    "DOCS_ONLY=false" "RUN_TEST_RUBY=true"
+
+run_test "temper-ts change runs the TS SDK + agent job" \
+    "clients/temper-ts/src/credentials.ts" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
+run_test "steward change runs the TS SDK + agent job" \
+    "packages/agent-workflows/steward/agent/agent.ts" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
+run_test "contract change runs the TS SDK + agent job (temper-ts asserts it)" \
+    "tests/contracts/m2m-token-request.json" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
+run_test "an unrelated rust change does not run the TS SDK + agent job" \
+    "crates/temper-api/src/main.rs" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=false"
+
+run_test "docs-only skips the TS SDK + agent job" \
+    "README.md" \
+    "DOCS_ONLY=true" "RUN_TEST_AGENTS_TS=false"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

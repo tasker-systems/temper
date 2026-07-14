@@ -11,12 +11,19 @@
 # "rust-only" change can still move the committed TypeScript surface; splitting
 # that safely is a separate change.
 #
-# ONE exception: test-ruby is path-scoped to the gem (clients/temper-rb/**), the
-# contract it is generated from (openapi.json), and its own workflow. It pulls a
-# ~1GB openapi-generator image for the codegen drift gate, and nothing outside
-# that set can affect it. The scoping is safe because the gem is inert to both
+# Two exceptions are path-scoped:
+#
+# - test-ruby: the gem (clients/temper-rb/**), the contract it is generated
+#   from (openapi.json), and its own workflow. It pulls a ~1GB
+#   openapi-generator image for the codegen drift gate, and nothing outside
+#   that set can affect it.
+# - test-agents-ts: the TS SDK (clients/temper-ts/**) and the eve agents that
+#   consume it (packages/agent-workflows/**), plus the wire contracts both are
+#   asserted against (tests/contracts/**), and its own workflow.
+#
+# Both scopings are safe for the same reason: each project is inert to both
 # cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit two-entry
-# `workspaces` list) — no Rust or TS change can reach it except through the
+# `workspaces` list) — no Rust or TS change can reach it except through a
 # contract, which is in its trigger set.
 #
 # Keep this script conservative: for every OTHER job it only ever turns things
@@ -33,7 +40,7 @@
 #
 # Output (stdout, eval-safe KEY=VALUE):
 #   DOCS_ONLY, RUN_CODE_QUALITY, RUN_TEST_RUST, RUN_TEST_TYPESCRIPT,
-#   RUN_TEST_RUBY, SCOPE_SUMMARY
+#   RUN_TEST_RUBY, RUN_TEST_AGENTS_TS, SCOPE_SUMMARY
 #
 # Bash 3.2 compatible (macOS default): no ${var^^}, no mapfile, no assoc arrays.
 
@@ -123,14 +130,30 @@ if [ -n "$NON_DOC_FILES" ]; then
     HAS_NON_DOC=true
 fi
 
-# Ruby SDK: the gem's own tree, the contract it is generated from, and its CI
+# Ruby SDK: the gem's own tree, the contracts it is asserted against, and its CI
 # workflow. openapi.json is in this set precisely because a contract change must
-# be SEEN to move the gem -- that is what the codegen drift gate proves.
+# be SEEN to move the gem -- that is what the codegen drift gate proves. The same
+# logic applies to tests/contracts/: credentials_spec.rb reads
+# m2m-token-request.json and asserts the gem emits it, so a contract change that
+# does not run this job is a contract change nothing checks.
 #
 # The no-diff safety fallback must run everything, this job included.
 HAS_RUBY=false
-if changes_match '^clients/temper-rb/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^__force_full_ci__$'; then
+if changes_match '^clients/temper-rb/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-ruby\.yml$|^__force_full_ci__$'; then
     HAS_RUBY=true
+fi
+
+# TypeScript SDK + agent workflows: clients/temper-ts (the TS client) and
+# packages/agent-workflows/** (the eve agents that consume it), plus the wire
+# contracts both are asserted against.
+#
+# Path-scoped for exactly the reason test-ruby is: these projects are inert to
+# both cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit
+# two-entry `workspaces` list), so no Rust or TS change can reach them except
+# through a contract, which is in the trigger set.
+HAS_AGENTS_TS=false
+if changes_match '^clients/temper-ts/|^packages/agent-workflows/|^tests/contracts/|^\.github/workflows/test-agents-ts\.yml$|^__force_full_ci__$'; then
+    HAS_AGENTS_TS=true
 fi
 
 # docs_only: at least one doc file AND no non-doc file AND not self-referential.
@@ -139,22 +162,25 @@ if [ "$HAS_DOCS" = "true" ] && [ "$HAS_NON_DOC" = "false" ] && [ "$HAS_SELF" = "
     DOCS_ONLY=true
 fi
 
-debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_RUBY=$HAS_RUBY -> DOCS_ONLY=$DOCS_ONLY"
+debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_RUBY=$HAS_RUBY HAS_AGENTS_TS=$HAS_AGENTS_TS -> DOCS_ONLY=$DOCS_ONLY"
 
 # ---------------------------------------------------------------------------
 # Compute job flags — every job runs unless the change is docs-only.
 #
-# test-ruby is the one exception, and the only PATH-SCOPED job: it pulls a ~1GB
-# openapi-generator image for the codegen drift gate, so it stays off the
-# critical path of PRs that cannot possibly affect the gem. A self-referential
-# change to this script forces it on, matching the conservative posture above.
+# test-ruby and test-agents-ts are the PATH-SCOPED jobs: test-ruby pulls a
+# ~1GB openapi-generator image for the codegen drift gate, so it stays off the
+# critical path of PRs that cannot possibly affect the gem; test-agents-ts
+# runs two `npm install`s across two projects that most PRs never touch. A
+# self-referential change to this script forces both on, matching the
+# conservative posture above.
 # ---------------------------------------------------------------------------
 if [ "$DOCS_ONLY" = "true" ]; then
     RUN_CODE_QUALITY=false
     RUN_TEST_RUST=false
     RUN_TEST_TYPESCRIPT=false
     RUN_TEST_RUBY=false
-    SCOPE_SUMMARY="docs-only: skipping code-quality, test-rust, test-typescript, test-ruby"
+    RUN_TEST_AGENTS_TS=false
+    SCOPE_SUMMARY="docs-only: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
 else
     RUN_CODE_QUALITY=true
     RUN_TEST_RUST=true
@@ -164,7 +190,12 @@ else
     else
         RUN_TEST_RUBY=false
     fi
-    SCOPE_SUMMARY="full-ci: code change detected — running full pipeline (test-ruby=${RUN_TEST_RUBY})"
+    if [ "$HAS_AGENTS_TS" = "true" ] || [ "$HAS_SELF" = "true" ]; then
+        RUN_TEST_AGENTS_TS=true
+    else
+        RUN_TEST_AGENTS_TS=false
+    fi
+    SCOPE_SUMMARY="full-ci: code change detected — running full pipeline (test-ruby=${RUN_TEST_RUBY}, test-agents-ts=${RUN_TEST_AGENTS_TS})"
 fi
 
 # ---------------------------------------------------------------------------
@@ -175,6 +206,7 @@ printf 'RUN_CODE_QUALITY=%s\n' "$RUN_CODE_QUALITY"
 printf 'RUN_TEST_RUST=%s\n' "$RUN_TEST_RUST"
 printf 'RUN_TEST_TYPESCRIPT=%s\n' "$RUN_TEST_TYPESCRIPT"
 printf 'RUN_TEST_RUBY=%s\n' "$RUN_TEST_RUBY"
+printf 'RUN_TEST_AGENTS_TS=%s\n' "$RUN_TEST_AGENTS_TS"
 printf 'SCOPE_SUMMARY=%s\n' "$SCOPE_SUMMARY"
 
 if [ "$USE_GITHUB_OUTPUT" = "true" ] && [ -n "${GITHUB_OUTPUT:-}" ]; then
@@ -184,6 +216,7 @@ if [ "$USE_GITHUB_OUTPUT" = "true" ] && [ -n "${GITHUB_OUTPUT:-}" ]; then
         echo "run-test-rust=${RUN_TEST_RUST}"
         echo "run-test-typescript=${RUN_TEST_TYPESCRIPT}"
         echo "run-test-ruby=${RUN_TEST_RUBY}"
+        echo "run-test-agents-ts=${RUN_TEST_AGENTS_TS}"
         echo "scope-summary=${SCOPE_SUMMARY}"
     } >> "$GITHUB_OUTPUT"
 fi

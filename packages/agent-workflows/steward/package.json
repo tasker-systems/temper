@@ -7,20 +7,27 @@
     "#evals/*": "./evals/*"
   },
   "scripts": {
+    "build:dep": "npm --prefix ../../../clients/temper-ts ci && npm --prefix ../../../clients/temper-ts run build",
+    "prebuild": "npm run build:dep",
     "build": "eve build",
     "dev": "eve dev",
     "start": "eve start",
+    "pretest": "npm run build:dep",
+    "test": "vitest run",
+    "pretypecheck": "npm run build:dep",
     "typecheck": "tsc"
   },
   "dependencies": {
     "@vercel/connect": "0.2.2",
     "ai": "^7.0.0",
     "eve": "^0.18.1",
+    "temper-ts": "file:../../../clients/temper-ts",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "typescript": "7.0.1-rc"
+    "typescript": "7.0.1-rc",
+    "vitest": "^3"
   },
   "overrides": {
     "ai": "^7.0.0"

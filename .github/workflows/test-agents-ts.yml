@@ -1,0 +1,64 @@
+name: TypeScript SDK & Agent Tests
+
+on:
+  workflow_call:
+
+jobs:
+  temper-ts:
+    name: temper-ts (typecheck, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: clients/temper-ts
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # npm, not bun: temper-ts is deliberately NOT a bun workspace member (the root list is exactly
+      # temper-cloud + temper-ui), and a root install would inherit the root's overrides.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+  steward:
+    name: steward agent (typecheck, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: packages/agent-workflows/steward
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # The steward takes temper-ts as a `file:` dependency, so npm symlinks it and its `pretest`
+      # hook builds it. Run from INSIDE this directory — a root install fails on the root's bun
+      # overrides.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test

@@ -1,4 +1,7 @@
 import { getToken } from "@vercel/connect";
+import { BearerToken, ClientCredentials, type Credentials, type TokenResult } from "temper-ts";
+
+import { fetchWithRetry, type RetryOptions } from "./fetch-retry.js";
 
 /**
  * Machine-identity auth for reaching temper, shared by the MCP connection AND the code schedules so
@@ -7,72 +10,114 @@ import { getToken } from "@vercel/connect";
  * instance the Connect connector has no M2M app behind it — so the schedules' REST fetches silently
  * failed while the MCP connection worked).
  *
+ * The MINT itself lives in `temper-ts` (`ClientCredentials`), shared with the Ruby gem's
+ * `Temper::Credentials` by way of one wire contract (tests/contracts/m2m-token-request.json). What
+ * stays here is what is genuinely steward-specific: the env names, and the Vercel Connect / static
+ * token strategies — eve and Vercel concepts with no business in a general-purpose client.
+ *
  * Ordering is **machine-identity-first**, identical to what the connection declares:
  *   1. `TEMPER_M2M_CLIENT_ID` present → mint the agent's own token via the OAuth `client_credentials`
- *      grant against Auth0 (`mintM2mToken`). This is the production path.
+ *      grant. This is the production path, and it works against BOTH issuers a temper instance can be
+ *      fronted by: an external IdP (`temper admin machine provision`, audience required) and temper's
+ *      own AS (`temper admin machine issue`, a `tmpr_` client id, audience omitted).
  *   2. else `TEMPER_CONNECT_CONNECTOR` → a Vercel Connect app token (instances where that works).
  *   3. else `TEMPER_TOKEN` (the already-OAuth-obtained token that drives `eve dev`).
  */
 
-let cachedM2m: { token: string; expiresAt: number } | undefined;
+let cached: Credentials | undefined;
 
 /**
- * Mint the agent's own token via the `client_credentials` grant. Cached across calls until ~60s
- * before expiry. Returns `{ token, expiresAt }` where `expiresAt` is absolute ms-since-epoch,
- * matching eve's `TokenResult` (so the connection can hand this straight to `auth.getToken`).
- *
- * The body is form-urlencoded, which RFC 6749 §4 mandates for the token endpoint. Auth0 also
- * accepts JSON, which is why this sent JSON for as long as Auth0 was the only issuer it faced —
- * and why nothing was red. Temper's own AS (`packages/temper-cloud/src/oauth/endpoints.ts`) reads
- * the body with `req.formData()`, so a JSON mint could never have reached its grant branch.
- * Form-encoding works against BOTH issuers; this is the shape that lets the steward be repointed
- * at temper's issuer without touching this file again.
- *
- * `audience` is Auth0's: temper's AS ignores a request-supplied audience and mints with its own
- * `AS_AUDIENCE`. Still sent unconditionally — it is required by Auth0 and inert everywhere else.
+ * `TEMPER_M2M_AUDIENCE` is read but NOT required. Auth0 demands an audience; temper's own AS ignores
+ * a request-supplied one entirely and mints with its server-side `AS_AUDIENCE`. So a temper-issued
+ * (`tmpr_`) credential must be able to omit it — requiring it here is precisely what made this agent
+ * unable to consume one.
  */
-export async function mintM2mToken(): Promise<{ token: string; expiresAt: number }> {
-  const skewMs = 60_000;
-  if (cachedM2m && cachedM2m.expiresAt - skewMs > Date.now()) {
-    return cachedM2m;
+function credentials(): Credentials {
+  if (cached !== undefined) {
+    return cached;
   }
 
-  const res = await fetch(requireEnv("TEMPER_M2M_TOKEN_URL"), {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: requireEnv("TEMPER_M2M_CLIENT_ID"),
-      client_secret: requireEnv("TEMPER_M2M_CLIENT_SECRET"),
-      audience: requireEnv("TEMPER_M2M_AUDIENCE"),
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`M2M token mint failed (${res.status}): ${await res.text()}`);
+  const clientId = process.env.TEMPER_M2M_CLIENT_ID;
+  if (clientId) {
+    cached = new ClientCredentials({
+      tokenUrl: requireEnv("TEMPER_M2M_TOKEN_URL"),
+      clientId,
+      clientSecret: requireEnv("TEMPER_M2M_CLIENT_SECRET"),
+      audience: process.env.TEMPER_M2M_AUDIENCE || undefined,
+    });
+    return cached;
   }
 
-  const body = (await res.json()) as { access_token: string; expires_in: number };
-  cachedM2m = {
-    token: body.access_token,
-    expiresAt: Date.now() + body.expires_in * 1000,
-  };
-  return cachedM2m;
+  const connector = process.env.TEMPER_CONNECT_CONNECTOR;
+  if (connector) {
+    cached = {
+      // Connect can hand out a fresh app token on demand, so a 401 IS worth one retry here.
+      canRefresh: true,
+      token: () => getToken(connector, { subject: { type: "app" } }),
+      tokenResult: async () => ({
+        token: await getToken(connector, { subject: { type: "app" } }),
+        expiresAt: Number.POSITIVE_INFINITY,
+      }),
+      refresh: async () => ({
+        token: await getToken(connector, { subject: { type: "app" } }),
+        expiresAt: Number.POSITIVE_INFINITY,
+      }),
+    };
+    return cached;
+  }
+
+  cached = new BearerToken(requireEnv("TEMPER_TOKEN"));
+  return cached;
 }
 
 /**
- * A bearer token string for imperative temper REST/MCP `fetch`es from the code schedules — the same
- * machine-identity-first ordering the connection uses. M2M-first is the fix: the previous
- * Connect-first ordering hit the dead-end connector on prod and threw before any request went out.
+ * The token + its ABSOLUTE expiry, handed straight to eve's `auth.getToken` by the MCP connection so
+ * eve can refresh ahead of a 401. Name and shape are load-bearing — `connections/temper.ts` passes
+ * this function itself as `getToken`.
  */
+export async function mintM2mToken(): Promise<TokenResult> {
+  return credentials().tokenResult();
+}
+
+/** A bearer token string for imperative temper REST/MCP `fetch`es from the code schedules. */
 export async function temperToken(): Promise<string> {
-  if (process.env.TEMPER_M2M_CLIENT_ID) {
-    return (await mintM2mToken()).token;
+  return credentials().token();
+}
+
+/**
+ * `fetch` against temper, authenticated, with the 5xx cold-start retry AND a single re-mint on 401.
+ *
+ * The 401 branch is the fix for a bug the Ruby port documented against this very file: a schedule
+ * resolves ONE token and then holds it across N parallel fetches, so a token that dies mid-tick
+ * takes the tick down with it and nothing recovers. Refresh-ahead-of-expiry cannot help — the token
+ * was live when it was checked. Temper's AS mints 900-second tokens by default, which makes a tick
+ * outliving its token ordinary rather than exotic.
+ *
+ * Exactly ONE re-mint: a 401 that survives a fresh token is a real authorization failure (a revoked
+ * credential, missing reach), and retrying it forever would only bury the error.
+ *
+ * A strategy that CANNOT mint (`TEMPER_TOKEN` under `eve dev`) gets its 401 back untouched. Calling
+ * `refresh()` on it would throw "BearerToken cannot refresh" — replacing temper's real answer, body
+ * and all, with a message about the client's own plumbing, on the one path a human actually reads.
+ */
+export async function temperFetch(
+  url: string,
+  init: RequestInit,
+  opts: RetryOptions = {},
+): Promise<Response> {
+  const creds = credentials();
+  const headers = new Headers(init.headers);
+
+  headers.set("authorization", `Bearer ${await creds.token()}`);
+  const res = await fetchWithRetry(url, { ...init, headers }, opts);
+  if (res.status !== 401 || !creds.canRefresh) {
+    return res;
   }
-  const connector = process.env.TEMPER_CONNECT_CONNECTOR;
-  if (connector) {
-    return getToken(connector, { subject: { type: "app" } });
-  }
-  return requireEnv("TEMPER_TOKEN");
+
+  const refreshed = await creds.refresh();
+  console.log(`[temper-auth] ${opts.label ?? url} returned 401; re-minted and retrying once`);
+  headers.set("authorization", `Bearer ${refreshed.token}`);
+  return fetchWithRetry(url, { ...init, headers }, opts);
 }
 
 export function requireEnv(name: string): string {
