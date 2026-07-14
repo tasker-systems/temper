@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_connections\n              SET tool_manifest = $2\n            WHERE id = $1 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7d2221670eb016dca85c21be1e0659ee7a0fad036848acecfb24e6bac2e79625"
+}

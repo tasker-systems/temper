@@ -13,7 +13,10 @@ use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_core::types::connection::{Connection, ProvisionConnectionRequest};
+use temper_core::types::connection::{
+    Connection, ConnectionCredential, ProvisionConnectionRequest, SetToolManifestRequest,
+    SetWebhookEventsRequest,
+};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiResult;
 use temper_services::services::connection_service;
@@ -68,5 +71,49 @@ pub async fn revoke(
     let caller = ProfileId::from(auth.0.profile.id);
     Ok(Json(
         connection_service::revoke(&state.pool, id, caller).await?,
+    ))
+}
+
+/// Attach the credential — what flips `needs_credential` off. The body carries no secret: it names
+/// a broker and a connector that broker holds the secret for.
+pub async fn attach_credential(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ConnectionCredential>,
+) -> ApiResult<Json<Connection>> {
+    let caller = ProfileId::from(auth.0.profile.id);
+    Ok(Json(
+        connection_service::attach_credential(&state.pool, caller, id, &body).await?,
+    ))
+}
+
+/// Register the remote event types. Non-empty ⇒ ledger-capable.
+///
+/// Its own endpoint rather than a field on a general update, because the two capability tiers are
+/// separately provisioned and both explicit — collapsing them into one PATCH would let a caller
+/// grant reach while believing they were only registering a webhook.
+pub async fn set_webhook_events(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetWebhookEventsRequest>,
+) -> ApiResult<Json<Connection>> {
+    let caller = ProfileId::from(auth.0.profile.id);
+    Ok(Json(
+        connection_service::set_webhook_events(&state.pool, caller, id, &body.events).await?,
+    ))
+}
+
+/// Declare the read-only remote tools. Non-empty ⇒ reach-capable.
+pub async fn set_tool_manifest(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetToolManifestRequest>,
+) -> ApiResult<Json<Connection>> {
+    let caller = ProfileId::from(auth.0.profile.id);
+    Ok(Json(
+        connection_service::set_tool_manifest(&state.pool, caller, id, &body.tools).await?,
     ))
 }

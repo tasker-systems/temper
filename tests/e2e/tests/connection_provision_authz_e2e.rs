@@ -74,6 +74,28 @@ async fn connection_count(pool: &PgPool) -> i64 {
         .expect("count connections")
 }
 
+/// `POST /api/connections/{id}/{sub}`. Returns (status, body).
+async fn post_sub(
+    app: &common::E2eTestApp,
+    token: &str,
+    id: &str,
+    sub: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let path = format!("/api/connections/{id}/{sub}");
+    let resp = app
+        .reqwest_client
+        .post(app.url(&path))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .expect("POST connection sub-resource");
+    let status = resp.status();
+    let json = resp.json().await.unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
 /// The point of the model: a team runs its own integrations, with no operator in the loop.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_team_owner_can_provision_for_their_own_team(pool: PgPool) {
@@ -165,5 +187,140 @@ async fn provisioning_for_an_unowned_team_is_denied_and_writes_nothing(pool: PgP
     assert_eq!(
         profiles_before, profiles_after,
         "a denied provisioning left an orphaned profile behind"
+    );
+}
+
+/// The credential and the two capability tiers, over the real router.
+///
+/// Each is its own endpoint precisely so a caller cannot grant reach while believing they were
+/// only registering a webhook — so the surface must prove they move independently, and that
+/// `needs_credential` flips off from the COLUMN, not from a status anyone set.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_credential_and_the_capability_tiers_move_independently_over_http(pool: PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let token = common::generate_test_jwt("conn-owner", "conn-owner@example.com");
+    provision_profile(&app, &token).await;
+    let team = create_team(&app, &token, "acme").await;
+
+    let (status, born) = provision(
+        &app,
+        &token,
+        json!({
+            "provider": "github",
+            "name": "Acme GitHub",
+            "owner_team_id": team,
+            "reach_granularity": "repo-set",
+            "reach_covers": "acme/temper",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "team owner may provision: {born:?}");
+    assert!(born["credential"].is_null(), "born needs_credential");
+    let id = born["id"].as_str().expect("connection id").to_string();
+
+    // The credential. No secret crosses the wire — a broker name and a connector id the BROKER
+    // holds the secret for.
+    let (status, credentialed) = post_sub(
+        &app,
+        &token,
+        &id,
+        "credential",
+        json!({ "broker": "vercel-connect", "connector": "conn_abc123" }),
+    )
+    .await;
+    assert_eq!(status, 200, "attach credential: {credentialed:?}");
+    assert_eq!(credentialed["credential"]["broker"], "vercel-connect");
+    assert_eq!(credentialed["credential"]["connector"], "conn_abc123");
+    assert!(
+        credentialed["credential"].get("installation").is_none(),
+        "an absent installation must be omitted, not serialized as null"
+    );
+    // A credential confers NEITHER tier.
+    assert_eq!(
+        credentialed["webhook_events"].as_array().map(Vec::len),
+        Some(0),
+        "a credential does not make a connection ledger-capable"
+    );
+    assert_eq!(
+        credentialed["tool_manifest"],
+        json!({}),
+        "a credential does not make a connection reach-capable"
+    );
+
+    // Ledger-capable, and ONLY ledger-capable.
+    let (status, ledger) = post_sub(
+        &app,
+        &token,
+        &id,
+        "webhook-events",
+        json!({ "events": ["pull_request", "push"] }),
+    )
+    .await;
+    assert_eq!(status, 200, "set webhook events: {ledger:?}");
+    assert_eq!(ledger["webhook_events"], json!(["pull_request", "push"]));
+    assert_eq!(
+        ledger["tool_manifest"],
+        json!({}),
+        "ledger-capable must not imply reach-capable — a ledger-only connection is legal, and \
+         inert for judgment"
+    );
+
+    // Reach-capable.
+    let (status, reach) = post_sub(
+        &app,
+        &token,
+        &id,
+        "tool-manifest",
+        json!({ "tools": ["get_pull_request"] }),
+    )
+    .await;
+    assert_eq!(status, 200, "set tool manifest: {reach:?}");
+    assert_eq!(reach["tool_manifest"], json!(["get_pull_request"]));
+    assert_eq!(
+        reach["webhook_events"],
+        json!(["pull_request", "push"]),
+        "declaring tools must not clear the registered webhooks"
+    );
+}
+
+/// The mutators must reach `machine_authz::authorize` too — not just `provision`. A surface that
+/// gates creation and then leaves mutation open is the classic way this goes wrong.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_outsider_cannot_attach_a_credential_over_http(pool: PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let owner = common::generate_test_jwt("conn-owner", "conn-owner@example.com");
+    let outsider = common::generate_test_jwt("conn-outsider", "conn-outsider@example.com");
+    provision_profile(&app, &owner).await;
+    provision_profile(&app, &outsider).await;
+    let team = create_team(&app, &owner, "acme").await;
+
+    let (status, born) = provision(
+        &app,
+        &owner,
+        json!({ "provider": "github", "name": "Acme GitHub", "owner_team_id": team }),
+    )
+    .await;
+    assert_eq!(status, 200, "owner provisions: {born:?}");
+    let id = born["id"].as_str().expect("connection id").to_string();
+
+    let (status, _) = post_sub(
+        &app,
+        &outsider,
+        &id,
+        "credential",
+        json!({ "broker": "vercel-connect", "connector": "conn_abc123" }),
+    )
+    .await;
+    assert_eq!(status, 403, "an outsider may not attach a credential");
+
+    let stored: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT credential FROM kb_connections WHERE id = $1")
+            .bind(id.parse::<Uuid>().expect("uuid"))
+            .fetch_one(&pool)
+            .await
+            .expect("read credential");
+    assert!(
+        stored.is_none(),
+        "a denied attach wrote a credential anyway"
     );
 }

@@ -4,7 +4,9 @@
 //! only the connection's OWNER, never its reach — owning a connection does not confer the right
 //! to subscribe to it.
 
-use temper_core::types::connection::{Connection, ProvisionConnectionRequest};
+use temper_core::types::connection::{
+    Connection, ConnectionCredential, ProvisionConnectionRequest,
+};
 
 use crate::error::{Result, TemperError};
 use crate::format::OutputFormat;
@@ -103,6 +105,72 @@ pub async fn show_remote(
         .get(parse_uuid("connection id", id)?)
         .await
         .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&row, fmt)?);
+    announce_capabilities(&row);
+    Ok(())
+}
+
+/// Attach the credential. `needs_credential` flips off because the column became non-NULL — there
+/// is no status to set.
+///
+/// `--broker` names the implementation behind the seam; it is never a bare connector id. The
+/// connector id lives on the row, per instance, which is what lets a self-hosted operator use their
+/// own connectors in their own Vercel team.
+pub async fn attach_credential_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    broker: &str,
+    connector: &str,
+    installation: Option<&str>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let credential = ConnectionCredential {
+        broker: broker.to_string(),
+        connector: connector.to_string(),
+        installation: installation.map(str::to_string),
+    };
+    let row = client
+        .connections()
+        .attach_credential(parse_uuid("connection id", id)?, &credential)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    println!("{}", crate::format::render(&row, fmt)?);
+    announce_capabilities(&row);
+    Ok(())
+}
+
+/// Register the remote event types. Non-empty ⇒ ledger-capable.
+pub async fn set_webhook_events_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    events: Vec<String>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let row = client
+        .connections()
+        .set_webhook_events(parse_uuid("connection id", id)?, events)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    println!("{}", crate::format::render(&row, fmt)?);
+    announce_capabilities(&row);
+    Ok(())
+}
+
+/// Declare the read-only remote tools. Non-empty ⇒ reach-capable.
+pub async fn set_tool_manifest_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    tools: Vec<String>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let row = client
+        .connections()
+        .set_tool_manifest(parse_uuid("connection id", id)?, tools)
+        .await
+        .map_err(crate::commands::client_err)?;
+
     println!("{}", crate::format::render(&row, fmt)?);
     announce_capabilities(&row);
     Ok(())

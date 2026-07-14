@@ -944,6 +944,50 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         })
                     })
                 }
+                AdminConnectionAction::AttachCredential {
+                    id,
+                    broker,
+                    connector,
+                    installation,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_connection::attach_credential_remote(
+                            client,
+                            &id,
+                            &broker,
+                            &connector,
+                            installation.as_deref(),
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminConnectionAction::SetWebhooks { id, events } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_connection::set_webhook_events_remote(
+                                client,
+                                &id,
+                                events,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+                AdminConnectionAction::SetTools { id, tools } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_connection::set_tool_manifest_remote(
+                                client,
+                                &id,
+                                tools,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
                 AdminConnectionAction::Revoke { id } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {

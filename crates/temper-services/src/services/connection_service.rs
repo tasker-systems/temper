@@ -14,7 +14,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::connection::{Connection, ProvisionConnectionRequest};
+use temper_core::types::connection::{
+    Connection, ConnectionCredential, ProvisionConnectionRequest,
+};
 use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
@@ -213,6 +215,116 @@ pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Co
     get(pool, id).await
 }
 
+/// Gate a mutation on an existing, **live** connection.
+///
+/// The machine gate keyed on the row's own owning team, plus the revoked check. A revoked
+/// connection is dead — reactivation is a new provisioning, never an UPDATE — so a mutator refuses
+/// one outright rather than issuing an UPDATE that silently matches no rows and reports success.
+async fn authorize_live(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Connection> {
+    let existing = get(pool, id).await?;
+    machine_authz::authorize(pool, caller, existing.owner_team_id).await?;
+    if existing.revoked_at.is_some() {
+        return Err(ApiError::Conflict(format!(
+            "connection '{}' is revoked; reactivation is a new provisioning",
+            existing.slug
+        )));
+    }
+    Ok(existing)
+}
+
+/// Attach the credential. This is what flips `needs_credential` off — and it flips off because
+/// the column became non-NULL, not because a status was written. There is no status to write.
+///
+/// The stored value holds **no secret**: it names a broker and a connector the broker holds the
+/// secret for. Nothing dispatches on `broker` yet; the adapter that does is a later chunk, which
+/// is precisely why this one only records it.
+pub async fn attach_credential(
+    pool: &PgPool,
+    caller: ProfileId,
+    id: Uuid,
+    credential: &ConnectionCredential,
+) -> ApiResult<Connection> {
+    authorize_live(pool, caller, id).await?;
+
+    if credential.broker.trim().is_empty() {
+        return Err(ApiError::BadRequest("broker must not be empty".into()));
+    }
+    if credential.connector.trim().is_empty() {
+        return Err(ApiError::BadRequest("connector must not be empty".into()));
+    }
+
+    let value = serde_json::to_value(credential)
+        .map_err(|e| ApiError::Internal(format!("failed to serialize credential: {e}")))?;
+
+    sqlx::query!(
+        r#"UPDATE kb_connections
+              SET credential = $2
+            WHERE id = $1 AND revoked_at IS NULL"#,
+        id,
+        value,
+    )
+    .execute(pool)
+    .await?;
+
+    get(pool, id).await
+}
+
+/// Register the remote event types. Non-empty ⇒ **ledger-capable**: events land, facts accrue.
+///
+/// Replaces the set wholesale. The registered set mirrors what the remote is actually configured
+/// to send, so a merge would let a stale entry outlive the webhook it names — and a capability we
+/// claim but do not have is exactly the silence invariant 6 forbids.
+pub async fn set_webhook_events(
+    pool: &PgPool,
+    caller: ProfileId,
+    id: Uuid,
+    events: &[String],
+) -> ApiResult<Connection> {
+    authorize_live(pool, caller, id).await?;
+
+    sqlx::query!(
+        r#"UPDATE kb_connections
+              SET webhook_events = $2
+            WHERE id = $1 AND revoked_at IS NULL"#,
+        id,
+        events,
+    )
+    .execute(pool)
+    .await?;
+
+    get(pool, id).await
+}
+
+/// Declare the read-only remote tools. Non-empty ⇒ **reach-capable**: agents can read the remote
+/// back, so judgment becomes possible.
+///
+/// The manifest is the evidence the provider is admissible at all — an empty one means judgment is
+/// *impossible*, not merely unconfigured. Stored as a JSON array of tool names, which is what
+/// `Connection::is_reach_capable` reads.
+pub async fn set_tool_manifest(
+    pool: &PgPool,
+    caller: ProfileId,
+    id: Uuid,
+    tools: &[String],
+) -> ApiResult<Connection> {
+    authorize_live(pool, caller, id).await?;
+
+    let value = serde_json::to_value(tools)
+        .map_err(|e| ApiError::Internal(format!("failed to serialize tool manifest: {e}")))?;
+
+    sqlx::query!(
+        r#"UPDATE kb_connections
+              SET tool_manifest = $2
+            WHERE id = $1 AND revoked_at IS NULL"#,
+        id,
+        value,
+    )
+    .execute(pool)
+    .await?;
+
+    get(pool, id).await
+}
+
 /// A connection slug, unique across the instance. Bases it on the name; on collision (two
 /// distinct names can sluggify to the same string) suffixes `-2`, `-3`, … The UNIQUE constraint
 /// remains the actual race guard — this only keeps the common case friendly.
@@ -265,7 +377,7 @@ mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
-    use temper_core::types::connection::ProvisionConnectionRequest;
+    use temper_core::types::connection::{ConnectionCredential, ProvisionConnectionRequest};
     use temper_core::types::ids::ProfileId;
     use temper_core::types::team::TeamRole;
 
@@ -626,5 +738,187 @@ mod tests {
 
         let admin_sees = svc::list(&pool, admin, false).await.expect("list");
         assert_eq!(admin_sees.len(), 2, "an admin sees every row");
+    }
+
+    fn credential() -> ConnectionCredential {
+        ConnectionCredential {
+            broker: "vercel-connect".to_string(),
+            connector: "conn_abc123".to_string(),
+            installation: Some("inst_42".to_string()),
+        }
+    }
+
+    /// The round-trip is the whole point of typing the column: what we write must come back as the
+    /// same struct, or the broker seam cannot dispatch on `broker`. Asserted through
+    /// `credential_typed`, not by eyeballing the raw JSON.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn attaching_a_credential_flips_needs_credential_and_round_trips(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+        assert!(c.needs_credential(), "born needs_credential");
+
+        let attached = svc::attach_credential(&pool, admin, c.id, &credential())
+            .await
+            .expect("attach");
+
+        // It flips off because the COLUMN is non-NULL — there is no status to set.
+        assert!(!attached.needs_credential());
+        assert_eq!(
+            attached
+                .credential_typed()
+                .expect("credential present")
+                .expect("credential parses"),
+            credential(),
+            "the stored credential must round-trip through ConnectionCredential"
+        );
+
+        // Attaching a credential confers NEITHER capability tier. They are separately provisioned.
+        assert!(!attached.is_ledger_capable());
+        assert!(!attached.is_reach_capable());
+    }
+
+    /// Ledger-capable and reach-capable are independent. A connection may legitimately be
+    /// ledger-only: events land, judgment is simply not yet possible — and it says so.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_two_capability_tiers_are_independently_settable(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        let events = vec!["pull_request".to_string(), "push".to_string()];
+        let ledger_only = svc::set_webhook_events(&pool, admin, c.id, &events)
+            .await
+            .expect("set webhooks");
+        assert!(ledger_only.is_ledger_capable(), "events land");
+        assert!(
+            !ledger_only.is_reach_capable(),
+            "ledger-capable must NOT imply reach-capable — a ledger-only connection is legal, \
+             and inert for judgment"
+        );
+        assert_eq!(ledger_only.webhook_events, events);
+
+        let tools = vec!["get_pull_request".to_string()];
+        let both = svc::set_tool_manifest(&pool, admin, c.id, &tools)
+            .await
+            .expect("set tools");
+        assert!(both.is_reach_capable(), "judgment becomes possible");
+        assert!(both.is_ledger_capable(), "and the webhook set survives");
+        assert_eq!(
+            both.tool_manifest,
+            serde_json::json!(["get_pull_request"]),
+            "the manifest is a JSON array of tool names — what is_reach_capable reads"
+        );
+    }
+
+    /// The registered set MIRRORS what the remote is configured to send, so it replaces rather
+    /// than merges. A merge would let a stale entry outlive the webhook it names — a claimed
+    /// capability we do not have.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn setting_webhook_events_replaces_rather_than_merges(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        svc::set_webhook_events(&pool, admin, c.id, &["push".to_string()])
+            .await
+            .expect("first");
+        let second = svc::set_webhook_events(&pool, admin, c.id, &["pull_request".to_string()])
+            .await
+            .expect("second");
+
+        assert_eq!(
+            second.webhook_events,
+            vec!["pull_request".to_string()],
+            "`push` must be gone, not merged"
+        );
+    }
+
+    /// A revoked connection is dead: reactivation is a new provisioning, never an UPDATE. Every
+    /// mutator must REFUSE one rather than issue an UPDATE that matches no rows and reports success.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_revoked_connection_refuses_every_mutation(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+        svc::revoke(&pool, c.id, admin).await.expect("revoke");
+
+        assert!(matches!(
+            svc::attach_credential(&pool, admin, c.id, &credential()).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            svc::set_webhook_events(&pool, admin, c.id, &["push".to_string()]).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            svc::set_tool_manifest(&pool, admin, c.id, &["t".to_string()]).await,
+            Err(ApiError::Conflict(_))
+        ));
+
+        // And nothing was written despite three attempts.
+        let after = svc::get(&pool, c.id).await.expect("get");
+        assert!(after.needs_credential());
+        assert!(!after.is_ledger_capable());
+        assert!(!after.is_reach_capable());
+    }
+
+    /// The mutators call `machine_authz::authorize` — the same gate as provisioning, keyed on the
+    /// EXISTING row's owning team. A maintainer is not an owner.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_mere_maintainer_cannot_attach_a_credential(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let (maintainer, team) =
+            seed_team_member(&pool, "conn-maint", "acme", TeamRole::Maintainer).await;
+
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+
+        assert!(matches!(
+            svc::attach_credential(&pool, maintainer, c.id, &credential()).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(
+            svc::get(&pool, c.id).await.expect("get").needs_credential(),
+            "a rejected attach writes nothing"
+        );
+    }
+
+    /// A credential naming no broker cannot be dispatched on, so it is not a credential. Reject it
+    /// rather than storing a row that flips `needs_credential` off while being unusable.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_empty_broker_or_connector_is_rejected(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        let no_broker = ConnectionCredential {
+            broker: "  ".to_string(),
+            ..credential()
+        };
+        assert!(matches!(
+            svc::attach_credential(&pool, admin, c.id, &no_broker).await,
+            Err(ApiError::BadRequest(_))
+        ));
+
+        let no_connector = ConnectionCredential {
+            connector: String::new(),
+            ..credential()
+        };
+        assert!(matches!(
+            svc::attach_credential(&pool, admin, c.id, &no_connector).await,
+            Err(ApiError::BadRequest(_))
+        ));
+
+        assert!(
+            svc::get(&pool, c.id).await.expect("get").needs_credential(),
+            "neither rejection may leave the connection looking credentialed"
+        );
     }
 }

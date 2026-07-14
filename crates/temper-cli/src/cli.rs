@@ -1159,6 +1159,47 @@ pub enum AdminConnectionAction {
     },
     /// Show one connection
     Show { id: String },
+    /// Attach the credential. This is what flips `needs_credential` off — the state is derived
+    /// from the column being non-NULL, never from a status flag.
+    ///
+    /// No secret is stored: `--broker` names the implementation behind the seam and `--connector`
+    /// identifies a connector THAT BROKER holds the secret for. The connector id lives on the row,
+    /// per instance — which is what lets a self-hosted operator use their own connectors.
+    AttachCredential {
+        id: String,
+        /// The implementation behind the broker seam, e.g. `vercel-connect`. Never a connector id.
+        #[arg(long)]
+        broker: String,
+        /// The broker's identifier for this connector.
+        #[arg(long)]
+        connector: String,
+        /// The specific installation, where the provider has that concept (a GitHub App
+        /// installation).
+        #[arg(long)]
+        installation: Option<String>,
+    },
+    /// Register the remote event types this connection receives. Non-empty ⇒ LEDGER-CAPABLE:
+    /// events land, facts accrue.
+    ///
+    /// Replaces the registered set wholesale — it mirrors what the remote is actually configured
+    /// to send, and a merge would let a stale entry outlive the webhook it names.
+    SetWebhooks {
+        id: String,
+        /// A remote event type, e.g. `pull_request`. Repeatable.
+        #[arg(long = "event", required = true)]
+        events: Vec<String>,
+    },
+    /// Declare the read-only remote tools. Non-empty ⇒ REACH-CAPABLE: agents can read the remote
+    /// back, so judgment becomes possible.
+    ///
+    /// Not decorative — the manifest is the evidence the provider is admissible at all. An empty
+    /// manifest means judgment is IMPOSSIBLE, not merely unconfigured.
+    SetTools {
+        id: String,
+        /// A read-only remote tool name. Repeatable.
+        #[arg(long = "tool", required = true)]
+        tools: Vec<String>,
+    },
     /// Revoke a connection. Its profile, emitter entity, and home context survive — events
     /// already attributed to the emitter must keep resolving.
     Revoke { id: String },
