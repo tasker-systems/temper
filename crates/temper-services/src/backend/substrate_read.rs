@@ -49,6 +49,17 @@ fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))
 }
 
+/// Tag an internal search fault with the stage it came from (issue #427), so a generic surface error
+/// names the failing stage (`unified_search` — the blended FTS/vector/graph query — vs `enrichment` —
+/// per-row display assembly) instead of collapsing to one opaque "Error occurred during tool
+/// execution" string. Both surfaces (`temper-api`, `temper-mcp`) format the resulting `ApiError`
+/// message verbatim, so the stage rides through to the client. Caller-facing 400/404s from scope
+/// resolution (a bad `context_ref`) return upstream and never pass through here — they are already
+/// self-describing. The embed stage cannot reach here: it degrades to FTS + graph rather than erroring.
+fn search_stage_err(stage: &str, e: impl std::fmt::Display) -> ApiError {
+    api_err(format!("search stage={stage}: {e}"))
+}
+
 /// One page of the filtered, visible resource set: the page's substrate ids (already
 /// sorted + paginated), the FILTERED total (before limit/offset), and the doc_type
 /// histogram over the filtered set (`ResourceFacets` = "current filter set").
@@ -443,6 +454,21 @@ async fn resolve_search_scope(
     Ok((context_id, scope_ids))
 }
 
+/// The wall-clock budget for a single server-side query embed, in milliseconds. Overridable via
+/// `TEMPER_QUERY_EMBED_BUDGET_MS` for targets whose serverless function deadline differs from the
+/// 8s default (issue #427). A non-numeric or zero value falls back to the default rather than
+/// disabling the guard — an unbounded embed is exactly the failure mode this protects against.
+const DEFAULT_QUERY_EMBED_BUDGET_MS: u64 = 8_000;
+
+fn query_embed_budget() -> std::time::Duration {
+    let ms = std::env::var("TEMPER_QUERY_EMBED_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .unwrap_or(DEFAULT_QUERY_EMBED_BUDGET_MS);
+    std::time::Duration::from_millis(ms)
+}
+
 /// Embed a text-only query server-side so the vector arm contributes for callers that can't run the
 /// ONNX model themselves (MCP clients, raw HTTP, agent workers). The CLI precomputes the vector and
 /// sends it in `SearchParams.embedding`, so this is a no-op for that path — as is a query that is
@@ -453,14 +479,21 @@ async fn resolve_search_scope(
 /// the stored chunks' vector space so scores stay comparable to the CLI's. Do not introduce a
 /// query-side prefix here without re-embedding the corpus.
 ///
-/// Failure mode is fallback-with-warn: if the model errors (e.g. unavailable on an unexpected target),
-/// we log and proceed with FTS + graph only rather than turning a soft degradation into a hard 500 —
-/// partial results beat none, and this preserves the pre-#297 behavior on embed failure.
+/// **The embed runs off the async executor, under a wall-clock budget (issue #427).** ONNX inference
+/// is CPU-bound and a cold serverless instance also pays a one-time model load (ORT init + writing
+/// the bundled runtime to `/tmp` + reading the quantized model); running it inline on the request's
+/// executor thread both blocks that thread and can hold the whole invocation past the function's
+/// deadline, at which point the platform kills the request and the client sees a generic "execution
+/// error" with no results. So we hand it to `spawn_blocking` and race it against `query_embed_budget()`.
 ///
-/// Returns `true` when a query needed server-side embedding but it *failed* (the "degraded" case
-/// surfaced in [`SearchDiagnostics`], issue #360); `false` when the vector signal is intact — the
-/// query already carried an embedding, there was nothing to embed, or the embed succeeded.
-fn embed_query_if_missing(params: &mut SearchParams) -> bool {
+/// Failure mode is fallback-with-warn: on embed error, task panic, OR budget timeout we log and
+/// proceed with FTS + graph only rather than turning a soft degradation into a killed request —
+/// partial results beat none, and the `degraded` signal is surfaced in [`SearchDiagnostics`] (#360).
+///
+/// Returns `true` when a query needed server-side embedding but it *did not land* (error / panic /
+/// timeout — the "degraded" case); `false` when the vector signal is intact — the query already
+/// carried an embedding, there was nothing to embed, or the embed succeeded within budget.
+async fn embed_query_if_missing(params: &mut SearchParams) -> bool {
     if params.embedding.is_some() {
         return false;
     }
@@ -468,15 +501,31 @@ fn embed_query_if_missing(params: &mut SearchParams) -> bool {
         Some(q) if !q.is_empty() => q.to_string(),
         _ => return false,
     };
-    match temper_ingest::embed::embed_text(&query) {
-        Ok(embedding) => {
+    let budget = query_embed_budget();
+    let embed = tokio::task::spawn_blocking(move || temper_ingest::embed::embed_text(&query));
+    match tokio::time::timeout(budget, embed).await {
+        Ok(Ok(Ok(embedding))) => {
             params.embedding = Some(embedding);
             false
         }
-        Err(e) => {
+        Ok(Ok(Err(e))) => {
             tracing::warn!(
                 error = %e,
                 "server-side query embedding failed; falling back to FTS + graph only"
+            );
+            true
+        }
+        Ok(Err(join_err)) => {
+            tracing::warn!(
+                error = %join_err,
+                "server-side query embedding task panicked; falling back to FTS + graph only"
+            );
+            true
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                budget_ms = budget.as_millis(),
+                "server-side query embedding exceeded its budget; falling back to FTS + graph only"
             );
             true
         }
@@ -568,7 +617,7 @@ pub async fn search_select(
     profile_id: ProfileId,
     mut params: SearchParams,
 ) -> ApiResult<SearchResponse> {
-    let degraded = embed_query_if_missing(&mut params);
+    let degraded = embed_query_if_missing(&mut params).await;
     let scope = classify_scope(&params);
     let clamped = clamp_search_params(&params);
     let (context_id, scope_ids) = resolve_search_scope(pool, profile_id, &params).await?;
@@ -601,7 +650,7 @@ pub async fn search_select(
         },
     )
     .await
-    .map_err(api_err)?;
+    .map_err(|e| search_stage_err("unified_search", e))?;
 
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
@@ -609,7 +658,9 @@ pub async fn search_select(
         // `readback::resource_row` LEFT-JOINs kb_contexts AND kb_cogmaps and is visibility-gated).
         // Context-homed hits carry `context_*`; cogmap-homed hits carry `cogmap_*`. `home_display`
         // surfaces whichever home is set, so a `--cogmap` hit renders the map name rather than null.
-        let row = native_resource_row(pool, profile_id, h.resource_id).await?;
+        let row = native_resource_row(pool, profile_id, h.resource_id)
+            .await
+            .map_err(|e| search_stage_err("enrichment", e))?;
         let context = row.home_display().map(str::to_owned);
         out.push(UnifiedSearchResultRow {
             resource_id: h.resource_id.uuid(),
@@ -909,15 +960,15 @@ mod clamp_tests {
     // `embed_query_if_missing` guards — the no-op cases never touch the ONNX model, so they run in the
     // plain (non-embed) test job. The positive case (text → 768-dim vector) is proven end-to-end in the
     // `test-embed` e2e regression `server_embeds_text_only_query_surfaces_semantic_only_hit`.
-    #[test]
-    fn embed_query_noop_when_embedding_already_present() {
+    #[tokio::test]
+    async fn embed_query_noop_when_embedding_already_present() {
         let precomputed = vec![0.5_f32; 768];
         let mut p = SearchParams {
             query: Some("kubernetes deploys".into()),
             embedding: Some(precomputed.clone()),
             ..SearchParams::default()
         };
-        let degraded = embed_query_if_missing(&mut p);
+        let degraded = embed_query_if_missing(&mut p).await;
         assert!(
             !degraded,
             "a precomputed embedding is not a degraded signal"
@@ -929,15 +980,15 @@ mod clamp_tests {
         );
     }
 
-    #[test]
-    fn embed_query_noop_when_query_is_none_or_blank() {
+    #[tokio::test]
+    async fn embed_query_noop_when_query_is_none_or_blank() {
         for q in [None, Some(String::new()), Some("   \t\n".into())] {
             let mut p = SearchParams {
                 query: q.clone(),
                 embedding: None,
                 ..SearchParams::default()
             };
-            let degraded = embed_query_if_missing(&mut p);
+            let degraded = embed_query_if_missing(&mut p).await;
             assert!(
                 !degraded && p.embedding.is_none(),
                 "empty/whitespace/absent query must not embed and is not degraded (query={q:?})"

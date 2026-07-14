@@ -17,7 +17,10 @@ anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["json"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "migrate"] }
-tokio = { version = "1", features = ["sync"] }
+# `rt`+`time`: the search read-path runs the CPU-bound server-side query embed off the async
+# executor (`spawn_blocking`) under a wall-clock budget (`timeout`) so a cold-instance model load
+# can never hold the serverless request past its deadline — issue #427.
+tokio = { version = "1", features = ["sync", "rt", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonwebtoken = "9"
