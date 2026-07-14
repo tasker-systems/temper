@@ -8,10 +8,11 @@
 # one generate-temper-rb.sh guards for the gem.
 #
 # This script is the single source of truth for the generator invocation. Called from
-# three places that must agree, or the drift gate would be checking a different
+# four places that must agree, or the drift gate would be checking a different
 # artifact than the one it tells you to regenerate:
 #   - `cargo make openapi` / `cargo make openapi-ts` (local dev, regen)
 #   - `cargo make openapi-ts-drift` → check-temper-ts-drift.sh (local dev, verify)
+#   - `npm run generate` from inside clients/temper-ts (what its README tells you)
 #   - the temper-ts CI job's drift step (.github/workflows/test-agents-ts.yml)
 #
 # Unlike the gem's generator this needs neither Docker nor Java — openapi-typescript
@@ -36,12 +37,25 @@ if [ ! -s "$SPEC" ]; then
   exit 1
 fi
 
-# npm ci (not install) so the LOCKED generator version is what emits — but only when
-# the binary is absent, since a wholesale reinstall on every regen would make
-# `cargo make check` pay seconds for nothing. temper-ts is workspace-isolated: npm
-# MUST run from inside it (a root install inherits the root's bun overrides and fails).
-if [ ! -x "$PKG/node_modules/.bin/openapi-typescript" ]; then
-  echo "  installing temper-ts devDependencies (pinned openapi-typescript)…" >&2
+# The pin above is only load-bearing if the binary we RUN is the pinned one, so check
+# the INSTALLED version against the PINNED one — presence is not enough. An earlier
+# guard tested only that node_modules/.bin/openapi-typescript existed, which made the
+# pin a comment: a stale binary from a previous checkout emitted silently, and the
+# failure was local-green / CI-red. Bump the pin, regenerate with the stale binary,
+# and `cargo make openapi-ts-drift` PASSES — it regenerates with that same stale
+# binary, so it is merely self-consistent. Commit, and CI's fresh `npm ci` emits
+# different bytes and fails, telling you to run the very command you just ran. (7.4.0
+# against a 7.13.0 pin: 252 insertions, 504 deletions, no warning.) The gem's
+# generator cannot drift this way — it has no node_modules cache to go stale.
+#
+# npm ci (not install) so the LOCKED version is what lands. Only on a mismatch, so a
+# regen with the right binary already in place stays free. temper-ts is
+# workspace-isolated: npm MUST run from inside it (a root install inherits the root's
+# bun overrides and fails).
+PINNED="$(node -p "require('$PKG/package.json').devDependencies['openapi-typescript']")"
+INSTALLED="$(node -p "require('$PKG/node_modules/openapi-typescript/package.json').version" 2>/dev/null || echo none)"
+if [ "$PINNED" != "$INSTALLED" ]; then
+  echo "  installing temper-ts devDependencies (openapi-typescript $PINNED, found $INSTALLED)…" >&2
   (cd "$PKG" && npm ci)
 fi
 

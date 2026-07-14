@@ -19,6 +19,19 @@ GENERATED="clients/temper-ts/src/generated/schema.ts"
 
 bash "$REPO_ROOT/.github/scripts/generate-temper-ts.sh"
 
+# Assert the artifact is TRACKED before diffing it. `git diff --exit-code -- <path>`
+# exits 0 when the path matches nothing — untracked, ignored, moved, renamed — so the
+# diff alone cannot distinguish "identical to what is committed" from "not committed
+# at all". If src/generated/ ever landed in a .gitignore, or the filename here drifted
+# from the generator's -o target, this gate would pass forever while checking nothing.
+# A gate that cannot fail is not a gate; make that state loud instead of green.
+if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$GENERATED" >/dev/null 2>&1; then
+  echo "ERROR: $GENERATED is not tracked by git, so there is nothing to diff against." >&2
+  echo "       Either it is gitignored or the path here has drifted from the one" >&2
+  echo "       generate-temper-ts.sh writes. Until that is fixed this gate checks nothing." >&2
+  exit 1
+fi
+
 if ! git -C "$REPO_ROOT" diff --exit-code -- "$GENERATED"; then
   echo >&2
   echo "ERROR: temper-ts's generated schema is out of date with openapi.json." >&2

@@ -231,11 +231,12 @@ script = [
 
 [tasks.openapi]
 description = "Emit the OpenAPI contract + regenerate the temper-rb gem and temper-ts schema (all products of the router)"
-# openapi.json AND the temper-rb generated core are both products of the router: a
-# new DTO field restales both. Regenerating them together is what keeps the two in
-# lockstep, so following openapi-check's "run cargo make openapi" remedy fixes the
-# gem too (the exact gap that bit #354). Gem regen needs Docker; when it is absent
-# this still emits the spec and points at `cargo make openapi-rb` for later.
+# openapi.json, the temper-rb generated core, AND temper-ts's generated schema.ts are
+# all products of the router: a new DTO field restales all three. Regenerating them
+# together is what keeps them in lockstep, so following openapi-check's "run cargo make
+# openapi" remedy fixes both SDKs too (the exact gap that bit #354). Gem regen needs
+# Docker; when it is absent this still emits the spec and the TS schema, and points at
+# `cargo make openapi-rb` for later. The TS schema needs only Node, so it never skips.
 script = [
   "out=${CARGO_MAKE_WORKING_DIRECTORY}/openapi.json",
   "cargo run --quiet -p temper-api --bin emit-openapi > \"$out\"",

@@ -228,6 +228,38 @@ run_test "openapi.json change: runs both SDK drift gates" \
     "RUN_TEST_RUBY=true" \
     "RUN_TEST_AGENTS_TS=true"
 
+# ---------------------------------------------------------------------------
+# A gate's own IMPLEMENTATION must run the gate. These four cases exist because
+# `git diff --exit-code -- <path-that-matches-nothing>` exits 0: a "chore: tidy
+# the drift scripts" PR that typos the GENERATED path turns the gate into a
+# permanent no-op that always passes — and, touching only .github/scripts/*.sh,
+# it would not have run the job whose gate it just killed. It merges green and
+# every later PR inherits a dead gate. The scripts belong in the trigger set of
+# the job they implement.
+# ---------------------------------------------------------------------------
+
+run_test "temper-ts drift script changed: runs the job it gates" \
+    ".github/scripts/check-temper-ts-drift.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
+run_test "temper-ts generator changed: runs the job it gates" \
+    ".github/scripts/generate-temper-ts.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
+run_test "temper-rb drift script changed: runs the job it gates" \
+    ".github/scripts/check-temper-rb-drift.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_RUBY=true"
+
+run_test "temper-rb generator changed: runs the job it gates" \
+    ".github/scripts/generate-temper-rb.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_RUBY=true"
+
+# The trigger keys are the SDK scripts specifically, not .github/scripts/ wholesale
+# — an unrelated script there must not drag both SDK jobs onto every PR.
+run_test "an unrelated .github script does not run either SDK job" \
+    ".github/scripts/check-openapi-routes.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_RUBY=false" "RUN_TEST_AGENTS_TS=false"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]
