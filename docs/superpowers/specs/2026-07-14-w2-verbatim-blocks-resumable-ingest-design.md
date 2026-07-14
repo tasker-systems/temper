@@ -82,6 +82,139 @@ This forces one upstream change: `temper_ingest::stream::segment_reader` current
 and drops a trailing newline — "almost exact" is not exact. It must emit **exact byte ranges**, and
 its test must assert `join("") == doc`.
 
+## The data shape, in SQL
+
+Grounded against the **live** schema (`\d`), not the origin migrations.
+
+### 1. Text gets a single home: the block
+
+A sidecar keyed by its parent, exactly mirroring the existing `kb_chunk_content` shape.
+
+```sql
+CREATE TABLE kb_block_content (
+    block_id     uuid PRIMARY KEY REFERENCES kb_content_blocks(id) ON DELETE CASCADE,
+    content      text NOT NULL,
+    content_hash text NOT NULL   -- sha256 hex of content's RAW BYTES
+);
+```
+
+`content_hash` is the block's raw-bytes sha256 — **the same value the client already sends** as
+`AppendBlockPayload.content_hash` and which the server currently discards after checking. Storing it
+makes the resume diff a straight comparison and removes a recompute.
+
+### 2. Chunks become a gappy byte-range index into their block
+
+```sql
+ALTER TABLE kb_chunks
+    ADD COLUMN start_byte integer,
+    ADD COLUMN end_byte   integer;
+
+ALTER TABLE kb_chunks
+    ADD CONSTRAINT ck_kb_chunks_byte_range CHECK (
+        (start_byte IS NULL AND end_byte IS NULL)      -- legacy: text lives in kb_chunk_content
+     OR (start_byte >= 0 AND end_byte > start_byte)    -- verbatim: half-open [start_byte, end_byte)
+    );
+```
+
+NULL offsets are the discriminator at chunk grain: a `derived` chunk keeps its text in
+`kb_chunk_content`; a `verbatim` chunk derives it from the block. Ranges are **half-open** and need
+**not** cover the block — heading lines are the gaps.
+
+### 3. The two discriminators, both defaulting to the honest legacy answer
+
+```sql
+ALTER TABLE kb_resources
+    ADD COLUMN body_storage text NOT NULL DEFAULT 'derived',
+    ADD COLUMN ingest_state text NOT NULL DEFAULT 'complete';
+
+ALTER TABLE kb_resources
+    ADD CONSTRAINT ck_kb_resources_body_storage
+        CHECK (body_storage IN ('verbatim', 'derived')),
+    ADD CONSTRAINT ck_kb_resources_ingest_state
+        CHECK (ingest_state IN ('in_progress', 'complete'));
+
+-- The owner's "what did I leave half-uploaded?" query.
+CREATE INDEX idx_kb_resources_incomplete
+    ON kb_resources (owner_profile_id)
+    WHERE ingest_state = 'in_progress';
+```
+
+`body_storage` defaults to `derived` so that existing rows — **and anything written by an un-upgraded
+server** — are labelled honestly; only the new write path opts *up* to `verbatim`. `ingest_state`
+defaults to `complete` because existing rows genuinely are. Both are `ADD COLUMN … NOT NULL DEFAULT`,
+which is catalog-only on PG11+ — **no table rewrite** on either PG17 (Neon prod) or PG18 (local/CI).
+
+### 4. Readback: concat, with **no** separator
+
+```sql
+SELECT string_agg(bc.content, '' ORDER BY b.seq) AS body
+  FROM kb_content_blocks b
+  JOIN kb_block_content  bc ON bc.block_id = b.id
+ WHERE b.resource_id = $1 AND NOT b.is_folded;
+```
+
+The `''` separator *is* the fix. `reconstruct_body` is then deleted.
+
+### 5. Byte offsets are sliced in **Rust**, never in SQL
+
+**Postgres `substr()` on `text` counts characters, not bytes.** Slicing a byte range in SQL would
+corrupt any multibyte content. So chunk-text derivation happens in Rust (`&content[start..end]` —
+byte-indexed, and it panics on a non-char boundary, which is the correct failure for a range that
+should always land on one). The embed and readback paths already materialize rows into Rust, so this
+costs nothing.
+
+This is also why the FTS change below is **load-bearing rather than optional** — it is what keeps SQL
+out of the slicing business entirely.
+
+### 6. FTS: aggregate the block for `verbatim`, unchanged for `derived`
+
+`_rebuild_resource_search_vector` currently does `string_agg(cc.content, ' ')` over chunk text. It
+branches:
+
+```sql
+IF v_body_storage = 'verbatim' THEN
+    SELECT COALESCE(string_agg(bc.content, ' ' ORDER BY b.seq), '')
+      INTO v_body
+      FROM kb_content_blocks b
+      JOIN kb_block_content  bc ON bc.block_id = b.id
+     WHERE b.resource_id = p_resource AND NOT b.is_folded;
+ELSE
+    -- legacy path, byte-for-byte unchanged
+    SELECT COALESCE(string_agg(cc.content, ' '), '')
+      INTO v_body
+      FROM kb_chunks c
+      JOIN kb_chunk_content cc ON cc.chunk_id = c.id
+     WHERE c.resource_id = p_resource AND c.is_current;
+END IF;
+```
+
+Note the **behavior change, stated plainly**: chunk text is heading-stripped, so headings are *not* in
+FTS today. Aggregating the block puts them in (at weight `B`; titles keep `A`). That is strictly more
+recall and, in my view, a fix — but it *is* a change to search results, and it is now unavoidable
+rather than optional, because the alternative is slicing bytes in SQL. (This supersedes the earlier
+"out of scope" note.)
+
+### 7. Search and list exclude partials
+
+```sql
+  AND r.ingest_state = 'complete'
+```
+
+In the list/search query builders — **not** in `resources_visible_to`.
+
+### Consequence of in-place block revision — state it, don't discover it
+
+Blocks are revised **in place** (2,627 revisions across 2,442 live blocks; `kb_block_revisions` records
+`block_body_hash` + `chunk_count` per revision, **not** content). So `kb_block_content` holds the
+block's **current** content, and byte offsets are meaningful **only for `is_current` chunks**.
+
+A superseded `verbatim` chunk therefore keeps its `content_hash` (its identity) but has **no
+retrievable text** — its offsets would point into content that has since changed. This is consistent
+with block history already being hash-only. **It is a real difference from today**, where
+`kb_chunk_content` retains text for superseded chunks too, so implementation must first confirm nothing
+reads it (`replay.rs` references `kb_chunk_content`). If something does, superseded chunks keep their
+sidecar row and only current chunks move to offsets.
+
 ## The integrity chain becomes real
 
 `body_hash` is currently `body_hash_from_chunk_hashes` — a merkle over **chunk** hashes. It attests
@@ -181,6 +314,9 @@ fields are optional.
 
 ## Open questions
 
-- Whether FTS should aggregate **block** content (headings included) rather than chunk slices — a free
-  retrieval improvement, but a behavior change; deliberately out of scope here.
+- **Does anything read superseded (`is_current = false`) chunk text?** If yes, superseded chunks keep
+  their `kb_chunk_content` row and only current chunks move to offsets. Must be settled before the
+  migration — `replay.rs` is the first place to look.
 - Whether `derived` rows ever get a deliberate cutover, or simply age out.
+- FTS gaining heading text (§6) is a deliberate, unavoidable behavior change, not an open question —
+  but its effect on ranking should be eyeballed on real queries once it lands.
