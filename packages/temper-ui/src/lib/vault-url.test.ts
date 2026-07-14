@@ -34,6 +34,7 @@ function makeRow(partial: Partial<ResourceRow>): ResourceRow {
 		mode: null,
 		effort: null,
 		body_hash: null,
+		ingest_state: 'complete',
 		...partial
 	};
 }
