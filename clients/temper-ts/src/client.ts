@@ -1,6 +1,6 @@
 import createClient, { type Client } from "openapi-fetch";
 
-import { createAuthedFetch, type FetchLike, type Surface } from "./auth-fetch.js";
+import { createAuthedFetch, type FetchLike } from "./auth-fetch.js";
 import type { Credentials } from "./credentials.js";
 import type { paths } from "./generated/schema.js";
 
@@ -8,8 +8,6 @@ export interface TemperClientOptions {
   /** The instance origin — e.g. `https://temperkb.io`. No trailing path. */
   baseUrl: string;
   credentials: Credentials;
-  /** Default `sdk`. */
-  surface?: Surface;
   /** The fetch to wrap — compose here to keep a caller-specific retry. Default: global `fetch`. */
   fetch?: FetchLike;
 }
@@ -24,17 +22,23 @@ export interface TemperClientOptions {
  * `resources.create()` would be a second, worse spelling of something already correct — and a
  * place for the two to drift.
  *
- * Errors are the contract's too. `openapi-fetch` does not throw; it returns
- * `{ data, error, response }` with `error` typed from the spec's own error responses. The gem
- * needs `errors.rb` because Faraday raises. Inventing a hierarchy alongside a typed one would be
- * inventing drift.
+ * HTTP errors are the contract's too — but ONLY those. `openapi-fetch` does not throw for a
+ * status: it returns `{ data, error, response }` with `error` typed from the spec's own error
+ * responses per status, so a 404 or a 422 is a value, not an exception, and no hand-written error
+ * hierarchy (the gem's `errors.rb`, which exists because Faraday raises) belongs alongside it.
+ *
+ * What DOES throw is everything the contract never described. The authed fetch is the injected
+ * fetch, and openapi-fetch rethrows whatever its fetch throws — there is no `onError` middleware
+ * catching it. So a bad `clientSecret` throws `TokenMintError` before a request is ever sent, and
+ * an unreachable host throws a network `TypeError`. Both are the client's own plumbing failing,
+ * which is exactly the thing that has no per-status entry in the spec. Wrap the call in a `try`;
+ * `if (error)` alone will not see them.
  */
 export function createTemperClient(opts: TemperClientOptions): Client<paths> {
   return createClient<paths>({
     baseUrl: opts.baseUrl,
     fetch: createAuthedFetch({
       credentials: opts.credentials,
-      surface: opts.surface,
       fetch: opts.fetch,
     }),
   });

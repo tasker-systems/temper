@@ -15,7 +15,12 @@ export interface MockApi {
   bearers: string[];
   /** Every `X-Temper-Surface` presented, in order — the attribution header. */
   surfaces: string[];
-  /** Every request body received, in order. Proves a retry REPLAYED the body it was given. */
+  /**
+   * Every request's body, in order — the empty string for a request that carried none, so this
+   * array is INDEX-ALIGNED with `bearers` and `surfaces`. Proves a retry REPLAYED the body it was
+   * given. (Pushing only non-empty bodies would slide the indices apart the moment a test mixed a
+   * GET in with a POST, and a body assertion would then be reading someone else's request.)
+   */
   bodies: string[];
   close(): Promise<void>;
 }
@@ -36,16 +41,19 @@ export async function startMockApi(opts: MockApiOptions = {}): Promise<MockApi> 
     const header = req.headers.authorization ?? "";
     bearers.push(header.replace(/^Bearer /, ""));
     surfaces.push((req.headers["x-temper-surface"] as string | undefined) ?? "");
-    seen += 1;
+    // This request's ordinal, fixed at HEADER time. Reading the shared `seen` from inside the
+    // deferred `end` closure would make the 401 decision depend on how long a body took to
+    // arrive, not on arrival ORDER: a slow-bodied first POST would see `seen` already advanced
+    // past `rejectFirst` by a fast second request and be served 200 — `rejectFirst: 1` yielding
+    // zero 401s, and the re-mint tests silently asserting nothing.
+    const mine = ++seen;
 
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      if (chunks.length > 0) {
-        bodies.push(Buffer.concat(chunks).toString("utf8"));
-      }
+      bodies.push(Buffer.concat(chunks).toString("utf8"));
 
-      if (seen <= rejectFirst) {
+      if (mine <= rejectFirst) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;

@@ -61,17 +61,29 @@ const client = createTemperClient({
   credentials,
 });
 
-// Every path in openapi.json is callable, typed end to end — params and per-status
-// responses come straight off the generated schema.
-const { data, error, response } = await client.GET("/api/resources", {
-  params: { query: { limit: 20 } },
-});
+try {
+  // Every path in openapi.json is callable, typed end to end — params and per-status
+  // responses come straight off the generated schema.
+  const { data, error, response } = await client.GET("/api/resources", {
+    params: { query: { limit: 20 } },
+  });
 
-if (error) {
-  // `error` is typed from the spec's own error responses — openapi-fetch never throws.
-  console.error(response.status, error);
-} else {
-  console.log(data);
+  if (error) {
+    // An HTTP STATUS error is a value, not an exception: `error` is typed from the spec's
+    // own error responses, per status. A 404 or a 422 lands here.
+    console.error(response.status, error);
+  } else {
+    console.log(data);
+  }
+} catch (cause) {
+  // AUTH and TRANSPORT failures THROW — they are the client's own plumbing failing, and the
+  // contract never described them. A bad `clientSecret` throws `TokenMintError` before a
+  // request is ever sent; an unreachable host throws a network `TypeError`. `createTemperClient`
+  // injects the authed fetch, and openapi-fetch rethrows whatever its fetch throws.
+  //
+  // An `if (error)` with no `try` around it is therefore not enough: the commonest M2M
+  // misconfiguration there is — a wrong secret — would surface as an unhandled rejection.
+  console.error("temper call failed before it got an answer", cause);
 }
 ```
 
@@ -79,6 +91,13 @@ if (error) {
 hand-written per-endpoint methods (no `resources.create()`). TypeScript infers everything the
 schema knows; a hand-written wrapper over that would just be a second, worse spelling of the same
 thing, and a place for the two to drift.
+
+**The error model has two halves, and only one of them is a value.** HTTP status errors come back
+in `error`, typed per status from the contract — no exception, no hand-written error hierarchy
+(that is what the gem's `errors.rb` exists for, because Faraday raises). Auth and transport
+failures **throw**: `TokenMintError` (exported from this package; carries the issuer's `status`)
+when a credential cannot mint, and a network `TypeError` when the host is unreachable. Wrap the
+call in a `try`.
 
 `ClientCredentials` also accepts an optional `audience` (only meaningful against an Auth0-fronted
 instance — temper's own AS ignores a request-supplied audience) and an injectable `now` for
@@ -109,8 +128,8 @@ export exists now so that migration has something to reach for.
 ## Testing
 
 ```bash
-npm test          # vitest
-npm run typecheck  # tsc --noEmit, strict
+npm test           # vitest
+npm run typecheck  # tsc --noEmit, then tsc -p tsconfig.test.json — src AND tests, both strict
 npm run build      # tsc, emits dist/ (including dist/generated/schema.js + .d.ts)
 ```
 

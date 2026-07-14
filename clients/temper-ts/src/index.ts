@@ -24,7 +24,7 @@ export {
  */
 export type { components, operations, paths } from "./generated/schema.js";
 
-export { createAuthedFetch, type AuthedFetchOptions, type FetchLike, type Surface } from "./auth-fetch.js";
+export { createAuthedFetch, type AuthedFetchOptions, type FetchLike } from "./auth-fetch.js";
 export { createTemperClient, type TemperClientOptions } from "./client.js";
 
 /**
