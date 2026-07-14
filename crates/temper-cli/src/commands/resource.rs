@@ -146,15 +146,27 @@ pub(crate) fn inject_context_ref(row: &mut serde_json::Value) {
 /// Resolve `--from <path|url>` into a body string via kreuzberg extraction.
 ///
 /// Returns `Some(body)` if `from` is set; `None` if `from` is `None`. Errors
-/// when `from` conflicts with `body` or with piped stdin (non-TTY), when the
-/// path does not exist, or when extraction fails.
+/// when `from` conflicts with `--body` or with a genuinely piped stdin body,
+/// when the path does not exist, or when extraction fails.
+///
+/// **Stdin gate (issue #420 item 1).** A non-TTY stdin is *not* on its own a
+/// conflict — every agent harness, CI job, and `< /dev/null` invocation has one,
+/// which is exactly where `--from` is most useful. The gate fires only when stdin
+/// actually carries a body: the readiness probe short-circuits an open-but-idle
+/// pipe (poll times out → no read), and an at-EOF stdin (`< /dev/null`) reads to
+/// empty → no conflict. Only real piped bytes (`cat foo | temper … --from bar`)
+/// error. `--from` wins regardless, so the drained stdin is discarded either way.
 ///
 /// URL detection: strings with `http://` or `https://` prefix are fetched to a
-/// tempfile first, then extracted. Everything else is treated as a local path.
-async fn resolve_from_input(
+/// tempfile first, then extracted. A `file://` URI is rejected with a targeted
+/// message (unlike `--sources`, `--from` takes a plain path). Everything else is
+/// treated as a local path.
+async fn resolve_from_input<R: std::io::Read>(
     from: Option<&str>,
     body_flag: Option<&str>,
     stdin_is_tty: bool,
+    mut stdin_reader: R,
+    stdin_ready: impl FnOnce() -> bool,
 ) -> Result<Option<String>> {
     let Some(from) = from else { return Ok(None) };
 
@@ -163,16 +175,35 @@ async fn resolve_from_input(
             "--from cannot be combined with --body".to_string(),
         ));
     }
-    if !stdin_is_tty {
-        return Err(TemperError::Config(
-            "--from cannot be combined with piped stdin".to_string(),
-        ));
+    // Only a non-TTY stdin that actually has bytes ready is a real `--body`-vs-`--from`
+    // collision. Probe first (idle-open pipe → not ready → never read → no hang), then read
+    // (EOF/`< /dev/null` → empty → not a conflict). See the doc comment above.
+    if !stdin_is_tty && stdin_ready() {
+        let mut buf = String::new();
+        stdin_reader
+            .read_to_string(&mut buf)
+            .map_err(|e| TemperError::Vault(format!("read stdin: {e}")))?;
+        if !buf.is_empty() {
+            return Err(TemperError::Config(
+                "--from cannot be combined with a piped stdin body; pass one or the other"
+                    .to_string(),
+            ));
+        }
     }
 
     let extracted = if temper_workflow::operations::is_remote_url(from) {
         let (tmp, _name) = crate::actions::ingest::fetch_url_to_tempfile(from).await?;
         crate::extract::extract_to_markdown(tmp.as_ref()).await?
     } else {
+        if from.starts_with("file://") {
+            // `file://` is accepted in --sources (issue #353) but not in --from, where it
+            // would fall through to the local-path branch and error with a confusing "path
+            // does not exist". Give the asymmetry its own message (issue #420 docs note).
+            return Err(TemperError::Config(format!(
+                "--from does not accept file:// URIs (they are only valid in --sources); \
+                 pass a plain filesystem path instead of '{from}'"
+            )));
+        }
         let path = std::path::Path::new(from);
         if !path.exists() {
             return Err(TemperError::Config(format!(
@@ -559,7 +590,13 @@ fn resolve_create_body(
     let from_body: Option<String> = if from.is_some() {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-        rt.block_on(resolve_from_input(from, body_flag, stdin_is_tty))?
+        rt.block_on(resolve_from_input(
+            from,
+            body_flag,
+            stdin_is_tty,
+            std::io::stdin(),
+            crate::actions::body_source::stdin_has_input_within,
+        ))?
     } else {
         None
     };
@@ -2510,14 +2547,31 @@ mod action_result_tests {
 
 #[cfg(test)]
 mod from_flag_tests {
+    use std::io::Cursor;
+
     use super::*;
+
+    /// Stdin-readiness probe stand-in: input is ready to read (a genuine pipe, or EOF).
+    fn ready() -> bool {
+        true
+    }
+    /// Stdin-readiness probe stand-in: stdin is open but idle (no input ready).
+    fn idle() -> bool {
+        false
+    }
 
     #[tokio::test]
     async fn from_and_body_are_mutually_exclusive() {
         // resolve_from_input errors when both --from and --body are provided.
-        let err = resolve_from_input(Some("/tmp/x.md"), Some("@body.md"), true)
-            .await
-            .expect_err("should error on mutex");
+        let err = resolve_from_input(
+            Some("/tmp/x.md"),
+            Some("@body.md"),
+            true,
+            Cursor::new(b""),
+            ready,
+        )
+        .await
+        .expect_err("should error on mutex");
         assert!(
             format!("{err}").contains("--from cannot be combined with --body"),
             "got: {err}"
@@ -2525,23 +2579,92 @@ mod from_flag_tests {
     }
 
     #[tokio::test]
-    async fn from_and_piped_stdin_are_mutually_exclusive() {
-        // resolve_from_input errors when --from is set and stdin is non-TTY.
-        let err = resolve_from_input(Some("/tmp/x.md"), None, false)
-            .await
-            .expect_err("should error on non-TTY stdin");
+    async fn from_with_a_genuinely_piped_body_errors() {
+        // A non-TTY stdin that actually carries bytes IS a real --from/--body collision.
+        let err = resolve_from_input(
+            Some("/tmp/x.md"),
+            None,
+            /*stdin_is_tty:*/ false,
+            Cursor::new(b"# piped body"),
+            ready,
+        )
+        .await
+        .expect_err("should error on a real piped body");
+        assert!(format!("{err}").contains("piped stdin body"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn from_with_idle_non_tty_stdin_is_allowed() {
+        // The issue #420 item 1 regression: an open-but-idle non-TTY stdin (the agent/CI
+        // case) must NOT be treated as a conflict. The probe reports not-ready, so stdin is
+        // never read — we fall through to the path check (which errors for a different,
+        // expected reason, proving the stdin gate was passed).
+        let err = resolve_from_input(
+            Some("/tmp/definitely_does_not_exist_420.md"),
+            None,
+            /*stdin_is_tty:*/ false,
+            Cursor::new(b"# would block in prod / must be ignored"),
+            idle,
+        )
+        .await
+        .expect_err("should reach the path check");
         assert!(
-            format!("{err}").contains("--from cannot be combined with piped stdin"),
-            "got: {err}"
+            format!("{err}").contains("--from path does not exist"),
+            "idle non-TTY stdin must pass the gate, not error as a conflict; got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn from_with_eof_stdin_is_allowed() {
+        // `< /dev/null`: the probe reports ready (EOF), but the read drains to empty, so it is
+        // not a conflict. This is the exact case the issue calls out as wrongly rejected.
+        let err = resolve_from_input(
+            Some("/tmp/definitely_does_not_exist_420.md"),
+            None,
+            /*stdin_is_tty:*/ false,
+            Cursor::new(b""),
+            ready,
+        )
+        .await
+        .expect_err("should reach the path check");
+        assert!(
+            format!("{err}").contains("--from path does not exist"),
+            "empty (EOF) non-TTY stdin must pass the gate; got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn from_file_uri_is_rejected_with_a_targeted_message() {
+        // `file://` is valid in --sources but not --from; it must not fall through to the
+        // path branch and emit a confusing "path does not exist" (issue #420 docs note).
+        let err = resolve_from_input(
+            Some("file:///tmp/x.md"),
+            None,
+            /*stdin_is_tty:*/ true,
+            Cursor::new(b""),
+            ready,
+        )
+        .await
+        .expect_err("should reject file:// URIs");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("file://") && !msg.contains("path does not exist"),
+            "expected a targeted file:// message, got: {msg}"
         );
     }
 
     #[tokio::test]
     async fn from_path_does_not_exist_errors() {
         // resolve_from_input errors when the path doesn't exist.
-        let err = resolve_from_input(Some("/tmp/definitely_does_not_exist_ch7.md"), None, true)
-            .await
-            .expect_err("should error on missing path");
+        let err = resolve_from_input(
+            Some("/tmp/definitely_does_not_exist_ch7.md"),
+            None,
+            true,
+            Cursor::new(b""),
+            ready,
+        )
+        .await
+        .expect_err("should error on missing path");
         assert!(
             format!("{err}").contains("--from path does not exist"),
             "got: {err}"

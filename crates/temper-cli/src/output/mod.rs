@@ -87,3 +87,13 @@ pub fn progress(msg: impl std::fmt::Display) {
     let mut out = anstream::stderr().lock();
     write!(out, "{DIM}{msg}{DIM:#}").ok();
 }
+
+/// Print a newline-terminated progress line to stderr (dimmed).
+///
+/// For step-by-step progress an agent or CI job tails line-by-line — e.g. the
+/// per-segment `N of M` output during a long segmented ingest. On stderr (never
+/// stdout) so it never corrupts the JSON document a caller parses on stdout.
+pub fn progress_line(msg: impl std::fmt::Display) {
+    let mut out = anstream::stderr().lock();
+    writeln!(out, "{DIM}{msg}{DIM:#}").ok();
+}
