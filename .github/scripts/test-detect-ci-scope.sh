@@ -220,6 +220,14 @@ run_test "docs-only skips the TS SDK + agent job" \
     "README.md" \
     "DOCS_ONLY=true" "RUN_TEST_AGENTS_TS=false"
 
+# --- openapi.json alone must run BOTH SDK jobs: each has a codegen drift gate
+# --- against it, and a gate the contract change does not run is not a gate.
+run_test "openapi.json change: runs both SDK drift gates" \
+    "openapi.json" \
+    "DOCS_ONLY=false" \
+    "RUN_TEST_RUBY=true" \
+    "RUN_TEST_AGENTS_TS=true"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

@@ -144,15 +144,24 @@ if changes_match '^clients/temper-rb/|^tests/contracts/|^openapi\.json$|^\.githu
 fi
 
 # TypeScript SDK + agent workflows: clients/temper-ts (the TS client) and
-# packages/agent-workflows/** (the eve agents that consume it), plus the wire
-# contracts both are asserted against.
+# packages/agent-workflows/** (the eve agents that consume it), plus BOTH wire
+# contracts they are asserted against.
+#
+# openapi.json is in this set for the same reason it is in test-ruby's: temper-ts
+# commits a generated schema.ts, so a contract change that does not run this job is
+# a contract change whose drift gate never fires. tests/contracts/ is the other
+# contract (the m2m token request).
+#
+# crates/** deliberately stays OUT: openapi.json is committed, and openapi-check in
+# code-quality already forces a DTO change to land a regenerated spec in the same
+# PR. The contract is therefore both sufficient and precise as the trigger key.
 #
 # Path-scoped for exactly the reason test-ruby is: these projects are inert to
 # both cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit
 # two-entry `workspaces` list), so no Rust or TS change can reach them except
 # through a contract, which is in the trigger set.
 HAS_AGENTS_TS=false
-if changes_match '^clients/temper-ts/|^packages/agent-workflows/|^tests/contracts/|^\.github/workflows/test-agents-ts\.yml$|^__force_full_ci__$'; then
+if changes_match '^clients/temper-ts/|^packages/agent-workflows/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-agents-ts\.yml$|^__force_full_ci__$'; then
     HAS_AGENTS_TS=true
 fi
 
