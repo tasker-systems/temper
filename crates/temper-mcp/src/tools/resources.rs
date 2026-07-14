@@ -257,8 +257,8 @@ pub struct UpdateResourceInput {
 /// Property-only — identity (`title`/`slug`), type, and home are NOT accepted
 /// here (change them via `update_resource`). `open_meta` stays a free-form JSON
 /// object by design — the open tier accepts any key, and is advertised to
-/// clients as `type: object` with `additionalProperties: true` (see
-/// [`open_meta_input_schema`]).
+/// clients as `type: object` with `additionalProperties: true` (via the
+/// `open_meta_input_schema` helper).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateResourceMetaInput {
     /// UUID of the resource to update.
