@@ -27,8 +27,12 @@
 //!
 //! # Scope
 //!
-//! Unix-first (macOS arm64, Linux x86_64), matching the release surface. A
-//! running `.exe` is locked on Windows, so Windows self-update is a follow-up.
+//! Unix-first (macOS arm64, Linux x86_64), matching the self-update surface. A
+//! running `.exe` is locked on Windows, so Windows self-update is a follow-up —
+//! but Windows *is* a shipped release target, so `update` there must still give
+//! an honest answer. A Windows script install is detected on its own terms (an
+//! `onnxruntime.dll` beside the binary) and refused with the re-run-the-installer
+//! hint, never the `cargo install` hint that would be false for a script install.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -56,6 +60,18 @@ like a `cargo install` build (no bundled lib/libonnxruntime.* sibling). Update i
 cargo install --path crates/temper-cli --locked --features embed,extract\n\
 (or `cargo install temper-cli` once published).";
 
+/// Shown on Windows when a genuine `install.ps1` install is detected. Windows is
+/// a shipped release target, but self-update there is deferred — a running
+/// `.exe` is file-locked, so the install dir can't be swapped out from under it
+/// (`install.ps1` does `Remove-Item -Recurse` then re-extract, which can't
+/// replace the running image). Points at the one action that *does* update: re-
+/// running the PowerShell installer. Deliberately NOT the `cargo install` hint,
+/// which is false advice for a script install.
+#[cfg(windows)]
+const WINDOWS_REFUSAL: &str = "`temper update` does not yet support self-update on Windows \
+(a running .exe is file-locked). Re-run the installer to update:\n  \
+irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex";
+
 /// GitHub `releases/latest` response — only the field we consume. A typed
 /// struct over `serde_json::Value` per the repo's "typed structs at
 /// boundaries" rule.
@@ -74,6 +90,13 @@ enum InstallLayout {
     /// A `cargo install` build (or anything else without the bundled lib):
     /// refuse rather than best-effort.
     Cargo,
+    /// A Windows `install.ps1` install: `temper.exe` sits beside an
+    /// `onnxruntime.dll` at the install-dir *root* (no `lib/` subdir, unlike
+    /// unix). Self-update is deferred on Windows, so this refuses with the
+    /// re-run-the-installer hint rather than being misfiled as [`Self::Cargo`]
+    /// and handed the (false) `cargo install` advice.
+    #[cfg(windows)]
+    WindowsScript,
 }
 
 /// `--check`-mode report: current vs latest, no mutation.
@@ -109,6 +132,8 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
     let install_dir = match detect_install_layout()? {
         InstallLayout::CurlScript { dir } => dir,
         InstallLayout::Cargo => return Err(CliError::Install(CARGO_REFUSAL.to_string())),
+        #[cfg(windows)]
+        InstallLayout::WindowsScript => return Err(CliError::Install(WINDOWS_REFUSAL.to_string())),
     };
 
     // 2. Resolve the target tag. An explicit --version pin is a pass-through
@@ -195,6 +220,14 @@ fn detect_install_layout() -> Result<InstallLayout> {
     let dir = real
         .parent()
         .ok_or_else(|| TemperError::Config("running binary has no parent directory".into()))?;
+    // Windows script installs lay `onnxruntime.dll` beside `temper.exe` at the
+    // install-dir root — there is no `lib/` subdir, so the unix discriminator
+    // below misses them and would misfile a legitimate `install.ps1` install as
+    // a `cargo install` build. Catch that layout first, on Windows only.
+    #[cfg(windows)]
+    if has_windows_ort_sibling(dir) {
+        return Ok(InstallLayout::WindowsScript);
+    }
     if has_ort_lib_sibling(dir) {
         Ok(InstallLayout::CurlScript {
             dir: dir.to_path_buf(),
@@ -217,6 +250,19 @@ fn has_ort_lib_sibling(dir: &Path) -> bool {
             .to_string_lossy()
             .starts_with("libonnxruntime")
     })
+}
+
+/// True when `dir` contains an `onnxruntime.dll` at its root — the ONNX Runtime
+/// native lib the *Windows* release archive lays beside `temper.exe` (at the
+/// archive root, not in a `lib/` subdir; see `build-cli-binaries.yml`'s
+/// `lib_dest_dir: .` for the windows target). This is the Windows analogue of
+/// [`has_ort_lib_sibling`]: its presence marks a genuine `install.ps1` install,
+/// distinguishing it from a bare `cargo install` build (which `cargo install`
+/// copies without any sibling DLL). Compiled on all platforms so its behavior is
+/// unit-tested everywhere, but only *consulted* under `#[cfg(windows)]`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn has_windows_ort_sibling(dir: &Path) -> bool {
+    dir.join("onnxruntime.dll").is_file()
 }
 
 /// Resolve the latest published release tag from the GitHub API — the same
@@ -486,6 +532,59 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("lib")).unwrap();
         assert!(!has_ort_lib_sibling(tmp.path()));
+    }
+
+    /// `has_windows_ort_sibling` is the Windows curl-vs-cargo discriminator,
+    /// mirroring `ort_lib_sibling_detects_curl_layout`. A dir with
+    /// `onnxruntime.dll` at its root reads as an `install.ps1` install; a bare
+    /// dir (the shape of a `cargo install` bin dir) does not.
+    #[test]
+    fn windows_ort_sibling_detects_script_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Bare dir: no onnxruntime.dll → not a Windows script install.
+        assert!(!has_windows_ort_sibling(tmp.path()));
+
+        // With onnxruntime.dll beside the binary → Windows script install.
+        std::fs::write(tmp.path().join("onnxruntime.dll"), b"").unwrap();
+        assert!(has_windows_ort_sibling(tmp.path()));
+    }
+
+    /// The two discriminators do not cross-fire: a Windows script layout (dll at
+    /// root, no `lib/`) is never read as a unix curl install, and a unix curl
+    /// layout (`lib/libonnxruntime.*`, no root dll) is never read as a Windows
+    /// script install. This is what keeps a real Windows install from being
+    /// misfiled as `Cargo` and handed the false `cargo install` hint.
+    #[test]
+    fn windows_and_unix_discriminators_are_disjoint() {
+        // Windows script layout: onnxruntime.dll at root, no lib/.
+        let win = tempfile::tempdir().unwrap();
+        std::fs::write(win.path().join("onnxruntime.dll"), b"").unwrap();
+        assert!(has_windows_ort_sibling(win.path()));
+        assert!(
+            !has_ort_lib_sibling(win.path()),
+            "windows script layout must not read as a unix curl install"
+        );
+
+        // Unix curl layout: lib/libonnxruntime.*, no root dll.
+        let unix = tempfile::tempdir().unwrap();
+        let lib = unix.path().join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libonnxruntime.so"), b"").unwrap();
+        assert!(has_ort_lib_sibling(unix.path()));
+        assert!(
+            !has_windows_ort_sibling(unix.path()),
+            "unix curl layout must not read as a windows script install"
+        );
+    }
+
+    /// The Windows refusal points at the installer, not at `cargo install` —
+    /// the whole point of the fix is that a script install stops being told to
+    /// rebuild with cargo. Windows-only, since the constant is `#[cfg(windows)]`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_refusal_is_actionable_and_not_the_cargo_hint() {
+        assert!(WINDOWS_REFUSAL.contains("install.ps1"));
+        assert!(!WINDOWS_REFUSAL.contains("cargo install"));
     }
 
     /// The cargo-refusal hint names the exact recovery command an operator
