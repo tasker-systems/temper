@@ -759,6 +759,7 @@ mod non_embed_impl {
             let ctx = CloudBackendCtx {
                 client,
                 owner: "@me".to_string(),
+                context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
             };
             let backend = CloudBackend::new(ctx);
