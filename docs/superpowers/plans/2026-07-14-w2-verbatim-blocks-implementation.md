@@ -1,4 +1,4 @@
-# W2 — Verbatim block content + honest ingest completion: Implementation Plan
+# W2 — Verbatim block content + honest ingest completion: Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -6,70 +6,90 @@
 
 **Architecture:** The block *revision* gains authoritative raw bytes (`kb_block_content`); `kb_chunks`/`kb_chunk_content` are untouched and remain the derived retrieval index. Completion becomes a real projection (`ingest_state`) of the `resource_finalized` event that already fires but currently projects nothing.
 
-**Spec:** [`docs/superpowers/specs/2026-07-14-w2-verbatim-blocks-resumable-ingest-design.md`](../specs/2026-07-14-w2-verbatim-blocks-resumable-ingest-design.md)
+**Spec:** [`../specs/2026-07-14-w2-verbatim-blocks-resumable-ingest-design.md`](../specs/2026-07-14-w2-verbatim-blocks-resumable-ingest-design.md)
+**Field guide (read this first):** temper research doc *"How temper's content write path actually works"* — `019f6280-f57f-7cb0-9289-1d40cc6ceb58`.
 
-**Tech Stack:** Rust (sqlx, axum, rmcp), PostgreSQL 17 (Neon prod) / 18 (local+CI), plpgsql projectors.
+> **v2.** v1 was rewritten after an adversarial review (5 surface adversaries + independent refutation)
+> found it would have shipped a feature that was **inert on the production path while its own tests
+> passed green**, plus a backfill that would have **hidden every cognitive map's charter** from list
+> and search. The corrections are load-bearing; the ✗ notes below say what v1 got wrong and why.
 
 ## Global Constraints
 
-- **Additive-only on `main`.** Auto-deploy of `main` must never break a running instance. Every migration is additive; every wire field is optional.
-- **Shipped migrations are checksum-locked.** Never edit an applied migration — add a new one.
-- **`uuid_generate_v7()`, never native `uuidv7()`.** The latter passes PG18 dev/CI and breaks Neon's PG17.
-- **No Rust code INSERTs into `kb_content_blocks` / `kb_chunks` / `kb_block_revisions` / `kb_chunk_content`.** All writes go through plpgsql projectors (`_project_blocks`, `_project_block_mutated`) called by `resource_create` / `block_append` / `block_mutate`. Respect this — do not add a Rust INSERT.
-- **Chunk prose and vectors never enter the ledger** (the CAS rule). Content travels in the transient **sidecar** (`p_content`), never in the event payload. Raw block bytes follow the same rule.
-- **`kb_events` is append-only** — a trigger blocks UPDATE/DELETE.
-- **After changing any SQL:** `cargo sqlx prepare --workspace -- --all-features`, then `cargo make prepare-services`, then `cargo make prepare-api`, then `cargo make prepare-e2e`. Stage the regenerated `.sqlx/` — the drift gate diffs against git, so a correctly-regenerated-but-unstaged cache still fails `cargo make check`.
+- **Additive-only on `main`.** `main` auto-deploys. A running instance must survive **both** skew
+  directions: old app + new DB, and new app + old DB.
+- **✗ NEVER change a SQL mutation-function signature.** `CREATE OR REPLACE FUNCTION` **cannot add a
+  parameter** — it mints a *second overload*, leaves the old function callable, and can make existing
+  calls ambiguous. A signature change is also a **write outage** across deploy skew. New content
+  travels by **reshaping the `jsonb` sidecar**, whose shape is ours on both ends.
+- **No Rust code INSERTs into `kb_content_blocks` / `kb_chunks` / `kb_block_revisions` /
+  `kb_chunk_content`.** All writes go through plpgsql projectors (`_project_blocks`,
+  `_project_block_mutated`).
+- **The CAS rule:** chunk prose and vectors never enter the ledger. Content travels in the transient
+  sidecar (`p_content`), never the event payload. Raw block bytes obey the same rule.
+- **`body_hash` is a two-level chunk merkle and MUST NOT be redefined.** It is consumed by the
+  create-dedup precheck, the telos charter diff, and finalize. (The spec's "`body_hash = sha256(concat)`"
+  line is wrong — see the spec amendment in PR 5.)
+- **Hash-format footgun:** `compute_body_hash` → `"sha256:<hex>"`; `sha256_hex` → **bare** hex. The DB
+  stores **bare** hex. Never compare across forms.
+- **Shipped migrations are checksum-locked.** Never edit one; add a new one. `uuid_generate_v7()`, never
+  native `uuidv7()`.
+- **Re-derive replaced functions from the LIVE body**, not the canonical one — `_project_blocks`'s live
+  definition is in `20260713000040_chunk_embedding_provenance.sql`, not `20260624000002`.
+- **After any SQL change:** `cargo sqlx prepare --workspace -- --all-features`, then
+  `cargo make prepare-services`, `cargo make prepare-api`, `cargo make prepare-e2e`. **Stage** the
+  regenerated `.sqlx/` — the drift gate diffs against git.
 - **Run `cargo make check` before every commit.**
-- **Hash formats differ and this is a live footgun:** `temper_core::hash::compute_body_hash` returns `"sha256:<hex>"`; `temper_core::hash::sha256_hex` returns **bare** hex. The DB's `block_body_hash` / `body_hash` are **bare** hex. Never compare across the two forms.
 
 ---
 
 ## PR 1 — The segmenter must stop normalizing (prerequisite)
 
-**Why first:** `segment_reader` reads via `src.lines()`, which **strips line endings**, and the CLI sends those segments as the block text. If we start storing block bytes *before* fixing this, early rows would be labelled `verbatim` while having already silently lost CRLF and any trailing newline. Byte-exactness must be true at the source before we attest to it.
+**Why first:** `segment_reader` reads via `src.lines()`, which **strips line endings**, and the CLI ships
+those segments as the block text. Storing bytes before fixing this would label rows `verbatim` while CRLF
+and trailing newlines had *already* been lost.
 
-**Files:**
-- Modify: `crates/temper-ingest/src/stream.rs` (`segment_reader` / `SegmentReader`, ~:30-46; test at :193-215)
-- Test: `crates/temper-ingest/src/stream.rs` (inline `mod tests`)
+**Files:** `crates/temper-ingest/src/stream.rs`; `crates/temper-cli/src/actions/ingest_manifest.rs`
 
-**Interfaces:**
-- Produces: `Segment { seq, text, initial_breadcrumb }` where **`segments.map(.text).join("") == source`** exactly (was: `join("\n")`).
-
-- [ ] **Step 1: Write the failing test** — replace `never_splits_a_line_and_reassembles_verbatim` with a byte-exact version covering the three cases `lines()` destroys.
+- [ ] **Step 1: Failing test** — replace `never_splits_a_line_and_reassembles_verbatim`:
 
 ```rust
 #[test]
 fn segments_reassemble_byte_exactly() {
     for doc in [
-        "# T\n\nalpha\nbeta\n",                    // trailing newline
-        "# T\n\nalpha\nbeta",                      // NO trailing newline
-        "# T\r\n\r\nalpha\r\nbeta\r\n",            // CRLF
-        "# T\n\nnaïve — ünïcode ✅\n",             // multibyte
+        "# T\n\nalpha\nbeta\n",              // trailing newline
+        "# T\n\nalpha\nbeta",                // NO trailing newline
+        "# T\r\n\r\nalpha\r\nbeta\r\n",      // CRLF
+        "# T\n\nnaïve — ünïcode ✅\n",       // multibyte
     ] {
         let segs: Vec<_> = super::segment_reader(std::io::Cursor::new(doc), 16)
-            .map(|r| r.unwrap())
-            .collect();
+            .map(|r| r.unwrap()).collect();
         let rejoined: String = segs.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(rejoined, doc, "segments must rejoin byte-exactly");
     }
 }
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 2: Run it, watch it fail.** `cargo nextest run -p temper-ingest -E 'test(segments_reassemble_byte_exactly)'`
 
-Run: `cargo nextest run -p temper-ingest -E 'test(segments_reassemble_byte_exactly)'`
-Expected: FAIL — CRLF comes back as LF and the trailing newline is missing.
+- [ ] **Step 3: Preserve bytes.** Replace `BufRead::lines()` with `read_line`, which **retains** the
+  terminator. Keep the budget + heading-boundary logic (heading detection still uses the *trimmed* line),
+  but never mutate the bytes emitted. **Budget accounting now counts the terminator** — that is correct
+  and intended.
 
-- [ ] **Step 3: Make `SegmentReader` preserve bytes**
+- [ ] **Step 4: Invalidate stale resume manifests.**
 
-Stop using `BufRead::lines()`. Read with `read_line`, which **retains** the terminator, and push the line verbatim into the buffer. Keep the existing budget + heading-boundary logic (a heading is still detected on the trimmed line), but never mutate the bytes you emit.
+> **✗ v1 missed this.** A `.temper/` manifest is keyed on `(source_hash, block_budget)`. After PR 1 a
+> CRLF source produces *different segment bytes*, so a pre-PR-1 manifest would still **match** on that
+> key and its recorded per-block `content_hash`es would disagree with the newly-cut segments — a resume
+> that silently mixes old and new bytes.
 
-- [ ] **Step 4: Run the whole crate suite** (the segmenter feeds chunking, so guard the neighbours)
+Add a `segmenter_version: u32` to the manifest identity (`find_resumable` must require equality). Bump it
+to `2`. A pre-PR-1 manifest now simply never matches, and the CLI begins a fresh session — which is the
+correct, safe behaviour.
 
-Run: `cargo nextest run -p temper-ingest`
-Expected: PASS.
-
-- [ ] **Step 5: Guard the CLI's own invariant** — add to `crates/temper-cli/src/actions/ingest.rs` tests:
+- [ ] **Step 5: Guard the CLI's invariant.** In `crates/temper-cli/src/actions/ingest.rs` tests
+  (`#[cfg(feature = "embed")]`, since `plan_segments` is feature-gated):
 
 ```rust
 #[test]
@@ -77,45 +97,74 @@ fn plan_segments_partitions_the_source_exactly() {
     let body = "# Doc\r\n\r\n".to_string() + &"line of text\n".repeat(5_000);
     let plan = plan_segments(&body, 1024).unwrap();
     let rejoined: String = plan.segments.iter().map(|s| s.text.as_str()).collect();
-    assert_eq!(rejoined, body, "the wire segments must reconstitute the source");
+    assert_eq!(rejoined, body);
 }
 ```
 
-Run: `cargo nextest run -p temper-cli -E 'test(plan_segments_partitions_the_source_exactly)'`
-
-- [ ] **Step 6: `cargo make check`, then commit**
-
-```bash
-cargo make check
-git add crates/temper-ingest/src/stream.rs crates/temper-cli/src/actions/ingest.rs
-git commit -m "fix(ingest): the segmenter must not normalize line endings
-
-segment_reader read via src.lines(), which strips line terminators, so a CRLF
-source silently became LF and a trailing newline vanished — and the CLI ships
-those segments as the block text. Byte-exactness has to be true at the source
-before anything downstream can attest to it."
-```
+- [ ] **Step 6:** `cargo nextest run -p temper-ingest && cargo nextest run -p temper-cli`, then
+  `cargo make check`, then commit.
 
 ---
 
-## PR 2 — Store the bytes (schema + projectors + sidecar)
+## PR 2 — Store the bytes
 
-**Why this shape:** the raw block text must reach the **projector**, and it must not enter the ledger. It therefore travels in a sidecar, exactly as chunk prose does. Adding a **new trailing parameter with a DEFAULT** to the three mutation functions is skew-safe *and* yields the `body_storage` discriminator for free: an un-upgraded app sends nothing → no `kb_block_content` row → the resource is honestly `derived`.
+### The two corrections that define this PR
 
-**Files:**
-- Create: `migrations/20260714000001_block_content_verbatim.sql`
-- Modify: `crates/temper-substrate/src/content.rs` (`PreparedBlock`), `crates/temper-substrate/src/payloads.rs` (new `block_content_sidecar`), `crates/temper-substrate/src/events.rs` (the `ResourceCreate` / `BlockAppend` / `BlockMutate` fire arms), `crates/temper-substrate/src/replay.rs` (`PROJECTION_DUMPS` + sidecar re-supply)
-- Test: `crates/temper-substrate/tests/block_content.rs` (new)
+> **✗ v1 error A — the feature would have been inert.** v1 said "add `raw_text` to `PreparedBlock` and
+> populate it in the `prepare_block*` helpers." But **`prepare_block_from_chunks(seq, role, chunks)`
+> receives no prose**, and that is the arm **every CLI write** lands on (the CLI always sends
+> `chunks_packed`): `writes.rs:161` (create), `writes.rs:336` (update), `writes.rs:595`, and
+> `db_backend.rs:2562` (segmented append). Only the *server-embed* arms (`prepare_block`,
+> `prepare_block_deferred` — the MCP path) ever see prose. So every CLI-created resource would have
+> stayed `derived`, the lossy readback would have persisted, and the substrate test would have passed
+> **via the prose arm**, attesting to a guarantee production never provides.
+>
+> **Fix:** the bytes are already in scope at every call site (`CreateParams.body`, `UpdateParams.body`,
+> `AppendBlockPayload.content`). Set `block.raw_text` **right after the match**, exactly as
+> `block.incorporated = p.sources` already does (`writes.rs:166`, `writes.rs:345`).
 
-**Interfaces:**
-- Produces: `payloads::block_content_sidecar(blocks: &[PreparedBlock]) -> HashMap<String, BlockContent>` keyed by **block `seq`** (as a string — JSONB object keys are strings), value `BlockContent { content: String, content_hash: String }` where `content_hash` is **bare** `sha256_hex(content.as_bytes())`.
-- Produces: `PreparedBlock.raw_text: Option<String>` — the verbatim segment/body text this block was cut from. `None` ⇒ legacy/derived write.
+> **✗ v1 error B — a signature change is a write outage.** v1 added `p_block_content jsonb DEFAULT '{}'`
+> to `resource_create` / `block_append` / `block_mutate`. `CREATE OR REPLACE` **cannot add a parameter**:
+> it creates an overload, leaves the old function live, and makes old-arity calls ambiguous. And a new
+> app calling a 7-arg function against a not-yet-migrated DB is a **total write outage** — `main`
+> auto-deploys.
+>
+> **Fix:** **change no signature.** Carry block bytes inside the existing `p_content` sidecar by
+> reshaping it, and make the projectors accept **both** shapes.
 
-- [ ] **Step 1: Write the migration**
+### The sidecar reshape (skew-safe, no signature change)
+
+Today: `p_content` is a flat map `{ "<chunk-uuid>": {content, embedding, …} }`.
+New: `{ "chunks": { "<chunk-uuid>": {...} }, "blocks": { "<block-key>": {content, content_hash} } }`.
+
+The projectors detect the shape: **if `p_content ? 'chunks'` → new shape, else → legacy flat map.**
+That is the whole skew story. Old app + new DB → legacy shape → no block bytes → resource is honestly
+`derived`. New app + old DB → old projector reads the flat map it expects… **which the new shape breaks.**
+So the new app must keep emitting the **legacy flat shape until the migration has landed** —
+therefore:
+
+**PR 2 splits into two deploys.** `2a` = migration only (projectors tolerant of both shapes; nothing
+writes the new shape yet). `2b` = the Rust change that starts emitting it. Land 2a, let it deploy, then
+land 2b. This is the only ordering that is safe in both skew directions.
+
+- **`<block-key>`** is the block's **`seq`** on the create/append paths, and the block's **id** on the
+  mutate path.
+  > **✗ v1 error C.** v1 keyed the mutate sidecar by `seq`. But `SeedAction::BlockMutate`
+  > (`events.rs:260`) carries **no `PreparedBlock` and no seq**, and the update path builds
+  > `prepare_block_from_chunks(0, …)` — **seq is hardcoded 0** regardless of which block is revised
+  > (`writes.rs:336`). Blocks are addressed by **id** there. So the mutate sidecar must be keyed by
+  > block id, and the raw text must ride on the `SeedAction::BlockMutate` variant (add
+  > `raw: Option<&str>`), not on `PreparedBlock`.
+
+### Files
+- Create: `migrations/20260714000001_block_content_verbatim.sql` (PR 2a)
+- Modify (PR 2b): `crates/temper-substrate/src/{content.rs,payloads.rs,events.rs,writes.rs,replay.rs}`,
+  `crates/temper-services/src/backend/db_backend.rs`
+- Test: `crates/temper-substrate/tests/block_content.rs` (new); `tests/e2e/` (see PR 3)
+
+- [ ] **Step 1 (2a): the migration**
 
 ```sql
--- Verbatim block content (W2). The block REVISION owns the authoritative bytes;
--- kb_chunks/kb_chunk_content are untouched and remain the derived retrieval index.
 CREATE TABLE kb_block_content (
     block_revision_id uuid PRIMARY KEY
         REFERENCES kb_block_revisions(id) ON DELETE CASCADE,
@@ -123,11 +172,9 @@ CREATE TABLE kb_block_content (
     content_hash text NOT NULL   -- bare sha256 hex of content's raw bytes
 );
 
--- The attribution anchor points at its current state.
 ALTER TABLE kb_content_blocks
     ADD COLUMN current_revision_id uuid REFERENCES kb_block_revisions(id);
 
--- Honest default: anything written by an un-upgraded server stays 'derived'.
 ALTER TABLE kb_resources
     ADD COLUMN body_storage text NOT NULL DEFAULT 'derived';
 ALTER TABLE kb_resources
@@ -135,213 +182,203 @@ ALTER TABLE kb_resources
         CHECK (body_storage IN ('verbatim', 'derived'));
 ```
 
-Then `CREATE OR REPLACE` the two projectors, taking a new trailing
-`p_block_content jsonb DEFAULT '{}'`, and the three mutation functions
-(`resource_create`, `block_append`, `block_mutate`) to thread it through.
-In `_project_blocks`, capture the revision id and write the content:
+Then `CREATE OR REPLACE` **the two projectors only** (same signatures — re-derive from the LIVE bodies in
+`20260713000040_chunk_embedding_provenance.sql`). In `_project_blocks`:
 
 ```sql
+-- shape-tolerant sidecar access
+v_chunks := CASE WHEN p_content ? 'chunks' THEN p_content->'chunks' ELSE p_content END;
+v_blocks := CASE WHEN p_content ? 'chunks' THEN p_content->'blocks' ELSE '{}'::jsonb END;
+
 INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count, created)
     VALUES (v_block, v_block_hash, v_chunk_count, v_occurred)
     RETURNING id INTO v_revision;
-
 UPDATE kb_content_blocks SET current_revision_id = v_revision WHERE id = v_block;
 
-v_raw := p_block_content -> (v_block_json->>'seq');
+v_raw := v_blocks -> (v_block_json->>'seq');
 IF v_raw IS NOT NULL THEN
     INSERT INTO kb_block_content (block_revision_id, content, content_hash)
         VALUES (v_revision, v_raw->>'content', v_raw->>'content_hash');
-    UPDATE kb_resources SET body_storage = 'verbatim' WHERE id = p_resource;
 END IF;
 ```
 
-`_project_block_mutated` does the same on its own revision INSERT (keyed by the
-mutated block's `seq`), advancing `current_revision_id` alongside `last_event_id`.
+Every existing `_insert_chunk` lookup must read `v_chunks`, not `p_content`.
+`_project_block_mutated` does the same, keying `v_blocks -> v_block::text` (**block id**), and advancing
+`current_revision_id` alongside `last_event_id`.
 
-> A revision with **no** `kb_block_content` row is a `derived` block. This is the
-> skew-safe path and needs no coordination.
+- [ ] **Step 2 (2a): coverage-verified `body_storage`.**
 
-- [ ] **Step 2: Apply and eyeball**
+> **✗ v1 error D — the fix reintroduced the bug it was fixing.** v1 set `body_storage='verbatim'` from
+> *any single block write*. But content is per-**revision** while the flag is per-**resource**, so a
+> resource with **mixed coverage** (some blocks with bytes, some without) would be flagged `verbatim`
+> and its `INNER JOIN` readback would **skip** the content-less blocks — returning a **short body that
+> looks complete.** That is precisely the silent-truncation class this work exists to kill.
 
-```bash
-cargo make docker-up
-sqlx migrate run --source migrations
-psql "$DATABASE_URL" -c '\d kb_block_content'
+So the flag is **derived from coverage**, recomputed at the tail of both projectors, never asserted:
+
+```sql
+CREATE FUNCTION _recompute_body_storage(p_resource uuid) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE kb_resources r SET body_storage = CASE WHEN (
+        SELECT count(*) = count(bc.block_revision_id)
+          FROM kb_content_blocks b
+          LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+         WHERE b.resource_id = p_resource AND NOT b.is_folded
+    ) THEN 'verbatim' ELSE 'derived' END
+    WHERE r.id = p_resource;
+END; $$;
 ```
 
-- [ ] **Step 3: Write the failing test** — `crates/temper-substrate/tests/block_content.rs`
+`'verbatim'` now means **every live block has bytes** — the only claim readback may rely on.
+(An all-folded / zero-block resource yields `count(*) = 0 = count(...)` ⇒ `verbatim` with an empty body,
+which is correct: nothing is missing.)
+
+- [ ] **Step 3 (2a): apply + verify, then commit 2a alone.**
+
+```bash
+cargo make docker-up && sqlx migrate run --source migrations
+psql "$DATABASE_URL" -c '\d kb_block_content'
+cargo make test-artifacts   # must be GREEN with no Rust change — the projectors still read the legacy shape
+```
+
+- [ ] **Step 4 (2b): failing tests** — `crates/temper-substrate/tests/block_content.rs`
+
+**Construct through the CHUNKS arm**, not the prose arm — otherwise the test proves nothing about
+production (v1's exact mistake).
 
 ```rust
 #![cfg(feature = "artifact-tests")]
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn create_stores_verbatim_block_content(pool: PgPool) {
-    let body = "# T\r\n\r\nalpha\nbeta\n";           // CRLF + trailing newline
-    let id = create_resource_with_body(&pool, body).await;
+async fn a_chunks_arm_create_stores_verbatim_bytes(pool: PgPool) {
+    let body = "# T\r\n\r\nalpha\nbeta\n";                 // CRLF + trailing newline
+    // chunks: Some(..) — the arm EVERY CLI write takes
+    let id = create_via_chunks_arm(&pool, body).await;
 
     let (stored, hash): (String, String) = sqlx::query_as(
-        "SELECT bc.content, bc.content_hash
-           FROM kb_content_blocks b
+        "SELECT bc.content, bc.content_hash FROM kb_content_blocks b
            JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
-          WHERE b.resource_id = $1",
-    ).bind(id).fetch_one(&pool).await.unwrap();
-
-    assert_eq!(stored, body, "block content must be stored byte-for-byte");
+          WHERE b.resource_id = $1").bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(stored, body);
     assert_eq!(hash, temper_core::hash::sha256_hex(body.as_bytes()));
 
-    let storage: String = sqlx::query_scalar("SELECT body_storage FROM kb_resources WHERE id = $1")
+    let storage: String = sqlx::query_scalar("SELECT body_storage FROM kb_resources WHERE id=$1")
         .bind(id).fetch_one(&pool).await.unwrap();
     assert_eq!(storage, "verbatim");
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn superseded_revisions_keep_their_own_bytes(pool: PgPool) {
-    let id = create_resource_with_body(&pool, "v1 body\n").await;
-    update_resource_body(&pool, id, "v2 body\n").await;
+async fn mixed_coverage_is_derived_not_verbatim(pool: PgPool) {
+    // one block WITH bytes, one WITHOUT (simulating a legacy block beside an upgraded one)
+    let id = create_mixed_coverage_resource(&pool).await;
+    let storage: String = sqlx::query_scalar("SELECT body_storage FROM kb_resources WHERE id=$1")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(storage, "derived",
+        "partial coverage must NEVER be verbatim — that is how a short body looks complete");
+}
 
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn superseded_revisions_keep_their_own_bytes(pool: PgPool) {
+    let id = create_via_chunks_arm(&pool, "v1 body\n").await;
+    update_body(&pool, id, "v2 body\n").await;
     let all: Vec<String> = sqlx::query_scalar(
         "SELECT bc.content FROM kb_block_content bc
            JOIN kb_block_revisions r ON r.id = bc.block_revision_id
            JOIN kb_content_blocks b  ON b.id = r.block_id
-          WHERE b.resource_id = $1 ORDER BY r.created",
-    ).bind(id).fetch_all(&pool).await.unwrap();
-
-    assert_eq!(all, vec!["v1 body\n".to_string(), "v2 body\n".to_string()],
-        "each revision keeps its own immutable bytes — this is what buys point-in-time content");
+          WHERE b.resource_id = $1 ORDER BY r.created").bind(id).fetch_all(&pool).await.unwrap();
+    assert_eq!(all, vec!["v1 body\n".to_string(), "v2 body\n".to_string()]);
 }
 ```
 
-- [ ] **Step 4: Run it and watch it fail**
+- [ ] **Step 5 (2b): thread the bytes at the call sites.**
 
-Run: `cargo make test-artifacts`
-Expected: FAIL — nothing writes `kb_block_content` yet.
+Add `raw_text: Option<String>` to `PreparedBlock`. Then, **after each match**:
 
-- [ ] **Step 5: Thread `raw_text` through Rust**
+- `writes.rs:161` (create) — `block.raw_text = Some(p.body.to_owned());`
+- `writes.rs:336` (update) — same, from `p.body`
+- `writes.rs:595` — same
+- `db_backend.rs:2562` (segmented append) — `Some(payload.content.clone())`
+- `db_backend.rs:259` (telos/charter) — **`None`.** `ReconcileTelosBlock { role, chunks_packed }`
+  (`temper-core/src/types/reconcile.rs`) carries **no prose**, so there is nothing to store. Charters stay
+  `body_storage='derived'` until that wire type gains a `content` field. **State this, don't hide it.**
 
-Add `raw_text: Option<String>` to `PreparedBlock` (`content.rs`); populate it in the `prepare_block*` helpers from the text they were given. Add `payloads::block_content_sidecar`. In `events.rs`, pass the new sidecar as the extra bound argument on the `ResourceCreate`, `BlockAppend`, and `BlockMutate` arms (`SELECT resource_create($1,…,$7)` etc.).
+Add `raw: Option<&str>` to `SeedAction::BlockMutate` (`events.rs:260`) and pass `p.body` from
+`writes.rs:346`. Add `payloads::block_content_sidecar` producing
+`{ "<key>": { content, content_hash } }` with **bare** `sha256_hex`, and reshape the sidecar builders to
+emit `{ "chunks": …, "blocks": … }`.
 
-- [ ] **Step 6: Update replay**
+- [ ] **Step 6 (2b): replay.** Add `kb_block_content` to `PROJECTION_DUMPS` and re-supply the block sidecar
+  from storage in `snapshot()` in the new shape. **Do not touch** the existing `kb_chunk_content` CAS
+  retention assertion — it stays true.
 
-Add `kb_block_content` to `PROJECTION_DUMPS` (`replay.rs:~40`) so block bytes are covered by the equivalence diff, and re-supply the block sidecar from storage in `snapshot()` exactly as chunk prose is. **Do not touch the existing `kb_chunk_content` CAS retention assertion** — it stays true.
-
-- [ ] **Step 7: Run artifact tests + replay equivalence**
-
-Run: `cargo make test-artifacts`
-Expected: PASS, including the existing replay-equivalence tests.
-
-- [ ] **Step 8: Regenerate sqlx caches, check, commit**
-
-```bash
-cargo sqlx prepare --workspace -- --all-features
-cargo make prepare-services && cargo make prepare-api && cargo make prepare-e2e
-cargo make check
-git add migrations/ crates/temper-substrate/ .sqlx/ crates/*/.sqlx tests/e2e/.sqlx
-git commit -m "feat(ingest): the block revision owns its authoritative bytes
-
-kb_block_content(block_revision_id) stores the verbatim text; kb_chunks and
-kb_chunk_content are untouched and remain the derived retrieval index. The bytes
-reach the projector via a sidecar (never the ledger — the CAS rule), and the new
-p_block_content parameter defaults to '{}', so an un-upgraded server writing no
-block content simply yields an honest body_storage='derived' row."
-```
+- [ ] **Step 7 (2b):** `cargo make test-artifacts` (incl. replay equivalence) → regenerate all four sqlx
+  caches → `cargo make check` → commit.
 
 ---
 
 ## PR 3 — Byte-exact readback
 
-**Files:**
-- Modify: `crates/temper-substrate/src/readback/mod.rs` (`body`, :472)
-- Modify: `crates/temper-services/src/backend/substrate_read.rs` (`get_content_select`, :265-279)
-- Modify: `crates/temper-workflow/src/types/resource.rs` (surface `body_storage` on the detail row)
-- Test: `tests/e2e/tests/byte_exact_roundtrip_test.rs` (new)
-
-**Interfaces:**
-- Consumes: `kb_block_content` + `kb_content_blocks.current_revision_id` (PR 2).
-- Produces: `readback::body` returns the stored bytes for `verbatim` resources; `reconstruct_body` is called **only** for `derived` ones.
-
-- [ ] **Step 1: Write the failing e2e test** — drive the real CLI path, since that is the production caller.
+- [ ] **Step 1: Failing e2e** — `tests/e2e/tests/byte_exact_roundtrip_test.rs`, driving the **CLI**
+  (the production caller). Assert against the API/`show` content, **not** the projected vault file
+  (`normalize_body_for_vault`, `actions/ingest.rs:736`, prepends a `\n` for the frontmatter separator —
+  a projection concern, not a storage one).
 
 ```rust
-#![cfg(all(feature = "test-db", feature = "test-embed"))]
-
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn body_round_trips_byte_exactly(pool: PgPool) {
-    for body in [
-        "# T\n\nalpha\nbeta\n",
-        "# T\n\nalpha\nbeta",                 // no trailing newline
-        "# T\r\n\r\nalpha\r\nbeta\r\n",       // CRLF
-        "# T\n\nnaïve — ünïcode ✅\n",
-        &large_multi_block_body(),            // > SEGMENT_BUDGET_BYTES ⇒ segmented path
-    ] {
-        let id = cli_create(&harness, body).await;
-        let got = cli_show_content(&harness, id).await;
-        assert_eq!(
-            sha256_hex(got.as_bytes()), sha256_hex(body.as_bytes()),
-            "readback must be byte-identical to what was written"
-        );
-    }
+for body in [
+    "# T\n\nalpha\nbeta\n", "# T\n\nalpha\nbeta",
+    "# T\r\n\r\nalpha\r\nbeta\r\n", "# T\n\nnaïve — ünïcode ✅\n",
+    &large_multi_block_body(),          // > SEGMENT_BUDGET_BYTES ⇒ segmented path
+] {
+    let id = cli_create(&h, body).await;
+    assert_eq!(sha256_hex(cli_show_content(&h, id).await.as_bytes()),
+               sha256_hex(body.as_bytes()));
+    assert_eq!(show(&h, id).await.body_storage, "verbatim");   // guards v1's inertness bug
 }
 ```
 
-Note: assert against the **API/`show` content**, not the projected vault file —
-`normalize_body_for_vault` (`actions/ingest.rs:736`) prepends a `\n` for the
-frontmatter separator, which is a projection concern, not a storage one.
+- [ ] **Step 2: Run it, watch it fail.** `cargo make test-e2e-embed`
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 3: Branch on `body_storage`, and verify coverage anyway.**
 
-Run: `cargo make test-e2e-embed`
-Expected: FAIL — the CRLF and no-trailing-newline cases come back altered (+ blank lines at chunk boundaries).
-
-- [ ] **Step 3: Branch `readback::body` on `body_storage`**
+> **✗ v1 error E.** v1 branched on *"did `string_agg` come back NULL"*. That is wrong for an empty body,
+> an all-folded resource, and — fatally — a **mixed-coverage** resource, where the INNER JOIN happily
+> returns a **short, plausible body**. Trust nothing; verify coverage in the query itself.
 
 ```rust
-// verbatim → the stored bytes, concatenated with NO separator.
+// verbatim ⇒ every live block has bytes (guaranteed by _recompute_body_storage, re-checked here).
+// The HAVING makes a short body IMPOSSIBLE: incomplete coverage returns NO row, never a partial concat.
 let verbatim: Option<String> = sqlx::query_scalar(
     "SELECT string_agg(bc.content, '' ORDER BY b.seq)
        FROM kb_content_blocks b
-       JOIN kb_block_content  bc ON bc.block_revision_id = b.current_revision_id
-      WHERE b.resource_id = $1 AND NOT b.is_folded",
+       LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+      WHERE b.resource_id = $1 AND NOT b.is_folded
+     HAVING count(*) = count(bc.block_revision_id)",
 ).bind(new_id).fetch_optional(pool).await?.flatten();
 
-if let Some(body) = verbatim {
-    return Ok(body);
+match verbatim {
+    Some(body) => Ok(body),
+    // derived (legacy, or partial coverage) → the old reconstruction, unchanged.
+    None => Ok(crate::content::reconstruct_body(&chunks)),
 }
-// derived (legacy) → the old lossy reconstruction, unchanged.
-Ok(crate::content::reconstruct_body(&chunks))
 ```
 
-- [ ] **Step 4: Run the e2e**
-
-Run: `cargo make test-e2e-embed`
-Expected: PASS on all five bodies.
-
-- [ ] **Step 5: Guard the legacy path** — assert a `derived` row still reads back through `reconstruct_body` unchanged (a resource created before PR 2 must not regress).
-
-- [ ] **Step 6: Regenerate caches, check, commit**
-
-```bash
-cargo sqlx prepare --workspace -- --all-features && cargo make prepare-services && cargo make prepare-api && cargo make prepare-e2e
-cargo make check
-git commit -am "feat(ingest): byte-exact readback for verbatim resources
-
-readback::body now returns the stored bytes concatenated with NO separator.
-reconstruct_body survives only to serve legacy 'derived' rows, and dies with them —
-taking the \"\\n\\n\" join bug and the heading-duplication bug (019f4694) with it."
-```
+- [ ] **Step 4:** `cargo make test-e2e-embed` → PASS on all five bodies.
+- [ ] **Step 5: Legacy guard** — a pre-PR-2 (`derived`) resource still reads back through
+  `reconstruct_body`, unchanged.
+- [ ] **Step 6: Surface `body_storage`** on the resource detail row; **regenerate the contract
+  artifacts** — `cargo make openapi` (openapi.json + the temper-rb gem + temper-ts `schema.ts`) and
+  `cargo make generate-ts-types`. **Stage them** or `cargo make check` fails on drift.
+- [ ] **Step 7:** caches → `cargo make check` → commit.
 
 ---
 
 ## PR 4 — `ingest_state`: the missing projection
 
-**Key discovery:** `resource_finalize()` records a **projection-less** `resource_finalized` event (its own comment says so, `migrations/20260708000012_streaming_ingest.sql:84-85`). "Is this complete?" is currently answerable only by scanning `kb_events`. So `ingest_state` is not a new invention — it is **the missing projection of an event that already fires**, which also means it can be **correctly backfilled from the ledger** rather than guessed.
+`resource_finalize()` records a **projection-less** `resource_finalized` event, so completeness is
+currently only discoverable by scanning `kb_events`. Project it.
 
-**Files:**
-- Create: `migrations/20260714000002_ingest_state_projection.sql`
-- Modify: `crates/temper-services/src/backend/substrate_read.rs` (`filtered_visible_page` WHERE, :138-150)
-- Modify: the `unified_search` SQL (`corpus` CTE **and** `search_vector_candidates`)
-- Modify: `crates/temper-workflow/src/types/resource.rs` (surface `ingest_state`)
-
-- [ ] **Step 1: Migration — column, projector, and a truthful backfill**
+- [ ] **Step 1: The column + the projector (migration).**
 
 ```sql
 ALTER TABLE kb_resources
@@ -349,110 +386,113 @@ ALTER TABLE kb_resources
 ALTER TABLE kb_resources
     ADD CONSTRAINT ck_kb_resources_ingest_state
         CHECK (ingest_state IN ('in_progress', 'complete'));
-
 CREATE INDEX idx_kb_resources_incomplete
     ON kb_resources (owner_profile_id) WHERE ingest_state = 'in_progress';
 
--- Project the event that already fires.
 CREATE FUNCTION _project_resource_finalized(p_event uuid, p_payload jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
     UPDATE kb_resources SET ingest_state = 'complete'
      WHERE id = (p_payload->>'resource_id')::uuid;
 END; $$;
--- ...and CREATE OR REPLACE resource_finalize to PERFORM it after _event_append.
-
--- Backfill from the ledger — derivable, not guessed:
--- a resource that BEGAN segmented (>1 live block) but has no resource_finalized
--- event was never completed.
-UPDATE kb_resources r SET ingest_state = 'in_progress'
- WHERE (SELECT count(*) FROM kb_content_blocks b
-         WHERE b.resource_id = r.id AND NOT b.is_folded) > 1
-   AND NOT EXISTS (
-        SELECT 1 FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id
-         WHERE t.name = 'resource_finalized'
-           AND (e.payload->>'resource_id')::uuid = r.id);
 ```
+`CREATE OR REPLACE resource_finalize` (**same 4-arg signature**) to `PERFORM` it after `_event_append`.
 
-> The default is `complete` because a one-shot create **is** atomic and complete. Only
-> a multi-block resource with no finalize event is genuinely a partial.
+- [ ] **Step 2: NO backfill to `in_progress`.**
 
-- [ ] **Step 2: Set `in_progress` at segmented begin** — `resource_create` must know it is a segmented begin. The payload already distinguishes this (`begin_segmented_ingest`, `db_backend.rs:2509`); thread a `segmented: true` flag into the create payload and have `_project_resource_created` set `ingest_state = 'in_progress'` when present.
+> **✗ v1 error F — this would have hidden the cognitive maps.** v1 backfilled
+> `count(live blocks) > 1 AND NOT EXISTS(resource_finalized)` ⇒ `in_progress`. Run against production it
+> matches **exactly 4 resources — and all 4 are telos charters**, including the **L0 kernel "What Temper
+> Is"** (12 blocks), "How this team works" (9), and two Storyteller charters (8 each). `charter_set`
+> projects a **multi-block** role-tagged set and never fires `resource_finalized`, because it is not a
+> segmented ingest. The backfill would have deleted every cognitive map's charter from list and search.
+>
+> **Multi-block does NOT mean segmented.** There is no historical signal that reliably identifies a
+> genuinely-abandoned pre-existing upload, so **backfill nothing**: every existing row keeps the
+> `complete` default. Only *new* segmented begins (Step 3) are ever born `in_progress`. The one known
+> historical partial can be handled by hand.
 
-- [ ] **Step 3: Write the failing test** — kill mid-ingest.
+- [ ] **Step 3: Born `in_progress` at segmented begin.**
+
+> **✗ v1 error G.** v1 said "the payload already distinguishes a segmented begin." It does not —
+> `begin_segmented_ingest` (`db_backend.rs:2509`) just calls `create_resource`.
+
+Add `segmented: bool` to the create **payload** (a plain flag, no prose — safe for the ledger), set it in
+`begin_segmented_ingest`, and have `_project_resource_created` set
+`ingest_state = 'in_progress'` when it is true.
+
+- [ ] **Step 4: Replay must see the finalize event.**
+
+> **✗ v1 error H.** `replay.rs`'s event scan is a **whitelist**:
+> `('cogmap_seeded','resource_created','block_created','block_mutated','charter_set')` — it **omits**
+> `resource_finalized`. So a replayed DB would leave a segmented resource stuck at `in_progress` and the
+> projection diff would fail.
+
+Add `resource_finalized` to the scan and dispatch it to `_project_resource_finalized`.
+
+- [ ] **Step 5: Failing test — an interrupted ingest is not a document.**
 
 ```rust
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_interrupted_ingest_is_not_a_document(pool: PgPool) {
-    let id = begin_segmented(&h, &body).await;
-    append_block(&h, id, 0).await;
-    append_block(&h, id, 1).await;
-    // ... and then we die. No finalize.
+let id = begin_segmented(&h, &body).await;
+append_block(&h, id, 0).await;
+append_block(&h, id, 1).await;      // ...and then we die. No finalize.
 
-    assert!(!search_hits(&h, "distinctive phrase").await.contains(&id),
-        "a partial must never surface as an authoritative search hit");
-    assert!(!list_ids(&h).await.contains(&id), "a partial must not be listed");
+assert!(!search_hits(&h, "distinctive phrase").await.contains(&id));
+assert!(!list_ids(&h).await.contains(&id));
+assert_eq!(show(&h, id).await.ingest_state, "in_progress");   // but still addressable
 
-    let detail = show(&h, id).await;               // but it IS addressable
-    assert_eq!(detail.ingest_state, "in_progress");
-}
+// and the cognitive maps are STILL visible — the v1 regression guard
+assert!(list_ids(&h).await.contains(&l0_kernel_telos_id));
 ```
 
-- [ ] **Step 4: Run it and watch it fail** — `cargo make test-e2e-embed`. Expected: the partial is currently listed and searchable.
+- [ ] **Step 6: Exclude partials from list.** Add `AND r.ingest_state = 'complete'` to the WHERE in
+  `substrate_read::filtered_visible_page` (`:138-150`) — one edit covers `list_select` **and**
+  `list_meta_select`. **Not** in `resources_visible_to`: visibility is *authorization*, completeness is
+  *content*.
 
-- [ ] **Step 5: Exclude partials from list** — add `AND r.ingest_state = 'complete'` to the WHERE in `filtered_visible_page` (`substrate_read.rs:138-150`). Both `list_select` and `list_meta_select` funnel through it, so one edit covers both. **Do not** put this in `resources_visible_to`: visibility is *authorization*, completeness is *content*, and conflating them changes who can see what.
+- [ ] **Step 7: Exclude partials from search — a MIGRATION, not a Rust edit.**
 
-- [ ] **Step 6: Exclude partials from search — in BOTH arms**
+> **✗ v1 error I.** v1 called this a Rust change. `unified_search` and `search_vector_candidates` are
+> **SQL functions**; this is a fourth migration.
 
-Add the predicate to the `corpus` CTE **and** to `search_vector_candidates`. The vector arm is deliberately scope-aware so a scoped corpus is not starved by a global top-k; a completeness filter applied only post-ANN would reintroduce exactly that starvation for an in-progress-heavy corpus.
+Add the predicate to the `corpus` CTE **and** to `search_vector_candidates`. The vector arm is
+deliberately scope-aware so a scoped corpus is not starved by a global top-k; a post-ANN-only filter
+reintroduces exactly that starvation.
 
-- [ ] **Step 7: Run the suite, regenerate caches, check, commit**
-
-```bash
-cargo make test-e2e-embed && cargo make test-db
-cargo sqlx prepare --workspace -- --all-features && cargo make prepare-services && cargo make prepare-api && cargo make prepare-e2e
-cargo make check
-git commit -am "feat(ingest): project resource_finalized into an ingest_state
-
-resource_finalize has always recorded a projection-LESS event, so 'is this document
-complete?' was answerable only by scanning kb_events — which is why a killed upload
-stayed listed, searchable and status:ok at 93% of its content. Project it. Partials
-are excluded from list and search (in the query builders, never in resources_visible_to
-— visibility is authorization, completeness is content) while remaining addressable
-via show. Backfilled from the ledger, not guessed."
-```
+- [ ] **Step 8:** `cargo make test-e2e-embed && cargo make test-db` → caches → `cargo make openapi` →
+  `cargo make check` → commit.
 
 ---
 
 ## PR 5 — The raw-bytes integrity check at finalize
 
-**The nuance that makes this additive:** today's `expected_body_hash` is **not** an integrity check — it is a *concurrency token*. `BlocksResponse.body_hash` is the server-computed **chunk merkle**, handed to the client precisely because a non-chunking caller (MCP) cannot derive it, and it is documented **"Opaque: echo it back verbatim, never parse it."** Repurposing it would break MCP. So we **add** a field.
+`expected_body_hash` is **not** an integrity check — it is a **concurrency token** (the server-computed
+chunk merkle, handed over because a non-chunking caller cannot derive it, and documented *"Opaque: echo
+it back verbatim, never parse it"*). Repurposing it breaks MCP. **Add** a field.
 
-A raw-bytes hash needs **no chunker**, so unlike the merkle, *every* client can compute it — MCP included. The integrity check is universal in a way the merkle never could be.
-
-**Files:**
-- Modify: `crates/temper-core/src/types/ingest.rs` (`FinalizePayload`)
-- Create: `migrations/20260714000003_finalize_content_hash.sql`
-- Modify: `crates/temper-substrate/src/writes.rs` (`FinalizeParams`, :1155-1179)
-- Modify: `crates/temper-cli/src/actions/ingest.rs` (`run_segmented_create` finalize call)
-
-- [ ] **Step 1: Add the optional wire field** (additive — an old client omits it)
+- [ ] **Step 1: Additive wire field.**
 
 ```rust
 pub struct FinalizePayload {
     pub expected_blocks: u32,
-    /// The server-computed chunk merkle, echoed back verbatim. A CONCURRENCY token:
-    /// "nothing changed between my last append and now". Never parse it.
+    /// The server-computed chunk merkle, echoed back verbatim. A CONCURRENCY token, not an
+    /// integrity check. Never parse it.
     pub expected_body_hash: String,
-    /// Bare sha256 hex of the FULL raw body the client uploaded — an INTEGRITY check
-    /// over the bytes themselves. Needs no chunker, so every surface can supply it.
-    /// `None` from a client that predates this field: the check is then skipped.
+    /// Bare sha256 hex of the FULL raw body uploaded — an INTEGRITY check over the bytes.
+    /// `None` from a caller that does not hold the whole body (MCP) or predates this field;
+    /// the check is then skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_content_hash: Option<String>,
 }
 ```
 
-- [ ] **Step 2: Verify it in `resource_finalize`** (new migration, `CREATE OR REPLACE`)
+> **✗ v1 error J.** v1 claimed a raw hash "needs no chunker, so every surface can supply it." True of
+> *hashing*; **false of availability** — MCP's finalize tool never sees the whole body, only per-block
+> content. MCP is therefore **honestly exempt** (`None`), not universal. Say so rather than imply
+> coverage we do not have. Adding the field must also not break `temper-mcp`'s construction of
+> `FinalizePayload` — `#[serde(default)]` + `..Default::default()` at its call site.
+
+- [ ] **Step 2: Verify in `resource_finalize`** (new migration, **same 4-arg signature**):
 
 ```sql
 IF p_payload ? 'expected_content_hash' THEN
@@ -470,49 +510,34 @@ IF p_payload ? 'expected_content_hash' THEN
 END IF;
 ```
 
-The resource stays `in_progress` on failure (the exception rolls the tx back and the
-`_project_resource_finalized` never runs) — **still resumable, never silently done.**
+The exception rolls back, `_project_resource_finalized` never runs, and the resource stays
+`in_progress` — **still resumable, never silently done.**
 
-- [ ] **Step 3: Write the failing test**
+- [ ] **Step 3: Failing test** — a bad hash fails finalize and leaves it resumable; the honest hash then
+  succeeds and flips it to `complete`.
 
-```rust
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn finalize_rejects_a_body_hash_mismatch_and_stays_resumable(pool: PgPool) {
-    let id = begin_and_append_all(&h, &body).await;
-    let err = finalize_with_content_hash(&h, id, "0".repeat(64)).await.unwrap_err();
-    assert!(err.to_string().contains("stored bytes hash"));
-    assert_eq!(show(&h, id).await.ingest_state, "in_progress");
-    // and the honest finalize still works afterwards
-    finalize_with_content_hash(&h, id, sha256_hex(body.as_bytes())).await.unwrap();
-    assert_eq!(show(&h, id).await.ingest_state, "complete");
-}
-```
+- [ ] **Step 4: CLI sends it** — in `run_segmented_create`, `expected_content_hash:
+  Some(sha256_hex(source_bytes))`. **Bare hex** — not `compute_body_hash` (which prefixes `"sha256:"`).
+  After PR 1, `concat(segments) == source`, so the two are provably the same bytes.
 
-- [ ] **Step 4: Send it from the CLI** — in `run_segmented_create`, set
-  `expected_content_hash: Some(sha256_hex(source_bytes))`. **Bare hex** — not
-  `compute_body_hash`, which prefixes `"sha256:"`.
+- [ ] **Step 5: Amend the spec.** Its "`body_hash = sha256(concat(block content))`" line is **wrong** —
+  `body_hash` is the two-level chunk merkle and redefining it breaks the dedup precheck, the charter
+  diff, and finalize. The new raw hash is a **separate** value. Also correct the spec's "chunks are
+  untouched, identical before and after": true for existing rows (no re-chunk, no re-embed), but a
+  **CRLF source ingested after PR 1 chunks differently than it would have before**, because the chunker
+  now receives the true bytes.
 
-- [ ] **Step 5: Run, regenerate, check, commit**
-
-```bash
-cargo make test-e2e-embed
-cargo sqlx prepare --workspace -- --all-features && cargo make prepare-services && cargo make prepare-api && cargo make prepare-e2e
-cargo make openapi && git add openapi.json clients/
-cargo make check
-git commit -am "feat(ingest): verify the stored BYTES at finalize
-
-expected_body_hash was never an integrity check — it is a concurrency token (the
-server-computed chunk merkle, echoed back opaquely because a non-chunking caller
-cannot derive it). Add expected_content_hash: a raw sha256 over the uploaded bytes,
-which needs no chunker and so is available to EVERY surface, MCP included. A mismatch
-now fails the finalize and leaves the resource in_progress and resumable."
-```
+- [ ] **Step 6:** e2e → caches → `cargo make openapi` → `cargo make check` → commit.
 
 ---
 
 ## Not in scope (and why)
 
-- **Idempotent append** — **already implemented.** `block_append` recomputes the incoming block merkle and compares it to the latest revision: identical ⇒ no-op `RETURN v_existing_block`; different ⇒ `RAISE EXCEPTION '… already present … with different content'` (`migrations/20260708000012_streaming_ingest.sql:51-69`). The only open question is whether that exception surfaces as a **409** rather than a 500 — worth a follow-up, not a task here.
-- **Dropping `kb_chunk_content` / `reconstruct_body`** — cannot happen until no `derived` rows remain.
-- **Semantic blocking** — out of scope; the `body = concat(blocks)` invariant keeps it cheap later.
-- **`resource_finalize` carries no authorship or invocation** (`p_metadata` hardcoded `{}`, `p_invocation` `None`, and it never gained `p_correlation`). Pre-existing; noted, not fixed here.
+- **Idempotent append** — **already implemented.** `block_append` compares the incoming block merkle to
+  the latest revision: identical ⇒ no-op; different ⇒ raises
+  (`20260708000012_streaming_ingest.sql:51-69`). Note the no-op path returns **before** any projection,
+  so it will not write block content either — a re-appended segment is a true no-op. Open question:
+  whether that exception surfaces as **409** rather than 500.
+- **Cogmap charters cannot be `verbatim`** until `ReconcileTelosBlock` carries prose. Stated, not hidden.
+- **Dropping `kb_chunk_content` / `reconstruct_body`** — impossible while any `derived` row exists.
+- **Semantic blocking** — out of scope; `body = concat(blocks)` keeps it cheap later.
