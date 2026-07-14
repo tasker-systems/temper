@@ -142,6 +142,7 @@ User-created guidance files. Read and apply any files found here.
 | `task create [--context @me/<ctx>]` | On Task Create |
 | `session start [--context @me/<ctx>]` | On Session Start |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, wayfind) | Read `cognitive-maps.md` |
+| Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Listing Is Truncated — Enumerate Before Asserting
@@ -198,6 +199,25 @@ temper pull <context>
 Deleting a projected file with `rm` has no server effect — it just creates a
 local cache miss. To actually delete a resource, use `temper resource delete
 <ref> [--force]` (the `<ref>` is the resource's `ref` field from `list`/`show`).
+
+## Editing Frontmatter vs Body — Avoid the stdin Footgun
+
+`temper resource update <ref>` treats **implicit non-TTY stdin as a full-body
+rewrite**. To change only frontmatter (e.g. `--title`, `--stage`), invoke
+`update` **one resource per call with stdin untouched**. **Never** run `update`
+inside a redirected loop:
+
+```bash
+# WRONG — each `update` inherits the loop's stdin (refs.txt) and rewrites the
+# body with the leftover lines; one resource clobbered, the rest skipped, no error.
+while read n ref; do temper resource update "$ref" --title "…"; done < refs.txt
+```
+
+Rewrite a body only with an explicit, intended `cat file.md | temper resource
+update <ref>` (or `--body @file.md`, which always wins over stdin). For per-block
+provenance/attribution and the segmented `ingest_*` lifecycle, read `reference.md`
+→ *Block-Grain Ingest & Attribution*. Full body-source precedence is in
+`reference.md` → *Body Source*.
 
 ## Cognitive Maps
 
