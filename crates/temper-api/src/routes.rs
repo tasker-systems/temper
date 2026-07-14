@@ -203,6 +203,21 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/connections/{id}",
             get(handlers::connections::get).delete(handlers::connections::revoke),
         )
+        // The credential and the two capability tiers, each its own endpoint. They are separately
+        // provisioned and both explicit — folding them into one PATCH would let a caller grant
+        // reach while believing they were only registering a webhook.
+        .route(
+            "/api/connections/{id}/credential",
+            post(handlers::connections::attach_credential),
+        )
+        .route(
+            "/api/connections/{id}/webhook-events",
+            post(handlers::connections::set_webhook_events),
+        )
+        .route(
+            "/api/connections/{id}/tool-manifest",
+            post(handlers::connections::set_tool_manifest),
+        )
 }
 
 /// Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.

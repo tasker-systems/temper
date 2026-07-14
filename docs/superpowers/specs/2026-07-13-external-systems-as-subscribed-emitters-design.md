@@ -508,8 +508,17 @@ its remote system, **there is no fallback**, and the agent-reach half of this go
 that is solved. This is the goal's highest-risk unknown and S1 exists partly to retire it early,
 while it is still cheap to be wrong.
 
-**Dogfoods the M2M work** — prod has exactly one machine client today (the steward). This is what
-makes the second one exist.
+~~**Dogfoods the M2M work** — prod has exactly one machine client today (the steward). This is what
+makes the second one exist.~~
+
+**Struck (2026-07-14).** This was wrong, and it is worth recording *how* it was wrong, because the
+paragraph immediately above warns against exactly this error. **Provisioning a connection produces no
+machine client, and never will** — a connection has no `kb_machine_clients` row by construction (see
+*The principal*, below). The sentence conflated the two credentials it had just finished separating.
+The genuine residue is real but unrelated to connections: prod's single machine client is
+`issuer='auth0-m2m'` and arrived by *backfill*, so the **`issue` path (temper as its own Authorization
+Server, `tmpr_…` client ids, secret rotation) has never run against production.** That is tracked as
+its own task, not as an S1 acceptance criterion.
 
 **S2 — Subscriptions, radius matching, and the delivery lifecycle.**
 The subscription table, the selector language, coarse radius at intake, the `references` `touches`
@@ -563,8 +572,13 @@ real consumer of that machinery — and it consumes it in three distinct ways:
 
 - **The authz predicate, verbatim.** `is_system_admin OR owner of the owning team`, owner-≠-reach,
   teamless-fails-closed. No new gate is invented here.
-- **The principal.** A connection's emitter entity is backed by a machine profile — the thing
-  `provision`/`issue` already create, along with emitter entities and gating-team enrollment.
+- **The principal.** A connection's emitter entity is backed by a dedicated **profile** — enough to own
+  an entity, and nothing more. **Not a machine *client*.** *(Corrected 2026-07-14, after S1 chunk A
+  built it: `kb_machine_clients` answers "who may authenticate **to** temper," and a connection never
+  does — GitHub holds no temper token. A connection has no `client_id`, no auth link, and no
+  machine-client row; `connection_service` calls `profile_service::create_connection_profile`, not
+  `create_agent_profile_and_link`. See `migrations/20260714000010_connections.sql` and the test
+  `a_connection_has_no_auth_link_and_no_machine_client_row`.)*
 - **The gap it exposes.** M2M solves *machines authenticating to temper*. A connection also needs
   *temper authenticating to a remote system*, and *temper brokering a scoped read-only token to an
   agent*. That second axis does not exist yet and is the core of S1.

@@ -45,6 +45,9 @@ ALLOWLIST='/api/access/admin/requests
 /api/machine-clients/{id}/rotate-secret
 /api/connections
 /api/connections/{id}
+/api/connections/{id}/credential
+/api/connections/{id}/webhook-events
+/api/connections/{id}/tool-manifest
 /internal/saml/reconcile
 /api/embed/dispatch
 /api/embed/admin/reembed'
