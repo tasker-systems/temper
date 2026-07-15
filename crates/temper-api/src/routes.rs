@@ -232,10 +232,13 @@ fn internal_routes() -> Router<AppState> {
     )
 }
 
-/// Internal embed-dispatch drain (issue #299) — self-gated by EMBED_DISPATCH_SECRET
-/// (bearer), NOT `require_auth`. Called by the Vercel cron on a schedule; the handler
-/// checks the secret itself (fail-closed when unset), so no auth-middleware layer is
-/// applied. Excluded from the OpenAPI contract entirely.
+/// Internal cron-invoked embed endpoints — self-gated by EMBED_DISPATCH_SECRET (bearer),
+/// NOT `require_auth`. Called by Vercel crons on a schedule; each handler checks the secret
+/// itself (fail-closed when unset), so no auth-middleware layer is applied. Excluded from the
+/// OpenAPI contract entirely.
+///
+/// - `/api/embed/dispatch` — the async-embed drain (issue #299).
+/// - `/api/embed/warm` — cold-start warmup for server-side query embedding (issue #427).
 ///
 /// NOTE: `embed::dispatch`'s `#[utoipa::path]` declares `get` only, but the route
 /// mounts BOTH GET and POST on the same handler. This plain `.route()` (rather than
@@ -243,10 +246,15 @@ fn internal_routes() -> Router<AppState> {
 fn embed_internal_routes() -> Router<AppState> {
     use axum::routing::get;
 
-    Router::new().route(
-        "/api/embed/dispatch",
-        get(handlers::embed::dispatch).post(handlers::embed::dispatch),
-    )
+    Router::new()
+        .route(
+            "/api/embed/dispatch",
+            get(handlers::embed::dispatch).post(handlers::embed::dispatch),
+        )
+        // Cold-start warmup (issue #427): loads/exercises the ONNX embedder so a subsequent
+        // server-side query embed on this instance is a cheap cached inference rather than a cold
+        // model load that blows the query-embed budget. Same self-gated posture as `dispatch`.
+        .route("/api/embed/warm", get(handlers::embed::warm))
 }
 
 pub fn create_app(state: AppState) -> Router {

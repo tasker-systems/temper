@@ -550,11 +550,24 @@ pub enum ResourceAction {
     },
     /// Update a resource's frontmatter and/or body
     ///
-    /// Mutates frontmatter from flag args. Optionally rewrites the body via
-    /// `--body @<path>` (file), `--body -` (explicit stdin), or implicit
-    /// non-TTY stdin (e.g. `cat new.md | temper resource update <slug>`). The
+    /// Mutates frontmatter from flag args. Optionally rewrites the body — the
     /// body trio (content + content_hash + chunks_packed) is PATCHed alongside
     /// any frontmatter changes in a single API call.
+    ///
+    /// Body-source precedence, first match wins:
+    ///
+    /// 1. `--body @<path>` — read the file; stdin is ignored entirely.
+    /// 2. `--body -` — read stdin explicitly (blocks; errors on a TTY or empty input).
+    /// 3. implicit stdin — read stdin only when it is a non-TTY with input *ready* and non-empty (the `cat new.md | temper resource update <ref>` case); an idle or empty pipe is "no body".
+    /// 4. none of the above — the body is left unchanged; only frontmatter is PATCHed.
+    ///
+    /// FOOTGUN: implicit non-TTY stdin is a body rewrite. Do NOT run `update`
+    /// inside a redirected loop (`while read n ref; do temper resource update
+    /// "$ref" --title …; done < refs.txt`): every `update` inherits the loop's
+    /// stdin (`refs.txt`) and rewrites the body with the leftover lines. For
+    /// frontmatter-only edits (e.g. `--title`), invoke once per resource with
+    /// stdin untouched; rewrite a body only via an explicit `cat file | temper
+    /// resource update <ref>`.
     Update {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
@@ -632,7 +645,13 @@ pub enum ResourceAction {
         /// Goal status (active, completed, paused, cancelled)
         #[arg(long)]
         status: Option<String>,
-        /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
+        /// Body source, first match wins: `@<path>` reads a file (stdin ignored);
+        /// `-` reads stdin explicitly (blocks; errors on a TTY or empty input);
+        /// omit to auto-detect a *ready* non-TTY stdin pipe (an idle/empty pipe =
+        /// no body). WARNING: implicit stdin is a body rewrite — never run this
+        /// inside a `while read … done < file` loop (each call inherits the
+        /// redirected file as its body); for frontmatter-only edits leave stdin
+        /// untouched.
         #[arg(long)]
         body: Option<String>,
         /// Provenance sources this body was distilled from — comma-separated resource

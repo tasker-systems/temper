@@ -216,6 +216,88 @@ fn test_skill_generate_documents_list_truncation_and_sort_filter() {
 }
 
 #[test]
+fn test_skill_generate_documents_body_source_precedence() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        // The reference must pin the body-source precedence and the loop-stdin
+        // footgun so agents don't silently clobber a body via inherited stdin.
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(
+            content.contains("## Body Source"),
+            "reference.md should document the body-source precedence"
+        );
+        assert!(
+            content.contains("while read"),
+            "should call out the redirected-loop stdin footgun"
+        );
+        assert!(
+            content.contains("implicit stdin is a body rewrite"),
+            "should state that implicit non-TTY stdin is a full-body rewrite"
+        );
+    });
+}
+
+#[test]
+fn test_skill_generate_documents_block_grain_ingest() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        // The reference must route agents to the block-grain / attribution
+        // surface so they don't default to whole-body writes for citation-graded
+        // or large documents.
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(
+            content.contains("## Block-Grain Ingest & Attribution"),
+            "reference.md should document the block-grain ingest/attribution surface"
+        );
+        for tool in [
+            "ingest_begin",
+            "ingest_append",
+            "ingest_blocks",
+            "ingest_finalize",
+        ] {
+            assert!(
+                content.contains(tool),
+                "reference should name the {tool} lifecycle tool"
+            );
+        }
+        assert!(
+            content.contains("annotate"),
+            "should document the annotate-only provenance backfill"
+        );
+        assert!(
+            content.contains("--provenance"),
+            "should point at `resource show --provenance` for reading provenance"
+        );
+    });
+}
+
+#[test]
+fn test_skill_md_routes_to_block_grain_and_guards_stdin() {
+    let dir = TempDir::new().unwrap();
+    let (config, env) = test_config_with_global(&dir);
+
+    temp_env::with_vars(env, || {
+        let skill_dir = dir.path().join("skill-output");
+        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        // Router must point at the block-grain reference section...
+        assert!(
+            skill_md.contains("Block-Grain Ingest & Attribution"),
+            "SKILL.md router should route block-level writes to the reference section"
+        );
+        // ...and guard the resource-update stdin footgun.
+        assert!(
+            skill_md.contains("while read"),
+            "SKILL.md should warn against running update inside a redirected loop"
+        );
+    });
+}
+
+#[test]
 fn test_skill_generate_includes_skill_only_commands() {
     let dir = TempDir::new().unwrap();
     let (config, env) = test_config_with_global(&dir);
