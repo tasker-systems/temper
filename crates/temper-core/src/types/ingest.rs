@@ -169,7 +169,21 @@ pub struct BlocksResponse {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct FinalizePayload {
     pub expected_blocks: u32,
+    /// The server-computed chunk merkle, echoed back verbatim. A **concurrency** token ("nothing
+    /// changed between my last append and now"), NOT an integrity check on the bytes — a non-chunking
+    /// caller (MCP) cannot derive it, so the server hands it over. Opaque: echo it back, never parse it.
     pub expected_body_hash: String,
+    /// Bare-hex sha256 of the **full raw body** uploaded — an **integrity** check over the actual bytes
+    /// (distinct from `expected_body_hash`, which is the chunk merkle). When present, `resource_finalize`
+    /// recomputes `sha256(concat of live block content in seq order)` and RAISEs on mismatch, rolling the
+    /// finalize back and leaving the resource `in_progress` (resumable, never silently done).
+    ///
+    /// `None` from a caller that does not hold the whole body — **MCP is honestly exempt** (its finalize
+    /// tool never sees the full body, only per-block content) — or one predating this field; the check is
+    /// then skipped. Bare hex (`sha256_hex`), NOT `compute_body_hash` (which prefixes `"sha256:"`); the DB
+    /// stores bare hex, so a prefixed value would mismatch 100% of the time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_content_hash: Option<String>,
 }
 
 /// A single chunk with its embedding, serialized via MessagePack inside
@@ -681,6 +695,7 @@ mod tests {
         let f = FinalizePayload {
             expected_blocks: 4,
             expected_body_hash: "sha256:deadbeef".to_owned(),
+            expected_content_hash: None,
         };
         let j = serde_json::to_string(&f).unwrap();
         let back: FinalizePayload = serde_json::from_str(&j).unwrap();

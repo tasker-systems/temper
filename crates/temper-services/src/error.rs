@@ -19,6 +19,12 @@ pub enum ApiError {
     BadRequest(String),
     #[error("Conflict: {0}")]
     Conflict(String),
+    /// Finalize's raw-bytes integrity check failed — the stored bytes do not hash to the caller's
+    /// declared `expected_content_hash` (W2 PR 5). A 422 with a distinct code (`CONTENT_INTEGRITY`)
+    /// because, unlike a block-count/merkle `Conflict`, this is **not resumable**: the committed bytes
+    /// are wrong and `block_append` refuses to overwrite a seq, so the caller must discard + re-upload.
+    #[error("Content integrity check failed: {0}")]
+    ContentIntegrity(String),
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -64,6 +70,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
+            ApiError::ContentIntegrity(_) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "CONTENT_INTEGRITY")
+            }
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
@@ -81,6 +90,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::Conflict(_) => {
                 tracing::info!(status_code, error_code = code, %message, "conflict");
+            }
+            ApiError::ContentIntegrity(_) => {
+                tracing::warn!(status_code, error_code = code, %message, "content integrity");
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden => {
                 tracing::warn!(status_code, error_code = code, %message, "auth error");
@@ -144,6 +156,7 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
             ApiError::Conflict(s) => TemperError::Conflict(s),
+            ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
             ApiError::Internal(s) => TemperError::Api(format!("internal: {s}")),
             ApiError::SystemAccessRequired { details } => {
                 // Lowercased Debug intentionally matches serde's snake_case rename for JoinRequestStatus
@@ -177,6 +190,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::Unauthorized(s) => ApiError::Unauthorized(s),
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
             TemperError::Conflict(s) => ApiError::Conflict(s),
+            TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {
                 // Round-trip the join_request_status string back to the enum.

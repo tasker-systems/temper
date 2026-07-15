@@ -152,6 +152,7 @@ async fn finalize_posts_to_resources_finalize_path_and_ignores_empty_body() {
             &FinalizePayload {
                 expected_blocks: 2,
                 expected_body_hash: "sha256:abc".to_string(),
+                expected_content_hash: None,
             },
         )
         .await

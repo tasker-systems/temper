@@ -64,6 +64,11 @@ pub enum TemperError {
 
     #[error("Conflict: {0}")]
     Conflict(String),
+    /// A finalize raw-bytes integrity check failed — the stored bytes do not match the caller's
+    /// declared hash (W2 PR 5). Distinct from `Conflict` because it is **not** resumable: the caller
+    /// (e.g. the CLI's segmented upload) must discard the poisoned resource and re-upload, not retry.
+    #[error("{0}")]
+    ContentIntegrity(String),
 
     #[error("Forbidden")]
     Forbidden,

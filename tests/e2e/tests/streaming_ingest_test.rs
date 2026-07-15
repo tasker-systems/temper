@@ -612,6 +612,7 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
             &FinalizePayload {
                 expected_blocks: segments.len() as u32,
                 expected_body_hash,
+                expected_content_hash: None,
             },
         )
         .await
@@ -845,6 +846,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
                         .map(|s| s.info.content_hash.clone())
                         .collect::<Vec<_>>(),
                 ),
+                expected_content_hash: None,
             },
         )
         .await

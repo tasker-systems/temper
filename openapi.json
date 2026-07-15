@@ -7444,7 +7444,15 @@
             "minimum": 0
           },
           "expected_body_hash": {
-            "type": "string"
+            "type": "string",
+            "description": "The server-computed chunk merkle, echoed back verbatim. A **concurrency** token (\"nothing\nchanged between my last append and now\"), NOT an integrity check on the bytes — a non-chunking\ncaller (MCP) cannot derive it, so the server hands it over. Opaque: echo it back, never parse it."
+          },
+          "expected_content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bare-hex sha256 of the **full raw body** uploaded — an **integrity** check over the actual bytes\n(distinct from `expected_body_hash`, which is the chunk merkle). When present, `resource_finalize`\nrecomputes `sha256(concat of live block content in seq order)` and RAISEs on mismatch, rolling the\nfinalize back and leaving the resource `in_progress` (resumable, never silently done).\n\n`None` from a caller that does not hold the whole body — **MCP is honestly exempt** (its finalize\ntool never sees the full body, only per-block content) — or one predating this field; the check is\nthen skipped. Bare hex (`sha256_hex`), NOT `compute_body_hash` (which prefixes `\"sha256:\"`); the DB\nstores bare hex, so a prefixed value would mismatch 100% of the time."
           }
         }
       },
