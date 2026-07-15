@@ -205,6 +205,14 @@ async fn transfer_makes_context_team_owned_and_members_can_author(pool: sqlx::Pg
         outcome.owner_ref, "+acme",
         "owner ref is the decorated team"
     );
+    assert!(
+        outcome.inherited_shares.is_empty(),
+        "a fresh context has no prior shares to inherit"
+    );
+    assert!(
+        outcome.inherited_read_grants.is_empty(),
+        "a fresh context has no prior read-grants to inherit"
+    );
     assert_eq!(
         context_owner(&pool, *context.id).await,
         ("kb_teams".to_string(), team.id),
@@ -236,6 +244,107 @@ async fn transfer_makes_context_team_owned_and_members_can_author(pool: sqlx::Pg
         .await
         .expect("idempotent re-transfer");
     assert!(!again.reassigned, "already team-owned → no-op");
+}
+
+/// A transfer SURFACES (does not sweep) the read-reach it inherits (spec D3): a prior
+/// `kb_team_contexts` share and an explicit `kb_access_grants` context read-grant both come
+/// back in the outcome so the new owner can prune deliberately.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn transfer_surfaces_inherited_shares_and_read_grants(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    let admin_id = provision(&app, &app.token).await;
+    root_bootstrap_first_admin(&pool, admin_id).await;
+
+    // Admin owns a personal context and the target team T.
+    let context = app
+        .client
+        .contexts()
+        .create("proj", None)
+        .await
+        .expect("admin creates context");
+    let team = app
+        .client
+        .teams()
+        .create(&TeamCreateRequest {
+            slug: "acme".to_owned(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        })
+        .await
+        .expect("admin creates target team");
+
+    // Seed residual reach BEFORE the transfer:
+    //   1) a share to a second team `other`  → kb_team_contexts
+    //   2) a context read-grant to a `viewer` profile → kb_access_grants(subject='kb_contexts')
+    let other_team: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('other','Other') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("other team");
+    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+        .bind(*context.id)
+        .bind(other_team)
+        .execute(&pool)
+        .await
+        .expect("seed share");
+    let viewer: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('viewer','viewer') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("viewer profile");
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, $3)",
+    )
+    .bind(*context.id)
+    .bind(viewer)
+    .bind(admin_id)
+    .execute(&pool)
+    .await
+    .expect("seed read-grant");
+
+    // Transfer C → T; the outcome reports the inherited reach.
+    let outcome = app
+        .client
+        .contexts()
+        .reassign(
+            *context.id,
+            &ReassignContextRequest {
+                to_team_id: team.id,
+            },
+        )
+        .await
+        .expect("admin transfers context to team");
+
+    assert!(outcome.reassigned, "the transfer happens");
+    assert_eq!(
+        outcome.inherited_shares.len(),
+        1,
+        "the share to `other` is surfaced"
+    );
+    assert_eq!(outcome.inherited_shares[0].team_id, other_team);
+    assert_eq!(outcome.inherited_shares[0].team_ref, "+other");
+    assert_eq!(
+        outcome.inherited_read_grants.len(),
+        1,
+        "the viewer read-grant is surfaced"
+    );
+    assert_eq!(outcome.inherited_read_grants[0].principal_id, viewer);
+    assert_eq!(outcome.inherited_read_grants[0].principal_ref, "@viewer");
+
+    // Surfaced, NOT swept: the share and grant still exist after the transfer.
+    let shares_remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_team_contexts WHERE context_id = $1")
+            .bind(*context.id)
+            .fetch_one(&pool)
+            .await
+            .expect("count shares");
+    assert_eq!(shares_remaining, 1, "transfer does not sweep the share");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

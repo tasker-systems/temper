@@ -7845,6 +7845,47 @@
           "complete"
         ]
       },
+      "InheritedReadGrant": {
+        "type": "object",
+        "description": "An explicit context read-grant that survives the ownership flip — inherited residual reach.",
+        "required": [
+          "principal_table",
+          "principal_id",
+          "principal_ref"
+        ],
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "principal_ref": {
+            "type": "string",
+            "description": "Decorated ref: `@handle` for a profile, `+slug` for a team."
+          },
+          "principal_table": {
+            "type": "string",
+            "description": "`kb_profiles` or `kb_teams`."
+          }
+        }
+      },
+      "InheritedShare": {
+        "type": "object",
+        "description": "A team the context is shared to (read-reach) at transfer time — reach the new owner inherits.",
+        "required": [
+          "team_id",
+          "team_ref"
+        ],
+        "properties": {
+          "team_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "team_ref": {
+            "type": "string",
+            "description": "Decorated `+team-slug` ref."
+          }
+        }
+      },
       "InvitationStatus": {
         "type": "string",
         "description": "Invitation status — lifecycle of a team invitation.\n\nMaps directly to the `invitation_status` Postgres enum.",
@@ -8885,6 +8926,20 @@
           "context_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "inherited_read_grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InheritedReadGrant"
+            },
+            "description": "Read-reach the new owner inherits: explicit context read-grants (kb_access_grants)."
+          },
+          "inherited_shares": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InheritedShare"
+            },
+            "description": "Read-reach the new owner inherits: teams this context was shared to (kb_team_contexts).\nSurfaced, not swept — the new owner prunes deliberately."
           },
           "owner_ref": {
             "type": "string",

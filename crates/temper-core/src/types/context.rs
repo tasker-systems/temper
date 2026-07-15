@@ -114,6 +114,32 @@ pub struct ReassignContextRequest {
     pub to_team_id: Uuid,
 }
 
+/// A team the context is shared to (read-reach) at transfer time — reach the new owner inherits.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InheritedShare {
+    pub team_id: Uuid,
+    /// Decorated `+team-slug` ref.
+    pub team_ref: String,
+}
+
+/// An explicit context read-grant that survives the ownership flip — inherited residual reach.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InheritedReadGrant {
+    /// `kb_profiles` or `kb_teams`.
+    pub principal_table: String,
+    pub principal_id: Uuid,
+    /// Decorated ref: `@handle` for a profile, `+slug` for a team.
+    pub principal_ref: String,
+}
+
 /// Result of a context ownership transfer. `reassigned` is `false` when the context was
 /// already owned by the target team (idempotent no-op).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -127,4 +153,11 @@ pub struct ReassignContextOutcome {
     pub owner_ref: String,
     /// `true` when this call transferred ownership; `false` when it was already team-owned.
     pub reassigned: bool,
+    /// Read-reach the new owner inherits: teams this context was shared to (kb_team_contexts).
+    /// Surfaced, not swept — the new owner prunes deliberately.
+    #[serde(default)]
+    pub inherited_shares: Vec<InheritedShare>,
+    /// Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).
+    #[serde(default)]
+    pub inherited_read_grants: Vec<InheritedReadGrant>,
 }

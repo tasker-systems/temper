@@ -2379,6 +2379,22 @@ export interface components {
          * @enum {string}
          */
         IngestState: "in_progress" | "complete";
+        /** @description An explicit context read-grant that survives the ownership flip — inherited residual reach. */
+        InheritedReadGrant: {
+            /** Format: uuid */
+            principal_id: string;
+            /** @description Decorated ref: `@handle` for a profile, `+slug` for a team. */
+            principal_ref: string;
+            /** @description `kb_profiles` or `kb_teams`. */
+            principal_table: string;
+        };
+        /** @description A team the context is shared to (read-reach) at transfer time — reach the new owner inherits. */
+        InheritedShare: {
+            /** Format: uuid */
+            team_id: string;
+            /** @description Decorated `+team-slug` ref. */
+            team_ref: string;
+        };
         /**
          * @description Invitation status — lifecycle of a team invitation.
          *
@@ -2948,6 +2964,13 @@ export interface components {
         ReassignContextOutcome: {
             /** Format: uuid */
             context_id: string;
+            /** @description Read-reach the new owner inherits: explicit context read-grants (kb_access_grants). */
+            inherited_read_grants?: components["schemas"]["InheritedReadGrant"][];
+            /**
+             * @description Read-reach the new owner inherits: teams this context was shared to (kb_team_contexts).
+             *     Surfaced, not swept — the new owner prunes deliberately.
+             */
+            inherited_shares?: components["schemas"]["InheritedShare"][];
             /** @description The new `+team-slug` decorated owner ref. */
             owner_ref: string;
             /** @description `true` when this call transferred ownership; `false` when it was already team-owned. */
