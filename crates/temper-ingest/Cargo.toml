@@ -23,6 +23,10 @@ similar = "2"
 temper-core = { path = "../temper-core" }
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }
+# Per-phase cold-load timing on the embed path (issue #451). Events are no-ops without a
+# subscriber (the CLI installs none), so this stays silent there and surfaces as JSON only on
+# the server, whose subscriber is configured in the Vercel function entrypoints.
+tracing = "0.1"
 
 # Performance-core detection (`cpu.rs`) reads `hw.perflevel0.logicalcpu`. macOS-only:
 # no other platform has a measured big-little story yet, so no other platform needs libc.
@@ -46,6 +50,9 @@ serde_json = "1"
 temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
+# Cold-load probe (examples/coldload_probe.rs) installs a subscriber so the per-phase embed
+# markers print; only the example needs it, hence dev-dep.
+tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
 
 # Cross-model embedding benchmark: per-chunk cost, peak RSS, and the vector-equivalence gate for
 # the quantized-model rollout. Needs the embedding stack, so it must not be compiled into a build
@@ -68,3 +75,11 @@ test-embed = ["embed"]
 [[example]]
 name = "classify_chunks"
 required-features = ["embed"]
+
+# Cold-load probe for issue #451: reproduces the `/api/embed/warm` cold path (model load + first
+# inference) so the per-phase timing can be read under a throttled CPU (see bench/). Built as the
+# `embed-download` variant because the local bed runs arm64, where the bundled x86_64 runtime
+# cannot load — the session-build/inference code it exercises is identical to the server's.
+[[example]]
+name = "coldload_probe"
+required-features = ["embed-download"]

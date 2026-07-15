@@ -42,8 +42,9 @@
 //!
 //! Pipeline: tokenize -> build tensors -> inference -> mean pool -> normalize
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use ndarray::{Array2, ArrayView3};
 use ort::session::Session;
@@ -393,13 +394,60 @@ struct Model {
 
 static MODEL: OnceLock<std::result::Result<Model, String>> = OnceLock::new();
 
+/// One-shot guard so the first-inference cold-load timing (issue #451) logs exactly once per
+/// process — the phase-entry marker that pinpoints a hang in `session.run` rather than the build.
+static FIRST_INFERENCE_LOGGED: AtomicBool = AtomicBool::new(false);
+
 fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
+        // Per-phase cold-load timing (issue #451). The cold model load is where a throttled
+        // serverless instance can hang for the whole `maxDuration`, and the 504 kill masks which
+        // phase. Logging ENTRY *before* each phase — not just completion — means a function killed
+        // mid-phase leaves the guilty phase as the last line in the logs. `tracing::info!` through
+        // the JSON subscriber flushes per line (Rust wraps stdout in a `LineWriter`), so the entry
+        // marker survives a subsequent hang; without a subscriber (the CLI) these are no-ops.
+        let load_start = Instant::now();
+
+        tracing::info!(
+            phase = "ort_init",
+            "embed cold-load: entering ORT runtime init"
+        );
+        let t = Instant::now();
         init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
+        tracing::info!(
+            phase = "ort_init",
+            elapsed_ms = t.elapsed().as_millis() as u64,
+            "embed cold-load: ORT runtime init done"
+        );
 
+        tracing::info!(
+            phase = "build_session",
+            "embed cold-load: entering ORT session build"
+        );
+        let t = Instant::now();
         let session = build_session()?;
+        tracing::info!(
+            phase = "build_session",
+            elapsed_ms = t.elapsed().as_millis() as u64,
+            "embed cold-load: ORT session build done"
+        );
 
+        tracing::info!(
+            phase = "tokenizer",
+            "embed cold-load: entering tokenizer load"
+        );
+        let t = Instant::now();
         let tokenizer = load_tokenizer()?;
+        tracing::info!(
+            phase = "tokenizer",
+            elapsed_ms = t.elapsed().as_millis() as u64,
+            "embed cold-load: tokenizer load done"
+        );
+
+        tracing::info!(
+            total_ms = load_start.elapsed().as_millis() as u64,
+            "embed cold-load: model ready"
+        );
 
         Ok(Model {
             session: Mutex::new(session),
@@ -790,6 +838,19 @@ fn embed_batch(model: &Model, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         .lock()
         .map_err(|e| EmbedError::Embedding(format!("session lock: {e}")))?;
 
+    // One-time first-inference timing (issue #451). The session build can complete and then the
+    // *first* `session.run` be the thing that hangs on a cold instance; without this marker that
+    // case looks like "tokenizer done" then silence. Logged once per process (the run mutex
+    // serializes, so exactly one call wins the swap); later runs are unmarked to keep the drain
+    // quiet.
+    let first_run = !FIRST_INFERENCE_LOGGED.swap(true, Ordering::Relaxed);
+    if first_run {
+        tracing::info!(
+            batch = texts.len(),
+            "embed cold-load: entering first inference"
+        );
+    }
+    let run_start = Instant::now();
     let outputs = session
         .run(ort::inputs![
             input_ids_ref,
@@ -797,6 +858,13 @@ fn embed_batch(model: &Model, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
             token_type_ids_ref
         ])
         .map_err(|e| EmbedError::Embedding(format!("ort run: {e}")))?;
+    if first_run {
+        tracing::info!(
+            batch = texts.len(),
+            elapsed_ms = run_start.elapsed().as_millis() as u64,
+            "embed cold-load: first inference done"
+        );
+    }
 
     let hidden = outputs[0]
         .try_extract_array::<f32>()
