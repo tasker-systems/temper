@@ -816,6 +816,14 @@ pub enum ContextAction {
         /// Team to unshare: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
+    /// Transfer a context's ownership to a team — the single path to shared authorship
+    /// (read-sharing stays `share`; writing into a context requires team ownership).
+    Transfer {
+        /// Context ref: a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`.
+        context: String,
+        /// Target team: a team slug (optionally `+`-prefixed) or a team UUID.
+        team: String,
+    },
     /// Orient in a context by its REGIONS: the distilled, region-level view of everything homed
     /// there, most salient first. The fastest way to see what a context is about without reading
     /// any single resource in it.

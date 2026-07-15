@@ -123,6 +123,8 @@ lib/temper/generated/models/provenance_source_one_of1.rb
 lib/temper/generated/models/provenance_source_one_of2.rb
 lib/temper/generated/models/public_system_settings.rb
 lib/temper/generated/models/reassign_ack.rb
+lib/temper/generated/models/reassign_context_outcome.rb
+lib/temper/generated/models/reassign_context_request.rb
 lib/temper/generated/models/reassign_resource_request.rb
 lib/temper/generated/models/reconcile_cogmap_request.rb
 lib/temper/generated/models/reconcile_edge.rb

@@ -186,6 +186,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::RelationshipFolded
             | EventKind::BlockProvenanceAnnotated
             | EventKind::ResourceReassigned
+            | EventKind::ContextReassigned
             | EventKind::DelegatedLaunch
             | EventKind::InvocationClosed => None,
         }
@@ -494,6 +495,13 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
             EventKind::ResourceReassigned => {
                 sqlx::query("SELECT _project_resource_reassigned($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            EventKind::ContextReassigned => {
+                sqlx::query("SELECT _project_context_reassigned($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)

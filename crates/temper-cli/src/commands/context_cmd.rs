@@ -5,7 +5,7 @@ use crate::config;
 use crate::error::{Result, TemperError};
 use crate::output;
 use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::context::ShareContextRequest;
+use temper_core::types::context::{ReassignContextRequest, ShareContextRequest};
 
 /// Parse the `--owner` CLI value into a typed owner descriptor.
 ///
@@ -231,6 +231,30 @@ pub async fn share_remote(
         .share_team(context_id, &ShareContextRequest { team_id })
         .await
         .map_err(|e| map_share_err("share", e))?;
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `temper context transfer <context_ref> <team>` — transfer a context's ownership to a team.
+///
+/// Binding a context to a team is the single path to shared authorship (read-sharing stays
+/// `share`; writing into a context requires team ownership). Uses the `@me`-accepting read
+/// resolver, because the headline flow is `@me/my-project → team` — the `share`/`unshare`
+/// resolver deliberately refuses `@me`.
+pub async fn transfer_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    team: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let to_team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    let outcome = client
+        .contexts()
+        .reassign(context_id, &ReassignContextRequest { to_team_id })
+        .await
+        .map_err(|e| map_share_err("transfer", e))?;
     let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
     Ok(())

@@ -130,6 +130,18 @@ jobs:
       TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
 
     steps:
+      - name: Free disk space
+        # This job builds the ENTIRE DB-backed workspace + every e2e/integration test binary in one
+        # `cargo nextest` command, with `-C debuginfo=2 -C split-debuginfo=unpacked`. The resulting
+        # target/ can exceed the ubuntu runner's ~14 GB free disk and fail at link time with
+        # "No space left on device" (an `ld` Bus error). Reclaim ~25 GB of preinstalled toolchains this
+        # job never touches (Android SDK, .NET, GHC/Haskell, CodeQL) plus the preloaded Docker images
+        # before the build. Dependency-free on purpose — no third-party action to pin.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Checkout code
         uses: actions/checkout@v6
         with:

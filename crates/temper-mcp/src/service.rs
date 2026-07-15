@@ -645,6 +645,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Transfer a context's ownership to a team — the single path to shared authorship. Read-sharing (share_context) lets a team read a context; owning it lets the team's members write into it. Authorized for the context's administrator who also manages the target team (owner/maintainer), or an instance admin. Idempotent — safe when the context is already owned by the target team. Pass the context and target team by UUID."
+    )]
+    async fn transfer_context(
+        &self,
+        Parameters(input): Parameters<tools::contexts::TransferContextInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::transfer_context(self, input).await
+    }
+
+    #[tool(
         description = "List all available document types with schema summaries. Returns id, name, has_schema, and required_fields for each type. Use describe_doc_type for full schema details."
     )]
     async fn list_doc_types(

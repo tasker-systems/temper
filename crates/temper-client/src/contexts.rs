@@ -8,8 +8,8 @@ use crate::http::HttpClient;
 use temper_core::context_ref::ContextOwnerRef;
 use temper_core::types::cognitive_maps::{CogmapRegionMetricsRow, CogmapRegionRow};
 use temper_core::types::context::{
-    ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
-    ShareContextRequest, UnshareContextOutcome,
+    ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
+    ReassignContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
 
@@ -88,6 +88,20 @@ impl<'a> ContextClient<'a> {
         let req = self.http.delete(&path);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/contexts/{id}/reassign — transfer the context's ownership to a team.
+    pub async fn reassign(
+        &self,
+        context_id: Uuid,
+        body: &ReassignContextRequest,
+    ) -> Result<ReassignContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/reassign");
+        let req = self.http.post(&path).json(body);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 }

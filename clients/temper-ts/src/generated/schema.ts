@@ -332,6 +332,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contexts/{id}/reassign": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reassign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contexts/{id}/region-metrics": {
         parameters: {
             query?: never;
@@ -2893,6 +2912,31 @@ export interface components {
             /** Format: uuid */
             to_profile_id: string;
         };
+        /**
+         * @description Result of a context ownership transfer. `reassigned` is `false` when the context was
+         *     already owned by the target team (idempotent no-op).
+         */
+        ReassignContextOutcome: {
+            /** Format: uuid */
+            context_id: string;
+            /** @description The new `+team-slug` decorated owner ref. */
+            owner_ref: string;
+            /** @description `true` when this call transferred ownership; `false` when it was already team-owned. */
+            reassigned: boolean;
+        };
+        /**
+         * @description Request body for `POST /api/contexts/{id}/reassign` — transfer a context's ownership to
+         *     a team. Binding a context to a team is the single path to shared authorship (read-only
+         *     sharing stays `share_context`; writing into a context requires team ownership).
+         */
+        ReassignContextRequest: {
+            /**
+             * Format: uuid
+             * @description The team that will own the context. Members with an authoring role can then write
+             *     into it via the container-write cascade.
+             */
+            to_team_id: string;
+        };
         /** @description API request to reassign a single resource's owner (resource id is in the path). */
         ReassignResourceRequest: {
             /** Format: uuid */
@@ -4611,6 +4655,57 @@ export interface operations {
             };
             /** @description Context not found (uniform — no existence oracle) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reassign: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReassignContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Context ownership transferred (or idempotent no-op) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReassignContextOutcome"];
+                };
+            };
+            /** @description Caller may not transfer this context to this team */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context or team not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Target team already owns a context with this slug */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT owner_table AS \"t!\", owner_id AS \"i!\" FROM kb_contexts WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "t!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "i!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "dd59699c0a9baf558edcc53f0a7bb3212b7966e6517bfcac048085c438267ba3"
+}

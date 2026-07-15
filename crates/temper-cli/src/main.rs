@@ -435,6 +435,19 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            ContextAction::Transfer { context, team } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::transfer_remote(
+                            client,
+                            &context,
+                            &team,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             ContextAction::Shape { context, lens } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {

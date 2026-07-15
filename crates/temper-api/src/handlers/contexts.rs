@@ -13,8 +13,8 @@ use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::context_service::{
-    self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
-    ShareContextRequest, UnshareContextOutcome,
+    self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
+    ReassignContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::state::AppState;
 use temper_workflow::operations::{Backend, MaterializeOnThreshold};
@@ -140,6 +140,36 @@ pub async fn unshare_team(
         ProfileId::from(auth.0.profile.id),
         context_id,
         team_id,
+    )
+    .await?;
+    Ok(Json(outcome))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/contexts/{id}/reassign",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    request_body = ReassignContextRequest,
+    responses(
+        (status = 200, description = "Context ownership transferred (or idempotent no-op)", body = ReassignContextOutcome),
+        (status = 403, description = "Caller may not transfer this context to this team"),
+        (status = 404, description = "Context or team not found"),
+        (status = 409, description = "Target team already owns a context with this slug"),
+    )
+)]
+pub async fn reassign(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+    Json(body): Json<ReassignContextRequest>,
+) -> ApiResult<Json<ReassignContextOutcome>> {
+    let outcome = context_service::reassign(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        context_id,
+        body.to_team_id,
     )
     .await?;
     Ok(Json(outcome))

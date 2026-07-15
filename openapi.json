@@ -1309,6 +1309,77 @@
         ]
       }
     },
+    "/api/contexts/{id}/reassign": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Contexts"
+        ],
+        "operationId": "reassign",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReassignContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Context ownership transferred (or idempotent no-op)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReassignContextOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not transfer this context to this team"
+          },
+          "404": {
+            "description": "Context or team not found"
+          },
+          "409": {
+            "description": "Target team already owns a context with this slug"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/contexts/{id}/region-metrics": {
       "parameters": [
         {
@@ -8740,6 +8811,43 @@
           "to_profile_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "ReassignContextOutcome": {
+        "type": "object",
+        "description": "Result of a context ownership transfer. `reassigned` is `false` when the context was\nalready owned by the target team (idempotent no-op).",
+        "required": [
+          "context_id",
+          "owner_ref",
+          "reassigned"
+        ],
+        "properties": {
+          "context_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_ref": {
+            "type": "string",
+            "description": "The new `+team-slug` decorated owner ref."
+          },
+          "reassigned": {
+            "type": "boolean",
+            "description": "`true` when this call transferred ownership; `false` when it was already team-owned."
+          }
+        }
+      },
+      "ReassignContextRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/contexts/{id}/reassign` — transfer a context's ownership to\na team. Binding a context to a team is the single path to shared authorship (read-only\nsharing stays `share_context`; writing into a context requires team ownership).",
+        "required": [
+          "to_team_id"
+        ],
+        "properties": {
+          "to_team_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The team that will own the context. Members with an authoring role can then write\ninto it via the container-write cascade."
           }
         }
       },

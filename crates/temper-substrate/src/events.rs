@@ -42,6 +42,7 @@ pub enum EventKind {
     ResourceDeleted,
     ResourceRehomed,
     ResourceReassigned,
+    ContextReassigned,
     RelationshipAsserted,
     RelationshipRetyped,
     RelationshipReweighted,
@@ -84,6 +85,7 @@ impl EventKind {
             EventKind::ResourceDeleted => "resource_deleted",
             EventKind::ResourceRehomed => "resource_rehomed",
             EventKind::ResourceReassigned => "resource_reassigned",
+            EventKind::ContextReassigned => "context_reassigned",
             EventKind::RelationshipAsserted => "relationship_asserted",
             EventKind::RelationshipRetyped => "relationship_retyped",
             EventKind::RelationshipReweighted => "relationship_reweighted",
@@ -117,6 +119,7 @@ impl EventKind {
             "resource_deleted" => EventKind::ResourceDeleted,
             "resource_rehomed" => EventKind::ResourceRehomed,
             "resource_reassigned" => EventKind::ResourceReassigned,
+            "context_reassigned" => EventKind::ContextReassigned,
             "relationship_asserted" => EventKind::RelationshipAsserted,
             "relationship_retyped" => EventKind::RelationshipRetyped,
             "relationship_reweighted" => EventKind::RelationshipReweighted,
@@ -340,6 +343,14 @@ pub enum SeedAction<'a> {
         to_profile: ProfileId,
         emitter: EntityId,
     },
+    ContextReassign {
+        context: ContextId,
+        from_owner_table: &'a str,
+        from_owner_id: Uuid,
+        to_owner_table: &'a str,
+        to_owner_id: Uuid,
+        emitter: EntityId,
+    },
     RelationshipRetype {
         edge: EdgeId,
         kind: EdgeKind,
@@ -390,6 +401,7 @@ impl SeedAction<'_> {
             SeedAction::ResourceUpdate { .. } => EventKind::ResourceUpdated,
             SeedAction::ResourceRehome { .. } => EventKind::ResourceRehomed,
             SeedAction::ResourceReassign { .. } => EventKind::ResourceReassigned,
+            SeedAction::ContextReassign { .. } => EventKind::ContextReassigned,
             SeedAction::RelationshipRetype { .. } => EventKind::RelationshipRetyped,
             SeedAction::RelationshipReweight { .. } => EventKind::RelationshipReweighted,
             SeedAction::InvocationOpen { .. } => EventKind::DelegatedLaunch,
@@ -407,6 +419,7 @@ pub enum Fired {
         telos_resource: ResourceId,
     },
     Resource(ResourceId),
+    Context(ContextId),
     Relationship(EdgeId),
     Facet(PropertyId),
     Lens(LensId),
@@ -1068,6 +1081,35 @@ pub async fn fire_with(
             .await?
             .context("resource_reassign returned null")?;
             Ok(Fired::Resource(ResourceId::from(id)))
+        }
+
+        SeedAction::ContextReassign {
+            context,
+            from_owner_table,
+            from_owner_id,
+            to_owner_table,
+            to_owner_id,
+            emitter,
+        } => {
+            let payload = payloads::ContextReassigned {
+                context_id: context,
+                from_owner_table: from_owner_table.to_string(),
+                from_owner_id,
+                to_owner_table: to_owner_table.to_string(),
+                to_owner_id,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT context_reassign($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("context_reassign returned null")?;
+            Ok(Fired::Context(ContextId::from(id)))
         }
 
         SeedAction::RelationshipRetype {
