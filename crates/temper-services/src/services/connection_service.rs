@@ -200,6 +200,15 @@ pub async fn provision(
 ///
 /// The profile, entity, and home context are deliberately left in place — events already
 /// attributed to this emitter must keep resolving, and `kb_events` is append-only.
+///
+/// **Revocation is a temper-side act; it does NOT reach the provider.** Setting `revoked_at`
+/// stops temper from minting *new* tokens for this connection, but any token *already* minted
+/// stays valid at the remote until it expires — the broker's revoke, where it exists at all, is
+/// best-effort (Vercel Connect's own CLI warns that provider-side token revocation may be
+/// unsupported). So this is not "the remote can no longer be reached"; it is "temper will not mint
+/// for it again." Callers surfacing revocation must say so rather than imply an instantaneous cutoff
+/// (invariant 6: absence of a capability — here, immediate remote revocation — must never be
+/// silently assumed present).
 pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Connection> {
     // Auth before writes, keyed on the existing row's owning team.
     let existing = get(pool, id).await?;

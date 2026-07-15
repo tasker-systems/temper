@@ -212,5 +212,10 @@ pub async fn revoke_remote(
         "The connection's profile, emitter entity, and home context were NOT removed — events \
          already attributed to this emitter must keep resolving.",
     );
+    crate::output::warning(
+        "Revocation stops temper from minting NEW tokens for this connection. It does NOT reach \
+         the provider — any token already minted stays valid at the remote until it expires. If a \
+         credential is believed compromised, rotate it at the provider too.",
+    );
     Ok(())
 }
