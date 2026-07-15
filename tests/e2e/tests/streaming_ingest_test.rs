@@ -148,11 +148,13 @@ fn generate_large_markdown(target_bytes: usize, last_phrase: &str) -> (String, u
     (body, section + 1)
 }
 
-/// A >1 MiB body drives the CLI's segmented (multi-block) create path end to end: the CLI's
-/// `ingest_mode` threshold (`crates/temper-cli/src/actions/ingest.rs`) picks `Segmented` for a
-/// body this large, `run_segmented_create` streams it through `begin_segmented`/`append_block`/
-/// `finalize`, and this test verifies all three surfaces the segmented path is supposed to light
-/// up: the reconstructed body, the FTS index, and the event ledger.
+/// A body spanning several segment budgets drives the CLI's segmented (multi-block) create path end
+/// to end: the CLI's `ingest_mode` threshold (`crates/temper-cli/src/actions/ingest.rs`) picks
+/// `Segmented` for a body over `SEGMENT_BUDGET_BYTES`, `run_segmented_create` streams it through
+/// `begin_segmented`/`append_block`/`finalize`, and this test verifies all three surfaces the
+/// segmented path is supposed to light up: the reconstructed body, the FTS index, and the event
+/// ledger. Sized to the *minimum* that fires >1 `block_created` (see the body-size note below) — big
+/// enough to be genuinely multi-segment, small enough not to sit at nextest's 300 s cap.
 #[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn segmented_create_roundtrips_large_body(pool: PgPool) {
@@ -173,11 +175,22 @@ async fn segmented_create_roundtrips_large_body(pool: PgPool) {
     // avoids any ambiguity in how Postgres FTS tokenizes the query.
     let last_phrase =
         "an extraordinarily rare zzyzx platypus wanders through the far edge of the archive";
-    let (body, num_sections) = generate_large_markdown(1_200_000, last_phrase);
+    // Sized to span >=3 segment budgets (so segments 1..N fire >1 `block_created` — the assertion
+    // below), NOT to be "large" for its own sake. The old 1.2 MB / ~939-chunk body existed to stress
+    // throughput, but throughput here is a DEBUG-BUILD ARTIFACT: this harness embeds ~single-core
+    // (~4 min for that body) while the release CLI is multi-core (~55 s) — so the size was testing the
+    // harness's unrepresentative slowness, and at ~939 chunks it sat right at nextest's 300 s cap and
+    // tipped over on a loaded CI runner. ~640 KiB still exercises the exact multi-segment path
+    // (begin → several appends → finalize → roundtrip) with comfortable headroom. Real embed
+    // throughput is the perf sub-thread of the parent task, not this test's job.
+    let target = 3 * temper_ingest::stream::SEGMENT_BUDGET_BYTES - 128 * 1024; // 640 KiB ⇒ 3 segments
+    let (body, num_sections) = generate_large_markdown(target, last_phrase);
     assert!(
-        body.len() > 1_048_576,
-        "test body must exceed 1 MiB; got {} bytes",
-        body.len()
+        // >2 budgets ⇒ >=3 segments ⇒ >1 block_created (segment 0 rides `resource_created`).
+        body.len() > 2 * temper_ingest::stream::SEGMENT_BUDGET_BYTES,
+        "test body must span >2 segment budgets (got {} bytes, budget {})",
+        body.len(),
+        temper_ingest::stream::SEGMENT_BUDGET_BYTES
     );
 
     let big_path = app.vault_dir.path().join("big.md");
