@@ -281,6 +281,17 @@ pub struct ResourceCreated {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_type: Option<String>,
     pub blocks: Vec<BlockManifest>,
+    /// This create OPENS a segmented ingest — block 0 has landed but the rest of the body has not, so
+    /// `_project_resource_created` births the resource `ingest_state = 'in_progress'` and only
+    /// `resource_finalize` may flip it to `complete`. `false` (the default) for every ordinary create,
+    /// which is atomic and is therefore born complete.
+    ///
+    /// A plain flag, never content — it is safe in the ledger (the CAS rule bars only chunk prose and
+    /// vectors). `skip_serializing_if` keeps an ordinary create's payload BYTE-IDENTICAL to today's, so
+    /// the create-dedup precheck is untouched; and its absence is what makes an old app's payload read
+    /// as `complete` on a new projector (`coalesce(…, false)`). Additive in both skew directions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub segmented: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

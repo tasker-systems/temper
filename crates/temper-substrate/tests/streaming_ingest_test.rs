@@ -103,6 +103,7 @@ mod streaming_test_support {
                 blocks: &blocks,
                 doc_type: Some("concept"),
                 emitter: EntityId::from(emitter),
+                segmented: false,
             },
         )
         .await

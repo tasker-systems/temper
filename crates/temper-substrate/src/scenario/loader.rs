@@ -162,6 +162,8 @@ async fn load_resources(
                 blocks: &blocks,
                 doc_type: r.doc_type.as_deref(),
                 emitter,
+                // A scenario seed is a BIRTH SPEC, not an upload — never segmented.
+                segmented: false,
             },
         )
         .await?

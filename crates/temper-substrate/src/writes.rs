@@ -117,6 +117,28 @@ pub struct CreateParams<'a> {
     pub sources: Vec<Incorporation>,
 }
 
+/// How a create is initiated — the two orthogonal switches [`create_resource_with_mode`] branches on.
+///
+/// Deliberately **not** fields on [`CreateParams`]: neither describes the resource being created, they
+/// describe how *this call* was initiated. (`CreateParams` also has 36 construction sites; these have
+/// one apiece.)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CreateMode {
+    /// Embed **off-request** (issue #299): when the caller supplies no precomputed `chunks`, the body
+    /// block is chunked but NOT embedded — its chunks land with a NULL vector, so the resource is fully
+    /// FTS-searchable immediately and its embeddings are backfilled later (see
+    /// [`crate::embed::embed_resource_chunks`]). Caller-supplied `chunks` (bring-your-own vectors) are
+    /// honored verbatim either way — there is nothing to defer.
+    pub defer: bool,
+    /// This create **opens a segmented ingest**: block 0 has landed, the rest of the body has not. The
+    /// resource is born `ingest_state = 'in_progress'` — excluded from list and search, still readable
+    /// by `show` — and only `resource_finalize` may flip it to `complete`.
+    ///
+    /// `false` for every ordinary create: a one-shot create is atomic, so there is no interruption
+    /// window and nothing to finalize.
+    pub segmented: bool,
+}
+
 pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<ResourceId> {
     create_resource_with(pool, p, EventContext::default()).await
 }
@@ -130,34 +152,44 @@ pub async fn create_resource_with(
     p: CreateParams<'_>,
     ctx: EventContext,
 ) -> Result<ResourceId> {
-    create_resource_impl(pool, p, ctx, false).await
+    create_resource_with_mode(pool, p, ctx, CreateMode::default()).await
 }
 
-/// [`create_resource_with`] with embedding **deferred** (issue #299): when the caller supplies no
-/// precomputed `chunks`, the body block is chunked but NOT embedded — its chunks land with a NULL
-/// vector, so the resource is fully FTS-searchable immediately and its embeddings are backfilled
-/// off-request (see [`crate::embed::embed_resource_chunks`]). Caller-supplied `chunks` (bring-your-own
-/// vectors) are still honored verbatim — there is nothing to defer. Persist-side twin of the queued
-/// embed job; the caller enqueues the backfill after this returns the new id.
+/// [`create_resource_with`] with embedding **deferred** — see [`CreateMode::defer`].
 pub async fn create_resource_deferred_with(
     pool: &PgPool,
     p: CreateParams<'_>,
     ctx: EventContext,
 ) -> Result<ResourceId> {
-    create_resource_impl(pool, p, ctx, true).await
+    let mode = CreateMode {
+        defer: true,
+        ..CreateMode::default()
+    };
+    create_resource_with_mode(pool, p, ctx, mode).await
 }
 
-/// Shared create body for [`create_resource_with`] (inline embed) and
-/// [`create_resource_deferred_with`] (deferred embed). `defer` only affects the no-precomputed-chunks
-/// case: `false` embeds inline (`prepare_block`), `true` chunks without embedding
-/// (`prepare_block_deferred`). Everything else — sources, event fan-out, properties — is identical.
+/// [`create_resource_with`] under an explicit [`CreateMode`] — the entry point the **segmented begin**
+/// uses (`db_backend::begin_segmented_ingest`), since it is the only caller that needs a create born
+/// `in_progress`. The three fns above are the ordinary-create conveniences over this one.
+pub async fn create_resource_with_mode(
+    pool: &PgPool,
+    p: CreateParams<'_>,
+    ctx: EventContext,
+    mode: CreateMode,
+) -> Result<ResourceId> {
+    create_resource_impl(pool, p, ctx, mode).await
+}
+
+/// Shared create body. `mode.defer` only affects the no-precomputed-chunks case: `false` embeds inline
+/// (`prepare_block`), `true` chunks without embedding (`prepare_block_deferred`). `mode.segmented` only
+/// rides the event payload. Everything else — sources, event fan-out, properties — is identical.
 async fn create_resource_impl(
     pool: &PgPool,
     p: CreateParams<'_>,
     ctx: EventContext,
-    defer: bool,
+    mode: CreateMode,
 ) -> Result<ResourceId> {
-    let mut block = match (p.chunks, defer) {
+    let mut block = match (p.chunks, mode.defer) {
         (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
         (None, false) => prepare_block(0, None, p.body)?,
         (None, true) => crate::content::prepare_block_deferred(0, None, p.body),
@@ -179,6 +211,7 @@ async fn create_resource_impl(
             blocks: &blocks,
             doc_type: Some(p.doc_type),
             emitter: p.emitter,
+            segmented: mode.segmented,
         },
         ctx,
     )
@@ -611,6 +644,8 @@ pub async fn create_kernel_resource_in_tx(
             blocks: &blocks,
             doc_type: Some(p.doc_type),
             emitter: p.emitter,
+            // The kernel resource is created whole, in one act — never segmented.
+            segmented: false,
         },
         ctx,
     )

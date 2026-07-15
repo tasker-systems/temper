@@ -84,6 +84,7 @@ async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
             blocks: &blocks,
             doc_type: None,
             emitter: EntityId::from(loaded.emitter),
+            segmented: false,
         },
     )
     .await
