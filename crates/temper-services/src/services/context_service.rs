@@ -791,13 +791,25 @@ mod tests {
         let outcome = reassign(&pool, alice, ctx, acme).await.expect("transfer");
         assert!(outcome.reassigned);
         assert_eq!(outcome.owner_ref, "+acme");
-        assert_eq!(owner_of_context(&pool, ctx).await, ("kb_teams".to_string(), acme));
+        assert_eq!(
+            owner_of_context(&pool, ctx).await,
+            ("kb_teams".to_string(), acme)
+        );
 
         // After transfer: authoring-role members can author; watcher cannot; non-member cannot.
         assert!(can_modify(&pool, bob, r).await, "member can author");
-        assert!(!can_modify(&pool, wanda, r).await, "watcher stays read-only");
-        assert!(!can_modify(&pool, stranger, r).await, "non-member unaffected");
-        assert!(can_modify(&pool, alice, r).await, "transferrer retains write");
+        assert!(
+            !can_modify(&pool, wanda, r).await,
+            "watcher stays read-only"
+        );
+        assert!(
+            !can_modify(&pool, stranger, r).await,
+            "non-member unaffected"
+        );
+        assert!(
+            can_modify(&pool, alice, r).await,
+            "transferrer retains write"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -840,9 +852,15 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn gating_team_target_forbidden(pool: PgPool) {
-        // Even a system admin cannot transfer INTO the gating/root team.
-        let (admin, _member, gating_team, context_id) = seed_admin_team_context(&pool).await;
-        let err = reassign(&pool, admin, *context_id, gating_team)
+        // The gating-team refusal applies to non-admins — a system admin bypasses `can_share`
+        // entirely (mirrors context_share_e2e's `share_into_gating_team_denied_for_non_admin`).
+        // So use a non-admin who owns the context AND even maintains the gating team.
+        let (_admin, _member, gating_team, _ctx) = seed_admin_team_context(&pool).await;
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let alice_ctx = mk_personal_context(&pool, "proj", alice).await;
+        add_member(&pool, gating_team, alice, "maintainer").await;
+
+        let err = reassign(&pool, alice, alice_ctx, gating_team)
             .await
             .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
@@ -874,9 +892,14 @@ mod tests {
         let acme = mk_team(&pool, "acme").await;
         add_member(&pool, acme, admin, "owner").await;
 
-        let outcome = reassign(&pool, admin, *context_id, acme).await.expect("admin transfer");
+        let outcome = reassign(&pool, admin, *context_id, acme)
+            .await
+            .expect("admin transfer");
         assert!(outcome.reassigned);
-        assert_eq!(owner_of_context(&pool, *context_id).await, ("kb_teams".to_string(), acme));
+        assert_eq!(
+            owner_of_context(&pool, *context_id).await,
+            ("kb_teams".to_string(), acme)
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
