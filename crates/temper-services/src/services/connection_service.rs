@@ -44,6 +44,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Connection> {
         r#"SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,
                   profile_id, emitter_entity_id, home_context_id, credential,
                   webhook_events, tool_manifest, reach_granularity, reach_covers,
+                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,
                   created, revoked_at, revoked_by_profile_id
              FROM kb_connections WHERE id = $1"#,
         id,
@@ -78,6 +79,7 @@ pub async fn list(
         r#"SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,
                   profile_id, emitter_entity_id, home_context_id, credential,
                   webhook_events, tool_manifest, reach_granularity, reach_covers,
+                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,
                   created, revoked_at, revoked_by_profile_id
              FROM kb_connections c
             WHERE ($1 OR c.revoked_at IS NULL)
@@ -536,6 +538,17 @@ mod tests {
         }
     }
 
+    /// A provision request that declares NO reach fidelity — neither granularity nor covers.
+    fn req_no_reach(name: &str, owner_team_id: Option<Uuid>) -> ProvisionConnectionRequest {
+        ProvisionConnectionRequest {
+            provider: "github".into(),
+            name: name.into(),
+            owner_team_id,
+            reach_granularity: None,
+            reach_covers: None,
+        }
+    }
+
     /// Seed a caller who is genuinely a system admin. `is_system_admin` IS ownership of the
     /// gating team, so being an admin means being seeded as one. The `temper-system` root team
     /// already exists in a migrated database (the L0 kernel migration creates it), so the team
@@ -682,6 +695,51 @@ mod tests {
         .expect("home context");
         assert_eq!(owner_table, "kb_profiles");
         assert_eq!(owner_id, c.profile_id);
+    }
+
+    /// The three excess-reach affirmation columns are born NULL (unaffirmed) and round-trip
+    /// through `get`. NO grant requiring affirmation has happened, so nothing is stamped — the
+    /// honest "never affirmed" state. Read-side only; enforcement is Beat 2.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn reach_affirmation_is_born_null_and_round_trips(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        assert!(c.reach_affirmed_by.is_none(), "unaffirmed by default");
+        assert!(c.reach_affirmed_at.is_none(), "unaffirmed by default");
+        assert!(c.reach_affirmation.is_none(), "unaffirmed by default");
+
+        // Round-trip through a fresh get — the columns exist and read back NULL.
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(reloaded.reach_affirmed_by.is_none());
+        assert!(reloaded.reach_affirmed_at.is_none());
+        assert!(reloaded.reach_affirmation.is_none());
+    }
+
+    /// `declares_reach()` is the honest, non-computing signal: TRUE when the connection was
+    /// provisioned WITH a declared reach fidelity, FALSE when it declares none. No enforcement —
+    /// this only reads whether an affirmation would be required (Beat 2 acts on it).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn declares_reach_reflects_the_declared_fidelity(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+
+        let with_reach = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision with reach");
+        assert!(
+            with_reach.declares_reach(),
+            "a connection provisioned with reach_granularity/reach_covers declares reach"
+        );
+
+        let no_reach = svc::provision(&pool, admin, &req_no_reach("Bare GitHub", None))
+            .await
+            .expect("provision without reach");
+        assert!(
+            !no_reach.declares_reach(),
+            "a connection provisioned with no reach fidelity declares no reach"
+        );
     }
 
     /// The direction-of-credential assertion, and the single easiest thing to get wrong here.

@@ -43,6 +43,17 @@ pub struct Connection {
     pub reach_granularity: Option<String>,
     /// What the credential can ACTUALLY see, in provider terms (`acme/temper`, `acme/*`).
     pub reach_covers: Option<String>,
+    /// Who affirmed that binding this connection's coarse remote reach to a team is intentional.
+    /// `None` = never affirmed (declares no reach, or no grant requiring affirmation yet). A
+    /// single-valued, last-writer audit stamp — not a per-grant ledger — and NOT a computed
+    /// `exceeds_temper_reach` bool: it records a declared intent, it does not resolve the
+    /// (incommensurable) remote-vs-temper scope asymmetry.
+    pub reach_affirmed_by: Option<Uuid>,
+    /// When the affirmation was made. `None` = never affirmed. Paired with `reach_affirmed_by`
+    /// and `reach_affirmation` as one last-writer stamp.
+    pub reach_affirmed_at: Option<DateTime<Utc>>,
+    /// The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed.
+    pub reach_affirmation: Option<String>,
     pub created: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub revoked_by_profile_id: Option<Uuid>,
@@ -67,6 +78,15 @@ impl Connection {
     /// Events land, facts accrue. Useful on its own.
     pub fn is_ledger_capable(&self) -> bool {
         !self.webhook_events.is_empty()
+    }
+
+    /// A connection "declares reach" when its declared remote-reach fidelity is populated (set at
+    /// provision, in the provider's terms). The honest, non-computing signal that its remote reach
+    /// is coarse enough to require an intentional affirmation before it is bound to a team — remote
+    /// and temper scope are incommensurable, so there is no `exceeds_temper_reach` bool to compute;
+    /// a populated declaration is all the signal an honest broker can give. Beat 2 enforces this.
+    pub fn declares_reach(&self) -> bool {
+        self.reach_granularity.is_some() || self.reach_covers.is_some()
     }
 
     /// Agents can read the remote back, so judgment becomes possible.
