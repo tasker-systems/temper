@@ -1223,6 +1223,24 @@ pub enum AdminConnectionAction {
     /// Revoke a connection. Its profile, emitter entity, and home context survive — events
     /// already attributed to the emitter must keep resolving.
     Revoke { id: String },
+    /// Grant a TEAM read-reach on this connection. Owning a connection is NOT reaching it — this
+    /// writes an access grant so the team's members inherit read on what the connection receives.
+    /// Reach is read-only; it confers no write.
+    GrantReach {
+        /// The connection id (a bare UUID, as printed by `connection list`/`show`).
+        id: String,
+        /// The team receiving read-reach: a slug, a decorated `slug-<uuid>` ref, or a team UUID.
+        #[arg(long)]
+        team: String,
+    },
+    /// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
+    RevokeReach {
+        /// The connection id (a bare UUID, as printed by `connection list`/`show`).
+        id: String,
+        /// The team whose read-reach is revoked: a slug, a decorated `slug-<uuid>` ref, or a UUID.
+        #[arg(long)]
+        team: String,
+    },
 }
 
 #[derive(Subcommand)]

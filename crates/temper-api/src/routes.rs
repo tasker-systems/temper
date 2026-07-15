@@ -218,6 +218,13 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/connections/{id}/tool-manifest",
             post(handlers::connections::set_tool_manifest),
         )
+        // A team's read-reach on the connection, its own endpoint (a `kb_access_grants` write, not
+        // a connection-row mutation). Owning ≠ reaching, so this is separate from provisioning.
+        // Grant and revoke share the path — POST adds, DELETE removes — both carrying the team.
+        .route(
+            "/api/connections/{id}/reach",
+            post(handlers::connections::grant_reach).delete(handlers::connections::revoke_reach),
+        )
 }
 
 /// Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.

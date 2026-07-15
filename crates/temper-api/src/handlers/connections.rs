@@ -14,8 +14,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::connection::{
-    AttachCredentialResponse, Connection, ConnectionCredential, ProvisionConnectionRequest,
-    SetToolManifestRequest, SetWebhookEventsRequest,
+    AttachCredentialResponse, Connection, ConnectionCredential, GrantConnectionReachRequest,
+    ProvisionConnectionRequest, SetToolManifestRequest, SetWebhookEventsRequest,
 };
 use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiResult;
@@ -122,5 +122,32 @@ pub async fn set_tool_manifest(
     let caller = ProfileId::from(auth.0.profile.id);
     Ok(Json(
         connection_service::set_tool_manifest(&state.pool, caller, id, &body.tools).await?,
+    ))
+}
+
+/// Grant a TEAM read-reach on this connection. Owning a connection is not reaching it — this writes
+/// a `kb_access_grants` row so the named team's members inherit read on what the connection receives.
+pub async fn grant_reach(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GrantConnectionReachRequest>,
+) -> ApiResult<Json<Connection>> {
+    let caller = ProfileId::from(auth.0.profile.id);
+    Ok(Json(
+        connection_service::grant_reach(&state.pool, caller, id, body.team).await?,
+    ))
+}
+
+/// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
+pub async fn revoke_reach(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GrantConnectionReachRequest>,
+) -> ApiResult<Json<Connection>> {
+    let caller = ProfileId::from(auth.0.profile.id);
+    Ok(Json(
+        connection_service::revoke_reach(&state.pool, caller, id, body.team).await?,
     ))
 }
