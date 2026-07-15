@@ -215,15 +215,22 @@ pub struct AppState {
     /// first email-fallback. Lazy (not boot-time) so there is no startup
     /// coupling to the IdP; shared across `AppState` clones via `Arc`.
     pub userinfo_endpoint: Arc<tokio::sync::OnceCell<String>>,
+    /// The credential broker — temper's outbound reach to remote systems. Resolved
+    /// from config: the Vercel Connect adapter when configured, else a
+    /// `NullBroker` that fails mints clearly. Surfaces dispatch through it (the
+    /// connection attach path mints once to verify).
+    pub broker: Arc<dyn crate::broker::CredentialBroker>,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, jwks_store: JwksKeyStore, config: ApiConfig) -> Self {
+        let broker = crate::broker::resolve_broker(config.vercel_connect.clone());
         Self {
             pool,
             jwks_store: Arc::new(jwks_store),
             config: Arc::new(config),
             userinfo_endpoint: Arc::new(tokio::sync::OnceCell::new()),
+            broker,
         }
     }
 }

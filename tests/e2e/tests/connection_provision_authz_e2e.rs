@@ -229,20 +229,33 @@ async fn the_credential_and_the_capability_tiers_move_independently_over_http(po
     )
     .await;
     assert_eq!(status, 200, "attach credential: {credentialed:?}");
-    assert_eq!(credentialed["credential"]["broker"], "vercel-connect");
-    assert_eq!(credentialed["credential"]["connector"], "conn_abc123");
+    // The response is now {connection, verification}: the connection plus what
+    // minting once at attach time observed.
+    let conn = &credentialed["connection"];
+    assert_eq!(conn["credential"]["broker"], "vercel-connect");
+    assert_eq!(conn["credential"]["connector"], "conn_abc123");
     assert!(
-        credentialed["credential"].get("installation").is_none(),
+        conn["credential"].get("installation").is_none(),
         "an absent installation must be omitted, not serialized as null"
+    );
+    // The test deployment configures no broker, so the credential is recorded but
+    // NOT verified — and it says so, out loud, rather than silently.
+    assert_eq!(
+        credentialed["verification"]["verified"], false,
+        "with no broker configured the mint cannot happen: {credentialed:?}"
+    );
+    assert!(
+        credentialed["verification"]["note"].is_string(),
+        "an unverified attach must carry a note saying why"
     );
     // A credential confers NEITHER tier.
     assert_eq!(
-        credentialed["webhook_events"].as_array().map(Vec::len),
+        conn["webhook_events"].as_array().map(Vec::len),
         Some(0),
         "a credential does not make a connection ledger-capable"
     );
     assert_eq!(
-        credentialed["tool_manifest"],
+        conn["tool_manifest"],
         json!({}),
         "a credential does not make a connection reach-capable"
     );

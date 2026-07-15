@@ -15,11 +15,13 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::connection::{
-    Connection, ConnectionCredential, ProvisionConnectionRequest,
+    AttachCredentialResponse, Connection, ConnectionCredential, CredentialVerification,
+    ProvisionConnectionRequest,
 };
 use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
+use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
 use crate::services::{machine_authz, profile_service};
 
@@ -232,18 +234,27 @@ async fn authorize_live(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult
     Ok(existing)
 }
 
-/// Attach the credential. This is what flips `needs_credential` off — and it flips off because
-/// the column became non-NULL, not because a status was written. There is no status to write.
+/// Attach the credential, minting once to prove the connector is live. This flips
+/// `needs_credential` off — and it flips off because the column became non-NULL,
+/// not because a status was written. There is no status to write.
 ///
-/// The stored value holds **no secret**: it names a broker and a connector the broker holds the
-/// secret for. Nothing dispatches on `broker` yet; the adapter that does is a later chunk, which
-/// is precisely why this one only records it.
+/// The stored value holds **no secret**: it names a broker and a connector the
+/// broker holds the secret for.
+///
+/// **The mint is the seam's real caller.** A connector that a broker *proves* bad
+/// (`Unauthorized`) fails the attach loudly here, rather than silently at S3.
+/// Every other outcome — consent pending, no broker configured, a transient
+/// failure — persists the credential with a visible `note` (invariant 6: an
+/// absent capability is stated, never silent). The mint response's `metadata` is
+/// surfaced as `observed_reach` next to the connection's *declared* reach, so a
+/// reviewer sees the gap; there is no computed `exceeds` bool (B3 acknowledges).
 pub async fn attach_credential(
     pool: &PgPool,
+    broker: &dyn CredentialBroker,
     caller: ProfileId,
     id: Uuid,
     credential: &ConnectionCredential,
-) -> ApiResult<Connection> {
+) -> ApiResult<AttachCredentialResponse> {
     authorize_live(pool, caller, id).await?;
 
     if credential.broker.trim().is_empty() {
@@ -252,6 +263,10 @@ pub async fn attach_credential(
     if credential.connector.trim().is_empty() {
         return Err(ApiError::BadRequest("connector must not be empty".into()));
     }
+
+    // Mint once to verify. Auth is already checked; this is a read against the
+    // broker, before any persistence. Only a proven-bad credential blocks.
+    let verification = verify_by_minting(broker, credential).await?;
 
     let value = serde_json::to_value(credential)
         .map_err(|e| ApiError::Internal(format!("failed to serialize credential: {e}")))?;
@@ -266,7 +281,62 @@ pub async fn attach_credential(
     .execute(pool)
     .await?;
 
-    get(pool, id).await
+    let connection = get(pool, id).await?;
+    Ok(AttachCredentialResponse {
+        connection,
+        verification,
+    })
+}
+
+/// Mint once and classify the outcome. `Err` here means the attach must be
+/// rejected (the credential was proven bad); `Ok(verification)` means persist,
+/// carrying what was (or could not be) observed.
+async fn verify_by_minting(
+    broker: &dyn CredentialBroker,
+    credential: &ConnectionCredential,
+) -> ApiResult<CredentialVerification> {
+    let outcome = broker
+        .mint(MintRequest {
+            credential,
+            subject: MintSubject::App,
+            scopes: vec![],
+        })
+        .await;
+
+    let verification = match outcome {
+        Ok(minted) => CredentialVerification {
+            verified: true,
+            observed_reach: Some(minted.reach.raw),
+            note: None,
+        },
+        // The ONE blocking case: the broker proved the credential bad.
+        Err(BrokerError::Unauthorized(msg)) => {
+            return Err(ApiError::BadRequest(format!(
+                "connector rejected the credential: {msg}"
+            )));
+        }
+        // Everything else records the credential but says, out loud, that it is
+        // not verified and why.
+        Err(BrokerError::NeedsConsent { authorize_url }) => CredentialVerification {
+            verified: false,
+            observed_reach: None,
+            note: Some(match authorize_url {
+                Some(url) => format!("consent pending — authorize at {url}"),
+                None => "consent pending — the connector needs an OAuth consent".into(),
+            }),
+        },
+        Err(BrokerError::NotConfigured) => CredentialVerification {
+            verified: false,
+            observed_reach: None,
+            note: Some("not verified — no credential broker is configured".into()),
+        },
+        Err(e) => CredentialVerification {
+            verified: false,
+            observed_reach: None,
+            note: Some(format!("could not verify — {e}")),
+        },
+    };
+    Ok(verification)
 }
 
 /// Register the remote event types. Non-empty ⇒ **ledger-capable**: events land, facts accrue.
@@ -748,6 +818,12 @@ mod tests {
         }
     }
 
+    /// A broker that mints successfully — the default for tests where the mint
+    /// outcome is not what is under test.
+    fn granting_broker() -> crate::broker::FakeBroker {
+        crate::broker::FakeBroker::granting(serde_json::json!({"repository_selection": "all"}))
+    }
+
     /// The round-trip is the whole point of typing the column: what we write must come back as the
     /// same struct, or the broker seam cannot dispatch on `broker`. Asserted through
     /// `credential_typed`, not by eyeballing the raw JSON.
@@ -759,9 +835,11 @@ mod tests {
             .expect("provision");
         assert!(c.needs_credential(), "born needs_credential");
 
-        let attached = svc::attach_credential(&pool, admin, c.id, &credential())
-            .await
-            .expect("attach");
+        let attached =
+            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential())
+                .await
+                .expect("attach")
+                .connection;
 
         // It flips off because the COLUMN is non-NULL — there is no status to set.
         assert!(!attached.needs_credential());
@@ -777,6 +855,97 @@ mod tests {
         // Attaching a credential confers NEITHER capability tier. They are separately provisioned.
         assert!(!attached.is_ledger_capable());
         assert!(!attached.is_reach_capable());
+    }
+
+    /// A broker that mints successfully records what it observed, and the observed
+    /// reach rides back next to the connection's declared reach.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_granting_broker_records_the_observed_reach(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        let out = svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential())
+            .await
+            .expect("attach");
+
+        assert!(out.verification.verified, "a successful mint is verified");
+        assert_eq!(
+            out.verification
+                .observed_reach
+                .as_ref()
+                .and_then(|r| r.get("repository_selection"))
+                .and_then(|v| v.as_str()),
+            Some("all"),
+            "the mint metadata is surfaced as observed_reach"
+        );
+        assert!(!out.connection.needs_credential());
+    }
+
+    /// A broker that *proves* the credential bad blocks the attach and writes
+    /// nothing — the seam failing loudly at attach, not silently at S3.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_rejecting_broker_blocks_the_attach_and_writes_nothing(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        let broker = crate::broker::FakeBroker::rejecting();
+        assert!(
+            svc::attach_credential(&pool, &broker, admin, c.id, &credential())
+                .await
+                .is_err(),
+            "a proven-bad credential must be rejected"
+        );
+
+        let reloaded = svc::get(&pool, c.id).await.expect("still there");
+        assert!(
+            reloaded.needs_credential(),
+            "a rejected attach must write nothing — the credential stays NULL"
+        );
+    }
+
+    /// A connector that needs consent, or a deployment with no broker, still
+    /// attaches — but says, out loud, that it is not verified (invariant 6).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_unverifiable_but_not_rejected_credential_attaches_with_a_note(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+
+        // needs-consent: persisted, flagged.
+        let c1 = svc::provision(&pool, admin, &req("Consent Pending", None))
+            .await
+            .expect("provision");
+        let consent = crate::broker::FakeBroker::needs_consent();
+        let out = svc::attach_credential(&pool, &consent, admin, c1.id, &credential())
+            .await
+            .expect("attach still succeeds");
+        assert!(
+            !out.connection.needs_credential(),
+            "the credential is recorded"
+        );
+        assert!(!out.verification.verified);
+        assert!(
+            out.verification.note.is_some(),
+            "an unverified attach must carry a note saying why"
+        );
+
+        // no broker configured: same shape.
+        let c2 = svc::provision(&pool, admin, &req("No Broker", None))
+            .await
+            .expect("provision");
+        let out2 = svc::attach_credential(
+            &pool,
+            &crate::broker::NullBroker,
+            admin,
+            c2.id,
+            &credential(),
+        )
+        .await
+        .expect("attach still succeeds without a broker");
+        assert!(!out2.verification.verified);
+        assert!(out2.verification.note.is_some());
     }
 
     /// Ledger-capable and reach-capable are independent. A connection may legitimately be
@@ -848,7 +1017,7 @@ mod tests {
         svc::revoke(&pool, c.id, admin).await.expect("revoke");
 
         assert!(matches!(
-            svc::attach_credential(&pool, admin, c.id, &credential()).await,
+            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential()).await,
             Err(ApiError::Conflict(_))
         ));
         assert!(matches!(
@@ -880,7 +1049,8 @@ mod tests {
             .expect("provision");
 
         assert!(matches!(
-            svc::attach_credential(&pool, maintainer, c.id, &credential()).await,
+            svc::attach_credential(&pool, &granting_broker(), maintainer, c.id, &credential())
+                .await,
             Err(ApiError::Forbidden)
         ));
         assert!(
@@ -903,7 +1073,7 @@ mod tests {
             ..credential()
         };
         assert!(matches!(
-            svc::attach_credential(&pool, admin, c.id, &no_broker).await,
+            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &no_broker).await,
             Err(ApiError::BadRequest(_))
         ));
 
@@ -912,7 +1082,7 @@ mod tests {
             ..credential()
         };
         assert!(matches!(
-            svc::attach_credential(&pool, admin, c.id, &no_connector).await,
+            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &no_connector).await,
             Err(ApiError::BadRequest(_))
         ));
 

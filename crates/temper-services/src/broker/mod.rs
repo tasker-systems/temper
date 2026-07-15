@@ -163,8 +163,12 @@ pub enum BrokerError {
 }
 
 /// The seam. Two operations, both provider-agnostic above this line.
+///
+/// `Debug` is a supertrait so an `Arc<dyn CredentialBroker>` can live on the
+/// `Debug`-deriving [`crate::state::AppState`]; every impl redacts its secret in
+/// `Debug`.
 #[async_trait]
-pub trait CredentialBroker: Send + Sync {
+pub trait CredentialBroker: Send + Sync + std::fmt::Debug {
     /// temper → remote: mint a scoped token for the connection's credential.
     async fn mint(&self, req: MintRequest<'_>) -> Result<Minted, BrokerError>;
 

@@ -40,6 +40,7 @@ fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        vercel_connect: None,
     };
     AppState::new(pool.clone(), jwks_store, api_config)
 }

@@ -64,6 +64,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> TemperMcpService {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        vercel_connect: None,
     };
     let svc = TemperMcpService::new(AppState::new(pool.clone(), jwks_store, api_config));
 
