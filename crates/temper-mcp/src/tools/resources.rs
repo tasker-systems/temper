@@ -1494,6 +1494,7 @@ mod build_enriched_tests {
             effort: None,
             body_hash: None,
             ingest_state: Some(temper_workflow::types::IngestState::Complete),
+            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
         }
     }
 

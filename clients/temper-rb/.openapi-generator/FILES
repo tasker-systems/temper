@@ -37,6 +37,7 @@ lib/temper/generated/models/bind_team_outcome.rb
 lib/temper/generated/models/bind_team_request.rb
 lib/temper/generated/models/block_provenance_row.rb
 lib/temper/generated/models/blocks_response.rb
+lib/temper/generated/models/body_storage.rb
 lib/temper/generated/models/bridge.rb
 lib/temper/generated/models/bulk_reassign_ack.rb
 lib/temper/generated/models/bulk_reassign_request.rb

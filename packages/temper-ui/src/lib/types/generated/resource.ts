@@ -6,6 +6,14 @@ import type { ProfileId } from "./ProfileId";
 import type { ResourceId } from "./ResourceId";
 
 /**
+ * What guarantee a resource's body carries on read — a **surfaced projection** of coverage
+ * (`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.
+ * Orthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have
+ * read back exactly, or only approximately?*
+ */
+export type BodyStorage = "verbatim" | "derived";
+
+/**
  * Response body for resource content.
  */
 export type ContentResponse = { resource_id: ResourceId, markdown: string, 
@@ -123,7 +131,18 @@ body_hash: string | null,
  * `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
  * always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
  */
-ingest_state: IngestState | null, };
+ingest_state: IngestState | null, 
+/**
+ * What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte**
+ * from the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries
+ * its source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform:
+ * CRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only
+ * partial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.
+ *
+ * `Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`),
+ * so a current server always sends it; `None` means the server predates W2 PR 3.
+ */
+body_storage: BodyStorage | null, };
 
 /**
  * Sort field for resource listing.

@@ -67,6 +67,54 @@ pub struct ResourceRow {
     /// `Option` purely for **version skew** — the column is `NOT NULL` server-side, so a current server
     /// always sends it; `None` means the server predates W2 PR 1. Do not read `None` as "incomplete".
     pub ingest_state: Option<IngestState>,
+    /// What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte**
+    /// from the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries
+    /// its source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform:
+    /// CRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only
+    /// partial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.
+    ///
+    /// `Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`),
+    /// so a current server always sends it; `None` means the server predates W2 PR 3.
+    pub body_storage: Option<BodyStorage>,
+}
+
+/// What guarantee a resource's body carries on read — a **surfaced projection** of coverage
+/// (`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.
+/// Orthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have
+/// read back exactly, or only approximately?*
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum BodyStorage {
+    /// Every live block carries its raw source bytes; the body reads back byte-for-byte.
+    Verbatim,
+    /// The body is reconstructed from chunks (lossy) — a pre-PR-3 resource, or one with only partial
+    /// verbatim coverage.
+    Derived,
+}
+
+impl BodyStorage {
+    /// The canonical wire/DB string (matches the `ck_kb_resources_body_storage` CHECK values).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BodyStorage::Verbatim => "verbatim",
+            BodyStorage::Derived => "derived",
+        }
+    }
+
+    /// Parse the DB/wire string. The `ck_kb_resources_body_storage` CHECK constrains the column to
+    /// these two values, so an unrecognized string is a schema/version violation, not ordinary input —
+    /// returned as `None` for the caller to handle rather than silently coerced.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "verbatim" => Some(BodyStorage::Verbatim),
+            "derived" => Some(BodyStorage::Derived),
+            _ => None,
+        }
+    }
 }
 
 /// A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
@@ -443,6 +491,7 @@ mod resource_detail_tests {
             effort: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
+            body_storage: Some(BodyStorage::Derived),
         }
     }
 

@@ -19,6 +19,9 @@ module Temper::Generated
     # SHA-256 hash of the resource body content, from `kb_resource_manifests`. `None` when no manifest row exists (resource created via POST without a body trio, or the manifest join returned NULL).
     attr_accessor :body_hash
 
+    # What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte** from the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries its source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform: CRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only partial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.  `Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`), so a current server always sends it; `None` means the server predates W2 PR 3.
+    attr_accessor :body_storage
+
     # Set when the resource is homed in a cognitive map (Surface B). Mutually exclusive with the `context_*` fields.
     attr_accessor :cogmap_id
 
@@ -96,6 +99,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'body_hash' => :'body_hash',
+        :'body_storage' => :'body_storage',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_name' => :'cogmap_name',
         :'context_name' => :'context_name',
@@ -134,6 +138,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'body_hash' => :'String',
+        :'body_storage' => :'BodyStorage',
         :'cogmap_id' => :'String',
         :'cogmap_name' => :'String',
         :'context_name' => :'String',
@@ -162,6 +167,7 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'body_hash',
+        :'body_storage',
         :'cogmap_id',
         :'cogmap_name',
         :'context_name',
@@ -194,6 +200,10 @@ module Temper::Generated
 
       if attributes.key?(:'body_hash')
         self.body_hash = attributes[:'body_hash']
+      end
+
+      if attributes.key?(:'body_storage')
+        self.body_storage = attributes[:'body_storage']
       end
 
       if attributes.key?(:'cogmap_id')
@@ -472,6 +482,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           body_hash == o.body_hash &&
+          body_storage == o.body_storage &&
           cogmap_id == o.cogmap_id &&
           cogmap_name == o.cogmap_name &&
           context_name == o.context_name &&
@@ -504,7 +515,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, cogmap_id, cogmap_name, context_name, context_owner_ref, context_slug, created, doc_type_name, effort, id, ingest_state, is_active, kb_context_id, mode, origin_uri, originator_profile_id, owner_handle, owner_profile_id, seq, stage, title, updated].hash
+      [body_hash, body_storage, cogmap_id, cogmap_name, context_name, context_owner_ref, context_slug, created, doc_type_name, effort, id, ingest_state, is_active, kb_context_id, mode, origin_uri, originator_profile_id, owner_handle, owner_profile_id, seq, stage, title, updated].hash
     end
 
     # Builds the object from hash

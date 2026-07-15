@@ -2418,6 +2418,7 @@ mod action_result_tests {
             effort: None,
             body_hash: None,
             ingest_state: Some(temper_workflow::types::IngestState::Complete),
+            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
         }
     }
 
@@ -2800,6 +2801,7 @@ mod resource_list_render_tests {
             effort: None,
             body_hash: Some("abc123deadbeef".to_string()),
             ingest_state: Some(temper_workflow::types::IngestState::Complete),
+            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
         }];
 
         let out =

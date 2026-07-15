@@ -653,6 +653,7 @@ mod tests {
             effort: None,
             body_hash: Some("abc123".to_string()),
             ingest_state: Some(temper_workflow::types::IngestState::Complete),
+            body_storage: Some(temper_workflow::types::resource::BodyStorage::Derived),
         }
     }
 
