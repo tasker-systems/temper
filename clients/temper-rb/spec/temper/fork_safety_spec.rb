@@ -134,7 +134,15 @@ RSpec.describe 'fork safety' do
       break if request_line.nil?
 
       nil while (header = socket.gets) && header.strip != ''
-      body = '{"id":"p1"}'
+      # whoami deserializes into ProfileWithEntitlements, so the body must carry
+      # every required Profile field plus entitlements — a bare {"id":"p1"} now
+      # raises "created cannot be nil" (issue #446).
+      body = JSON.generate(
+        id: 'p1', slug: 'p1', display_name: 'P One',
+        created: '2026-07-15T00:00:00Z', updated: '2026-07-15T00:00:00Z',
+        is_active: true,
+        entitlements: { system_access: true, is_admin: false }
+      )
       socket.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" \
                    "Content-Length: #{body.bytesize}\r\n\r\n#{body}")
     end

@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'stringio'
+require 'zlib'
+
 RSpec.describe 'Temper connection' do
   before do
     Temper.reset_connection!
@@ -30,6 +33,29 @@ RSpec.describe 'Temper connection' do
 
   it 'stamps X-Temper-Surface: sdk once, on the client' do
     expect(Temper.api_client.default_headers['X-Temper-Surface']).to eq('sdk')
+  end
+
+  # The regression from #446: the net_http_persistent adapter bypasses Net::HTTP's
+  # transparent gzip handling, so a `Content-Encoding: gzip` body would reach the
+  # deserializer as raw bytes and reads returned nil. faraday-gzip inflates it.
+  it 'inflates a gzip-encoded response body instead of returning nil (issue #446)' do
+    body = JSON.generate(
+      id: 'p1', slug: 'p1', display_name: 'P One',
+      created: '2026-07-15T00:00:00Z', updated: '2026-07-15T00:00:00Z',
+      is_active: true, entitlements: { system_access: true, is_admin: false }
+    )
+    gz = StringIO.new
+    Zlib::GzipWriter.wrap(gz) { |w| w.write(body) }
+
+    stub_request(:get, 'https://api.test/api/profile')
+      .with(headers: { 'Accept-Encoding' => 'gzip,deflate' })
+      .to_return(
+        status: 200, body: gz.string,
+        headers: { 'Content-Type' => 'application/json', 'Content-Encoding' => 'gzip' }
+      )
+
+    profile = Temper::Client.new(credentials: Temper::Credentials::BearerToken.new('t')).whoami
+    expect(profile&.id).to eq('p1')
   end
 
   it 'omits the device header when unconfigured' do

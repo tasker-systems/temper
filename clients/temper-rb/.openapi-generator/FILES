@@ -75,6 +75,7 @@ lib/temper/generated/models/edge_kind.rb
 lib/temper/generated/models/element_event.rb
 lib/temper/generated/models/element_kind.rb
 lib/temper/generated/models/embed_dispatch_summary.rb
+lib/temper/generated/models/entitlements.rb
 lib/temper/generated/models/error_body.rb
 lib/temper/generated/models/error_detail.rb
 lib/temper/generated/models/event_cursor_response.rb
@@ -117,6 +118,7 @@ lib/temper/generated/models/polarity.rb
 lib/temper/generated/models/profile.rb
 lib/temper/generated/models/profile_auth_link.rb
 lib/temper/generated/models/profile_update_request.rb
+lib/temper/generated/models/profile_with_entitlements.rb
 lib/temper/generated/models/provenance_source.rb
 lib/temper/generated/models/provenance_source_one_of.rb
 lib/temper/generated/models/provenance_source_one_of1.rb

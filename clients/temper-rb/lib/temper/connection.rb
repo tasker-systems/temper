@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'faraday'
+require 'faraday/gzip'
 require 'faraday/net_http_persistent'
 require 'uri'
 
@@ -60,7 +61,7 @@ module Temper
       Generated::Configuration.new.tap do |c|
         apply_endpoint(c, base_uri)
         c.access_token_getter = -> { Temper.current_token }
-        install_persistent_adapter(c)
+        configure_faraday(c)
       end
     end
 
@@ -80,11 +81,21 @@ module Temper
     # the invoker the generated ApiClient calls with the connection.
     #
     # It runs AFTER build_connection sets conn.adapter(Faraday.default_adapter), so
-    # this replaces it. An adapter set via `configure_middleware` runs BEFORE, and
-    # would be silently overwritten by the default -- costing a TLS handshake per
-    # request while nothing fails.
-    def install_persistent_adapter(generated_config)
+    # setting the adapter here replaces it. An adapter set via `configure_middleware`
+    # runs BEFORE, and would be silently overwritten by the default -- costing a TLS
+    # handshake per request while nothing fails.
+    #
+    # `conn.request :gzip` installs faraday-gzip's decompression middleware. It sets
+    # Accept-Encoding: gzip,deflate and inflates the response in Faraday's
+    # on_complete -- OUTSIDE Net::HTTP. That is the whole point: the
+    # net_http_persistent adapter bypasses Net::HTTP's transparent gzip handling, so
+    # without this a `Content-Encoding: gzip` body reaches the deserializer as raw
+    # compressed bytes and every read returns nil (issue #446). Order is irrelevant
+    # -- Faraday keeps the adapter last regardless of call order -- but registering
+    # the request middleware before the adapter reads in stack order.
+    def configure_faraday(generated_config)
       generated_config.configure_faraday_connection do |conn|
+        conn.request :gzip
         conn.adapter :net_http_persistent, pool_size: 5
       end
     end

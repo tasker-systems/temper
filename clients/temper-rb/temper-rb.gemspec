@@ -33,6 +33,15 @@ Gem::Specification.new do |spec|
   # api_client.rb. Both are pure Ruby.
   spec.add_dependency 'faraday-multipart', '~> 1.0'
   spec.add_dependency 'faraday-net_http_persistent', '~> 2.0'
+  # The faraday-net_http_persistent adapter does NOT inflate a
+  # `Content-Encoding: gzip` response — Net::HTTP's transparent decompression
+  # only fires when it added the Accept-Encoding header itself, which the
+  # persistent adapter bypasses. Without this the raw compressed bytes reach the
+  # deserializer and every read returns nil (issue #446). faraday-gzip's :gzip
+  # request middleware sets Accept-Encoding and inflates the response, so reads
+  # stay compressed on the wire and correct off it. Pure Ruby; ~> 2.0 pins the
+  # Faraday 2.x line.
+  spec.add_dependency 'faraday-gzip', '~> 2.0'
   spec.add_dependency 'marcel', '~> 1.0'
   # Transitive via net-http-persistent, but pinned explicitly because we DEPEND on
   # its behaviour: connection_pool >= 2.4 defaults `auto_reload_after_fork: true`

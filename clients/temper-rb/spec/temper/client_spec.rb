@@ -24,17 +24,30 @@ RSpec.describe Temper::Client do
 
   def json(body) = { status: 200, body: body, headers: { 'Content-Type' => 'application/json' } }
 
+  # whoami deserializes into ProfileWithEntitlements, whose flattened Profile
+  # fields (id, slug, display_name, created, updated, is_active) and entitlements
+  # are all required. A minimal `{"id":"p1"}` body only ever sufficed while
+  # get_profile lacked a response schema and returned nil (issue #446).
+  def profile_body
+    JSON.generate(
+      id: 'p1', slug: 'p1', display_name: 'P One',
+      created: '2026-07-15T00:00:00Z', updated: '2026-07-15T00:00:00Z',
+      is_active: true,
+      entitlements: { system_access: true, is_admin: false }
+    )
+  end
+
   it 'scopes the credential token around the call and stamps the surface header' do
     stub_request(:get, 'https://api.test/api/profile')
       .with(headers: { 'Authorization' => 'Bearer tok-1', 'X-Temper-Surface' => 'sdk' })
-      .to_return(json('{"id":"p1"}'))
+      .to_return(json(profile_body))
 
     client.whoami
     expect(a_request(:get, 'https://api.test/api/profile')).to have_been_made.once
   end
 
   it 'clears the fiber-local token after the call' do
-    stub_request(:get, 'https://api.test/api/profile').to_return(json('{}'))
+    stub_request(:get, 'https://api.test/api/profile').to_return(json(profile_body))
     client.whoami
     expect(Temper.current_token).to be_nil
   end
@@ -72,7 +85,7 @@ RSpec.describe Temper::Client do
       .to_return(status: 401, body: '{}')
     stub_request(:get, 'https://api.test/api/profile')
       .with(headers: { 'Authorization' => 'Bearer tok-b' })
-      .to_return(json('{"id":"p1"}'))
+      .to_return(json(profile_body))
 
     expect { client(credentials: m2m_credentials).whoami }.not_to raise_error
     expect(a_request(:post, 'https://auth.test/token')).to have_been_made.twice
@@ -89,7 +102,7 @@ RSpec.describe Temper::Client do
 
   it 'retries an idempotent read on 5xx, three attempts' do
     stub_request(:get, 'https://api.test/api/profile')
-      .to_return({ status: 503, body: 'down' }, { status: 503, body: 'down' }, json('{"id":"p1"}'))
+      .to_return({ status: 503, body: 'down' }, { status: 503, body: 'down' }, json(profile_body))
 
     expect { client.whoami }.not_to raise_error
     expect(a_request(:get, 'https://api.test/api/profile')).to have_been_made.times(3)
