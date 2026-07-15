@@ -178,6 +178,18 @@ pub async fn create_resource_with_mode(
     create_resource_impl(pool, p, ctx, mode).await
 }
 
+/// The verbatim bytes to store for a body block: `Some(body)` for real prose, `None` for an EMPTY body.
+///
+/// An empty body is a "no whole-body prose — reblock from chunks" sentinel: the cognitive-map reconcile
+/// path (`db_backend::apply_resource_phase`) passes `body: ""` with real `chunks`, because a distilled
+/// map node's content lives in its chunks, not a whole-body string. Storing `Some("")` would write an
+/// empty `kb_block_content` row and mark the resource `body_storage = 'verbatim'` — a byte-exact
+/// guarantee over ZERO bytes, which PR 4's coverage-verified readback would then surface as an empty
+/// body. `None` ⇒ no bytes stored ⇒ honestly `derived` ⇒ readback falls to chunk reconstruction.
+fn raw_body(body: &str) -> Option<String> {
+    (!body.is_empty()).then(|| body.to_owned())
+}
+
 /// Shared create body. `mode.defer` only affects the no-precomputed-chunks case: `false` embeds inline
 /// (`prepare_block`), `true` chunks without embedding (`prepare_block_deferred`). `mode.segmented` only
 /// rides the event payload. Everything else — sources, event fan-out, properties — is identical.
@@ -196,8 +208,8 @@ async fn create_resource_impl(
     block.incorporated = p.sources;
     // The raw body bytes are stored verbatim (kb_block_content) — threaded here, at the call site, not
     // in the prepare helpers, because the chunks arm (every CLI create) never sees prose. Same pattern
-    // as `incorporated` one line up.
-    block.raw_text = Some(p.body.to_owned());
+    // as `incorporated` one line up. `raw_body` maps an empty body ⇒ `None` (see its doc).
+    block.raw_text = raw_body(p.body);
     let blocks = [block];
     let mut tx = begin_scoped(pool).await?;
     let new_id = fire_with(
@@ -385,8 +397,10 @@ pub async fn update_resource_in_tx(
                 chunks: &prepared.chunks,
                 // The revised block's raw bytes, stored verbatim. `body` is the new content of the
                 // addressed block (the update path refuses a whole-body write on a multi-block
-                // resource, so this is that block's whole text).
-                raw: Some(body),
+                // resource, so this is that block's whole text). An empty body (the reconcile
+                // "reblock from chunks" sentinel — `db_backend` passes `Some("")`) stores no bytes ⇒
+                // the revision is honestly `derived`, never `verbatim` over zero bytes. See `raw_body`.
+                raw: (!body.is_empty()).then_some(body),
                 incorporated: &prepared.incorporated,
                 emitter: p.emitter,
             },
@@ -634,7 +648,9 @@ pub async fn create_kernel_resource_in_tx(
         Some(chunks) => prepare_block_from_chunks(0, None, chunks),
         None => prepare_block(0, None, p.body)?,
     };
-    block.raw_text = Some(p.body.to_owned());
+    // Reconcile creates kernel resources with `body: ""` (content rides in `chunks`) — that empty
+    // sentinel must NOT store an empty verbatim row. See `raw_body`.
+    block.raw_text = raw_body(p.body);
     let blocks = [block];
     let new_id = fire_with(
         conn,

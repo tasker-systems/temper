@@ -55,6 +55,13 @@ ALTER TABLE kb_resources
 -- that claims a byte-exact guarantee over no bytes. It must be 'derived'. (An empty-manifest
 -- `_project_blocks` recomputes this on one code path and not another, so the vacuous case also breaks
 -- replay equivalence — the empty resource must land 'derived' on every path.)
+--
+-- Concurrency: this is an unlocked read-modify-write over the whole live block set, like
+-- `_recompute_resource_body_hash` before it took its FOR-NO-KEY-UPDATE row lock (20260712000110). It
+-- needs no lock of its own ONLY because both projectors call `_recompute_resource_body_hash` on the
+-- immediately preceding line, and that lock is held to end-of-transaction — so a concurrent same-resource
+-- write serializes at the body-hash acquisition and body_storage inherits the serialization. The safety
+-- is transitive/ordering-dependent: keep this call AFTER `_recompute_resource_body_hash` in both projectors.
 CREATE FUNCTION _recompute_body_storage(p_resource uuid) RETURNS void
 LANGUAGE plpgsql AS $$
 BEGIN

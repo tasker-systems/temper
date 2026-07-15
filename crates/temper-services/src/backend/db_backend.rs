@@ -2614,8 +2614,10 @@ impl Backend for DbBackend {
         };
         // The segment's raw bytes (byte-exact after PR 2's non-normalizing segmenter) are stored
         // verbatim in kb_block_content. `payload.content` is the raw segment text on BOTH arms — the
-        // chunks-packed (CLI) arm carries it alongside the packed chunks.
-        block.raw_text = Some(payload.content.clone());
+        // chunks-packed (CLI) arm carries it alongside the packed chunks. An empty segment (which
+        // `validate_append` already refuses) would store no bytes rather than an empty verbatim row —
+        // the same "empty ⇒ no verbatim guarantee" invariant the create/update paths enforce.
+        block.raw_text = (!payload.content.is_empty()).then(|| payload.content.clone());
 
         writes::append_block(
             &self.pool,

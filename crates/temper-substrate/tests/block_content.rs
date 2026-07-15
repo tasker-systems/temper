@@ -219,6 +219,56 @@ async fn superseded_revisions_keep_their_own_bytes(pool: sqlx::PgPool) {
     assert_eq!(body_storage(&pool, id).await, "verbatim");
 }
 
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn empty_body_with_real_chunks_is_derived_not_empty_verbatim(pool: sqlx::PgPool) {
+    // The cognitive-map reconcile path creates/updates kernel resources with body="" — the content
+    // rides in `chunks`, and the empty string is a "reblock from chunks, no whole-body prose" sentinel.
+    // That MUST NOT store an empty verbatim row: `body_storage = 'verbatim'` over zero bytes is a
+    // silent-empty-body trap that PR 4's coverage-verified readback would surface as an empty body for
+    // a resource that actually has content. It must be 'derived'.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "emptybody").await;
+
+    let id = create_resource(
+        &pool,
+        CreateParams {
+            title: "t",
+            origin_uri: "test://empty",
+            body: "", // the reconcile sentinel — real content is in the chunk below
+            doc_type: "concept",
+            home: AnchorRef::context(ctx),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![one_incoming_chunk("real distilled content")]),
+            sources: vec![],
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        body_storage(&pool, id).await,
+        "derived",
+        "an empty whole-body must be 'derived' — 'verbatim' over zero bytes is a silent-empty-body trap"
+    );
+    let content_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_content_blocks b \
+           JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
+          WHERE b.resource_id = $1",
+    )
+    .bind(id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        content_rows, 0,
+        "an empty body stores no verbatim content row (the chunk carries the real content instead)"
+    );
+}
+
 /// One prepared block at `seq` whose raw bytes are `raw` (`None` ⇒ a legacy/derived block with no
 /// stored bytes). A fixed non-degenerate 768-d unit embedding keeps it ONNX-free.
 fn block_with_raw(seq: i32, raw: Option<&str>) -> PreparedBlock {

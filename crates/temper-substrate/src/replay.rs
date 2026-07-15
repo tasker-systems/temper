@@ -255,7 +255,14 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
         };
         let mut blocks_side = serde_json::Map::new();
         for (key, block_id) in block_keys {
-            let row = sqlx::query(
+            // Map this event to the revision IT created, by (block_id, this event's occurred_at). This
+            // assumes ONE content-bearing revision of a block per event's occurred_at. `now()` is
+            // transaction-scoped, so two revisions of one block minted in a SINGLE transaction would
+            // share `created` and this lookup would become ambiguous — no current write path does that
+            // (one content event per transaction), but rather than silently pick an arbitrary revision
+            // (which would corrupt the replay proof, not fail it), assert the 1:1 mapping and fail loud
+            // if a future batched-mutation path ever violates it.
+            let rows = sqlx::query(
                 "SELECT bc.content, bc.content_hash \
                    FROM kb_block_revisions r JOIN kb_block_content bc ON bc.block_revision_id = r.id \
                   WHERE r.block_id = $1 \
@@ -263,15 +270,26 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             )
             .bind(block_id)
             .bind(event_id)
-            .fetch_optional(pool)
+            .fetch_all(pool)
             .await?;
-            if let Some(row) = row {
-                let content: String = row.get(0);
-                let content_hash: String = row.get(1);
-                blocks_side.insert(
-                    key,
-                    serde_json::json!({ "content": content, "content_hash": content_hash }),
-                );
+            match rows.as_slice() {
+                // No stored bytes for this event's revision (a `derived` block) — nothing to re-supply.
+                [] => {}
+                [row] => {
+                    let content: String = row.get(0);
+                    let content_hash: String = row.get(1);
+                    blocks_side.insert(
+                        key,
+                        serde_json::json!({ "content": content, "content_hash": content_hash }),
+                    );
+                }
+                _ => anyhow::bail!(
+                    "replay: ambiguous block-content reconstruction — block {block_id} has {} content \
+                     revisions sharing event {event_id}'s occurred_at, so (block_id, occurred_at) no \
+                     longer maps to a single revision (a batched multi-revision transaction?). Failing \
+                     loud rather than re-supplying arbitrary bytes.",
+                    rows.len()
+                ),
             }
         }
         if !blocks_side.is_empty() {
