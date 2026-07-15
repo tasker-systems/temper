@@ -12,7 +12,7 @@
     { "path": "/api/embed/warm", "schedule": "*/2 * * * *" }
   ],
   "functions": {
-    "api/axum.rs": { "memory": 3009, "maxDuration": 60 },
+    "api/axum.rs": { "memory": 3009, "maxDuration": 300 },
     "api/mcp.rs": { "memory": 3009, "maxDuration": 60 }
   },
   "routes": [
