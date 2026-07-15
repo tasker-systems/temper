@@ -17,6 +17,23 @@ use uuid::Uuid;
 use crate::error::{Result, TemperError};
 use temper_core::types::ingest::SegmentInfo;
 
+/// The current segmenter identity. Bumped whenever `temper_ingest::stream::segment_reader`
+/// changes the *bytes* it emits for a given source, so a manifest cut by an older segmenter
+/// never resumes against segments the current one would cut differently.
+///
+/// - **1** — the original normalizing segmenter (`BufRead::lines()` + `join("\n")`, which
+///   collapsed CRLF→LF and dropped the trailing newline).
+/// - **2** — the verbatim segmenter (`read_line`, terminators retained). W2 PR 2.
+pub const SEGMENTER_VERSION: u32 = 2;
+
+/// A manifest written before `segmenter_version` existed was cut by the v1 normalizing
+/// segmenter. It deserializes to `1` (not an error), then fails the equality gate in
+/// [`find_resumable`] — so the CLI begins a fresh session rather than resuming against
+/// bytes the current segmenter would cut differently.
+fn legacy_segmenter_version() -> u32 {
+    1
+}
+
 /// The CLI's local record of a segmented ingest session's progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestManifest {
@@ -29,6 +46,12 @@ pub struct IngestManifest {
     /// re-derives identical segment boundaries — determinism is load-bearing for diffing
     /// `blocks` against a freshly re-scanned source.
     pub block_budget: u32,
+    /// The segmenter identity ([`SEGMENTER_VERSION`]) that cut this session's segments. Part of
+    /// the resume identity: a manifest cut by a different segmenter is never resumed against,
+    /// because its recorded per-block `content_hash`es would disagree with freshly re-cut
+    /// segments while still matching on `(source_hash, block_budget)`.
+    #[serde(default = "legacy_segmenter_version")]
+    pub segmenter_version: u32,
     pub correlation_id: Uuid,
     /// Landed segments, as last observed (seq + block-merkle `content_hash`, matching
     /// `SegmentInfo`'s wire shape). Always re-verified against a live `list_blocks` call
@@ -91,7 +114,9 @@ pub fn resume_gap(local: &[SegmentInfo], landed: &[SegmentInfo]) -> Vec<u32> {
 }
 
 /// Scan `<vault>/.temper/ingest/*.json` for an incomplete (`finalized == false`) manifest
-/// whose `source_hash`/`block_budget` match the source about to be ingested.
+/// whose `source_hash`/`block_budget`/`segmenter_version` match the source about to be
+/// ingested (segmenter identity included so a manifest cut by an older, normalizing segmenter
+/// is never resumed against — see [`SEGMENTER_VERSION`]).
 ///
 /// This is the local-only mechanism `run_segmented_create` uses to recognize "this exact
 /// `resource create` was already begun and interrupted" on a bare re-run that has no resource
@@ -123,6 +148,7 @@ pub fn find_resumable(
         if !manifest.finalized
             && manifest.source_hash == source_hash
             && manifest.block_budget == block_budget
+            && manifest.segmenter_version == SEGMENTER_VERSION
         {
             return Ok(Some((manifest.resource_id, manifest)));
         }
@@ -146,6 +172,7 @@ mod tests {
             resource_id,
             source_hash: source_hash.to_string(),
             block_budget: 262_144,
+            segmenter_version: SEGMENTER_VERSION,
             correlation_id: Uuid::now_v7(),
             blocks: vec![seg(0, "h0"), seg(1, "h1")],
             finalized,
@@ -280,6 +307,47 @@ mod tests {
         // A different source hash (the file changed since the interrupted attempt) must not
         // resume against the stale manifest.
         assert!(find_resumable(dir.path(), &"e".repeat(64), 262_144)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn find_resumable_ignores_a_segmenter_version_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let resource_id = Uuid::now_v7();
+        let source_hash = "a1".repeat(32);
+        // A manifest cut by an older, normalizing segmenter (v1) matches on source_hash +
+        // budget but must NOT resume — its segments' bytes would differ from a fresh cut.
+        let mut manifest = sample_manifest(resource_id, &source_hash, false);
+        manifest.segmenter_version = 1;
+        store(&manifest_path(dir.path(), resource_id), &manifest).unwrap();
+
+        assert!(find_resumable(dir.path(), &source_hash, 262_144)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_manifest_without_segmenter_version_deserializes_as_v1_and_never_resumes() {
+        // A pre-versioning manifest on disk (no `segmenter_version` key) must deserialize
+        // (not error) and default to v1, so `find_resumable` skips it and the CLI begins a
+        // fresh session rather than surfacing a parse error on resume.
+        let dir = tempfile::tempdir().unwrap();
+        let resource_id = Uuid::now_v7();
+        let source_hash = "b2".repeat(32);
+        let path = manifest_path(dir.path(), resource_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let legacy_json = format!(
+            r#"{{"resource_id":"{resource_id}","source_hash":"{source_hash}","block_budget":262144,"correlation_id":"{cid}","blocks":[],"finalized":false}}"#,
+            cid = Uuid::now_v7()
+        );
+        std::fs::write(&path, legacy_json).unwrap();
+
+        let loaded = load(&path)
+            .unwrap()
+            .expect("legacy manifest should load, not error");
+        assert_eq!(loaded.segmenter_version, 1, "absent field defaults to v1");
+        assert!(find_resumable(dir.path(), &source_hash, 262_144)
             .unwrap()
             .is_none());
     }
