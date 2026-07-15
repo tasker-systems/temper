@@ -33,14 +33,20 @@ DECLARE
 BEGIN
     SELECT count(*) INTO v_actual_blocks FROM kb_content_blocks
         WHERE resource_id = v_resource AND NOT is_folded;
+    -- Custom SQLSTATEs so the transport can distinguish the failure modes and give the caller a
+    -- reconciliation path (mapped in temper-services `From<sqlx::Error>`): TF001/TF002 are RESUMABLE
+    -- (409 — re-list/append the gap and re-finalize), TF003 is NOT (422 — the committed bytes are wrong
+    -- and `block_append` refuses to overwrite a seq, so the caller must discard + re-upload).
     IF v_actual_blocks <> v_expected_blocks THEN
         RAISE EXCEPTION 'resource_finalize: resource % has % live blocks, expected %',
-            v_resource, v_actual_blocks, v_expected_blocks;
+            v_resource, v_actual_blocks, v_expected_blocks
+            USING ERRCODE = 'TF001';
     END IF;
     SELECT body_hash INTO v_actual_hash FROM kb_resources WHERE id = v_resource;
     IF v_actual_hash IS DISTINCT FROM v_expected_hash THEN
         RAISE EXCEPTION 'resource_finalize: resource % body_hash % does not match expected %',
-            v_resource, v_actual_hash, v_expected_hash;
+            v_resource, v_actual_hash, v_expected_hash
+            USING ERRCODE = 'TF002';
     END IF;
     -- W2 PR 5: raw-bytes integrity, only when the caller supplied it. `string_agg('' ORDER BY seq)`
     -- reconstructs the exact bytes the verbatim readback (PR 4) returns — the stored block content
@@ -56,7 +62,8 @@ BEGIN
          WHERE b.resource_id = v_resource AND NOT b.is_folded;
         IF v_actual_content_hash IS DISTINCT FROM (p_payload->>'expected_content_hash') THEN
             RAISE EXCEPTION 'resource_finalize: resource % stored bytes hash %, expected %',
-                v_resource, v_actual_content_hash, p_payload->>'expected_content_hash';
+                v_resource, v_actual_content_hash, p_payload->>'expected_content_hash'
+                USING ERRCODE = 'TF003';
         END IF;
     END IF;
     SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes

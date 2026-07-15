@@ -2666,7 +2666,7 @@ impl Backend for DbBackend {
             },
         )
         .await
-        .map_err(api_err)?;
+        .map_err(finalize_err)?;
 
         Ok(CommandOutput::new(()))
     }
@@ -2761,6 +2761,31 @@ fn map_facet_write_err(e: anyhow::Error) -> TemperError {
                     "a facet with this key is already set on the resource; fold it before re-setting"
                         .to_string(),
                 );
+            }
+        }
+    }
+    api_err(e)
+}
+
+/// Map a `resource_finalize` write error, preserving its custom SQLSTATEs (W2 PR 5) so the caller gets
+/// a client-actionable status **and a reconciliation path** instead of an opaque 500. Without this the
+/// RAISE — wrapped in `anyhow` by the substrate write and flattened by [`api_err`] — surfaces as a
+/// generic `Internal`, which the CLI cannot branch on and would resume into a loop. Walks the source
+/// chain like [`map_facet_write_err`] (the sqlx error sits under `anyhow`'s `?`):
+///   - `TF001`/`TF002` (block-count / body_hash merkle) → 409 `Conflict` — **RESUMABLE**: re-list and
+///     append the gap, then re-finalize.
+///   - `TF003` (raw-bytes integrity) → 422 [`TemperError::ContentIntegrity`] — **NOT resumable**: the
+///     committed bytes are wrong and `block_append` refuses to overwrite a seq, so the caller must
+///     discard the resource and re-upload. The RAISE message is safe to surface (the caller's own state).
+fn finalize_err(e: anyhow::Error) -> TemperError {
+    for cause in e.chain() {
+        if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
+            match db.code().as_deref() {
+                Some("TF001") | Some("TF002") => {
+                    return TemperError::Conflict(db.message().to_string())
+                }
+                Some("TF003") => return TemperError::ContentIntegrity(db.message().to_string()),
+                _ => {}
             }
         }
     }

@@ -481,22 +481,48 @@ pub async fn run_segmented_create(
     embed_result?;
     upload_result?;
 
-    client
+    let finalize_payload = FinalizePayload {
+        expected_blocks: segments.len() as u32,
+        expected_body_hash,
+        // Integrity over the actual bytes. `source_hash` is the bare-hex sha256 of the full raw body
+        // (computed above for manifest keying); after PR 2 the segments rejoin byte-exact, so
+        // `concat(stored block bytes) == source` and this is the same value the finalize recompute
+        // produces. Bare hex — matches the DB's `encode(sha256(...),'hex')`.
+        expected_content_hash: Some(source_hash.clone()),
+    };
+    if let Err(e) = client
         .ingest()
-        .finalize(
-            resource_id,
-            &FinalizePayload {
-                expected_blocks: segments.len() as u32,
-                expected_body_hash,
-                // Integrity over the actual bytes. `source_hash` is the bare-hex sha256 of the full
-                // raw body (computed above for manifest keying); after PR 2 the segments rejoin
-                // byte-exact, so `concat(stored block bytes) == source` and this is the same value the
-                // finalize recompute produces. Bare hex — matches the DB's `encode(sha256(...),'hex')`.
-                expected_content_hash: Some(source_hash.clone()),
-            },
-        )
+        .finalize(resource_id, &finalize_payload)
         .await
-        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    {
+        // A content-integrity failure (HTTP 422) is NOT resumable: the committed bytes are wrong and
+        // `block_append` refuses to overwrite a seq, so a re-run would resume straight back into the
+        // same finalize failure. Discard the poisoned in_progress resource + the local resume manifest
+        // and stop with an actionable error — a re-run then does a clean, fresh upload. (A resumable
+        // 409 — block-count / body_hash — propagates unchanged, leaving the manifest so a re-run
+        // resumes the gap.)
+        if let temper_client::error::ClientError::ContentIntegrity { message } = &e {
+            crate::output::progress_line(
+                "  integrity check FAILED — the stored bytes do not match the source; \
+                 discarding the incomplete upload"
+                    .to_string(),
+            );
+            let _ = client
+                .resources()
+                .delete(resource_id, &Default::default())
+                .await;
+            let manifest_path =
+                crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);
+            let _ = std::fs::remove_file(&manifest_path);
+            return Err(TemperError::ContentIntegrity(format!(
+                "upload integrity check failed for {:?}: {message}. The stored bytes do not match \
+                 your source (corruption in transit or storage). The incomplete upload has been \
+                 discarded — re-run the same command to retry with a fresh upload.",
+                cmd.title
+            )));
+        }
+        return Err(crate::actions::runtime::client_err_to_temper(e));
+    }
 
     manifest.finalized = true;
     let path = crate::actions::ingest_manifest::manifest_path(vault_root, resource_id);

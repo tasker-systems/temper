@@ -22,6 +22,12 @@ pub enum ClientError {
     #[error("conflict: {message}")]
     Conflict { message: String },
 
+    /// A finalize raw-bytes integrity check failed (HTTP 422, `CONTENT_INTEGRITY`) — the stored bytes
+    /// do not match the caller's declared hash (W2 PR 5). Distinct from `Conflict` because it is **not**
+    /// resumable: the caller must discard the poisoned resource and re-upload, not retry.
+    #[error("content integrity check failed: {message}")]
+    ContentIntegrity { message: String },
+
     #[error("rate limited — retry after {retry_after:?}")]
     RateLimited { retry_after: Duration },
 

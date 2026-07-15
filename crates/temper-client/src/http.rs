@@ -369,6 +369,11 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 parse_error_field(body, "message").unwrap_or_else(|| "conflict".to_owned());
             ClientError::Conflict { message }
         }
+        422 if parse_error_field(body, "code").as_deref() == Some("CONTENT_INTEGRITY") => {
+            let message = parse_error_field(body, "message")
+                .unwrap_or_else(|| "content integrity check failed".to_owned());
+            ClientError::ContentIntegrity { message }
+        }
         429 => {
             // Parse `Retry-After` value from body if embedded, or fall back to 60 s.
             let secs = body.parse::<u64>().unwrap_or(60);
@@ -471,6 +476,26 @@ mod tests {
         let body = r#"{"error":{"code":"conflict","message":"already exists"}}"#;
         let err = map_status_to_error(status(409), body);
         assert!(matches!(err, ClientError::Conflict { message } if message == "already exists"));
+    }
+
+    #[test]
+    fn test_422_content_integrity_maps_to_distinct_variant() {
+        // A finalize integrity failure (W2 PR 5) must surface as its own variant, NOT a generic
+        // Server error — the CLI branches on it to discard + re-upload rather than resume.
+        let body =
+            r#"{"error":{"code":"CONTENT_INTEGRITY","message":"stored bytes hash a, expected b"}}"#;
+        let err = map_status_to_error(status(422), body);
+        assert!(
+            matches!(err, ClientError::ContentIntegrity { message } if message.contains("expected b"))
+        );
+    }
+
+    #[test]
+    fn test_422_without_integrity_code_is_generic_server_error() {
+        // A 422 that is NOT the integrity code stays a generic Server error (no false positive).
+        let body = r#"{"error":{"code":"SOMETHING_ELSE","message":"nope"}}"#;
+        let err = map_status_to_error(status(422), body);
+        assert!(matches!(err, ClientError::Server { status: 422, .. }));
     }
 
     #[test]
