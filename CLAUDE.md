@@ -150,6 +150,15 @@ bun run build          # production build
 bun run check          # svelte-check
 ```
 
+> **`cargo make check` does NOT cover temper-ui.** Its TypeScript step runs `tsc` on temper-cloud, not
+> `svelte-check` on temper-ui. So a change to a **generated shared type** (`cargo make generate-ts-types`
+> → `src/lib/types/generated/*.ts`) that restales a UI fixture — e.g. adding a required field to
+> `ResourceRow`, which then breaks a hand-built `makeRow` test helper — passes `cargo make check` and
+> fails only in CI's UI job. After any shared-type change, run `cd packages/temper-ui && bun run check`
+> yourself. (If it reds on `d3-*` "implicit any" / "cannot find package" in `graph/atlas/layout/*`, that
+> is a stale local `node_modules`, not your change — `bun install` first; CI installs fresh. See
+> [[project_ci_flake_signatures]].)
+
 ## Branch and Commit Conventions
 
 These patterns are observed in recent history rather than rigidly enforced. Match the existing style when in doubt.
