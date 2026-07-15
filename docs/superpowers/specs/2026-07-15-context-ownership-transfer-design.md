@@ -78,31 +78,46 @@ Everything downstream is already wired:
 - **Cogmap bindings are untouched.** A context transfer does not alter `kb_team_cogmaps`
   or any cogmap-homed resource. The team↔cogmap boundary is governed separately.
 
-## Not event-sourced — a deliberate divergence from resource reassign
+## Event-sourced — recorded in the ledger
 
-The sibling **resource** reassign is event-sourced, because `kb_resource_homes` is
-projected from the event stream (`replay.rs` rebuilds it) — an un-evented owner change
-would be clobbered on replay.
+Ownership transfer is a **consequential, auditable act**, so it is written to the event
+ledger like every other mutation — a full mirror of the sibling `resource_reassign`
+(new `context_reassigned` event type + payload + `SeedAction` + projector + replay
+wiring). The ledger record is the point: it preserves who moved the context, from which
+owner to which, and when — history the plain `UPDATE` would throw away.
 
-**Contexts are different by an established product decision:** `kb_contexts` is
-non-evented infrastructure. `context_service::create` is "a plain INSERT with NO event
-emission (product decision 5 — contexts are infrastructure)" (`context_service.rs:286`),
-and `share`/`unshare` are likewise plain `INSERT`/`DELETE` with no events. Replay never
-rebuilds `kb_contexts`, so there is **no replay-stability requirement** forcing an event
-here. Therefore context transfer is a **service-direct plain `UPDATE`**, consistent with
-its siblings `create`/`share`/`unshare` in the same service — *not* a new event type,
-SeedAction, projector, or writes-layer function.
+**Why this is safe even though contexts are otherwise non-evented.** `context_service`'s
+`create`/`share`/`unshare` are plain, un-evented writes, and `kb_contexts` is an
+**`INPUT_TABLE`** in replay — "non-projected input tables, copied verbatim into the replay
+namespace" (`replay.rs:80`), *not* a projection rebuilt from events (unlike
+`kb_resource_homes`, which is why *resource* reassign must be evented). The two facts
+compose cleanly:
 
-> This corrects the provisional "event-sourced `context_reassigned`" phrasing in the task
-> body: matching the resource-reassign *event* machinery would be inconsistent with how
-> contexts are modeled. An **audit trail** for ownership transfer (contexts have none
-> today, nor do share/unshare) is a separable follow-up, noted below.
+- **At append time**, the `context_reassign` SQL fn appends the event and its projector
+  performs the actual `UPDATE kb_contexts SET owner_* = to_owner`. This is the single
+  write path — no plain-UPDATE-plus-sidecar divergence.
+- **At replay time**, `kb_contexts` is restored **verbatim** from the snapshot (already at
+  the transferred owner), and then the `context_reassigned` projector re-applies the same
+  owner — an **idempotent no-op**. `kb_contexts` is not in the projection-diff set (it is
+  an input), so replay equivalence is unaffected. A replay-roundtrip test pins this.
 
-## Layering (service-direct, mirrors `share`/`unshare`)
+The event type is seeded with `payload_schema = NULL` (mirroring `resource_reassigned`),
+which keeps it out of the published-schema `TYPED_EVENT_NAMES` invariant.
 
-New `context_service::reassign`, living beside `share`/`unshare` in
-`crates/temper-services/src/services/context_service.rs`, reusing that file's existing
-helpers verbatim:
+> This supersedes the "not event-sourced" position of an earlier draft: the right test is
+> not "does replay *require* it" but "is this act worth a ledger record" — and an
+> ownership transfer is. `kb_contexts` being an input table makes the evented projector a
+> safe idempotent-on-replay mutation, not a conflict.
+
+## Layering (service-direct authz, event via the writes layer)
+
+Authorization is service-direct — the `reassign_service` precedent: the service owns the
+gate and enforces it before any write. The write itself routes through the substrate
+**writes layer**, which fires the `context_reassigned` event (append + project). No
+`Backend`-trait change.
+
+New `context_service::reassign`, beside `share`/`unshare` in
+`crates/temper-services/src/services/context_service.rs`, reusing that file's helpers:
 
 ```
 pub async fn reassign(
@@ -116,17 +131,39 @@ pub async fn reassign(
    `caller_administers_context(context)`. All three helpers already exist
    (`context_service.rs:369-420`).
 2. **Existence** — `ensure_context_and_team_exist` (existing helper) → clean 404.
-3. **Idempotent no-op** — if the context is already owned by `to_team_id`, return
-   `reassigned: false` without writing.
-4. **Slug-collision guard** (new; see below) — 409 Conflict if the target team already
-   owns a context with this slug.
-5. **The write** — `UPDATE kb_contexts SET owner_table='kb_teams', owner_id=$team WHERE
-   id=$context`, returning the new `owner_ref` (the `+team-slug` decorated form, same
-   `CASE` expression `create` uses).
+3. **Read the current owner** — for the event's `from_owner_*` audit fields and the
+   idempotency check.
+4. **Idempotent no-op** — if the context is already owned by `to_team_id`, return
+   `reassigned: false` without emitting.
+5. **Slug-collision guard** (new; see below) — 409 Conflict if the target team already
+   owns a context with this slug (a service pre-check; the projector's `UNIQUE` is the
+   backstop).
+6. **The write** — resolve the emitter (`writes::resolve_emitter(pool, caller, "web")`)
+   and fire `writes::reassign_context_with(pool, context, from_owner, to_owner, emitter,
+   ctx)`, which invokes the `context_reassign` SQL fn (append `context_reassigned`
+   anchored to `('kb_contexts', context_id)`, then project the owner change). Return the
+   new `owner_ref` (the `+team-slug` decorated form, same `CASE` expression `create` uses).
 
-No `Backend`-trait change (contexts are service-direct on both surfaces, per the layering
-rule — reads and these infra writes alike). No substrate/`writes.rs` change. No migration
-for the mutation itself (see slug guard for the one possible schema touch).
+Substrate additions (all mirroring the `ResourceReassign` precedent):
+
+- `events.rs`: `EventKind::ContextReassigned` (+ `as_canonical_name`/`from_canonical_name`
+  `"context_reassigned"` arms); `SeedAction::ContextReassign { context, from_owner_table,
+  from_owner_id, to_owner_table, to_owner_id, emitter }` + `event_type()` arm; a
+  `Fired::Context(ContextId)` variant + the fire arm issuing `SELECT
+  context_reassign($1,$2,$3,$4)`.
+- `payloads.rs`: `ContextReassigned { context_id, from_owner_table, from_owner_id,
+  to_owner_table, to_owner_id }` (owner is polymorphic → carry table+id for both ends;
+  the `scenario-schema` `JsonSchema` derive regenerates `tests/scenario_schema.rs`'s
+  snapshot).
+- `replay.rs`: classify `ContextReassigned` as a non-content mutation (the `None` arm at
+  `replay.rs:179`) + a projection-dispatch arm calling `_project_context_reassigned`.
+- `writes.rs`: `reassign_context_with` (and `_in_tx` if a bulk path is ever needed; single
+  suffices for v1).
+- **Additive migration** — `INSERT INTO kb_event_types (name, payload_schema,
+  schema_version) VALUES ('context_reassigned', NULL, 1) ON CONFLICT DO NOTHING;` plus the
+  paired `_project_context_reassigned` (UPDATE owner, `RAISE` if the row is missing) and
+  `context_reassign` (append-then-project, envelope-anchored to the context) SQL fns.
+  Purely additive → safe under additive-only-on-`main`.
 
 ### Slug uniqueness across the owner boundary — the one genuinely new edge
 
@@ -211,9 +248,14 @@ can't yet create one over MCP.
   - the transferrer (target-team owner/maintainer) retains read+write post-transfer;
   - authz matrix — each independently ⇒ `Forbidden`: caller not a context administrator;
     caller not owner/maintainer of the target team; target is the gating/root team;
-  - idempotent no-op when already owned by the target team;
+  - idempotent no-op when already owned by the target team (no event emitted);
   - **slug collision** under the target team ⇒ `Conflict` (409), owner unchanged;
-  - `is_system_admin` bypass.
+  - `is_system_admin` bypass;
+  - a `context_reassigned` event is emitted with correct `from_owner_*`/`to_owner_*`.
+- **Replay-roundtrip** (`artifact-tests`) — a context transferred to a team survives
+  snapshot → namespace reset → replay: the restored `kb_contexts` row + the
+  `context_reassigned` projector converge on the team owner (idempotent). Extend the
+  substrate replay suite.
 - **E2E** (`tests/e2e`, `test-db`) — one test driving `temper context transfer` through
   CLI → client → API → DB, asserting `owner_ref` becomes `+team` and a team member can now
   author a resource in the context (via `can_modify_resource`). Embed features not
@@ -241,7 +283,4 @@ can't yet create one over MCP.
 - **Residual access & transfer completeness** → T-D (`019f6399-3c96…`): originator floor,
   grant sweep, resource-owner reassignment on transfer, in-flight-ingest race.
 - **Reversibility** (team → personal un-bind) — its own authz story; v1 is one-way.
-- **Audit trail** for ownership transfer — contexts are non-evented (as are share/unshare);
-  if transfers warrant an audit record, that is a broader "audit context lifecycle" change,
-  not scoped here.
 - **team → team** transfer — include in v1 if cheap (same gate), else fast-follow.
