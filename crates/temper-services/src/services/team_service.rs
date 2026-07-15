@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
+use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
     AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
     TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
@@ -388,7 +389,7 @@ pub async fn remove_member(
     caller: ProfileId,
     team_id: Uuid,
     target: Uuid,
-) -> ApiResult<()> {
+) -> ApiResult<RemoveMemberOutcome> {
     // Auth before writes: manager, or self-leave.
     let is_self = *caller == target;
     if !is_self {
@@ -433,7 +434,29 @@ pub async fn remove_member(
                 .to_string(),
         ));
     }
-    Ok(())
+
+    // Removal succeeded. Surface (read-only) the reach the removed member still
+    // OWNS in this team's contexts, so the caller can hand it off deliberately via
+    // `reassign_team_resources`. The scope query is membership-independent, so it is
+    // correct post-delete; we reuse the exact definition the handoff moves, so the
+    // warning and the handoff can never disagree.
+    let owned = crate::services::reassign_service::team_scoped_owned(pool, team_id, target).await?;
+    let mut contexts: Vec<ResidualContext> = Vec::new();
+    for row in &owned {
+        match contexts.last_mut() {
+            Some(last) if last.context_ref == row.context_ref => last.count += 1,
+            _ => contexts.push(ResidualContext {
+                context_ref: row.context_ref.clone(),
+                count: 1,
+            }),
+        }
+    }
+    Ok(RemoveMemberOutcome {
+        residual_owned: ResidualOwnedReach {
+            count: owned.len() as u32,
+            contexts,
+        },
+    })
 }
 
 /// Change an existing member's role. Owner/maintainer only. Cannot create a
@@ -575,6 +598,27 @@ mod lifecycle_tests {
         rid
     }
 
+    /// A profile-owned context shared to `team` via `kb_team_contexts` — the
+    /// offboarding shape: a personal context whose resources the team can reach.
+    async fn mk_shared_profile_context(pool: &PgPool, owner: Uuid, team: Uuid, slug: &str) -> Uuid {
+        let ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+        )
+        .bind(owner)
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+            .bind(ctx)
+            .bind(team)
+            .execute(pool)
+            .await
+            .unwrap();
+        ctx
+    }
+
     async fn is_visible(pool: &PgPool, profile: Uuid, resource: Uuid) -> bool {
         sqlx::query_scalar!(
             "SELECT EXISTS(SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
@@ -614,6 +658,45 @@ mod lifecycle_tests {
 
         let denied = team_detail(&pool, ProfileId::from(outsider), team).await;
         assert!(matches!(denied, Err(ApiError::NotFound)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn remove_member_surfaces_residual_owned_reach(pool: PgPool) {
+        // owner removes `leaver`, who owns 2 resources in a shared context + 0 elsewhere.
+        let owner = mk_profile(&pool, "owner").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, leaver, "member", "native").await;
+
+        let shared = mk_shared_profile_context(&pool, leaver, team, "shared").await;
+        let _r1 = mk_homed_resource(&pool, shared, leaver).await;
+        let _r2 = mk_homed_resource(&pool, shared, leaver).await;
+
+        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
+            .await
+            .expect("removal ok");
+        assert_eq!(outcome.residual_owned.count, 2);
+        assert_eq!(outcome.residual_owned.contexts.len(), 1);
+        assert_eq!(outcome.residual_owned.contexts[0].count, 2);
+        assert!(outcome.residual_owned.contexts[0]
+            .context_ref
+            .ends_with("/shared"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn remove_member_residual_is_empty_when_nothing_owned(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, leaver, "member", "native").await;
+
+        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
+            .await
+            .expect("removal ok");
+        assert_eq!(outcome.residual_owned.count, 0);
+        assert!(outcome.residual_owned.contexts.is_empty());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

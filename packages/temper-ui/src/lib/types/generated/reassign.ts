@@ -19,3 +19,24 @@ export type ReassignAck = { resource_id: string, to_profile_id: string, };
  * API request to reassign a single resource's owner (resource id is in the path).
  */
 export type ReassignResourceRequest = { to_profile_id: string, };
+
+/**
+ * Response to a member removal (or self-leave): the removal happened; this
+ * reports the residual owned-resource reach so the caller can hand it off.
+ */
+export type RemoveMemberOutcome = { residual_owned: ResidualOwnedReach, };
+
+/**
+ * One team context a removed member still owns resources in, with the count.
+ */
+export type ResidualContext = { 
+/**
+ * Decorated context ref `{owner_ref}/{slug}`.
+ */
+context_ref: string, count: number, };
+
+/**
+ * The resources a removed member still OWNS in the team's contexts — the reach
+ * an admin should hand off via `team reassign`. `count == 0` is the clean case.
+ */
+export type ResidualOwnedReach = { count: number, contexts: Array<ResidualContext>, };
