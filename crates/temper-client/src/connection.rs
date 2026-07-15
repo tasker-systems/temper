@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::connection::{
-    AttachCredentialResponse, Connection, ConnectionCredential, ProvisionConnectionRequest,
-    SetToolManifestRequest, SetWebhookEventsRequest,
+    AttachCredentialResponse, Connection, ConnectionCredential, GrantConnectionReachRequest,
+    ProvisionConnectionRequest, SetToolManifestRequest, SetWebhookEventsRequest,
 };
 
 /// Sub-client for connection provisioning.
@@ -103,6 +103,33 @@ impl<'a> ConnectionsClient<'a> {
             .json(&SetToolManifestRequest { tools });
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// Grant a TEAM read-reach on this connection. Owning ≠ reaching — this writes an access grant
+    /// so the team's members inherit read on what the connection receives.
+    pub async fn grant_reach(&self, id: Uuid, team: Uuid) -> Result<Connection> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/connections/{id}/reach");
+        let req = self
+            .http
+            .post(&path)
+            .json(&GrantConnectionReachRequest { team });
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
+    pub async fn revoke_reach(&self, id: Uuid, team: Uuid) -> Result<Connection> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/connections/{id}/reach");
+        let req = self
+            .http
+            .delete(&path)
+            .json(&GrantConnectionReachRequest { team });
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
             .await
     }
 }

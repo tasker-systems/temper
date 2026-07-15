@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n                 SELECT 1 FROM kb_access_grants\n                  WHERE subject_table = 'kb_connections' AND subject_id = $1\n                    AND principal_table = 'kb_teams' AND principal_id = $2\n                    AND can_read\n               ) AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4a047a3d00ec1d4fde33278878a30172b4d5f4fff8d44a49a20628f624e8426c"
+}

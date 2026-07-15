@@ -48,6 +48,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/connections/{id}/credential
 /api/connections/{id}/webhook-events
 /api/connections/{id}/tool-manifest
+/api/connections/{id}/reach
 /internal/saml/reconcile
 /api/embed/dispatch
 /api/embed/warm
