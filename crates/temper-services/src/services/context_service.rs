@@ -551,13 +551,28 @@ pub async fn reassign(
         temper_substrate::events::EventContext::default(),
     )
     .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .map_err(map_reassign_write_err)?;
 
     Ok(ReassignContextOutcome {
         context_id,
         owner_ref: team_owner_ref(pool, to_team_id).await?,
         reassigned: true,
     })
+}
+
+/// Map a substrate write error from `reassign_context_with` to an [`ApiError`].
+///
+/// The `context_reassign` SQL function raises SQLSTATE `42501` (insufficient_privilege) when its
+/// atomic RBAC invariant rejects the write. The `can_share` pre-check returns a clean `Forbidden`
+/// on the common path, so this only fires on a TOCTOU change between check and write — but that
+/// race should still read as `403`, not `500`. Everything else is a genuine internal error.
+fn map_reassign_write_err(e: anyhow::Error) -> ApiError {
+    if let Some(sqlx::Error::Database(db)) = e.downcast_ref::<sqlx::Error>() {
+        if db.code().as_deref() == Some("42501") {
+            return ApiError::Forbidden;
+        }
+    }
+    ApiError::Internal(e.to_string())
 }
 
 /// `+team-slug` decorated owner ref for a transfer outcome (mirrors `create`'s CASE).
@@ -933,5 +948,98 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// The `<handle>@web` emitter entity id for a profile (what `resolve_emitter` returns and what
+    /// `context_reassign` reads back to `kb_entities.profile_id` for its authz).
+    async fn emitter_of(pool: &PgPool, p: ProfileId, handle: &str) -> Uuid {
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id = $1 AND name = $2")
+            .bind(*p)
+            .bind(format!("{handle}@web"))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// The RBAC gate is an invariant of the `context_reassign` SQL function, not merely a service
+    /// pre-check — this is the TOCTOU backstop the review asked for. Calling the function DIRECTLY
+    /// (bypassing `can_share`) with an unauthorized emitter must still be rejected, atomically:
+    /// mallory manages the target team but does not administer alice's context, so the guard raises
+    /// SQLSTATE 42501 and the owner is left untouched.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sql_guard_rejects_unauthorized_emitter_directly(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let mallory = mk_profile_ent(&pool, "mallory").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, mallory, "owner").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+
+        let payload = temper_substrate::payloads::ContextReassigned {
+            context_id: ContextId::from(ctx),
+            from_owner_table: "kb_profiles".to_string(),
+            from_owner_id: *alice,
+            to_owner_table: "kb_teams".to_string(),
+            to_owner_id: acme,
+        };
+        let payload_json = serde_json::to_value(&payload).unwrap();
+        let emitter = emitter_of(&pool, mallory, "mallory").await;
+
+        let res = sqlx::query_scalar::<_, Uuid>("SELECT context_reassign($1,$2,$3,$4,$5)")
+            .bind(&payload_json)
+            .bind(emitter)
+            .bind(serde_json::json!({}))
+            .bind(None::<Uuid>)
+            .bind(None::<Uuid>)
+            .fetch_one(&pool)
+            .await;
+
+        match res.unwrap_err() {
+            sqlx::Error::Database(db) => assert_eq!(
+                db.code().as_deref(),
+                Some("42501"),
+                "authz raise must use insufficient_privilege"
+            ),
+            other => panic!("expected the SQL RBAC guard to raise, got {other:?}"),
+        }
+        // Atomic: the rejected write leaves ownership untouched (no partial mutation).
+        assert_eq!(
+            owner_of_context(&pool, ctx).await,
+            ("kb_profiles".to_string(), *alice),
+            "owner unchanged when the SQL guard rejects"
+        );
+    }
+
+    /// The system-admin bypass also holds at the SQL layer: the seeded admin (gating-team owner)
+    /// may reassign a context it administers directly through the function.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sql_guard_allows_system_admin_directly(pool: PgPool) {
+        let (admin, _member, _gating, context_id) = seed_admin_team_context(&pool).await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, admin, "owner").await;
+
+        let payload = temper_substrate::payloads::ContextReassigned {
+            context_id,
+            from_owner_table: "kb_profiles".to_string(),
+            from_owner_id: *admin,
+            to_owner_table: "kb_teams".to_string(),
+            to_owner_id: acme,
+        };
+        let payload_json = serde_json::to_value(&payload).unwrap();
+        let emitter = emitter_of(&pool, admin, "admin").await;
+
+        sqlx::query_scalar::<_, Uuid>("SELECT context_reassign($1,$2,$3,$4,$5)")
+            .bind(&payload_json)
+            .bind(emitter)
+            .bind(serde_json::json!({}))
+            .bind(None::<Uuid>)
+            .bind(None::<Uuid>)
+            .fetch_one(&pool)
+            .await
+            .expect("system admin transfer through the SQL function");
+
+        assert_eq!(
+            owner_of_context(&pool, *context_id).await,
+            ("kb_teams".to_string(), acme)
+        );
     }
 }
