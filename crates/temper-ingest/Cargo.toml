@@ -83,3 +83,9 @@ required-features = ["embed"]
 [[example]]
 name = "coldload_probe"
 required-features = ["embed-download"]
+
+# Root-cause probe for #451: feeds a git-LFS pointer to commit_from_memory to see whether ORT hangs
+# (the maxDuration-kill symptom) or errors fast. See bench/README.md.
+[[example]]
+name = "pointer_probe"
+required-features = ["embed-download"]
