@@ -593,6 +593,19 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
+        // Every profile that ACTS needs a `<handle>@web` emitter entity for `resolve_emitter`
+        // (real profiles get one on first auth). `share`/`unshare` are non-evented so they never
+        // needed it, but the event-sourced `reassign` resolves the caller's emitter — without
+        // this, a transfer as `admin` panics in `resolve_emitter`.
+        sqlx::query(
+            "INSERT INTO kb_entities (name, profile_id) \
+             VALUES ('admin@web', $1), ('member@web', $2)",
+        )
+        .bind(admin)
+        .bind(non_admin)
+        .execute(pool)
+        .await
+        .unwrap();
 
         // `temper-system` is created by migration 20260625000001 — use the existing row.
         let team_id: Uuid =
