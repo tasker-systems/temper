@@ -19,7 +19,7 @@
 - **New event names must be seeded.** `_event_append` raises unless a `kb_event_types` row exists. `context_reassigned` gets a `NULL` `payload_schema` row (like `resource_reassigned`) so it stays out of the published-schema `TYPED_EVENT_NAMES` invariant.
 - **Correlation-threaded SQL signature.** New mutation fns carry the full 5-param act-context signature `(p_payload, p_emitter, p_metadata DEFAULT '{}', p_invocation DEFAULT NULL, p_correlation DEFAULT NULL)` and forward `p_metadata`/`p_invocation`/`p_correlation` into `_event_append` — matching the post-`20260709000050` shape of every mutation fn (the `fire` arm passes all five).
 - **OpenAPI is a three-artifact contract.** New response DTOs restale `openapi.json` + the temper-rb gem + temper-ts `schema.ts`. Run `cargo make openapi` and stage all three; the drift gates compare against git (gem regen needs Docker; ts needs only Node and never skips).
-- **Scenario-schema snapshot.** The new `ContextReassigned` payload carries the `scenario-schema` `JsonSchema` derive, so `tests/scenario_schema.rs`'s snapshot changes — regenerate/accept it (step included).
+- **Scenario-schema derive (no snapshot churn).** The new `ContextReassigned` payload carries the `scenario-schema` `JsonSchema` derive for parity with `ResourceReassigned` — but `tests/scenario_schema.rs` snapshots only `Scenario`/`Seed`/`AccessScenario`, which don't reference the reassign payloads, so **no snapshot regen occurs** (confirmed: `ResourceReassigned` isn't in those snapshots either). Keep the derive for parity; don't chase a phantom diff.
 - **Env for tests:** `export DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`; `cargo make docker-up` before db tests. After merging any temper-cli change, the local e2e uses the prebuilt bin — rebuild it before e2e.
 - **Commit message trailer:** end every commit body with the repo's standard co-author + session trailers.
 
@@ -42,8 +42,8 @@
 - `crates/temper-api/src/handlers/contexts.rs` — thin `reassign` handler (or a new `handlers/context_reassign.rs`).
 - `crates/temper-api/src/routes.rs`, `openapi.rs` — route + schema registration.
 - `crates/temper-client/src/contexts.rs` — client method.
-- `crates/temper-cli/src/cli.rs`, `commands/context.rs` — `context transfer` verb.
-- `crates/temper-mcp/src/tools/contexts.rs` — `transfer_context` tool.
+- `crates/temper-cli/src/cli.rs` (the `ContextAction` enum, ~line 780), `commands/context_cmd.rs` — `context transfer` verb.
+- `crates/temper-mcp/src/tools/contexts.rs` **and** `crates/temper-mcp/src/service.rs` — `transfer_context` tool body + its `#[tool]` registration (the registration lives in `service.rs`, ~626).
 - `openapi.json`, `clients/temper-rb/lib/temper/generated/*`, `clients/temper-ts/src/generated/schema.ts` — regenerated.
 
 ---
@@ -134,7 +134,7 @@ pub struct ContextReassigned {
 }
 ```
 
-> Confirm `ContextId` is importable in `payloads.rs` (substrate `ids` or `temper_core::types::ids`). If substrate `ids.rs` has no `ContextId`, add one mirroring `ResourceId` (a `Uuid` newtype with `From<Uuid>`), OR type `context_id` as `Uuid` — prefer the typed id for parity with `ResourceReassigned`. Confirm `Uuid` is in scope (other payloads use it).
+> `ContextId` is **already present** (`temper-core/src/types/ids.rs:111`, re-exported by substrate `ids.rs:13`, `From<Uuid>` via `define_id!`) and already imported in `payloads.rs:18`; `Uuid` is in scope at `payloads.rs:24`. No new newtype needed.
 
 - [ ] **Step 3: EventKind variant + string mappings**
 
@@ -194,9 +194,11 @@ In `events.rs`, after the `SeedAction::ResourceReassign` fire arm (~1049):
         }
 ```
 
-- [ ] **Step 6: Replay classification + projection dispatch**
+- [ ] **Step 6: Replay classification + projection dispatch** — **two** mandatory edits (both matches are exhaustive, no wildcard, so both must compile):
 
-In `replay.rs`: add `| EventKind::ContextReassigned` to the non-content-payload classification list (~179, beside `ResourceReassigned`). Add the projection dispatch arm (~415):
+**(a)** Add `| EventKind::ContextReassigned` to the no-manifest `=> None` arm in `snapshot()` (`replay.rs:163-181`, beside `ResourceReassigned`) — the payload carries no chunk manifest. This *is* the "non-content classification" arm; it is **one** edit, not two (an earlier draft double-counted it).
+
+**(b)** Add the projection-dispatch arm (~415):
 
 ```rust
             EventKind::ContextReassigned => {
@@ -207,8 +209,6 @@ In `replay.rs`: add `| EventKind::ContextReassigned` to the non-content-payload 
                     .await?;
             }
 ```
-
-> Confirm the `snapshot()` sidecar match (`replay.rs:163-181`) also lists `ContextReassigned` under the no-manifest arm — it must, since the payload carries no chunks (add it beside `ResourceReassigned` there too).
 
 - [ ] **Step 7: The writes-layer fn**
 
@@ -261,9 +261,9 @@ cargo sqlx prepare --workspace -- --all-features
 cargo make check
 ```
 
-If the `scenario-schema` snapshot test (`tests/scenario_schema.rs`) fails on the new `ContextReassigned`, regenerate/accept its snapshot per that test's update instructions, and stage it.
+(No `scenario_schema.rs` snapshot change is expected — see the Global Constraint. If `check` unexpectedly reds there, treat it as a real signal, not a routine regen.)
 
-- [ ] **Step 10: Commit** (`migrations/ crates/temper-substrate/ .sqlx/` + any snapshot).
+- [ ] **Step 10: Commit** (`migrations/ crates/temper-substrate/ .sqlx/`).
 
 ---
 
@@ -276,7 +276,11 @@ If the `scenario-schema` snapshot test (`tests/scenario_schema.rs`) fails on the
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the `tests` module in `context_service.rs` (reuse its existing seed helpers; the module already seeds profiles/teams/contexts + mints a system-admin — see `context_service.rs:486+`). Cover:
+Add to the `tests` module in `context_service.rs` (reuse its seed helpers; the module already seeds profiles/teams/contexts + mints a system-admin — see `context_service.rs:496+`).
+
+> **Target team must be non-gating.** The existing `seed_admin_team_context` helper builds the **`temper-system` gating team** and makes the caller its owner (so `is_system_admin` resolves true). But `can_share` **refuses a gating-team target** (`is_gating_team` ⇒ `Ok(false)`, `context_service.rs:378`). So every success-path test must seed a **separate, non-gating team** as the transfer target and add the caller as owner/maintainer of *it*. Only the "target is the gating/root team ⇒ Forbidden" matrix case reuses `temper-system` as the target.
+
+Cover:
 
 - `personal_context_transfers_to_team` — after `reassign`, the context's `owner_table='kb_teams'`/`owner_id=team`; `reassigned == true`.
 - `team_member_can_author_after_transfer` — a resource homed in the context: `can_modify_resource(member, resource)` is false before and **true** after transfer for an owner/maintainer/**member**; **false** for a `watcher`; unchanged (false) for a non-member. (Reuse `can_modify_resource` via `SELECT can_modify_resource($1,$2)`.)
@@ -469,9 +473,9 @@ pub async fn reassign(
 }
 ```
 
-- [ ] **Step 2: Route + OpenAPI** — add to the **gated** router beside the existing context team routes:
-`.route("/api/contexts/{id}/reassign", post(handlers::contexts::reassign))`.
-In `openapi.rs` add `crate::handlers::contexts::reassign,` to `paths(...)` and `ReassignContextRequest`/`ReassignContextOutcome` to `components(schemas(...))`. Extend the openapi assertion test with `assert!(json.contains("/api/contexts/{id}/reassign"));`.
+- [ ] **Step 2: Route + OpenAPI** — the router is a utoipa-axum `OpenApiRouter`; routes are registered with `.routes(routes!(...))` (which *also* collects the OpenAPI path), **not** a plain `.route(...)`. Add beside the existing context team routes (`routes.rs:88-94`):
+`.routes(routes!(handlers::contexts::reassign))`.
+`openapi.rs` has **no `paths(...)` list** — paths are derived from the router (`openapi.rs:21-25`). The only `openapi.rs` edit is adding `ReassignContextRequest` + `ReassignContextOutcome` to `components(schemas(...))` (beside `ShareContextRequest`/`ShareContextOutcome`, `openapi.rs:43-44`). Extend the openapi assertion test (`openapi.rs:292-293`) with `assert!(json.contains("/api/contexts/{id}/reassign"));`.
 
 - [ ] **Step 3: Regenerate the three artifacts + verify**
 
@@ -491,40 +495,43 @@ If Docker is unavailable for the gem regen, generate what you can, stage it, and
 
 **Files:** Modify `crates/temper-client/src/contexts.rs`.
 
-- [ ] Add (mirror the sibling `share`/`unshare` context client methods' HTTP-helper usage exactly):
+- [ ] Add, mirroring `share_team`'s body **exactly** (`contexts.rs:67-78`) — there is **no `post_json`**; the pattern is `resolve_token` → `post(&path).json(body)` → `send_json(&Method::POST, &path, req, Some(&token))`:
 
 ```rust
     /// Transfer a context's ownership to a team. POST /api/contexts/{id}/reassign.
     pub async fn reassign(
         &self,
         id: uuid::Uuid,
-        req: &temper_core::types::context::ReassignContextRequest,
+        body: &temper_core::types::context::ReassignContextRequest,
     ) -> Result<temper_core::types::context::ReassignContextOutcome> {
-        self.http.post_json(&format!("/api/contexts/{id}/reassign"), req).await
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{id}/reassign");
+        let req = self.http.post(&path).json(body);
+        self.http.send_json(&Method::POST, &path, req, Some(&token)).await
     }
 ```
 
-> Match the exact helper name/signature the neighbouring context methods use. `cargo make check` + commit.
+> Copy the surrounding `use` (`reqwest::Method`) and exact helper signatures from `share_team`/`unshare_team` in the same file; do not invent names. `cargo make check` + commit.
 
 ---
 
 ## Task 6: CLI `temper context transfer`
 
-**Files:** Modify `crates/temper-cli/src/cli.rs` (context subcommand enum), `crates/temper-cli/src/commands/context.rs` (dispatch + action).
+**Files:** Modify `crates/temper-cli/src/cli.rs` (the `ContextAction` enum, ~line 780 — `Share` at 806, `Unshare` at 813), `crates/temper-cli/src/commands/context_cmd.rs` (dispatch + action). *(Note the file is `context_cmd.rs`, not `context.rs`.)*
 
-- [ ] **Step 1: Subcommand variant** (mirror the existing `context share`/`unshare` clap attrs):
+- [ ] **Step 1: `ContextAction::Transfer` variant** (mirror the `Share`/`Unshare` clap attrs):
 
 ```rust
     /// Transfer a context's ownership to a team (shared authorship requires team ownership).
     Transfer {
-        /// Context ref (UUID or decorated slug-uuid).
+        /// Context ref — `@me/slug`, `@handle/slug`, or UUID.
         context: String,
         /// Target team (slug, +slug, decorated ref, or UUID).
         team: String,
     },
 ```
 
-- [ ] **Step 2: Action** (mirror `share_remote` in `commands/context.rs`, which already resolves a context ref + a team via `resolve_team_id`):
+- [ ] **Step 2: Action** (mirror `share_remote` in `context_cmd.rs:227`, which resolves the team via `resolve_team_id`):
 
 ```rust
 pub async fn transfer_remote(
@@ -533,26 +540,33 @@ pub async fn transfer_remote(
     team: &str,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
-    let context_id = /* resolve context ref → Uuid, exactly as share_remote does */;
+    // IMPORTANT: use the read-side resolver that ACCEPTS `@me`, not `resolve_context_id`
+    // (the share/unshare resolver DELIBERATELY REFUSES `@me`, context_cmd.rs:261-264).
+    // The transfer JTBD is literally `@me/my-project → team`, so `@me` MUST resolve.
+    let context_id = resolve_context_id_for_read(client, context).await?;
     let to_team_id = resolve_team_id(client, team).await?;
     let req = temper_core::types::context::ReassignContextRequest { to_team_id };
-    let outcome = client.contexts().reassign(context_id, &req).await.map_err(crate::commands::client_err)?;
+    let outcome = client
+        .contexts()
+        .reassign(context_id, &req)
+        .await
+        .map_err(crate::commands::client_err)?;
     println!("{}", crate::format::render(&outcome, fmt)?);
     Ok(())
 }
 ```
 
-Wire the `Transfer` variant to `transfer_remote` in the context command dispatcher.
+Wire the `Transfer` variant to `transfer_remote` in the `ContextAction` dispatcher.
 
-> Copy `share_remote`'s exact context-ref resolution (it may use `parse_ref` or a client lookup) — do not invent one. `cargo build -p temper-cli --bin temper && ./target/debug/temper context transfer --help`, then `cargo make check` + commit.
+> **Confirm the `@me`-accepting resolver's exact name** — the review identified `resolve_context_id` as the *share-path* resolver that refuses `@me` (`context_cmd.rs:261-264`) and pointed at a read-side variant that accepts it. Read `context_cmd.rs` around 227-264, pick the resolver that accepts `@me`, and if none exists, either (a) generalize `resolve_context_id` with a flag, or (b) reduce the CLI to `@handle/slug`|UUID and note the `@me` limitation in `--help`. Do **not** ship a `context transfer @me/x` that 400s — that is the headline flow. `cargo build -p temper-cli --bin temper && ./target/debug/temper context transfer --help`, then `cargo make check` + commit.
 
 ---
 
 ## Task 7: MCP tool `transfer_context`
 
-**Files:** Modify `crates/temper-mcp/src/tools/contexts.rs` (add beside `share_context`).
+**Files:** Modify `crates/temper-mcp/src/tools/contexts.rs` (the tool body, beside `share_context` at `contexts.rs:120-164`) **and** `crates/temper-mcp/src/service.rs` (the `#[tool]` registration, beside `share_context` at ~626-632). **Both** edits are required — the body in `tools/`, the `#[tool]`-annotated delegating method in `service.rs`; without the `service.rs` method the tool is never exposed.
 
-- [ ] Add an input struct + tool method mirroring `ShareContextInput`/`share_context` (`contexts.rs:43-141`):
+- [ ] **Step 1: Input struct + tool body** in `tools/contexts.rs`, mirroring `ShareContextInput`/`share_context` (`contexts.rs:43-141`) — `svc.require_profile()` → `context_service::reassign(pool, caller, input.context, input.to_team)` → `map_api_error`:
 
 ```rust
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -564,9 +578,9 @@ pub struct TransferContextInput {
 }
 ```
 
-The tool resolves the caller profile (as `share_context` does), then calls `context_service::reassign(pool, caller, input.context, input.to_team)` and returns the outcome. Register it in the tool router the same way `share_context` is.
+- [ ] **Step 2: `#[tool]` registration** in `service.rs` (~626), mirroring the `share_context` `#[tool]` method that delegates to `tools::contexts::share_context`. Add the sibling `transfer_context` delegating to `tools::contexts::transfer_context`.
 
-> Match `share_context`'s exact auth-context extraction + error mapping. This delivers the agent-first path for the op; broader team lifecycle over MCP is the separate Seq-21 task. `cargo make check` + commit.
+> Match `share_context`'s exact auth-context extraction + error mapping in both places. This delivers the agent-first path for the op; broader team lifecycle over MCP is the separate Seq-21 task. `cargo make check` + commit.
 
 ---
 
