@@ -95,6 +95,7 @@ fn one_chunk_block(content: &str) -> PreparedBlock {
     embedding[0] = 1.0;
     PreparedBlock {
         incorporated: vec![],
+        raw_text: None,
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,

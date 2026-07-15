@@ -94,6 +94,7 @@ pub async fn fire_resource_with_headed_chunk(
         embedding[0] = 1.0;
         PreparedBlock {
             incorporated: vec![],
+            raw_text: None,
             block_id: BlockId::from(Uuid::now_v7()),
             seq: 0,
             role: None,
@@ -256,6 +257,7 @@ pub async fn genesis_cogmap(
     charter_embedding[0] = 1.0;
     let charter = vec![PreparedBlock {
         incorporated: vec![],
+        raw_text: None,
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,
