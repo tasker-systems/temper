@@ -6,6 +6,13 @@
 //! stack — scanned across the whole document, not reset per segment — into the next
 //! segment's `initial_breadcrumb`, so [`crate::chunk::chunk_markdown_with_prefix`] can
 //! reconstruct full ancestor `header_path`s for content that begins mid-section.
+//!
+//! **The reader does not normalize.** It reads with [`BufRead::read_line`], which *retains*
+//! each line's terminator (`\n`, `\r\n`, or none at EOF), so concatenating the segments in
+//! `seq` order reproduces the source **byte-for-byte** — CRLF, blank lines, and a missing
+//! trailing newline all survive. Heading detection runs against the trimmed line; only the
+//! emitted bytes are left untouched. (Before this, `BufRead::lines()` + `join("\n")` silently
+//! collapsed CRLF to LF and dropped the trailing newline.)
 
 use std::io::{self, BufRead};
 
@@ -36,27 +43,27 @@ pub fn segment_reader<R: BufRead>(
     budget: usize,
 ) -> impl Iterator<Item = io::Result<Segment>> {
     SegmentReader {
-        lines: src.lines(),
+        src,
         budget,
         seq: 0,
         header_stack: Vec::new(),
-        buffer: Vec::new(),
-        buffer_len: 0,
+        buffer: String::new(),
         segment_start_breadcrumb: Vec::new(),
         done: false,
     }
 }
 
 struct SegmentReader<R: BufRead> {
-    lines: io::Lines<R>,
+    src: R,
     budget: usize,
     seq: u32,
     /// Heading stack scanned across the *whole* document (never reset per segment) —
     /// `(level, title)` pairs, mirroring `chunk::collect_sections_with_stack`'s pop-on-
     /// same-or-higher-level rule.
     header_stack: Vec<(usize, String)>,
-    buffer: Vec<String>,
-    buffer_len: usize,
+    /// The in-progress segment's *raw* bytes — each line appended verbatim, terminator and
+    /// all. Its `len()` is the running budget measure.
+    buffer: String,
     /// The breadcrumb snapshot for the segment currently being accumulated in `buffer`.
     segment_start_breadcrumb: Vec<String>,
     done: bool,
@@ -67,8 +74,8 @@ impl<R: BufRead> SegmentReader<R> {
         self.header_stack.iter().map(|(_, t)| t.clone()).collect()
     }
 
-    /// Scan `line`; if it's an ATX heading, pop/push the running stack exactly like
-    /// `chunk::collect_sections_with_stack` does.
+    /// Scan `line` (already trimmed of its terminator); if it's an ATX heading, pop/push the
+    /// running stack exactly like `chunk::collect_sections_with_stack` does.
     fn scan_heading(&mut self, line: &str) {
         let Some(caps) = heading_re().captures(line) else {
             return;
@@ -86,14 +93,11 @@ impl<R: BufRead> SegmentReader<R> {
         self.header_stack.push((level, title));
     }
 
-    /// Append `line` to the in-progress segment buffer, updating the running heading stack.
+    /// Append `line` — terminator and all — to the in-progress segment buffer, updating the
+    /// running heading stack from the trimmed line. The bytes are never mutated.
     fn append_line(&mut self, line: String) {
-        if !self.buffer.is_empty() {
-            self.buffer_len += 1; // '\n' join separator
-        }
-        self.buffer_len += line.len();
-        self.scan_heading(&line);
-        self.buffer.push(line);
+        self.scan_heading(line.trim_end());
+        self.buffer.push_str(&line);
     }
 
     /// Start a fresh segment buffer with `line` as its first line, snapshotting the current
@@ -110,10 +114,8 @@ impl<R: BufRead> SegmentReader<R> {
         if self.buffer.is_empty() {
             return None;
         }
-        let text = self.buffer.join("\n");
+        let text = std::mem::take(&mut self.buffer);
         let initial_breadcrumb = std::mem::take(&mut self.segment_start_breadcrumb);
-        self.buffer.clear();
-        self.buffer_len = 0;
         let seg = Segment {
             seq: self.seq,
             text,
@@ -132,26 +134,27 @@ impl<R: BufRead> Iterator for SegmentReader<R> {
             return None;
         }
         loop {
-            let line = match self.lines.next() {
-                None => {
+            let mut line = String::new();
+            match self.src.read_line(&mut line) {
+                Ok(0) => {
                     self.done = true;
                     return self.flush().map(Ok);
                 }
-                Some(Err(e)) => {
+                Ok(_) => {}
+                Err(e) => {
                     self.done = true;
                     return Some(Err(e));
                 }
-                Some(Ok(line)) => line,
-            };
+            }
 
-            let is_heading = heading_re().is_match(&line);
-            let would_exceed_budget =
-                self.buffer_len > 0 && self.buffer_len + 1 + line.len() > self.budget;
+            // Heading detection ignores the retained terminator; budget accounting counts it.
+            let is_heading = heading_re().is_match(line.trim_end());
+            let buffer_len = self.buffer.len();
+            let would_exceed_budget = buffer_len > 0 && buffer_len + line.len() > self.budget;
             // Prefer to cut right before a heading once the buffer already holds at least
             // half the budget — a cleaner boundary than waiting for the hard budget cut,
             // without inventing an untested precise threshold.
-            let prefers_heading_cut =
-                is_heading && self.buffer_len > 0 && self.buffer_len * 2 >= self.budget;
+            let prefers_heading_cut = is_heading && buffer_len > 0 && buffer_len * 2 >= self.budget;
 
             if (would_exceed_budget || prefers_heading_cut) && !self.buffer.is_empty() {
                 if let Some(seg) = self.flush() {
@@ -192,10 +195,7 @@ mod tests {
 
     #[test]
     fn never_splits_a_line_and_reassembles_verbatim() {
-        let doc = (0..1000)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let doc = (0..1000).map(|i| format!("line {i}\n")).collect::<String>();
         let segs: Vec<_> = super::segment_reader(std::io::Cursor::new(doc.clone()), 512)
             .map(|r| r.unwrap())
             .collect();
@@ -203,15 +203,31 @@ mod tests {
             segs.len() > 1,
             "expected multiple segments at a tiny budget"
         );
-        let reassembled = segs
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+        // Each segment's text retains its own line terminators, so segments concatenate
+        // (no join separator) back to the exact source bytes.
+        let reassembled: String = segs.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(
             reassembled, doc,
             "segments rejoin to the original source verbatim"
         );
+    }
+
+    #[test]
+    fn segments_reassemble_byte_exactly() {
+        // The segmenter must not normalize: CRLF, a missing trailing newline, blank lines,
+        // and multibyte UTF-8 all survive a segment→rejoin round-trip unchanged.
+        for doc in [
+            "# T\n\nalpha\nbeta\n",         // trailing newline
+            "# T\n\nalpha\nbeta",           // NO trailing newline
+            "# T\r\n\r\nalpha\r\nbeta\r\n", // CRLF
+            "# T\n\nnaïve — ünïcode ✅\n",  // multibyte
+        ] {
+            let segs: Vec<_> = super::segment_reader(std::io::Cursor::new(doc), 16)
+                .map(|r| r.unwrap())
+                .collect();
+            let rejoined: String = segs.iter().map(|s| s.text.as_str()).collect();
+            assert_eq!(rejoined, doc, "segments must rejoin byte-exactly: {doc:?}");
+        }
     }
 
     #[test]

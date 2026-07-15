@@ -378,6 +378,7 @@ pub async fn run_segmented_create(
                 resource_id: response.resource_id,
                 source_hash: source_hash.clone(),
                 block_budget: budget as u32,
+                segmenter_version: crate::actions::ingest_manifest::SEGMENTER_VERSION,
                 correlation_id: response.correlation_id,
                 blocks: response.blocks.clone(),
                 finalized: false,
@@ -819,6 +820,22 @@ mod tests {
     #[test]
     fn plan_segments_rejects_an_empty_body() {
         assert!(plan_segments("", 262_144).is_err());
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn plan_segments_partitions_the_source_exactly() {
+        // The segments the CLI ships must concatenate back to the exact source bytes — CRLF
+        // and the trailing newline included — or the "verbatim" bytes PR 3 stores would
+        // already be normalized before they land.
+        let body = "# Doc\r\n\r\n".to_string() + &"line of text\n".repeat(5_000);
+        let plan = plan_segments(&body, 1024).expect("should succeed");
+        assert!(plan.segments.len() > 1, "expected a multi-segment body");
+        let rejoined: String = plan.segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(
+            rejoined, body,
+            "segments must partition the source byte-exactly"
+        );
     }
 
     #[cfg(feature = "embed")]
