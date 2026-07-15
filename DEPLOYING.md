@@ -11,9 +11,13 @@ Design rationale:
 
 ## The deployment unit: an independent Vercel project
 
-Temper's cloud runtime is the repo-root [`vercel.json`](vercel.json), which ships the
-Rust serverless functions `/api/axum` (the Axum API) and `/api/mcp` (the MCP server),
-built remotely by Vercel's Rust runtime.
+Temper's cloud runtime is the repo-root [`vercel.json`](vercel.json), which ships three
+Rust serverless functions — `/api/axum` (the public Axum API), `/api/mcp` (the MCP server),
+and `/api/internal` (the infrastructure-invoked embed crons + server-to-server internal
+routes) — built remotely by Vercel's Rust runtime. `/api/internal` is a **separate function
+purely so it can carry a different `maxDuration`** (see [Function timeouts](#function-timeouts-per-function-not-per-route)
+below): Vercel's timeout is per-function, and the embed crons run ONNX work that legitimately
+exceeds the public API's 60s ceiling.
 
 A **deployment target** is one Vercel project pointed at this repo. Each target owns,
 on the Vercel side, everything that distinguishes it:
@@ -139,19 +143,33 @@ between searches, *every* search can pay this — the symptom is "search never u
 
 Two committed, target-agnostic mitigations in `vercel.json`, so every target inherits them:
 
-- **Function memory → CPU.** `functions."api/axum.rs"` and `functions."api/mcp.rs"` set
-  `memory: 3009` (Vercel scales CPU with memory), so the cold model load + first inference
-  fit inside the budget instead of timing out. This is the **durable** fix and it covers
-  **both** Rust functions (the MCP lambda is separate from the Axum one). `maxDuration: 60`
-  is headroom above the 8s budget so a cold request completes rather than being killed.
-- **Keep-warm cron.** `GET /api/embed/warm` (every 2 min) loads and exercises the embedder
-  so the serving instance's model cache is hot before a real search arrives. Same
-  `EMBED_DISPATCH_SECRET` bearer gate as `/api/embed/dispatch` (fail-closed when unset), so
-  it activates once that secret is set (see [Async embedding](#async-embedding-off-request-embed-drain-issue-299)
-  above — the same secret gates both). Best-effort: Vercel doesn't guarantee the cron and a
-  user request hit the same instance, and it warms the **Axum** function (the REST/web search
-  path); the MCP function relies on the memory lever plus its own traffic. Tune the cadence,
-  or the budget via `TEMPER_QUERY_EMBED_BUDGET_MS`, per target.
+- **Function memory → CPU.** All three Rust functions set `memory: 3009` (Vercel scales CPU
+  with memory), so the cold model load + first inference fit inside the budget instead of
+  timing out. This is the **durable** fix for the search path and it covers **every** Rust
+  function (each lambda is separate). On `api/axum.rs`/`api/mcp.rs`, `maxDuration: 60` is
+  headroom above the 8s search budget so a cold request completes rather than being killed.
+- **Keep-warm cron.** `GET /api/embed/warm` (every 2 min) loads and exercises the embedder so
+  a serving instance's model cache is hot. Same `EMBED_DISPATCH_SECRET` bearer gate as
+  `/api/embed/dispatch` (fail-closed when unset), so it activates once that secret is set (see
+  [Async embedding](#async-embedding-off-request-embed-drain-issue-299) above — the same secret
+  gates both). It is routed to the **`api/internal`** function, so it keeps the **embed-drain
+  worker** hot (post-#299 that is where the real repeated ONNX cost lives — dispatch runs every
+  minute); the public Axum/MCP search paths rely on the memory lever, their 8s budget +
+  graceful FTS degrade, and live traffic. Tune the cadence, or the budget via
+  `TEMPER_QUERY_EMBED_BUDGET_MS`, per target.
+
+### Function timeouts: per-function, not per-route
+
+Vercel's `maxDuration` is set **per function** (the `functions` map, keyed by source file),
+never per route — a `routes` entry cannot carry its own timeout. So an endpoint gets a
+different timeout only by being served from a different function. That is why the embed crons
+live on `api/internal.rs` (`maxDuration: 300`) while the public API stays on `api/axum.rs`
+(`maxDuration: 60`): raising the public ceiling to survive a long cron would let **any** public
+request hang for that window. The `routes` block diverts `/api/embed/dispatch`, `/api/embed/warm`,
+and `/internal/*` to `/api/internal` before the `/(.*) → /api/axum` catch-all. The heavy ONNX
+surface is confined to these crons by design — `search` self-bounds at the 8s query-embed budget
+and degrades to FTS+graph, and `ingest` defers embedding to the drain (#299) — so no other
+endpoint needs a raised timeout.
 
 ## Rollback
 

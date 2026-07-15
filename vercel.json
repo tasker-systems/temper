@@ -13,12 +13,16 @@
   ],
   "functions": {
     "api/axum.rs": { "memory": 3009, "maxDuration": 60 },
-    "api/mcp.rs": { "memory": 3009, "maxDuration": 60 }
+    "api/mcp.rs": { "memory": 3009, "maxDuration": 60 },
+    "api/internal.rs": { "memory": 3009, "maxDuration": 300 }
   },
   "routes": [
     { "handle": "filesystem" },
     { "src": "/mcp", "dest": "/api/mcp" },
     { "src": "/mcp/(.*)", "dest": "/api/mcp" },
+    { "src": "/api/embed/dispatch", "dest": "/api/internal" },
+    { "src": "/api/embed/warm", "dest": "/api/internal" },
+    { "src": "/internal/(.*)", "dest": "/api/internal" },
     { "src": "/.well-known/oauth-authorization-server", "dest": "/api/oauth/authorization-server" },
     { "src": "/oauth/jwks", "dest": "/api/oauth/jwks" },
     { "src": "/oauth/authorize", "dest": "/api/oauth/authorize" },

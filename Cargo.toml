@@ -16,6 +16,10 @@ path = "api/axum.rs"
 name = "mcp"
 path = "api/mcp.rs"
 
+[[bin]]
+name = "internal"
+path = "api/internal.rs"
+
 [dependencies]
 temper-api = { path = "crates/temper-api" }
 temper-services = { path = "crates/temper-services" }
