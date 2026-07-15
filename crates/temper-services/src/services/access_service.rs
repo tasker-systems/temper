@@ -153,6 +153,31 @@ pub async fn insert_grant(conn: &mut sqlx::PgConnection, p: &InsertGrantParams) 
     Ok(inserted)
 }
 
+/// Raw delete of one access grant by its `(subject, principal)` 4-tuple, on a connection so it can
+/// join a transaction. **Performs no authorization** — every caller must gate first (auth before
+/// writes). Returns whether a row was removed (absent ⇒ `false`, idempotent no-op).
+pub async fn delete_grant(
+    conn: &mut sqlx::PgConnection,
+    subject_table: &str,
+    subject_id: Uuid,
+    principal_table: &str,
+    principal_id: Uuid,
+) -> ApiResult<bool> {
+    let deleted = sqlx::query!(
+        r#"DELETE FROM kb_access_grants
+            WHERE subject_table = $1 AND subject_id = $2
+              AND principal_table = $3 AND principal_id = $4"#,
+        subject_table,
+        subject_id,
+        principal_table,
+        principal_id,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok(deleted > 0)
+}
+
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
 /// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
 /// the row already existed and was updated in place.
@@ -193,21 +218,16 @@ pub async fn revoke_capability(
     if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let deleted = sqlx::query!(
-        r#"DELETE FROM kb_access_grants
-            WHERE subject_table = $1 AND subject_id = $2
-              AND principal_table = $3 AND principal_id = $4"#,
-        req.subject_table,
+    let mut conn = pool.acquire().await?;
+    let revoked = delete_grant(
+        &mut conn,
+        &req.subject_table,
         req.subject_id,
-        req.principal_table,
+        &req.principal_table,
         req.principal_id,
     )
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(RevokeOutcome {
-        revoked: deleted > 0,
-    })
+    .await?;
+    Ok(RevokeOutcome { revoked })
 }
 
 /// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is

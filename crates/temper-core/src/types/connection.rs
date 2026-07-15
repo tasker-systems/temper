@@ -160,6 +160,18 @@ pub struct AttachCredentialResponse {
     pub verification: CredentialVerification,
 }
 
+/// Grant (or revoke) a TEAM's read-reach on a connection. Owning a connection is not reaching it:
+/// this writes a `kb_access_grants` row (`subject_table = 'kb_connections'`) that lets the named
+/// team READ what the connection receives. Reach is read-only — a grant confers no write. One
+/// request type carries `team` for both the grant and the revoke, so the two sides cannot drift.
+///
+/// The CLI resolves the team ref to a UUID before sending, so this is a `Uuid`, not a ref string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrantConnectionReachRequest {
+    /// The team receiving read-reach. Its members inherit read on what the connection receives.
+    pub team: Uuid,
+}
+
 /// Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.
 ///
 /// Not decorative: the manifest is the evidence the provider is admissible at all. A provider that

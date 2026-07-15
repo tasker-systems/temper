@@ -196,6 +196,49 @@ pub async fn set_tool_manifest_remote(
     Ok(())
 }
 
+/// Grant a TEAM read-reach on this connection. Owning a connection is NOT reaching it — this
+/// writes an access grant so the team's members inherit read on what the connection receives.
+/// Reach is read-only; it confers no write.
+pub async fn grant_reach_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    team: &str,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    let row = client
+        .connections()
+        .grant_reach(parse_uuid("connection id", id)?, team_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&row, fmt)?);
+    crate::output::hint(
+        "Read-reach granted: the team's members now inherit read on what this connection receives. \
+         Reach is read-only — it confers no write.",
+    );
+    Ok(())
+}
+
+/// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
+pub async fn revoke_reach_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    team: &str,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    let row = client
+        .connections()
+        .revoke_reach(parse_uuid("connection id", id)?, team_id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    println!("{}", crate::format::render(&row, fmt)?);
+    crate::output::hint(
+        "The team now has no read-reach on this connection (idempotent — an absent grant was a no-op).",
+    );
+    Ok(())
+}
+
 /// Revoke a connection.
 pub async fn revoke_remote(
     client: &temper_client::TemperClient,
