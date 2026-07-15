@@ -190,17 +190,28 @@ pub async fn embed_resource_chunks(
 
     let mut embedded = 0u64;
     if !to_embed.is_empty() {
-        let texts: Vec<&str> = to_embed.iter().map(|(_, c)| c.as_str()).collect();
-        let vectors = temper_ingest::embed::embed_texts(&texts)?;
-        if vectors.len() != to_embed.len() {
+        // ONNX inference is CPU-bound and blocking; run it on the blocking pool via `spawn_blocking`
+        // rather than inline on the async executor. Inline, a 64-chunk single-threaded embed pins a
+        // tokio worker for its full duration — starving every other task the runtime is driving on
+        // that thread (the same reason `warm_embedder` already wraps its embed). The DB reads/writes
+        // around it stay async; only the inference moves off-executor, so the strings are handed to
+        // the closure by value and the vectors come back for the async UPDATE loop below.
+        let (chunk_ids, texts): (Vec<Uuid>, Vec<String>) = to_embed.into_iter().unzip();
+        let vectors = tokio::task::spawn_blocking(move || {
+            let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+            temper_ingest::embed::embed_texts(&refs)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("embed inference task panicked: {e}"))??;
+        if vectors.len() != chunk_ids.len() {
             anyhow::bail!(
                 "embed_texts returned {} vectors for {} chunks",
                 vectors.len(),
-                to_embed.len()
+                chunk_ids.len()
             );
         }
 
-        for ((chunk_id, _), emb) in to_embed.iter().zip(&vectors) {
+        for (chunk_id, emb) in chunk_ids.iter().zip(&vectors) {
             let vec_lit = format!(
                 "[{}]",
                 emb.iter()

@@ -62,6 +62,31 @@ pub async fn warm_embedder() -> ApiResult<usize> {
     Ok(dims)
 }
 
+/// Default wall-clock ceiling for one dispatch pass, in seconds. Sits well under the `api/internal`
+/// function's `maxDuration` (300s in `vercel.json`) so a pass returns cleanly rather than being killed
+/// mid-embed. The chunk budget ([`temper_substrate::embed::EMBED_CHUNK_BUDGET`], 64) bounds *work*, but
+/// the box's real ms/chunk is unmeasured (task `019f5892`) and a cold model load is paid before the
+/// first inference — so a work-bound alone cannot promise the pass finishes in time. This deadline
+/// converts "we hope 64 chunks fits" into "we provably stop claiming new work by T." The headroom
+/// between it and `maxDuration` must cover one in-flight embed (a single job embeds at most one
+/// 64-chunk batch) plus the re-enqueue writes and the response.
+pub const DEFAULT_EMBED_DISPATCH_DEADLINE_SECONDS: u64 = 200;
+
+/// Env override for the per-pass wall-clock ceiling, in seconds. A malformed or zero value falls back
+/// to the default rather than silently disabling the bound — mirroring `resolve_chunk_budget`. Retune
+/// alongside `maxDuration` and `TEMPER_EMBED_CHUNK_BUDGET` once real ms/chunk is measured.
+pub const EMBED_DISPATCH_DEADLINE_ENV: &str = "TEMPER_EMBED_DISPATCH_DEADLINE_SECONDS";
+
+/// Resolve the per-pass wall-clock ceiling as a [`std::time::Duration`].
+pub fn resolve_dispatch_deadline() -> std::time::Duration {
+    let secs = std::env::var(EMBED_DISPATCH_DEADLINE_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_EMBED_DISPATCH_DEADLINE_SECONDS);
+    std::time::Duration::from_secs(secs)
+}
+
 /// What slice of the index to re-embed. Deliberately three granularities, because a re-embed is a
 /// thing you want to try on **one** resource, then a **handful**, then **everything** — in that order.
 /// A mechanism that only offers "all" is one nobody dares run.
@@ -221,6 +246,17 @@ pub async fn dispatch_tick(
     cap: Option<i32>,
     redrive: bool,
 ) -> ApiResult<EmbedDispatchSummary> {
+    dispatch_tick_inner(pool, cap, redrive, resolve_dispatch_deadline()).await
+}
+
+/// [`dispatch_tick`] with the wall-clock ceiling injected, so tests can force the deadline-defer path
+/// deterministically (a `Duration::ZERO` defers every claimed job on its first check) without sleeping.
+async fn dispatch_tick_inner(
+    pool: &PgPool,
+    cap: Option<i32>,
+    redrive: bool,
+    deadline: std::time::Duration,
+) -> ApiResult<EmbedDispatchSummary> {
     let persona = Persona::Embed.as_str();
     let dispatch = DispatchType::Embed.as_str();
 
@@ -257,7 +293,29 @@ pub async fn dispatch_tick(
     // reports what remains, and is re-enqueued below to resume next tick.
     let mut budget = temper_substrate::embed::resolve_chunk_budget();
 
+    // Hard wall-clock ceiling on the pass (see `resolve_dispatch_deadline`). Checked before each job:
+    // once past it, the remaining claimed jobs are re-enqueued untouched to resume next tick rather
+    // than held `in_progress` — a held lease is not reclaimable for DEFAULT_EMBED_LEASE_SECONDS (600s,
+    // deliberately > maxDuration), so leaving them would stall those resources for ~10 minutes.
+    let start = std::time::Instant::now();
+
     for job in claimed {
+        if start.elapsed() >= deadline {
+            // Deadline reached: defer this job (and, by the same check, every one after it). This is
+            // the same non-failure re-enqueue as the budget-exhaustion path below — 0 chunks embedded
+            // this pass, job resumed on a later tick — so it is tallied as `partial`, not `failed`.
+            workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
+                .await?;
+            workflow_job_service::enqueue_resource(pool, job.resource_id, persona, dispatch)
+                .await?;
+            tracing::info!(
+                resource_id = %job.resource_id,
+                elapsed_ms = start.elapsed().as_millis() as u64,
+                "embed dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
+            );
+            summary.partial += 1;
+            continue;
+        }
         match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget).await {
             Ok(progress) => {
                 summary.chunks_embedded += progress.embedded;
@@ -442,6 +500,52 @@ mod tests {
         assert_eq!(summary.claimed, 0);
         assert_eq!(summary.completed, 0);
         assert_eq!(summary.chunks_embedded, 0);
+    }
+
+    // The wall-clock guard: a pass that is already past its deadline embeds nothing and re-enqueues the
+    // claimed job untouched (tallied `partial`, not `failed`), so the next tick resumes it. A
+    // `Duration::ZERO` deadline forces the defer branch on the first check without sleeping. ONNX-free:
+    // the resource is chunkless, and the defer path never calls the embedder anyway.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn dispatch_tick_defers_jobs_past_the_wall_clock_deadline(pool: PgPool) {
+        let r = a_resource(&pool).await;
+        workflow_job_service::enqueue_resource(&pool, r, "embed", "embed")
+            .await
+            .unwrap()
+            .expect("enqueue");
+
+        let summary = dispatch_tick_inner(&pool, Some(5), false, std::time::Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(summary.claimed, 1);
+        assert_eq!(
+            summary.partial, 1,
+            "a deadline-deferred job is partial (re-enqueued), not failed"
+        );
+        assert_eq!(summary.completed, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(
+            summary.chunks_embedded, 0,
+            "nothing is embedded past the deadline"
+        );
+
+        // The deferred job was completed + re-enqueued, so the resource holds one fresh pending job.
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_workflow_jobs WHERE resource_id = $1 AND status = 'pending'",
+        )
+        .bind(r)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pending, 1, "deferred job re-enqueued as pending");
+
+        // A normal-deadline tick then drains the re-enqueued job cleanly — progress is monotonic.
+        let drained = dispatch_tick(&pool, Some(5), false).await.unwrap();
+        assert_eq!(drained.claimed, 1);
+        assert_eq!(
+            drained.completed, 1,
+            "the re-enqueued job drains on the next tick"
+        );
     }
 
     // ── Phase 4: derived embedding_status + re-drive (all ONNX-free) ───────────────────────────
