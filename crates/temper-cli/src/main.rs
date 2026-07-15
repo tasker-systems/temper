@@ -1013,19 +1013,22 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         })
                     })
                 }
-                AdminConnectionAction::GrantReach { id, team } => {
-                    temper_cli::actions::runtime::with_client(|client| {
-                        Box::pin(async move {
-                            temper_cli::commands::admin_connection::grant_reach_remote(
-                                client,
-                                &id,
-                                &team,
-                                output_format,
-                            )
-                            .await
-                        })
+                AdminConnectionAction::GrantReach {
+                    id,
+                    team,
+                    affirm_reach,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_connection::grant_reach_remote(
+                            client,
+                            &id,
+                            &team,
+                            affirm_reach,
+                            output_format,
+                        )
+                        .await
                     })
-                }
+                }),
                 AdminConnectionAction::RevokeReach { id, team } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {
