@@ -276,6 +276,14 @@ pub enum SeedAction<'a> {
         block: BlockId,
         /// The revised body as a single prepared block's worth of chunks (re-embedded inline).
         chunks: &'a [PreparedChunk],
+        /// The revised block's RAW source bytes, stored verbatim in `kb_block_content` (keyed by
+        /// block id — this path hardcodes seq 0 and addresses blocks by id). `None` on paths that
+        /// carry no whole-block prose (the scenario CONFORM revise without a body); then the revision
+        /// stores no bytes and the resource drops to `body_storage = 'derived'`. Unlike `chunks`, the
+        /// raw text rides the `SeedAction` variant, not `PreparedBlock`, because this path fires from
+        /// bare chunks with no `PreparedBlock` in hand. See `content_sidecar_with_blocks`'s sibling
+        /// construction in `materialize`.
+        raw: Option<&'a str>,
         /// Sources this revision incorporated — recorded into `kb_block_provenance` by the projector.
         /// `&[]` for the scenario/charter/no-source paths; the resource-update write path passes the
         /// caller's sources.
@@ -597,7 +605,7 @@ pub async fn fire_with(
                 blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
                 segmented,
             };
-            let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
+            let sidecar = serde_json::to_value(payloads::content_sidecar_with_blocks(blocks))?;
             let id = sqlx::query_scalar!(
                 "SELECT resource_create($1,$2,$3,$4,$5,$6)",
                 serde_json::to_value(&payload)?,
@@ -853,6 +861,7 @@ pub async fn fire_with(
         SeedAction::BlockMutate {
             block,
             chunks,
+            raw,
             incorporated,
             emitter,
         } => {
@@ -861,8 +870,20 @@ pub async fn fire_with(
                 chunks: chunks.iter().map(payloads::ChunkManifest::from).collect(),
                 incorporated: incorporated.to_vec(), // recorded into kb_block_provenance by the projector
             };
-            let mut sidecar = std::collections::HashMap::new();
-            payloads::content_sidecar_chunks(&mut sidecar, chunks);
+            // The mutate sidecar keys `__blocks` by BLOCK ID (this path hardcodes seq 0), unlike the
+            // create/append sidecar which keys by seq — hence the sibling construction rather than
+            // `content_sidecar_with_blocks`.
+            let mut chunk_map = std::collections::HashMap::new();
+            payloads::content_sidecar_chunks(&mut chunk_map, chunks);
+            let sidecar = payloads::ContentSidecar {
+                chunks: chunk_map,
+                blocks: raw.map(|text| {
+                    std::collections::HashMap::from([(
+                        block.to_string(),
+                        payloads::BlockContent::of(text),
+                    )])
+                }),
+            };
             let id = sqlx::query_scalar!(
                 "SELECT block_mutate($1,$2,$3,$4,$5,$6)",
                 serde_json::to_value(&payload)?,
@@ -915,8 +936,9 @@ pub async fn fire_with(
                 resource_id: resource,
                 block: payloads::BlockManifest::from(block),
             };
-            let sidecar =
-                serde_json::to_value(payloads::content_sidecar(std::slice::from_ref(block)))?;
+            let sidecar = serde_json::to_value(payloads::content_sidecar_with_blocks(
+                std::slice::from_ref(block),
+            ))?;
             let id = sqlx::query_scalar!(
                 "SELECT block_append($1,$2,$3,$4,$5,$6)",
                 serde_json::to_value(&payload)?,
@@ -1199,6 +1221,7 @@ mod tests {
             SeedAction::BlockMutate {
                 block: BlockId::from(Uuid::nil()),
                 chunks: &chunks,
+                raw: None,
                 incorporated: &[],
                 emitter,
             }

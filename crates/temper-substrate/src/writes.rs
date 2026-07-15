@@ -14,9 +14,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
-use crate::content::{
-    prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock, PreparedChunk,
-};
+use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock};
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
     BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, ProfileId, PropertyId,
@@ -196,6 +194,10 @@ async fn create_resource_impl(
     };
     // Resource-level sources apply to the (single) body block; carried onto the manifest → provenance.
     block.incorporated = p.sources;
+    // The raw body bytes are stored verbatim (kb_block_content) — threaded here, at the call site, not
+    // in the prepare helpers, because the chunks arm (every CLI create) never sees prose. Same pattern
+    // as `incorporated` one line up.
+    block.raw_text = Some(p.body.to_owned());
     let blocks = [block];
     let mut tx = begin_scoped(pool).await?;
     let new_id = fire_with(
@@ -381,6 +383,10 @@ pub async fn update_resource_in_tx(
             SeedAction::BlockMutate {
                 block: crate::ids::BlockId::from(block_id),
                 chunks: &prepared.chunks,
+                // The revised block's raw bytes, stored verbatim. `body` is the new content of the
+                // addressed block (the update path refuses a whole-body write on a multi-block
+                // resource, so this is that block's whole text).
+                raw: Some(body),
                 incorporated: &prepared.incorporated,
                 emitter: p.emitter,
             },
@@ -624,10 +630,11 @@ pub async fn create_kernel_resource_in_tx(
     p: KernelCreateParams<'_>,
     ctx: EventContext,
 ) -> Result<ResourceId> {
-    let block = match p.chunks {
+    let mut block = match p.chunks {
         Some(chunks) => prepare_block_from_chunks(0, None, chunks),
         None => prepare_block(0, None, p.body)?,
     };
+    block.raw_text = Some(p.body.to_owned());
     let blocks = [block];
     let new_id = fire_with(
         conn,
@@ -793,29 +800,6 @@ pub async fn set_property_in_tx(
         ctx,
     )
     .await?;
-    Ok(())
-}
-
-/// Re-block a resource's body block from already-prepared chunks (the update path — the caller
-/// resolves the block id and prepares the new chunks). Mirrors the `Revise`/`BlockMutate` fire.
-pub async fn mutate_block(
-    pool: &PgPool,
-    block: BlockId,
-    chunks: &[PreparedChunk],
-    emitter: EntityId,
-) -> Result<()> {
-    let mut tx = begin_scoped(pool).await?;
-    fire(
-        &mut tx,
-        SeedAction::BlockMutate {
-            block,
-            chunks,
-            incorporated: &[],
-            emitter,
-        },
-    )
-    .await?;
-    tx.commit().await?;
     Ok(())
 }
 

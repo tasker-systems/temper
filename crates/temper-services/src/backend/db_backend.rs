@@ -2576,7 +2576,7 @@ impl Backend for DbBackend {
         // (`AppendParams.block.seq`), same no-embed path as create/update. Absent chunks (MCP, and
         // any programmatic client without an embedder) are chunked server-side, seeding the heading
         // breadcrumb from the prior block so `header_path` is continuous across the boundary.
-        let block = match payload.chunks_packed.as_deref() {
+        let mut block = match payload.chunks_packed.as_deref() {
             Some(packed) => {
                 let chunks = unpack_incoming_chunks(packed)?;
                 temper_substrate::content::prepare_block_from_chunks(
@@ -2612,6 +2612,10 @@ impl Backend for DbBackend {
                 }
             }
         };
+        // The segment's raw bytes (byte-exact after PR 2's non-normalizing segmenter) are stored
+        // verbatim in kb_block_content. `payload.content` is the raw segment text on BOTH arms — the
+        // chunks-packed (CLI) arm carries it alongside the packed chunks.
+        block.raw_text = Some(payload.content.clone());
 
         writes::append_block(
             &self.pool,

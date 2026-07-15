@@ -77,6 +77,15 @@ pub struct PreparedBlock {
     /// `PreparedBlock`'s own serialized shape (the content sidecar) byte-identical.
     #[serde(skip)]
     pub incorporated: Vec<crate::payloads::Incorporation>,
+    /// The block's RAW source bytes — the verbatim text this block was cut from, before the lossy
+    /// chunk transform. `Some` on the create/append write path (threaded from the caller's body at
+    /// the call site, exactly like [`Self::incorporated`]); `None` on the charter/scenario paths that
+    /// carry no prose. Rides the content sidecar under the reserved `__blocks` key (via
+    /// [`crate::payloads::content_sidecar_with_blocks`]) → stored in `kb_block_content` by the
+    /// projector. `#[serde(skip)]`: it is CAS content and must never reach a ledger payload — it
+    /// travels only in the transient sidecar, and keeps `PreparedBlock`'s serialized shape unchanged.
+    #[serde(skip)]
+    pub raw_text: Option<String>,
 }
 
 /// Pure chunk plan for one block's prose — chunking + hashing only, **no** embedding (so it is
@@ -183,6 +192,7 @@ pub fn prepare_block_from_chunks(
         role: role.map(str::to_owned),
         chunks,
         incorporated: Vec::new(),
+        raw_text: None,
     }
 }
 
@@ -240,6 +250,7 @@ pub fn prepare_block_with_prefix(
         role: role.map(str::to_owned),
         chunks,
         incorporated: Vec::new(),
+        raw_text: None,
     })
 }
 
@@ -292,12 +303,14 @@ pub fn prepare_block_deferred_with_prefix(
         role: role.map(str::to_owned),
         chunks,
         incorporated: Vec::new(),
+        raw_text: None,
     }
 }
 
 /// Lowercase hex sha256 of a string's UTF-8 bytes — the Rust twin of Postgres's
-/// `encode(sha256(convert_to(s, 'UTF8')), 'hex')`.
-fn sha256_hex(s: &str) -> String {
+/// `encode(sha256(convert_to(s, 'UTF8')), 'hex')`. `pub(crate)` so the sidecar builder can stamp a
+/// block's raw-bytes `content_hash` with the same function that computes the chunk/body merkles.
+pub(crate) fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     format!("{:x}", h.finalize())
@@ -1047,6 +1060,7 @@ mod tests {
                 heading_depth: None,
             }],
             incorporated: vec![],
+            raw_text: None,
         };
         let v = serde_json::to_value([&block]).unwrap();
         assert_eq!(v[0]["seq"], 2);

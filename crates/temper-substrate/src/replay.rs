@@ -37,7 +37,9 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     ),
     (
         "kb_content_blocks",
-        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_content_blocks t",
+        // mask current_revision_id: it points at a kb_block_revisions.id, which is freshly minted per
+        // projection (that table masks its own id for the same reason), so it differs fire-vs-replay.
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'current_revision_id') ORDER BY t.id), '[]'::jsonb) FROM kb_content_blocks t",
     ),
     (
         "kb_chunks",
@@ -53,6 +55,13 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         // back to a prior body produces two revisions with the SAME (block_id, block_body_hash), and
         // ordering on that pair alone is a tie whose jsonb_agg order can differ fire-vs-replay.
         "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id') ORDER BY t.block_id, t.block_body_hash, t.created), '[]'::jsonb) FROM kb_block_revisions t",
+    ),
+    (
+        "kb_block_content",
+        // mask block_revision_id (a masked kb_block_revisions.id) and order by the bytes themselves, so
+        // the comparison is over the SET of (content, content_hash) stored — the meaningful equivalence
+        // (the same bytes survive), independent of which non-deterministic revision id they hang off.
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'block_revision_id') ORDER BY t.content_hash, t.content), '[]'::jsonb) FROM kb_block_content t",
     ),
     (
         "kb_properties",
@@ -217,6 +226,59 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                     }),
                 );
             }
+        }
+        // Re-supply the `__blocks` sidecar (verbatim block bytes, PR 3) from kb_block_content, keyed
+        // EXACTLY as the fire path keyed it: by block id for a mutate, by seq for create/append/charter.
+        // The revision a given event created is found by (block_id, this event's occurred_at) — the
+        // revision id itself is non-deterministic and never appears in the payload. A block that stored
+        // no bytes (a `derived` block: charter/scenario) simply yields no row and is omitted, so replay
+        // reproduces the same coverage — and therefore the same body_storage.
+        let block_keys: Vec<(String, Uuid)> = match kind {
+            EventKind::BlockMutated => {
+                let bid: Uuid = payload["block_id"]
+                    .as_str()
+                    .context("block_mutated payload missing block_id")?
+                    .parse()?;
+                vec![(bid.to_string(), bid)]
+            }
+            // create/append/charter: key by seq, look up by block id — both live on the manifest.
+            _ => manifests
+                .as_array()
+                .context("blocks not an array")?
+                .iter()
+                .filter_map(|b| {
+                    let bid: Uuid = b["block_id"].as_str()?.parse().ok()?;
+                    let seq = b["seq"].as_i64()?;
+                    Some((seq.to_string(), bid))
+                })
+                .collect(),
+        };
+        let mut blocks_side = serde_json::Map::new();
+        for (key, block_id) in block_keys {
+            let row = sqlx::query(
+                "SELECT bc.content, bc.content_hash \
+                   FROM kb_block_revisions r JOIN kb_block_content bc ON bc.block_revision_id = r.id \
+                  WHERE r.block_id = $1 \
+                    AND r.created = (SELECT occurred_at FROM kb_events WHERE id = $2)",
+            )
+            .bind(block_id)
+            .bind(event_id)
+            .fetch_optional(pool)
+            .await?;
+            if let Some(row) = row {
+                let content: String = row.get(0);
+                let content_hash: String = row.get(1);
+                blocks_side.insert(
+                    key,
+                    serde_json::json!({ "content": content, "content_hash": content_hash }),
+                );
+            }
+        }
+        if !blocks_side.is_empty() {
+            side.insert(
+                "__blocks".to_string(),
+                serde_json::Value::Object(blocks_side),
+            );
         }
         sidecars.insert(event_id, serde_json::Value::Object(side));
     }

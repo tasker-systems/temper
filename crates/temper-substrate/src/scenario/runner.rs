@@ -310,6 +310,9 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                 SeedAction::BlockMutate {
                     block: crate::ids::BlockId::from(block_id),
                     chunks: &prepared.chunks,
+                    // The revised body's raw bytes, stored verbatim (the DSL revise has the whole
+                    // block body in hand).
+                    raw: Some(body),
                     // Scenario `revise` carries no provenance sources (T7 threads them on the
                     // production write path, not the YAML DSL).
                     incorporated: &[],

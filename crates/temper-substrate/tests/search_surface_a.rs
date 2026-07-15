@@ -184,6 +184,7 @@ async fn fts_candidates_supports_quoted_phrase(pool: sqlx::PgPool) {
 fn block_with_embedding(content: &str, emb: Vec<f32>) -> PreparedBlock {
     PreparedBlock {
         incorporated: vec![],
+        raw_text: None,
         block_id: BlockId::from(Uuid::now_v7()),
         seq: 0,
         role: None,
