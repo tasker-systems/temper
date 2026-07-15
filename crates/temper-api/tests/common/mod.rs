@@ -321,6 +321,7 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        vercel_connect: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);
@@ -371,6 +372,7 @@ pub async fn setup_test_app_with_config(
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        vercel_connect: None,
     };
     configure(&mut config);
 

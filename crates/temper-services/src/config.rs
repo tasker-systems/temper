@@ -1,4 +1,5 @@
 use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
+use crate::broker::VercelConnectConfig;
 use std::env;
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,10 @@ pub struct ApiConfig {
     /// Shared secret gating the internal embed-dispatch drain endpoint (issue #299), called by the
     /// Vercel cron. `None` disables the endpoint (a deployment with no drain configured).
     pub embed_dispatch_secret: Option<String>,
+    /// Vercel Connect broker credentials. `None` when the four env vars are not all
+    /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
+    /// hardcoded; a self-hosted operator sets their own.
+    pub vercel_connect: Option<VercelConnectConfig>,
 }
 
 impl ApiConfig {
@@ -72,6 +77,21 @@ impl ApiConfig {
             internal_reconcile_secret: lookup("INTERNAL_RECONCILE_SECRET")
                 .filter(|s| !s.is_empty()),
             embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
+            vercel_connect: parse_vercel_connect(&lookup),
         })
     }
+}
+
+/// Build the Vercel Connect config from env — `Some` only when all four values are
+/// present and non-empty. A partial set is treated as unconfigured (the safer
+/// default: a `NullBroker` that fails mints loudly, not a half-configured one that
+/// fails obscurely at request time).
+fn parse_vercel_connect(lookup: impl Fn(&str) -> Option<String>) -> Option<VercelConnectConfig> {
+    let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
+    Some(VercelConnectConfig {
+        access_token: get("VERCEL_CONNECT_ACCESS_TOKEN")?,
+        project_id: get("VERCEL_CONNECT_PROJECT_ID")?,
+        team_id: get("VERCEL_CONNECT_TEAM_ID")?,
+        team_slug: get("VERCEL_CONNECT_TEAM_SLUG")?,
+    })
 }

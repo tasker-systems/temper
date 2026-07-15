@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::connection::{
-    Connection, ConnectionCredential, ProvisionConnectionRequest, SetToolManifestRequest,
-    SetWebhookEventsRequest,
+    AttachCredentialResponse, Connection, ConnectionCredential, ProvisionConnectionRequest,
+    SetToolManifestRequest, SetWebhookEventsRequest,
 };
 
 /// Sub-client for connection provisioning.
@@ -71,7 +71,7 @@ impl<'a> ConnectionsClient<'a> {
         &self,
         id: Uuid,
         body: &ConnectionCredential,
-    ) -> Result<Connection> {
+    ) -> Result<AttachCredentialResponse> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/connections/{id}/credential");
         let req = self.http.post(&path).json(body);

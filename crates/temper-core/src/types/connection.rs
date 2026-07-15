@@ -129,6 +129,37 @@ pub struct SetWebhookEventsRequest {
     pub events: Vec<String>,
 }
 
+/// What minting once at attach time observed about a credential — the
+/// verification result surfaced back to the operator.
+///
+/// This is B4's half of the reach story: `observed_reach` is what the credential
+/// can *actually* see (the provider's mint metadata), placed next to the
+/// connection's *declared* reach (`reach_granularity`/`reach_covers`) so a human
+/// can see the gap. There is deliberately **no computed `exceeds` bool** — remote
+/// and temper scope are incommensurable and a stored bool would go stale. B3 adds
+/// the acknowledgment; B4 only makes the gap visible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CredentialVerification {
+    /// The connector minted successfully (proved live).
+    pub verified: bool,
+    /// The reach the provider reported at mint (its `metadata`), when verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_reach: Option<serde_json::Value>,
+    /// Why verification did not fully succeed, when it did not — consent pending,
+    /// no broker configured, or a transient failure. A capability that is absent
+    /// is stated, never silent (invariant 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// The result of attaching a credential: the updated connection plus what minting
+/// once at attach time observed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachCredentialResponse {
+    pub connection: Connection,
+    pub verification: CredentialVerification,
+}
+
 /// Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.
 ///
 /// Not decorative: the manifest is the evidence the provider is admissible at all. A provider that

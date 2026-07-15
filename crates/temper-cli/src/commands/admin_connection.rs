@@ -5,7 +5,7 @@
 //! to subscribe to it.
 
 use temper_core::types::connection::{
-    Connection, ConnectionCredential, ProvisionConnectionRequest,
+    Connection, ConnectionCredential, CredentialVerification, ProvisionConnectionRequest,
 };
 
 use crate::error::{Result, TemperError};
@@ -136,8 +136,28 @@ pub async fn attach_credential_remote(
         .map_err(crate::commands::client_err)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
-    announce_capabilities(&row);
+    announce_capabilities(&row.connection);
+    announce_verification(&row.connection, &row.verification);
     Ok(())
+}
+
+/// Surface what minting once at attach time observed. The observed reach is placed
+/// next to the DECLARED reach so a reviewer sees the gap — there is no computed
+/// `exceeds` bool (the two scopes are incommensurable; B3 records the
+/// acknowledgment). An unverified attach says why, out loud (invariant 6).
+fn announce_verification(conn: &Connection, v: &CredentialVerification) {
+    if v.verified {
+        if let Some(reach) = &v.observed_reach {
+            crate::output::hint(format!(
+                "Verified by minting once. The credential's ACTUAL remote reach is {reach}. \
+                 Declared reach is granularity={:?}, covers={:?}. Where the actual reach exceeds \
+                 the declared, that gap is real and must be acknowledged before granting a team.",
+                conn.reach_granularity, conn.reach_covers,
+            ));
+        }
+    } else if let Some(note) = &v.note {
+        crate::output::warning(format!("Credential recorded but NOT verified — {note}"));
+    }
 }
 
 /// Register the remote event types. Non-empty ⇒ ledger-capable.
@@ -191,6 +211,11 @@ pub async fn revoke_remote(
     crate::output::hint(
         "The connection's profile, emitter entity, and home context were NOT removed — events \
          already attributed to this emitter must keep resolving.",
+    );
+    crate::output::warning(
+        "Revocation stops temper from minting NEW tokens for this connection. It does NOT reach \
+         the provider — any token already minted stays valid at the remote until it expires. If a \
+         credential is believed compromised, rotate it at the provider too.",
     );
     Ok(())
 }

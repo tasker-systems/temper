@@ -14,8 +14,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::connection::{
-    Connection, ConnectionCredential, ProvisionConnectionRequest, SetToolManifestRequest,
-    SetWebhookEventsRequest,
+    AttachCredentialResponse, Connection, ConnectionCredential, ProvisionConnectionRequest,
+    SetToolManifestRequest, SetWebhookEventsRequest,
 };
 use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiResult;
@@ -81,10 +81,17 @@ pub async fn attach_credential(
     auth: AuthUser,
     Path(id): Path<Uuid>,
     Json(body): Json<ConnectionCredential>,
-) -> ApiResult<Json<Connection>> {
+) -> ApiResult<Json<AttachCredentialResponse>> {
     let caller = ProfileId::from(auth.0.profile.id);
     Ok(Json(
-        connection_service::attach_credential(&state.pool, caller, id, &body).await?,
+        connection_service::attach_credential(
+            &state.pool,
+            state.broker.as_ref(),
+            caller,
+            id,
+            &body,
+        )
+        .await?,
     ))
 }
 
