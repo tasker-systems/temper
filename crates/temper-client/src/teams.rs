@@ -8,7 +8,7 @@ use crate::http::HttpClient;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InviteeInvitation, TeamInvitation,
 };
-use temper_core::types::reassign::{BulkReassignAck, BulkReassignRequest};
+use temper_core::types::reassign::{BulkReassignAck, BulkReassignRequest, RemoveMemberOutcome};
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
     TeamUpdateRequest,
@@ -114,16 +114,21 @@ impl<'a> TeamsClient<'a> {
 
     /// DELETE /api/teams/{id}/members/{profile_id} — remove a member (or self-leave).
     ///
-    /// Returns `()` on a 204; `send` errors on any non-2xx (403/404/409), so
-    /// callers surface the guard failures without decoding a body.
-    pub async fn remove_member(&self, team_id: Uuid, profile_id: Uuid) -> Result<()> {
+    /// Returns the residual owned-resource reach the removed member retains (the
+    /// resources they still OWN in the team's contexts) so the caller can hand it
+    /// off via `reassign`. `send_json` errors on any non-2xx (403/404/409), so
+    /// callers still surface the guard failures.
+    pub async fn remove_member(
+        &self,
+        team_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<RemoveMemberOutcome> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/teams/{team_id}/members/{profile_id}");
         let req = self.http.delete(&path);
         self.http
-            .send(&Method::DELETE, &path, req, Some(&token))
-            .await?;
-        Ok(())
+            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
     }
 
     /// POST /api/teams/{id}/invite — create a pending invitation.
