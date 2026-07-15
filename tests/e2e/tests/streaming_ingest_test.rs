@@ -148,11 +148,13 @@ fn generate_large_markdown(target_bytes: usize, last_phrase: &str) -> (String, u
     (body, section + 1)
 }
 
-/// A >1 MiB body drives the CLI's segmented (multi-block) create path end to end: the CLI's
-/// `ingest_mode` threshold (`crates/temper-cli/src/actions/ingest.rs`) picks `Segmented` for a
-/// body this large, `run_segmented_create` streams it through `begin_segmented`/`append_block`/
-/// `finalize`, and this test verifies all three surfaces the segmented path is supposed to light
-/// up: the reconstructed body, the FTS index, and the event ledger.
+/// A body spanning several segment budgets drives the CLI's segmented (multi-block) create path end
+/// to end: the CLI's `ingest_mode` threshold (`crates/temper-cli/src/actions/ingest.rs`) picks
+/// `Segmented` for a body over `SEGMENT_BUDGET_BYTES`, `run_segmented_create` streams it through
+/// `begin_segmented`/`append_block`/`finalize`, and this test verifies all three surfaces the
+/// segmented path is supposed to light up: the reconstructed body, the FTS index, and the event
+/// ledger. Sized to the *minimum* that fires >1 `block_created` (see the body-size note below) — big
+/// enough to be genuinely multi-segment, small enough not to sit at nextest's 300 s cap.
 #[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn segmented_create_roundtrips_large_body(pool: PgPool) {
@@ -173,11 +175,22 @@ async fn segmented_create_roundtrips_large_body(pool: PgPool) {
     // avoids any ambiguity in how Postgres FTS tokenizes the query.
     let last_phrase =
         "an extraordinarily rare zzyzx platypus wanders through the far edge of the archive";
-    let (body, num_sections) = generate_large_markdown(1_200_000, last_phrase);
+    // Sized to span >=3 segment budgets (so segments 1..N fire >1 `block_created` — the assertion
+    // below), NOT to be "large" for its own sake. The old 1.2 MB / ~939-chunk body existed to stress
+    // throughput, but throughput here is a DEBUG-BUILD ARTIFACT: this harness embeds ~single-core
+    // (~4 min for that body) while the release CLI is multi-core (~55 s) — so the size was testing the
+    // harness's unrepresentative slowness, and at ~939 chunks it sat right at nextest's 300 s cap and
+    // tipped over on a loaded CI runner. ~640 KiB still exercises the exact multi-segment path
+    // (begin → several appends → finalize → roundtrip) with comfortable headroom. Real embed
+    // throughput is the perf sub-thread of the parent task, not this test's job.
+    let target = 3 * temper_ingest::stream::SEGMENT_BUDGET_BYTES - 128 * 1024; // 640 KiB ⇒ 3 segments
+    let (body, num_sections) = generate_large_markdown(target, last_phrase);
     assert!(
-        body.len() > 1_048_576,
-        "test body must exceed 1 MiB; got {} bytes",
-        body.len()
+        // >2 budgets ⇒ >=3 segments ⇒ >1 block_created (segment 0 rides `resource_created`).
+        body.len() > 2 * temper_ingest::stream::SEGMENT_BUDGET_BYTES,
+        "test body must span >2 segment budgets (got {} bytes, budget {})",
+        body.len(),
+        temper_ingest::stream::SEGMENT_BUDGET_BYTES
     );
 
     let big_path = app.vault_dir.path().join("big.md");
@@ -608,5 +621,268 @@ async fn interrupted_ingest_resumes_only_the_gap(pool: PgPool) {
         count_events(&pool, "resource_finalized", resource_id).await,
         1,
         "finalize must fire exactly one resource_finalized event"
+    );
+}
+
+/// **W2 PR 1 (#420 set 3): an interrupted ingest is not a document.**
+///
+/// The bug this closes: a ~1.2 MB ingest was killed mid-upload and left a resource holding 93.2% of
+/// its source, `status: ok` everywhere it was visible — listed, searchable, indistinguishable from a
+/// complete document without diffing the source. A knowledge base that cannot tell you what it does
+/// not have is worse than one that fails loudly.
+///
+/// Drives the same begin→append-without-finalize shape as `interrupted_ingest_resumes_only_the_gap`,
+/// then asserts the four properties that make the partial *honest*:
+///   1. it is **absent from list**,
+///   2. it is **absent from search**,
+///   3. it is **still addressable via `show`**, which reports `ingest_state = "in_progress"` — hidden
+///      is not deleted; the owner must be able to see and resume it, and
+///   4. `finalize` flips it to `complete` and it reappears in list.
+///
+/// Plus the regression guard that the *first* draft of this work would have failed: a completed
+/// one-shot resource in the same context stays visible throughout. The tempting backfill heuristic —
+/// "multi-block AND no `resource_finalized` ⇒ incomplete" — matches every cognitive-map charter in
+/// production (including the L0 kernel), because `charter_set` projects a multi-block set and never
+/// finalizes. MULTI-BLOCK DOES NOT MEAN SEGMENTED. Hence: no backfill, and `in_progress` is only ever
+/// *born* at a segmented begin.
+#[cfg(feature = "test-embed")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
+    use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload, SegmentedBegin};
+    use temper_workflow::types::resource::ResourceListParams;
+
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("partialctx", None)
+        .await
+        .expect("create partialctx context");
+
+    // A complete, ordinary one-shot resource in the same context. It must stay visible in list and
+    // search the entire time — the guard that the completeness gate hides ONLY the partial.
+    let whole_body = "# Complete Neighbour\n\nThis document is whole and must stay visible.\n";
+    let whole = app
+        .client
+        .ingest()
+        .create(&IngestPayload {
+            segmented: None,
+            goal: None,
+            title: "Complete Neighbour".to_string(),
+            origin_uri: format!("test://whole-{}", Uuid::new_v4()),
+            context_ref: "@me/partialctx".to_string(),
+            home_cogmap_id: None,
+            doc_type_name: "research".to_string(),
+            content_hash: None,
+            content: whole_body.to_string(),
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: None,
+            act: Default::default(),
+            sources: Vec::new(),
+        })
+        .await
+        .expect("one-shot create");
+    let whole_id = uuid::Uuid::from(whole.id);
+
+    // A one-shot create is ATOMIC — there is no interruption window, so it is born complete.
+    let whole_row = app
+        .client
+        .resources()
+        .get(whole_id)
+        .await
+        .expect("show the whole resource")
+        .row;
+    assert_eq!(
+        whole_row.ingest_state,
+        Some(temper_workflow::types::IngestState::Complete),
+        "a one-shot create is atomic and must be born `complete`"
+    );
+
+    // ---- Now: begin a segmented ingest, land one more block, and DIE. No finalize. ----
+    const BUDGET: usize = 4096;
+    let content = build_resume_content(10);
+    let segments = plan_local_segments(&content, BUDGET);
+    assert!(segments.len() >= 4, "need a multi-segment body");
+
+    let begin_payload = IngestPayload {
+        segmented: Some(SegmentedBegin {
+            total_blocks_hint: Some(segments.len() as u32),
+            block_budget: BUDGET as u32,
+            source_hash: None,
+        }),
+        goal: None,
+        title: "Killed Mid Upload".to_string(),
+        origin_uri: format!("test://partial-{}", Uuid::new_v4()),
+        context_ref: "@me/partialctx".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: None,
+        content: segments[0].text.clone(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(embed_and_pack_chunks(&segments[0].chunked)),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    let begin = app
+        .client
+        .ingest()
+        .begin_segmented(&begin_payload)
+        .await
+        .expect("begin_segmented");
+    let partial_id = begin.resource_id;
+
+    app.client
+        .ingest()
+        .append_block(
+            partial_id,
+            &AppendBlockPayload {
+                seq: 1,
+                content: segments[1].text.clone(),
+                content_hash: temper_core::hash::sha256_hex(segments[1].text.as_bytes()),
+                chunks_packed: Some(embed_and_pack_chunks(&segments[1].chunked)),
+                sources: Vec::new(),
+            },
+        )
+        .await
+        .expect("append seq 1");
+    // ...and then the process is killed. Segments 2..N never arrive; finalize never runs.
+
+    async fn list_ids(app: &common::E2eTestApp) -> Vec<uuid::Uuid> {
+        app.client
+            .resources()
+            .list(&ResourceListParams {
+                context_ref: Some("@me/partialctx".to_string()),
+                limit: Some(50),
+                ..Default::default()
+            })
+            .await
+            .expect("list")
+            .rows
+            .into_iter()
+            .map(|r| uuid::Uuid::from(r.id))
+            .collect()
+    }
+
+    // ---- 1. Absent from list ----
+    let ids = list_ids(&app).await;
+    assert!(
+        !ids.contains(&partial_id),
+        "an unfinalized segmented ingest must NOT be listed — that is the whole bug"
+    );
+    assert!(
+        ids.contains(&whole_id),
+        "the completeness gate must hide ONLY the partial; the whole neighbour stays listed"
+    );
+
+    // ---- 2. Absent from search ----
+    // "Filler prose line" is the distinctive phrase in every landed segment of the partial, so a hit
+    // would mean its chunks reached the index as if the document were whole.
+    let hits = app
+        .client
+        .search()
+        .text_query(
+            "Filler prose line padding section",
+            Some("@me/partialctx".into()),
+            None,
+            Some(20),
+        )
+        .await
+        .expect("search");
+    assert!(
+        !hits.iter().any(|h| h.resource_id == partial_id),
+        "an unfinalized segmented ingest must NOT surface in search"
+    );
+
+    // ---- 3. Still addressable via `show`, and honest about why it is hidden ----
+    let shown = app
+        .client
+        .resources()
+        .get(partial_id)
+        .await
+        .expect("show must still work on a partial — hidden is not deleted")
+        .row;
+    assert_eq!(
+        shown.ingest_state,
+        Some(temper_workflow::types::IngestState::InProgress),
+        "`show` must say the resource is incomplete, so a reader can tell a partial from a document"
+    );
+
+    // ---- 4. Finalize completes it, and it reappears ----
+    for seq in 2..segments.len() as u32 {
+        let idx = seq as usize;
+        app.client
+            .ingest()
+            .append_block(
+                partial_id,
+                &AppendBlockPayload {
+                    seq,
+                    content: segments[idx].text.clone(),
+                    content_hash: temper_core::hash::sha256_hex(segments[idx].text.as_bytes()),
+                    chunks_packed: Some(embed_and_pack_chunks(&segments[idx].chunked)),
+                    sources: Vec::new(),
+                },
+            )
+            .await
+            .expect("append the gap");
+    }
+    app.client
+        .ingest()
+        .finalize(
+            partial_id,
+            &FinalizePayload {
+                expected_blocks: segments.len() as u32,
+                expected_body_hash: temper_ingest::merkle::resource_body_hash(
+                    &segments
+                        .iter()
+                        .map(|s| s.info.content_hash.clone())
+                        .collect::<Vec<_>>(),
+                ),
+            },
+        )
+        .await
+        .expect("finalize");
+
+    let shown = app
+        .client
+        .resources()
+        .get(partial_id)
+        .await
+        .expect("show after finalize")
+        .row;
+    assert_eq!(
+        shown.ingest_state,
+        Some(temper_workflow::types::IngestState::Complete),
+        "finalize must project `complete` — the event is no longer projection-less"
+    );
+    assert!(
+        list_ids(&app).await.contains(&partial_id),
+        "a finalized resource must reappear in list"
+    );
+
+    // The differential that proves the search assertion above was not vacuous: the SAME query over
+    // the SAME corpus now finds it. Nothing changed but `ingest_state` — so the earlier absence was
+    // the completeness gate doing its job, not a query that never matched.
+    let hits = app
+        .client
+        .search()
+        .text_query(
+            "Filler prose line padding section",
+            Some("@me/partialctx".into()),
+            None,
+            Some(20),
+        )
+        .await
+        .expect("search after finalize");
+    assert!(
+        hits.iter().any(|h| h.resource_id == partial_id),
+        "after finalize the same query must find it — otherwise the absence above proved nothing"
     );
 }

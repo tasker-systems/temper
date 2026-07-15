@@ -179,6 +179,8 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                     blocks: &blocks,
                     doc_type: doc_type.as_deref(),
                     emitter: EntityId::from(loaded.emitter),
+                    // A scenario seed is a BIRTH SPEC, not an upload — never segmented.
+                    segmented: false,
                 },
             )
             .await?

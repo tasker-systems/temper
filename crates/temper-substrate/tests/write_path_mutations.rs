@@ -84,6 +84,7 @@ async fn make_resource(
             blocks: &blocks,
             doc_type: Some("concept"),
             emitter,
+            segmented: false,
         },
     )
     .await

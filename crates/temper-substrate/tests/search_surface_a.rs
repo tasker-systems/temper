@@ -223,6 +223,7 @@ async fn mk_embedded(
             blocks: &blocks,
             doc_type: Some("concept"),
             emitter,
+            segmented: false,
         },
     )
     .await

@@ -311,6 +311,10 @@ pub struct ResourceRowParity {
     pub created: DateTime<Utc>,
     /// Real last-mutation timestamp — `kb_resources.updated` (event `occurred_at` at last write).
     pub updated: DateTime<Utc>,
+    /// Are all the bytes here? `complete` | `in_progress` — see `ResourceRow::ingest_state`. NOT a
+    /// parity invariant: it is born from the create payload's `segmented` flag and advanced by
+    /// `resource_finalized`, both of which replay reproduces.
+    pub ingest_state: String,
     /// Home context display name (invariant). `None` for a cogmap-homed resource.
     pub context_name: Option<String>,
     /// Authoritative doctype name (invariant) — the `doc_type` property.
@@ -361,6 +365,7 @@ pub async fn resource_row(
                 r.created,
                 r.updated,
                 r.body_hash,
+                r.ingest_state,
                 c.id              AS re_minted_context_id,
                 c.name            AS context_name,
                 c.slug            AS context_slug,
@@ -425,6 +430,7 @@ pub async fn resource_row(
         effort: row.get("effort"),
         seq,
         body_hash: row.get("body_hash"),
+        ingest_state: row.get("ingest_state"),
     })
 }
 

@@ -332,6 +332,7 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path(pool: sqlx::PgPool) 
             blocks: &blocks,
             doc_type: Some("concept"),
             emitter,
+            segmented: false,
         },
         EventContext {
             authorship: Some(AgentAuthorship {
@@ -397,6 +398,7 @@ async fn invocation_and_authorship_survive_replay(pool: sqlx::PgPool) {
             blocks: &blocks,
             doc_type: Some("concept"),
             emitter,
+            segmented: false,
         },
         EventContext {
             authorship: Some(AgentAuthorship {
@@ -505,6 +507,7 @@ async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
             blocks: &blocks_a,
             doc_type: Some("concept"),
             emitter,
+            segmented: false,
         },
         EventContext {
             authorship: Some(authorship.clone()),
@@ -530,6 +533,7 @@ async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
             blocks: &blocks_b,
             doc_type: Some("concept"),
             emitter,
+            segmented: false,
         },
         EventContext {
             authorship: Some(authorship.clone()),

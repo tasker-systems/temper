@@ -164,6 +164,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::SalienceRefreshed
             | EventKind::ResourceDeleted
             | EventKind::ResourceRehomed
+            // A segmented ingest's completion assertion. It carries no content — the bytes arrived on
+            // the block_created events it is attesting to — so it needs no sidecar.
+            | EventKind::ResourceFinalized
             | EventKind::RelationshipAsserted
             | EventKind::RelationshipRetyped
             | EventKind::RelationshipReweighted
@@ -300,6 +303,16 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .bind(side)
+                    .execute(pool)
+                    .await?;
+            }
+            // A segmented ingest completing. NO sidecar — it carries no content, only the assertion
+            // that the body is all here (`resource_finalize` validated that before recording it). Two
+            // args, unlike its content-bearing neighbours above.
+            EventKind::ResourceFinalized => {
+                sqlx::query("SELECT _project_resource_finalized($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
                     .execute(pool)
                     .await?;
             }

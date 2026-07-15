@@ -163,6 +163,7 @@ pub async fn fire_resource_with_headed_chunk(
             blocks: &blocks,
             doc_type: None,
             emitter,
+            segmented: false,
         },
     )
     .await

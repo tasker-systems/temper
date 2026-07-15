@@ -91,6 +91,7 @@ lib/temper/generated/models/home_context.rb
 lib/temper/generated/models/ingest_create_response.rb
 lib/temper/generated/models/ingest_delta.rb
 lib/temper/generated/models/ingest_payload.rb
+lib/temper/generated/models/ingest_state.rb
 lib/temper/generated/models/invitation_status.rb
 lib/temper/generated/models/invitee_invitation.rb
 lib/temper/generated/models/invocation_ack.rb

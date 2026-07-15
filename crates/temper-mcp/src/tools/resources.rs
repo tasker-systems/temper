@@ -1493,6 +1493,7 @@ mod build_enriched_tests {
             mode: None,
             effort: None,
             body_hash: None,
+            ingest_state: Some(temper_workflow::types::IngestState::Complete),
         }
     }
 
