@@ -99,3 +99,32 @@ pub struct UnshareContextOutcome {
     /// `true` when this call deleted a share; `false` when none existed.
     pub unshared: bool,
 }
+
+/// Request body for `POST /api/contexts/{id}/reassign` — transfer a context's ownership to
+/// a team. Binding a context to a team is the single path to shared authorship (read-only
+/// sharing stays `share_context`; writing into a context requires team ownership).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReassignContextRequest {
+    /// The team that will own the context. Members with an authoring role can then write
+    /// into it via the container-write cascade.
+    pub to_team_id: Uuid,
+}
+
+/// Result of a context ownership transfer. `reassigned` is `false` when the context was
+/// already owned by the target team (idempotent no-op).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReassignContextOutcome {
+    pub context_id: Uuid,
+    /// The new `+team-slug` decorated owner ref.
+    pub owner_ref: String,
+    /// `true` when this call transferred ownership; `false` when it was already team-owned.
+    pub reassigned: bool,
+}

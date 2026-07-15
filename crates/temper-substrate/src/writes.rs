@@ -579,6 +579,35 @@ pub async fn reassign_resource_in_tx(
     Ok(())
 }
 
+/// Reassign a context's owner (event-sourced, in-place) under an explicit [`EventContext`].
+/// The single write path for context ownership transfer; `kb_contexts` is a replay input
+/// table, so the `context_reassigned` projector is an idempotent re-apply on replay.
+pub async fn reassign_context_with(
+    pool: &PgPool,
+    context: ContextId,
+    from_owner: (&str, Uuid),
+    to_owner: (&str, Uuid),
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire_with(
+        &mut tx,
+        SeedAction::ContextReassign {
+            context,
+            from_owner_table: from_owner.0,
+            from_owner_id: from_owner.1,
+            to_owner_table: to_owner.0,
+            to_owner_id: to_owner.1,
+            emitter,
+        },
+        ctx,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 // ── cogmap-homed kernel writes (L0 reconcile) ──────────────────────────────────
 
 /// Create a kernel resource homed to a **cogmap** (not a context) — the shape the L0 reconciler

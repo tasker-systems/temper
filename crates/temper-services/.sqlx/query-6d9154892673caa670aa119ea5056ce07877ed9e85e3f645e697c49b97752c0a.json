@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id WHERE t.name = 'context_reassigned' AND (e.payload->>'context_id')::uuid = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6d9154892673caa670aa119ea5056ce07877ed9e85e3f645e697c49b97752c0a"
+}

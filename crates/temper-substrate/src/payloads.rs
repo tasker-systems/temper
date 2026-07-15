@@ -617,6 +617,19 @@ pub struct ResourceReassigned {
     pub to_profile_id: ProfileId,
 }
 
+/// Reassign a context's owner — set `kb_contexts.(owner_table, owner_id)` to the target.
+/// Owner is polymorphic (`kb_profiles` | `kb_teams`), so both ends carry table + id.
+/// `from_owner_*` is recorded for the audit trail; the projector writes only the new owner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ContextReassigned {
+    pub context_id: ContextId,
+    pub from_owner_table: String,
+    pub from_owner_id: Uuid,
+    pub to_owner_table: String,
+    pub to_owner_id: Uuid,
+}
+
 // `ProvenanceSource` is the shared wire carrier — canonical home `temper_core::types::provenance`
 // (CLAUDE.md: "the wire type lives in temper-core", the same chain as authorship below). Re-exported
 // so substrate's `payloads::ProvenanceSource` users (`Incorporation`, `BlockProvenanceCorrected`, and

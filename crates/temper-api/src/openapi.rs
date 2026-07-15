@@ -9,7 +9,8 @@ use temper_core::types::api::{
     SearchReason, SearchResultRow, SearchScope, UnifiedSearchResultRow,
 };
 use temper_core::types::context::{
-    ContextRowWithCounts, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ContextRowWithCounts, ReassignContextOutcome, ReassignContextRequest, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::error::{ErrorBody, ErrorDetail};
 use temper_workflow::types::managed_meta::ResourceMetaListResponse;
@@ -40,6 +41,8 @@ use temper_workflow::types::resource::{
         ContentResponse,
         DeleteResponse,
         ContextRowWithCounts,
+        ReassignContextRequest,
+        ReassignContextOutcome,
         ShareContextRequest,
         ShareContextOutcome,
         UnshareContextOutcome,

@@ -47,6 +47,15 @@ pub struct ShareContextInput {
     pub team: Uuid,
 }
 
+/// MCP input for transfer_context: a context and the team that will own it, both by UUID.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TransferContextInput {
+    /// UUID of the context to transfer.
+    pub context: Uuid,
+    /// UUID of the team the context will be owned by.
+    pub to_team: Uuid,
+}
+
 pub async fn list_contexts(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
@@ -133,6 +142,32 @@ pub async fn share_context(
     )
     .await
     .map_err(|e| map_api_error("share_context", e))?;
+
+    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+/// Transfer a context's ownership to a team. SERVICE-DIRECT, authorized by
+/// `context_service::reassign` (the two-sided `can_share` gate) before the write. Binding a
+/// context to a team is the single path to shared authorship — read-sharing stays
+/// [`share_context`]; writing into a context requires team ownership. Idempotent —
+/// `reassigned: false` when the context was already owned by the target team.
+pub async fn transfer_context(
+    svc: &TemperMcpService,
+    input: TransferContextInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let outcome = temper_services::services::context_service::reassign(
+        &svc.api_state.pool,
+        ProfileId::from(profile.id),
+        input.context,
+        input.to_team,
+    )
+    .await
+    .map_err(|e| map_api_error("transfer_context", e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(

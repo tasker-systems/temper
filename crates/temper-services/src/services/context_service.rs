@@ -20,8 +20,8 @@ use temper_core::types::ids::{ContextId, ProfileId};
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
-    ContextCreateRequest, ContextRow, ContextRowWithCounts, ShareContextOutcome,
-    ShareContextRequest, UnshareContextOutcome,
+    ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
+    ReassignContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
@@ -483,6 +483,91 @@ pub async fn unshare(
     })
 }
 
+/// Transfer a context's ownership to a team — the single path to shared *authorship*.
+///
+/// A personal context stays personal until transferred; read-sharing (`share`) never grants
+/// write. Binding the context to a team makes its members (with an authoring role) able to
+/// author its resources via the container-write cascade. The owner change is event-sourced
+/// (`context_reassigned`) through the substrate writes layer.
+///
+/// Auth before writes: the two-sided `can_share` gate — system-admin, OR the caller
+/// administers the context AND manages the target team (owner/maintainer), and the target is
+/// not the gating/root team. Idempotent: a context already owned by `to_team_id` returns
+/// `reassigned: false` without emitting. A slug collision under the new owner is a `Conflict`
+/// (the `UNIQUE(owner_table, owner_id, slug)` constraint is the backstop).
+pub async fn reassign(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+    to_team_id: uuid::Uuid,
+) -> ApiResult<ReassignContextOutcome> {
+    if !can_share(pool, caller, context_id, to_team_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_context_and_team_exist(pool, context_id, to_team_id).await?;
+
+    // Current owner — for the audit fields, idempotency, and the slug-collision check.
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug
+             FROM kb_contexts WHERE id = $1"#,
+        context_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if cur.owner_table == "kb_teams" && cur.owner_id == to_team_id {
+        return Ok(ReassignContextOutcome {
+            context_id,
+            owner_ref: team_owner_ref(pool, to_team_id).await?,
+            reassigned: false,
+        });
+    }
+
+    // The slug must be unique under the NEW owner — 409 rather than a silent re-slug or an
+    // opaque UNIQUE violation surfacing from the projector.
+    let collision = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_contexts
+             WHERE owner_table = 'kb_teams' AND owner_id = $1 AND slug = $2) AS "e!""#,
+        to_team_id,
+        cur.slug,
+    )
+    .fetch_one(pool)
+    .await?;
+    if collision {
+        return Err(ApiError::Conflict(format!(
+            "team already owns a context with slug '{}'; rename before transferring",
+            cur.slug
+        )));
+    }
+
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    temper_substrate::writes::reassign_context_with(
+        pool,
+        temper_substrate::ids::ContextId::from(context_id),
+        (cur.owner_table.as_str(), cur.owner_id),
+        ("kb_teams", to_team_id),
+        emitter,
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(ReassignContextOutcome {
+        context_id,
+        owner_ref: team_owner_ref(pool, to_team_id).await?,
+        reassigned: true,
+    })
+}
+
+/// `+team-slug` decorated owner ref for a transfer outcome (mirrors `create`'s CASE).
+async fn team_owner_ref(pool: &PgPool, team_id: uuid::Uuid) -> ApiResult<String> {
+    let slug = sqlx::query_scalar!("SELECT slug FROM kb_teams WHERE id = $1", team_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(format!("+{slug}"))
+}
+
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
@@ -570,5 +655,247 @@ mod tests {
         assert!(u1.unshared);
         let u2 = unshare(&pool, admin, *context_id, team_id).await.unwrap();
         assert!(!u2.unshared);
+    }
+
+    // ── Context ownership transfer (reassign) ────────────────────────────────
+    //
+    // The target team must be NON-gating: `can_share` refuses the gating team as a target,
+    // so these helpers build a fresh `kb_teams` row (never `temper-system`). A caller must
+    // administer the source context AND manage the target team to pass the two-sided gate.
+
+    /// A profile plus its `<handle>@web` emitter entity (required by `resolve_emitter`, which
+    /// the event-sourced transfer resolves before firing `context_reassigned`).
+    async fn mk_profile_ent(pool: &PgPool, handle: &str) -> ProfileId {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_entities (name, profile_id) VALUES ($1 || '@web', $2)")
+            .bind(handle)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        ProfileId::from(id)
+    }
+
+    async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
+        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn add_member(pool: &PgPool, team: Uuid, p: ProfileId, role: &str) {
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+             VALUES ($1, $2, $3::team_role, 'native'::team_member_source) \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+        )
+        .bind(team)
+        .bind(*p)
+        .bind(role)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn mk_personal_context(pool: &PgPool, slug: &str, owner: ProfileId) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
+             VALUES ($1, $1, 'kb_profiles', $2) RETURNING id",
+        )
+        .bind(slug)
+        .bind(*owner)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn mk_team_context(pool: &PgPool, slug: &str, team: Uuid) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
+             VALUES ($1, $1, 'kb_teams', $2) RETURNING id",
+        )
+        .bind(slug)
+        .bind(team)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn mk_homed_resource(pool: &PgPool, ctx: Uuid, owner: ProfileId) -> Uuid {
+        let rid: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('r', 'r') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_resource_homes \
+               (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+             VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(rid)
+        .bind(ctx)
+        .bind(*owner)
+        .execute(pool)
+        .await
+        .unwrap();
+        rid
+    }
+
+    async fn owner_of_context(pool: &PgPool, ctx: Uuid) -> (String, Uuid) {
+        let row = sqlx::query!(
+            r#"SELECT owner_table AS "t!", owner_id AS "i!" FROM kb_contexts WHERE id = $1"#,
+            ctx
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (row.t, row.i)
+    }
+
+    async fn can_modify(pool: &PgPool, profile: ProfileId, resource: Uuid) -> bool {
+        sqlx::query_scalar!(
+            r#"SELECT can_modify_resource($1, $2) AS "e!""#,
+            *profile,
+            resource
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn transfers_personal_context_to_team_and_members_can_author(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await; // context owner + team owner
+        let bob = mk_profile_ent(&pool, "bob").await; // plain member
+        let wanda = mk_profile_ent(&pool, "wanda").await; // watcher
+        let stranger = mk_profile_ent(&pool, "stranger").await; // non-member
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        add_member(&pool, acme, bob, "member").await;
+        add_member(&pool, acme, wanda, "watcher").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+
+        // Before transfer: only the owner (alice) can author; team members cannot.
+        assert!(can_modify(&pool, alice, r).await);
+        assert!(!can_modify(&pool, bob, r).await);
+
+        let outcome = reassign(&pool, alice, ctx, acme).await.expect("transfer");
+        assert!(outcome.reassigned);
+        assert_eq!(outcome.owner_ref, "+acme");
+        assert_eq!(owner_of_context(&pool, ctx).await, ("kb_teams".to_string(), acme));
+
+        // After transfer: authoring-role members can author; watcher cannot; non-member cannot.
+        assert!(can_modify(&pool, bob, r).await, "member can author");
+        assert!(!can_modify(&pool, wanda, r).await, "watcher stays read-only");
+        assert!(!can_modify(&pool, stranger, r).await, "non-member unaffected");
+        assert!(can_modify(&pool, alice, r).await, "transferrer retains write");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn transfer_is_idempotent(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+
+        let first = reassign(&pool, alice, ctx, acme).await.unwrap();
+        assert!(first.reassigned);
+        let second = reassign(&pool, alice, ctx, acme).await.unwrap();
+        assert!(!second.reassigned, "already team-owned → no-op");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn non_context_admin_forbidden(pool: PgPool) {
+        // mallory manages the target team but does NOT own alice's context.
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let mallory = mk_profile_ent(&pool, "mallory").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, mallory, "owner").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+
+        let err = reassign(&pool, mallory, ctx, acme).await.unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn non_target_manager_forbidden(pool: PgPool) {
+        // alice owns the context but is only a plain member of the target team.
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "member").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+
+        let err = reassign(&pool, alice, ctx, acme).await.unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn gating_team_target_forbidden(pool: PgPool) {
+        // Even a system admin cannot transfer INTO the gating/root team.
+        let (admin, _member, gating_team, context_id) = seed_admin_team_context(&pool).await;
+        let err = reassign(&pool, admin, *context_id, gating_team)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn slug_collision_is_conflict(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        // The team already owns a context with slug "proj"; alice's personal one collides.
+        mk_team_context(&pool, "proj", acme).await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+
+        let err = reassign(&pool, alice, ctx, acme).await.unwrap_err();
+        assert!(matches!(err, ApiError::Conflict(_)));
+        assert_eq!(
+            owner_of_context(&pool, ctx).await,
+            ("kb_profiles".to_string(), *alice),
+            "owner unchanged on conflict"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn system_admin_can_transfer_any_context(pool: PgPool) {
+        // The seeded admin is a system admin (owner of the gating team). Transfer a context
+        // it owns to a fresh non-gating team it also owns.
+        let (admin, _member, _gating, context_id) = seed_admin_team_context(&pool).await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, admin, "owner").await;
+
+        let outcome = reassign(&pool, admin, *context_id, acme).await.expect("admin transfer");
+        assert!(outcome.reassigned);
+        assert_eq!(owner_of_context(&pool, *context_id).await, ("kb_teams".to_string(), acme));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn transfer_emits_context_reassigned_event(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+        reassign(&pool, alice, ctx, acme).await.unwrap();
+
+        let n = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+             WHERE t.name = 'context_reassigned' AND (e.payload->>'context_id')::uuid = $1",
+            ctx,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(n, 1);
     }
 }
