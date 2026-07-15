@@ -10,6 +10,12 @@ publish = false
 # Needs a DB + ONNX (bge-768). Enabled by the Embed CI job; run locally: `cargo make test-artifacts`.
 # Pure core tests (affinity, cluster) are ungated and run in CI.
 artifact-tests = []
+# Gates DB-only integration tests that need a migrated database but NOT ONNX (unlike `artifact-tests`).
+# Each runs on an ephemeral `public`-schema DB via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`
+# with runtime `sqlx::query` (no macros, no per-crate `.sqlx` cache). Enabled workspace-wide by the
+# Integration & E2E CI job (`--features test-db,test-embed`); run locally: `cargo make test-db` or
+# `cargo nextest run -p temper-substrate --features test-db`.
+test-db = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
 scenario-schema = ["schemars", "temper-core/scenario-schema"]
 
