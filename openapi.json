@@ -2873,7 +2873,14 @@
         "operationId": "get_profile",
         "responses": {
           "200": {
-            "description": "Current authenticated profile with entitlements"
+            "description": "Current authenticated profile with entitlements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileWithEntitlements"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -7316,6 +7323,32 @@
           }
         }
       },
+      "Entitlements": {
+        "type": "object",
+        "description": "Entitlements included in the profile response — tells the client\nwhat this profile is allowed to do at the system level.",
+        "required": [
+          "system_access",
+          "is_admin"
+        ],
+        "properties": {
+          "is_admin": {
+            "type": "boolean"
+          },
+          "join_request_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JoinRequestStatus"
+              }
+            ]
+          },
+          "system_access": {
+            "type": "boolean"
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "required": [
@@ -8702,6 +8735,24 @@
             ]
           }
         }
+      },
+      "ProfileWithEntitlements": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Profile"
+          },
+          {
+            "type": "object",
+            "required": [
+              "entitlements"
+            ],
+            "properties": {
+              "entitlements": {
+                "$ref": "#/components/schemas/Entitlements"
+              }
+            }
+          }
+        ]
       },
       "ProvenanceSource": {
         "oneOf": [

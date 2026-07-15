@@ -21,15 +21,15 @@ module Temper::Generated
     end
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [nil]
+    # @return [ProfileWithEntitlements]
     def get_profile(opts = {})
-      get_profile_with_http_info(opts)
-      nil
+      data, _status_code, _headers = get_profile_with_http_info(opts)
+      data
     end
 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    # @return [Array<(ProfileWithEntitlements, Integer, Hash)>] ProfileWithEntitlements data, response status code and response headers
     def get_profile_with_http_info(opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ProfileApi.get_profile ...'
@@ -57,7 +57,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type]
+      return_type = opts[:debug_return_type] || 'ProfileWithEntitlements'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

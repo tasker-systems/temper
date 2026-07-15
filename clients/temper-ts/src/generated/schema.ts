@@ -2103,6 +2103,15 @@ export interface components {
              */
             redriven: number;
         };
+        /**
+         * @description Entitlements included in the profile response — tells the client
+         *     what this profile is allowed to do at the system level.
+         */
+        Entitlements: {
+            is_admin: boolean;
+            join_request_status?: null | components["schemas"]["JoinRequestStatus"];
+            system_access: boolean;
+        };
         ErrorBody: {
             error: components["schemas"]["ErrorDetail"];
         };
@@ -2877,6 +2886,9 @@ export interface components {
             display_name?: string | null;
             preferences?: unknown;
             vault_config?: null | components["schemas"]["VaultConfig"];
+        };
+        ProfileWithEntitlements: components["schemas"]["Profile"] & {
+            entitlements: components["schemas"]["Entitlements"];
         };
         /** @description Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec). */
         ProvenanceSource: {
@@ -5597,7 +5609,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ProfileWithEntitlements"];
+                };
             };
             /** @description Unauthorized */
             401: {

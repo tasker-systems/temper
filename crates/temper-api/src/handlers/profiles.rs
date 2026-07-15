@@ -10,7 +10,7 @@ use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::{access_service, profile_service};
 use temper_services::state::AppState;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ProfileWithEntitlements {
     #[serde(flatten)]
     pub profile: Profile,
@@ -24,7 +24,7 @@ pub struct ProfileWithEntitlements {
     tag = "Profile",
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Current authenticated profile with entitlements"),
+        (status = 200, description = "Current authenticated profile with entitlements", body = ProfileWithEntitlements),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]

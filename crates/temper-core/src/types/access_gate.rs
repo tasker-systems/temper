@@ -134,6 +134,7 @@ impl From<SystemSettings> for PublicSystemSettings {
 /// what this profile is allowed to do at the system level.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct Entitlements {
     pub system_access: bool,

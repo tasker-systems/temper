@@ -68,6 +68,8 @@ use temper_workflow::types::resource::{
         temper_core::types::graph_territory::TerritoryKind,
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
+        temper_core::types::access_gate::Entitlements,
+        crate::handlers::profiles::ProfileWithEntitlements,
         temper_core::types::relationship_requests::AssertRelationshipRequest,
         temper_core::types::relationship_requests::RetypeRelationshipRequest,
         temper_core::types::relationship_requests::ReweightRelationshipRequest,
