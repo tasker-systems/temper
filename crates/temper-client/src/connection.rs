@@ -108,13 +108,22 @@ impl<'a> ConnectionsClient<'a> {
 
     /// Grant a TEAM read-reach on this connection. Owning ≠ reaching — this writes an access grant
     /// so the team's members inherit read on what the connection receives.
-    pub async fn grant_reach(&self, id: Uuid, team: Uuid) -> Result<Connection> {
+    ///
+    /// `affirm_reach` carries the intentional affirmation required when the connection declares a
+    /// reach: without it the grant FAILS server-side. It records the intent for review; it does not
+    /// narrow the remote reach.
+    pub async fn grant_reach(
+        &self,
+        id: Uuid,
+        team: Uuid,
+        affirm_reach: Option<String>,
+    ) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/connections/{id}/reach");
         let req = self
             .http
             .post(&path)
-            .json(&GrantConnectionReachRequest { team });
+            .json(&GrantConnectionReachRequest { team, affirm_reach });
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
             .await
@@ -124,10 +133,10 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn revoke_reach(&self, id: Uuid, team: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/connections/{id}/reach");
-        let req = self
-            .http
-            .delete(&path)
-            .json(&GrantConnectionReachRequest { team });
+        let req = self.http.delete(&path).json(&GrantConnectionReachRequest {
+            team,
+            affirm_reach: None,
+        });
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
             .await
