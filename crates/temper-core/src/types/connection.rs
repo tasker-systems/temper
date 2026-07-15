@@ -190,6 +190,14 @@ pub struct AttachCredentialResponse {
 pub struct GrantConnectionReachRequest {
     /// The team receiving read-reach. Its members inherit read on what the connection receives.
     pub team: Uuid,
+    /// An intentional affirmation that binding this connection's coarse remote reach to the team
+    /// is deliberate — the stated reason. REQUIRED when the connection declares a reach
+    /// (`Connection::declares_reach`): granting without it FAILS rather than proceeding silently.
+    /// It records the intent for review; it does not make the coarse remote reach any narrower.
+    /// `revoke_reach` reuses this type and ignores the field — revoking a binding needs no
+    /// affirmation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affirm_reach: Option<String>,
 }
 
 /// Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.

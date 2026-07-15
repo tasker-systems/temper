@@ -1232,6 +1232,12 @@ pub enum AdminConnectionAction {
         /// The team receiving read-reach: a slug, a decorated `slug-<uuid>` ref, or a team UUID.
         #[arg(long)]
         team: String,
+        /// Affirm that binding this connection's coarse remote reach to the team is intentional —
+        /// REQUIRED when the connection declares a reach; the value is the stated reason. Granting
+        /// without it FAILS rather than proceeding silently. It records the intent for review; it
+        /// does NOT make the connection's coarse remote reach any narrower.
+        #[arg(long)]
+        affirm_reach: Option<String>,
     },
     /// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
     RevokeReach {

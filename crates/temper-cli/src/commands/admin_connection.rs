@@ -203,12 +203,16 @@ pub async fn grant_reach_remote(
     client: &temper_client::TemperClient,
     id: &str,
     team: &str,
+    affirm_reach: Option<String>,
     fmt: OutputFormat,
 ) -> Result<()> {
     let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
+    // A connection that declares a reach requires `affirm_reach`: the service returns Conflict
+    // otherwise, and that failure surfaces here via `client_err` — it IS the warning, so there is
+    // no pre-check to duplicate it.
     let row = client
         .connections()
-        .grant_reach(parse_uuid("connection id", id)?, team_id)
+        .grant_reach(parse_uuid("connection id", id)?, team_id, affirm_reach)
         .await
         .map_err(crate::commands::client_err)?;
     println!("{}", crate::format::render(&row, fmt)?);
@@ -216,6 +220,12 @@ pub async fn grant_reach_remote(
         "Read-reach granted: the team's members now inherit read on what this connection receives. \
          Reach is read-only — it confers no write.",
     );
+    if row.reach_affirmed_at.is_some() {
+        crate::output::hint(
+            "Reach affirmed and recorded (who/when/why). This does not narrow the connection's \
+             remote reach; it makes the intent reviewable.",
+        );
+    }
     Ok(())
 }
 

@@ -135,7 +135,8 @@ pub async fn grant_reach(
 ) -> ApiResult<Json<Connection>> {
     let caller = ProfileId::from(auth.0.profile.id);
     Ok(Json(
-        connection_service::grant_reach(&state.pool, caller, id, body.team).await?,
+        connection_service::grant_reach(&state.pool, caller, id, body.team, body.affirm_reach)
+            .await?,
     ))
 }
 

@@ -416,33 +416,115 @@ pub async fn set_tool_manifest(
 /// SAME policy as every other connection mutator, CALLED not restated. It deliberately does NOT
 /// route through `access_service::can_administer_grant`, whose `can_grant` seam has no bootstrap
 /// holder for a connection subject — the whole point is one policy, called once.
+///
+/// A connection whose reach is *declared* (`Connection::declares_reach`) carries a coarse remote
+/// reach that may exceed the granted team's temper reach — remote and temper scope are
+/// incommensurable, so there is no computed `exceeds` bool, only the honest declaration. Binding
+/// such a connection to a team is therefore not allowed to proceed silently: `affirm_reach` must
+/// carry the stated reason, or the grant FAILS. Affirming records who/when/why on the connection —
+/// it makes the asymmetry declared and reviewable; it does NOT resolve it or narrow the remote
+/// reach. The four cases:
+///
+/// - declares reach, no affirmation → `Conflict`, writes nothing (naming the declared reach and the fix).
+/// - declares reach, affirmation → one transaction: stamp the affirmation, then insert the grant.
+/// - declares no reach, affirmation → `BadRequest` (the flag is inapplicable — honest over lenient).
+/// - declares no reach, no affirmation → the plain grant.
+///
+/// Auth stays FIRST — affirmation never bypasses authorization.
 pub async fn grant_reach(
     pool: &PgPool,
     caller: ProfileId,
     connection_id: Uuid,
     team_id: Uuid,
+    affirm_reach: Option<String>,
 ) -> ApiResult<Connection> {
     let connection = get(pool, connection_id).await?;
     machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
 
-    let mut conn = pool.acquire().await?;
-    access_service::insert_grant(
-        &mut conn,
-        &InsertGrantParams {
-            subject_table: "kb_connections".into(),
-            subject_id: connection_id,
-            principal_table: "kb_teams".into(),
-            principal_id: team_id,
-            can_read: true,
-            can_write: false,
-            can_delete: false,
-            can_grant: false,
-            granted_by_profile_id: *caller,
-        },
-    )
-    .await?;
+    match (connection.declares_reach(), affirm_reach) {
+        // Declared reach, unaffirmed: refuse, naming the declared reach and the fix. Write nothing.
+        (true, None) => Err(ApiError::Conflict(format!(
+            "connection '{}' declares remote reach ({}) that may exceed the team's temper reach; \
+             binding it to a team must be affirmed as intentional — re-run with \
+             --affirm-reach \"<why this is intended>\"",
+            connection.slug,
+            reach_descriptor(&connection),
+        ))),
+        // Declared reach, affirmed: stamp the affirmation and insert the grant atomically —
+        // never affirmation-without-grant or grant-without-affirmation.
+        (true, Some(rationale)) => {
+            let mut tx = pool.begin().await?;
+            sqlx::query!(
+                r#"UPDATE kb_connections
+                      SET reach_affirmed_by = $2, reach_affirmed_at = now(), reach_affirmation = $3
+                    WHERE id = $1"#,
+                connection_id,
+                *caller,
+                rationale,
+            )
+            .execute(&mut *tx)
+            .await?;
+            access_service::insert_grant(
+                &mut tx,
+                &reach_grant_params(connection_id, team_id, caller),
+            )
+            .await?;
+            // (`&mut tx` coerces to `&mut PgConnection` via Transaction's DerefMut.)
+            tx.commit().await?;
+            // The top-of-fn `connection` is stale post-UPDATE; re-read so the returned struct
+            // carries the populated affirmation fields.
+            get(pool, connection_id).await
+        }
+        // No declared reach, but an affirmation was passed: the flag is inapplicable. Honest over
+        // lenient — do not silently ignore it. Write nothing.
+        (false, Some(_)) => Err(ApiError::BadRequest(
+            "this connection declares no reach; --affirm-reach is not applicable".into(),
+        )),
+        // No declared reach, no affirmation: the plain grant.
+        (false, None) => {
+            let mut conn = pool.acquire().await?;
+            access_service::insert_grant(
+                &mut conn,
+                &reach_grant_params(connection_id, team_id, caller),
+            )
+            .await?;
+            Ok(connection)
+        }
+    }
+}
 
-    Ok(connection)
+/// The declared-reach descriptor for the affirmation-required message. Built from whichever of
+/// `reach_granularity` / `reach_covers` is populated (at least one is, given `declares_reach`).
+fn reach_descriptor(connection: &Connection) -> String {
+    match (
+        connection.reach_granularity.as_deref(),
+        connection.reach_covers.as_deref(),
+    ) {
+        (Some(g), Some(c)) => format!("{g}: {c}"),
+        (Some(g), None) => g.to_string(),
+        (None, Some(c)) => c.to_string(),
+        (None, None) => "declared".to_string(),
+    }
+}
+
+/// The columns of a team's read-reach grant on a connection — read-only, conferring no write,
+/// delete, or grant. Built in one place so the two grant paths (affirmed, unaffirmed) cannot drift.
+fn reach_grant_params(
+    connection_id: Uuid,
+    team_id: Uuid,
+    granted_by: ProfileId,
+) -> InsertGrantParams {
+    InsertGrantParams {
+        subject_table: "kb_connections".into(),
+        subject_id: connection_id,
+        principal_table: "kb_teams".into(),
+        principal_id: team_id,
+        can_read: true,
+        can_write: false,
+        can_delete: false,
+        can_grant: false,
+        granted_by_profile_id: *granted_by,
+    }
 }
 
 /// Revoke a team's read-reach on a connection. Same gate as [`grant_reach`]; deletes the
@@ -1266,9 +1348,15 @@ mod tests {
             .expect("provision");
         let beta = seed_team(&pool, "beta").await;
 
-        svc::grant_reach(&pool, owner, c.id, beta)
-            .await
-            .expect("a team owner may grant reach on their own connection");
+        svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            beta,
+            Some("beta reviews acme CI".into()),
+        )
+        .await
+        .expect("a team owner may grant reach on their own connection");
 
         assert!(
             reach_grant_exists(&pool, c.id, beta).await,
@@ -1285,9 +1373,15 @@ mod tests {
             .expect("provision");
         let beta = seed_team(&pool, "beta").await;
 
-        svc::grant_reach(&pool, admin, c.id, beta)
-            .await
-            .expect("a system admin may grant reach");
+        svc::grant_reach(
+            &pool,
+            admin,
+            c.id,
+            beta,
+            Some("admin binds teamless reach".into()),
+        )
+        .await
+        .expect("a system admin may grant reach");
 
         assert!(reach_grant_exists(&pool, c.id, beta).await);
     }
@@ -1302,7 +1396,7 @@ mod tests {
         let (outsider, _other) =
             seed_team_member(&pool, "reach-outsider", "other", TeamRole::Owner).await;
 
-        let err = svc::grant_reach(&pool, outsider, c.id, team)
+        let err = svc::grant_reach(&pool, outsider, c.id, team, None)
             .await
             .expect_err("an owner of a different team is not authorized here");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
@@ -1323,7 +1417,7 @@ mod tests {
             seed_team_member(&pool, "reach-outsider", "other", TeamRole::Owner).await;
         let beta = seed_team(&pool, "beta").await;
 
-        let err = svc::grant_reach(&pool, outsider, c.id, beta)
+        let err = svc::grant_reach(&pool, outsider, c.id, beta, None)
             .await
             .expect_err("teamless is admin-only");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
@@ -1338,9 +1432,15 @@ mod tests {
             .expect("provision");
         let beta = seed_team(&pool, "beta").await;
 
-        svc::grant_reach(&pool, owner, c.id, beta)
-            .await
-            .expect("grant");
+        svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            beta,
+            Some("beta reviews acme CI".into()),
+        )
+        .await
+        .expect("grant");
         assert!(reach_grant_exists(&pool, c.id, beta).await, "granted");
 
         svc::revoke_reach(&pool, owner, c.id, beta)
@@ -1350,5 +1450,185 @@ mod tests {
             !reach_grant_exists(&pool, c.id, beta).await,
             "the grant must be gone after revoke"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Excess-reach affirmation (B3 beat 2). Granting a team reach on a
+    // connection that DECLARES reach must be affirmed as intentional or it
+    // FAILS — the trigger is purely `declares_reach()`, never a computed
+    // comparison against the team. Affirming records who/when/why; it does not
+    // narrow the remote reach.
+    // -----------------------------------------------------------------------
+
+    /// Declared reach, no affirmation: the grant is refused, and nothing is written — no grant row,
+    /// and the affirmation stamp stays NULL.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn grant_on_a_reach_declaring_connection_without_affirmation_is_refused(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        assert!(c.declares_reach(), "req declares reach");
+        let beta = seed_team(&pool, "beta").await;
+
+        let err = svc::grant_reach(&pool, owner, c.id, beta, None)
+            .await
+            .expect_err("a reach-declaring grant must be affirmed");
+        assert!(matches!(err, ApiError::Conflict(_)), "got {err:?}");
+
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "a refused grant must write no grant row"
+        );
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(
+            reloaded.reach_affirmed_at.is_none(),
+            "a refused grant must stamp no affirmation"
+        );
+    }
+
+    /// Declared reach, affirmed: the affirmation records who/when/why AND the grant lands. The
+    /// returned connection (and a fresh get) carry the populated affirmation fields.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn affirming_a_reach_declaring_grant_records_who_when_why_and_writes_the_grant(
+        pool: PgPool,
+    ) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        let beta = seed_team(&pool, "beta").await;
+
+        let out = svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            beta,
+            Some("beta reviews acme CI".into()),
+        )
+        .await
+        .expect("an affirmed grant lands");
+
+        assert!(
+            reach_grant_exists(&pool, c.id, beta).await,
+            "the grant must land alongside the affirmation"
+        );
+        // The returned struct is re-read post-UPDATE, so it carries the stamp.
+        assert_eq!(out.reach_affirmed_by, Some(*owner), "who");
+        assert_eq!(
+            out.reach_affirmation.as_deref(),
+            Some("beta reviews acme CI"),
+            "why"
+        );
+        assert!(out.reach_affirmed_at.is_some(), "when");
+
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert_eq!(reloaded.reach_affirmed_by, Some(*owner));
+        assert_eq!(
+            reloaded.reach_affirmation.as_deref(),
+            Some("beta reviews acme CI")
+        );
+        assert!(reloaded.reach_affirmed_at.is_some());
+    }
+
+    /// A connection that declares NO reach grants without any affirmation — the affirmation stamp
+    /// stays NULL because no affirmation was required or made.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_connection_that_declares_no_reach_grants_without_affirmation(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req_no_reach("Bare GitHub", Some(team)))
+            .await
+            .expect("provision");
+        assert!(!c.declares_reach(), "req_no_reach declares no reach");
+        let beta = seed_team(&pool, "beta").await;
+
+        svc::grant_reach(&pool, owner, c.id, beta, None)
+            .await
+            .expect("a connection with no declared reach grants freely");
+
+        assert!(
+            reach_grant_exists(&pool, c.id, beta).await,
+            "the grant lands"
+        );
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(
+            reloaded.reach_affirmed_at.is_none(),
+            "no affirmation is required or recorded"
+        );
+    }
+
+    /// Affirming a connection that declares NO reach is refused — the flag is inapplicable. Honest
+    /// over lenient: it is not silently ignored, and nothing is written.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn affirming_a_connection_that_declares_no_reach_is_refused(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req_no_reach("Bare GitHub", Some(team)))
+            .await
+            .expect("provision");
+        let beta = seed_team(&pool, "beta").await;
+
+        let err = svc::grant_reach(&pool, owner, c.id, beta, Some("but I insist".into()))
+            .await
+            .expect_err("--affirm-reach is inapplicable when no reach is declared");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "a refused grant must write nothing"
+        );
+    }
+
+    /// Authorization precedes affirmation: a non-owner/non-admin caller passing `affirm_reach` on a
+    /// reach-declaring connection is still `Forbidden` (the gate runs FIRST), and nothing is written.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn authorization_precedes_affirmation(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        let (outsider, _other) =
+            seed_team_member(&pool, "reach-outsider", "other", TeamRole::Owner).await;
+        let beta = seed_team(&pool, "beta").await;
+
+        let err = svc::grant_reach(&pool, outsider, c.id, beta, Some("I insist".into()))
+            .await
+            .expect_err("auth runs before affirmation");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "an auth-denied grant writes no grant row"
+        );
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(
+            reloaded.reach_affirmed_at.is_none(),
+            "an auth-denied grant stamps no affirmation"
+        );
+    }
+
+    /// Re-affirming overwrites the prior affirmation (last-writer). The second rationale and
+    /// affirmer win.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn re_affirming_overwrites_the_prior_affirmation(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        let beta = seed_team(&pool, "beta").await;
+        let gamma = seed_team(&pool, "gamma").await;
+
+        svc::grant_reach(&pool, owner, c.id, beta, Some("first reason".into()))
+            .await
+            .expect("first affirmation");
+        let second = svc::grant_reach(&pool, owner, c.id, gamma, Some("second reason".into()))
+            .await
+            .expect("second affirmation");
+
+        assert_eq!(
+            second.reach_affirmation.as_deref(),
+            Some("second reason"),
+            "the last writer's rationale wins"
+        );
+        assert_eq!(second.reach_affirmed_by, Some(*owner));
     }
 }
