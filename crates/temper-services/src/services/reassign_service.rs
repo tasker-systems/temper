@@ -142,8 +142,10 @@ pub struct ScopedOwnedRow {
     pub context_ref: String,
 }
 
-/// Resources owned by `profile_id` and homed in a context shared to `team_id`,
-/// ordered by `(context slug, resource_id)` so same-context rows are adjacent.
+/// Resources owned by `profile_id` and homed in a context shared to `team_id`.
+/// Ordered by `(context slug, resource_id)` for stable output only — consumers
+/// that group by context MUST key on `context_id` (a slug is unique only per-owner,
+/// so two distinct contexts can share a slug and are NOT guaranteed to be adjacent).
 pub async fn team_scoped_owned(
     pool: &PgPool,
     team_id: Uuid,

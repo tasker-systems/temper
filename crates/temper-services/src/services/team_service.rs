@@ -441,14 +441,22 @@ pub async fn remove_member(
     // correct post-delete; we reuse the exact definition the handoff moves, so the
     // warning and the handoff can never disagree.
     let owned = crate::services::reassign_service::team_scoped_owned(pool, team_id, target).await?;
+    // Group by context IDENTITY (context_id), not by row adjacency: a slug is unique
+    // only per-owner, so two distinct contexts can share a slug and interleave in the
+    // result — an adjacency fold would split one into duplicate entries. A map keyed
+    // on context_id is order-independent and preserves first-seen order for stable output.
     let mut contexts: Vec<ResidualContext> = Vec::new();
+    let mut index: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
     for row in &owned {
-        match contexts.last_mut() {
-            Some(last) if last.context_ref == row.context_ref => last.count += 1,
-            _ => contexts.push(ResidualContext {
-                context_ref: row.context_ref.clone(),
-                count: 1,
-            }),
+        match index.get(&row.context_id) {
+            Some(&i) => contexts[i].count += 1,
+            None => {
+                index.insert(row.context_id, contexts.len());
+                contexts.push(ResidualContext {
+                    context_ref: row.context_ref.clone(),
+                    count: 1,
+                });
+            }
         }
     }
     Ok(RemoveMemberOutcome {
@@ -682,6 +690,46 @@ mod lifecycle_tests {
         assert!(outcome.residual_owned.contexts[0]
             .context_ref
             .ends_with("/shared"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn remove_member_residual_groups_same_slug_contexts_by_identity(pool: PgPool) {
+        // Two DISTINCT contexts sharing the slug "docs" (slug is unique only per-owner),
+        // both shared to the team, both holding leaver-owned resources. Resources are
+        // inserted interleaved (A, B, A); kb_resources.id is uuid_generate_v7 (monotonic),
+        // so `ORDER BY slug, resource_id` yields the non-adjacent sequence A, B, A. The
+        // fold must group by context IDENTITY — an adjacency fold would split A in two.
+        let owner = mk_profile(&pool, "owner").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let carol = mk_profile(&pool, "carol").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, leaver, "member", "native").await;
+
+        let ctx_a = mk_shared_profile_context(&pool, carol, team, "docs").await; // @carol/docs
+        let ctx_b = mk_shared_profile_context(&pool, leaver, team, "docs").await; // @leaver/docs
+
+        let _r1 = mk_homed_resource(&pool, ctx_a, leaver).await;
+        let _r2 = mk_homed_resource(&pool, ctx_b, leaver).await;
+        let _r3 = mk_homed_resource(&pool, ctx_a, leaver).await;
+
+        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
+            .await
+            .expect("removal ok");
+        assert_eq!(outcome.residual_owned.count, 3);
+        assert_eq!(
+            outcome.residual_owned.contexts.len(),
+            2,
+            "one entry per context identity, not per row-run"
+        );
+        let by_ref: std::collections::HashMap<&str, u32> = outcome
+            .residual_owned
+            .contexts
+            .iter()
+            .map(|c| (c.context_ref.as_str(), c.count))
+            .collect();
+        assert_eq!(by_ref.get("@carol/docs"), Some(&2));
+        assert_eq!(by_ref.get("@leaver/docs"), Some(&1));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
