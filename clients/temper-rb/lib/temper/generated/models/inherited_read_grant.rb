@@ -14,30 +14,22 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Result of a context ownership transfer. `reassigned` is `false` when the context was already owned by the target team (idempotent no-op).
-  class ReassignContextOutcome < ApiModelBase
-    attr_accessor :context_id
+  # An explicit context read-grant that survives the ownership flip — inherited residual reach.
+  class InheritedReadGrant < ApiModelBase
+    attr_accessor :principal_id
 
-    # Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).
-    attr_accessor :inherited_read_grants
+    # Decorated ref: `@handle` for a profile, `+slug` for a team.
+    attr_accessor :principal_ref
 
-    # Read-reach the new owner inherits: teams this context was shared to (kb_team_contexts). Surfaced, not swept — the new owner prunes deliberately.
-    attr_accessor :inherited_shares
-
-    # The new `+team-slug` decorated owner ref.
-    attr_accessor :owner_ref
-
-    # `true` when this call transferred ownership; `false` when it was already team-owned.
-    attr_accessor :reassigned
+    # `kb_profiles` or `kb_teams`.
+    attr_accessor :principal_table
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'context_id' => :'context_id',
-        :'inherited_read_grants' => :'inherited_read_grants',
-        :'inherited_shares' => :'inherited_shares',
-        :'owner_ref' => :'owner_ref',
-        :'reassigned' => :'reassigned'
+        :'principal_id' => :'principal_id',
+        :'principal_ref' => :'principal_ref',
+        :'principal_table' => :'principal_table'
       }
     end
 
@@ -54,11 +46,9 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'context_id' => :'String',
-        :'inherited_read_grants' => :'Array<InheritedReadGrant>',
-        :'inherited_shares' => :'Array<InheritedShare>',
-        :'owner_ref' => :'String',
-        :'reassigned' => :'Boolean'
+        :'principal_id' => :'String',
+        :'principal_ref' => :'String',
+        :'principal_table' => :'String'
       }
     end
 
@@ -72,46 +62,34 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ReassignContextOutcome` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::InheritedReadGrant` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ReassignContextOutcome`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::InheritedReadGrant`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'context_id')
-        self.context_id = attributes[:'context_id']
+      if attributes.key?(:'principal_id')
+        self.principal_id = attributes[:'principal_id']
       else
-        self.context_id = nil
+        self.principal_id = nil
       end
 
-      if attributes.key?(:'inherited_read_grants')
-        if (value = attributes[:'inherited_read_grants']).is_a?(Array)
-          self.inherited_read_grants = value
-        end
-      end
-
-      if attributes.key?(:'inherited_shares')
-        if (value = attributes[:'inherited_shares']).is_a?(Array)
-          self.inherited_shares = value
-        end
-      end
-
-      if attributes.key?(:'owner_ref')
-        self.owner_ref = attributes[:'owner_ref']
+      if attributes.key?(:'principal_ref')
+        self.principal_ref = attributes[:'principal_ref']
       else
-        self.owner_ref = nil
+        self.principal_ref = nil
       end
 
-      if attributes.key?(:'reassigned')
-        self.reassigned = attributes[:'reassigned']
+      if attributes.key?(:'principal_table')
+        self.principal_table = attributes[:'principal_table']
       else
-        self.reassigned = nil
+        self.principal_table = nil
       end
     end
 
@@ -120,16 +98,16 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @context_id.nil?
-        invalid_properties.push('invalid value for "context_id", context_id cannot be nil.')
+      if @principal_id.nil?
+        invalid_properties.push('invalid value for "principal_id", principal_id cannot be nil.')
       end
 
-      if @owner_ref.nil?
-        invalid_properties.push('invalid value for "owner_ref", owner_ref cannot be nil.')
+      if @principal_ref.nil?
+        invalid_properties.push('invalid value for "principal_ref", principal_ref cannot be nil.')
       end
 
-      if @reassigned.nil?
-        invalid_properties.push('invalid value for "reassigned", reassigned cannot be nil.')
+      if @principal_table.nil?
+        invalid_properties.push('invalid value for "principal_table", principal_table cannot be nil.')
       end
 
       invalid_properties
@@ -139,40 +117,40 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @context_id.nil?
-      return false if @owner_ref.nil?
-      return false if @reassigned.nil?
+      return false if @principal_id.nil?
+      return false if @principal_ref.nil?
+      return false if @principal_table.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] context_id Value to be assigned
-    def context_id=(context_id)
-      if context_id.nil?
-        fail ArgumentError, 'context_id cannot be nil'
+    # @param [Object] principal_id Value to be assigned
+    def principal_id=(principal_id)
+      if principal_id.nil?
+        fail ArgumentError, 'principal_id cannot be nil'
       end
 
-      @context_id = context_id
+      @principal_id = principal_id
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] owner_ref Value to be assigned
-    def owner_ref=(owner_ref)
-      if owner_ref.nil?
-        fail ArgumentError, 'owner_ref cannot be nil'
+    # @param [Object] principal_ref Value to be assigned
+    def principal_ref=(principal_ref)
+      if principal_ref.nil?
+        fail ArgumentError, 'principal_ref cannot be nil'
       end
 
-      @owner_ref = owner_ref
+      @principal_ref = principal_ref
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] reassigned Value to be assigned
-    def reassigned=(reassigned)
-      if reassigned.nil?
-        fail ArgumentError, 'reassigned cannot be nil'
+    # @param [Object] principal_table Value to be assigned
+    def principal_table=(principal_table)
+      if principal_table.nil?
+        fail ArgumentError, 'principal_table cannot be nil'
       end
 
-      @reassigned = reassigned
+      @principal_table = principal_table
     end
 
     # Checks equality by comparing each attribute.
@@ -180,11 +158,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          context_id == o.context_id &&
-          inherited_read_grants == o.inherited_read_grants &&
-          inherited_shares == o.inherited_shares &&
-          owner_ref == o.owner_ref &&
-          reassigned == o.reassigned
+          principal_id == o.principal_id &&
+          principal_ref == o.principal_ref &&
+          principal_table == o.principal_table
     end
 
     # @see the `==` method
@@ -196,7 +172,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [context_id, inherited_read_grants, inherited_shares, owner_ref, reassigned].hash
+      [principal_id, principal_ref, principal_table].hash
     end
 
     # Builds the object from hash

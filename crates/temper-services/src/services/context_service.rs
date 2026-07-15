@@ -20,8 +20,9 @@ use temper_core::types::ids::{ContextId, ProfileId};
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
-    ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
-    ReassignContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
+    ReassignContextOutcome, ReassignContextRequest, ShareContextOutcome, ShareContextRequest,
+    UnshareContextOutcome,
 };
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
@@ -514,11 +515,17 @@ pub async fn reassign(
     )
     .fetch_one(pool)
     .await?;
+
+    // Read-reach the new owner inherits — surfaced in the outcome, never swept (spec D3).
+    let (inherited_shares, inherited_read_grants) = inherited_reach(pool, context_id).await?;
+
     if cur.owner_table == "kb_teams" && cur.owner_id == to_team_id {
         return Ok(ReassignContextOutcome {
             context_id,
             owner_ref: team_owner_ref(pool, to_team_id).await?,
             reassigned: false,
+            inherited_shares,
+            inherited_read_grants,
         });
     }
 
@@ -557,7 +564,63 @@ pub async fn reassign(
         context_id,
         owner_ref: team_owner_ref(pool, to_team_id).await?,
         reassigned: true,
+        inherited_shares,
+        inherited_read_grants,
     })
+}
+
+/// Gather the read-reach a transfer leaves in place: `kb_team_contexts` shares plus explicit
+/// `kb_access_grants` context read-grants. Surfaced in the transfer outcome; never swept (D3).
+async fn inherited_reach(
+    pool: &PgPool,
+    context_id: uuid::Uuid,
+) -> ApiResult<(Vec<InheritedShare>, Vec<InheritedReadGrant>)> {
+    let shares = sqlx::query!(
+        r#"SELECT tc.team_id AS "team_id!", t.slug AS "slug!"
+             FROM kb_team_contexts tc
+             JOIN kb_teams t ON t.id = tc.team_id
+            WHERE tc.context_id = $1
+            ORDER BY t.slug"#,
+        context_id,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| InheritedShare {
+        team_id: r.team_id,
+        team_ref: format!("+{}", r.slug),
+    })
+    .collect();
+
+    let grants = sqlx::query!(
+        r#"SELECT g.principal_table AS "principal_table!",
+                  g.principal_id    AS "principal_id!",
+                  COALESCE(p.handle, t.slug) AS "principal_name!"
+             FROM kb_access_grants g
+             LEFT JOIN kb_profiles p ON g.principal_table = 'kb_profiles' AND p.id = g.principal_id
+             LEFT JOIN kb_teams    t ON g.principal_table = 'kb_teams'    AND t.id = g.principal_id
+            WHERE g.subject_table = 'kb_contexts' AND g.subject_id = $1 AND g.can_read
+            ORDER BY g.principal_table, g.principal_id"#,
+        context_id,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| {
+        let principal_ref = if r.principal_table == "kb_profiles" {
+            format!("@{}", r.principal_name)
+        } else {
+            format!("+{}", r.principal_name)
+        };
+        InheritedReadGrant {
+            principal_table: r.principal_table,
+            principal_id: r.principal_id,
+            principal_ref,
+        }
+    })
+    .collect();
+
+    Ok((shares, grants))
 }
 
 /// Map a substrate write error from `reassign_context_with` to an [`ApiError`].

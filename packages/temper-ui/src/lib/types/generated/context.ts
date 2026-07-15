@@ -30,6 +30,63 @@ slug: string,
 owner_ref: string, };
 
 /**
+ * An explicit context read-grant that survives the ownership flip — inherited residual reach.
+ */
+export type InheritedReadGrant = { 
+/**
+ * `kb_profiles` or `kb_teams`.
+ */
+principal_table: string, principal_id: string, 
+/**
+ * Decorated ref: `@handle` for a profile, `+slug` for a team.
+ */
+principal_ref: string, };
+
+/**
+ * A team the context is shared to (read-reach) at transfer time — reach the new owner inherits.
+ */
+export type InheritedShare = { team_id: string, 
+/**
+ * Decorated `+team-slug` ref.
+ */
+team_ref: string, };
+
+/**
+ * Result of a context ownership transfer. `reassigned` is `false` when the context was
+ * already owned by the target team (idempotent no-op).
+ */
+export type ReassignContextOutcome = { context_id: string, 
+/**
+ * The new `+team-slug` decorated owner ref.
+ */
+owner_ref: string, 
+/**
+ * `true` when this call transferred ownership; `false` when it was already team-owned.
+ */
+reassigned: boolean, 
+/**
+ * Read-reach the new owner inherits: teams this context was shared to (kb_team_contexts).
+ * Surfaced, not swept — the new owner prunes deliberately.
+ */
+inherited_shares: Array<InheritedShare>, 
+/**
+ * Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).
+ */
+inherited_read_grants: Array<InheritedReadGrant>, };
+
+/**
+ * Request body for `POST /api/contexts/{id}/reassign` — transfer a context's ownership to
+ * a team. Binding a context to a team is the single path to shared authorship (read-only
+ * sharing stays `share_context`; writing into a context requires team ownership).
+ */
+export type ReassignContextRequest = { 
+/**
+ * The team that will own the context. Members with an authoring role can then write
+ * into it via the container-write cascade.
+ */
+to_team_id: string, };
+
+/**
  * Result of sharing a context into a team. `shared` is `false` when the share already
  * existed (idempotent no-op).
  */
