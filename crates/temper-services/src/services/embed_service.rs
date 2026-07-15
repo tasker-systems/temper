@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::services::workflow_job_service;
 use temper_core::types::workflow_job::{
     DispatchType, EmbedDispatchSummary, EmbeddingStatus, Persona, DEFAULT_EMBED_DISPATCH_CAP,
@@ -29,6 +29,37 @@ pub fn async_embed_enabled() -> bool {
     std::env::var("TEMPER_ASYNC_EMBED")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// Warm the ONNX embedder — cold-start mitigation for server-side query embedding (issue #427).
+///
+/// A search whose caller cannot precompute an embedding (MCP, the web UI, `--text-only`) is embedded
+/// server-side *inside the request* (`substrate_read::embed_query_if_missing`). On a COLD serverless
+/// instance that pays a one-time model load (ORT init + writing the bundled runtime to `/tmp` +
+/// reading the quantized model + first inference); run inside the request that cost can exceed the
+/// query-embed budget (`TEMPER_QUERY_EMBED_BUDGET_MS`, default 8s), and the vector arm is silently
+/// dropped to FTS + graph. On a low-traffic deploy where the function scales to zero between searches,
+/// *every* search pays it — which is exactly the "vector ranking was unavailable" report this fixes.
+///
+/// This populates the process's model cache (`MODEL: OnceLock`) BEFORE a real search arrives, so the
+/// embed inside the request is a cheap cached inference. Called by the cron-driven `/api/embed/warm`
+/// endpoint to keep the serving instance hot.
+///
+/// The embed is CPU-bound and blocking, so it runs off the async executor via `spawn_blocking` —
+/// exactly as the search path does. Returns the embedding dimensionality as a liveness signal (768 for
+/// bge-base); the vector itself is discarded.
+///
+/// NOTE: this is a *best-effort* warmth, not a guarantee — Vercel does not promise the cron and a user
+/// request land on the same instance. The durable "cold embed fits the budget" guarantee is the
+/// function's memory (and thus CPU) in `vercel.json`; this reduces how often a cold embed happens at
+/// all.
+pub async fn warm_embedder() -> ApiResult<usize> {
+    let dims = tokio::task::spawn_blocking(|| temper_ingest::embed::embed_text("warm"))
+        .await
+        .map_err(|e| ApiError::Internal(format!("embed warm task panicked: {e}")))?
+        .map_err(|e| ApiError::Internal(format!("embed warm failed: {e}")))?
+        .len();
+    Ok(dims)
 }
 
 /// What slice of the index to re-embed. Deliberately three granularities, because a re-embed is a

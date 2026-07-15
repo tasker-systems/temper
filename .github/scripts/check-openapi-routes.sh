@@ -50,6 +50,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/connections/{id}/tool-manifest
 /internal/saml/reconcile
 /api/embed/dispatch
+/api/embed/warm
 /api/embed/admin/reembed'
 
 if [ ! -f "$ROUTES_FILE" ]; then
