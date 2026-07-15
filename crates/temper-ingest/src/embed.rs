@@ -130,6 +130,10 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
             not(feature = "embed-download")
         ))]
         {
+            // Fail fast if git-lfs was skipped: `ort::init_from` HANGS on a pointer-as-.so for the
+            // whole function timeout (issue #451). Check the compiled-in bytes before touching /tmp,
+            // so a pointer already staged there on a prior invocation is caught too.
+            reject_lfs_pointer(ORT_LIB_BYTES, "the bundled libonnxruntime.so")?;
             let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
             if !lib_path.exists() {
                 std::fs::write(lib_path, ORT_LIB_BYTES)
@@ -385,6 +389,34 @@ fn verify_model_file(path: &std::path::Path) -> std::result::Result<(), String> 
     Ok(())
 }
 
+/// First bytes of a git-lfs pointer file. A build that did not run `git lfs pull` (on Vercel, a
+/// deploy checkout without `lfs: true`) leaves the LFS-tracked artifacts as ~134-byte pointer TEXT,
+/// and `include_bytes!` bakes THAT into the binary instead of the real bytes.
+const LFS_POINTER_MAGIC: &[u8] = b"version https://git-lfs.github.com/spec/v1";
+
+/// Refuse a git-lfs POINTER masquerading as a real bundled artifact — fail FAST and LOUD rather than
+/// hand it to ONNX Runtime.
+///
+/// This is the guard the bundled path never had. `MODEL_BYTES` and `ORT_LIB_BYTES` are
+/// `include_bytes!` blobs treated as "verified by construction" (the sha gate only re-checks the
+/// file/override path), so on an LFS-off build a pointer sails straight into ORT. And ORT does *not*
+/// fail cleanly on one: handed a pointer-as-`libonnxruntime.so`, `ort::init_from` **hangs** for the
+/// whole function timeout (measured >90s; issue #451) — inside the `ORT_INIT`/`MODEL` `OnceLock`, so
+/// every later embed blocks behind it and is killed at `maxDuration`. Detecting the pointer up front
+/// converts that silent 300s catastrophe into an instant, self-explanatory error.
+#[allow(dead_code)] // called from the bundled `embed` sites (cfg-gated) and from tests
+fn reject_lfs_pointer(bytes: &[u8], what: &str) -> std::result::Result<(), String> {
+    if bytes.starts_with(LFS_POINTER_MAGIC) {
+        return Err(format!(
+            "{what} is a git-lfs POINTER ({} bytes), not the real artifact: this build did not run \
+             `git lfs pull` (on Vercel, set `lfs: true` on the deploy's checkout). Refusing to load \
+             it — a pointer handed to ONNX Runtime hangs the process until it is killed.",
+            bytes.len()
+        ));
+    }
+    Ok(())
+}
+
 // ---- Model management ----
 
 struct Model {
@@ -484,11 +516,17 @@ fn build_session() -> std::result::Result<Session, String> {
                 .commit_from_file(&path)
                 .map_err(|e| format!("ort load: {e}"))
         }
-        // `MODEL_BYTES` is the very file `build.rs` hashed to produce EXPECTED_MODEL_SHA256, so it
-        // is verified by construction — re-hashing it here would cost 0.2s to prove a tautology.
-        None => builder
-            .commit_from_memory(MODEL_BYTES)
-            .map_err(|e| format!("ort load: {e}")),
+        // `MODEL_BYTES` is the file `build.rs` hashed for EXPECTED_MODEL_SHA256, so its *content* is
+        // verified by construction — re-hashing the 110MB here would prove a tautology. But
+        // "construction" assumes git-lfs ran: an LFS-off build bakes a pointer here, and ORT would
+        // rather hang on it than error (issue #451). Reject the pointer up front; that is the one
+        // thing the tautology does not cover.
+        None => {
+            reject_lfs_pointer(MODEL_BYTES, "the bundled ONNX model")?;
+            builder
+                .commit_from_memory(MODEL_BYTES)
+                .map_err(|e| format!("ort load: {e}"))
+        }
     }
 }
 
@@ -942,6 +980,46 @@ mod tests {
             let resolved = model_path_override().expect("a readable file resolves");
             assert_eq!(resolved.as_deref(), Some(f.path()));
         });
+    }
+
+    // ---- LFS-pointer guard (issue #451) ----
+
+    #[test]
+    fn reject_lfs_pointer_catches_a_pointer_and_names_the_fix() {
+        // The exact shape include_bytes! bakes when git-lfs is skipped.
+        let pointer = b"version https://git-lfs.github.com/spec/v1\n\
+                        oid sha256:c9729cc84cbd0e9fecc759505d2be65916c9fe05222d7ea26c65fcb3382af38d\n\
+                        size 110083337\n";
+        let err = super::reject_lfs_pointer(pointer, "the bundled ONNX model")
+            .expect_err("a git-lfs pointer must be refused, never handed to ORT");
+        assert!(
+            err.contains("git-lfs POINTER"),
+            "says what went wrong: {err}"
+        );
+        assert!(
+            err.contains("lfs pull") || err.contains("lfs: true"),
+            "says how to fix it: {err}"
+        );
+        assert!(
+            err.contains("the bundled ONNX model"),
+            "names which artifact: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_lfs_pointer_passes_real_artifact_bytes() {
+        // Keys on the pointer magic ONLY, so real binary bytes (an ELF .so header, an ONNX protobuf
+        // header) never false-positive. Empty is fine too — that is a different failure for ORT.
+        assert!(
+            super::reject_lfs_pointer(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0], "libonnxruntime.so")
+                .is_ok(),
+            "an ELF header is a real shared library, not a pointer"
+        );
+        assert!(
+            super::reject_lfs_pointer(b"\x08\x07\x12\x0Bonnx-model", "model").is_ok(),
+            "protobuf-ish bytes are not a pointer"
+        );
+        assert!(super::reject_lfs_pointer(&[], "empty").is_ok());
     }
 
     // ---- Feature guard tests ----
