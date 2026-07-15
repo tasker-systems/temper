@@ -245,6 +245,61 @@ pub fn content_sidecar(blocks: &[PreparedBlock]) -> HashMap<String, ChunkContent
     map
 }
 
+/// One block's verbatim source bytes + their bare-hex sha256 — the value under a `__blocks` entry.
+/// The projector stores this into `kb_block_content` (`content_hash` computed here so the DB never
+/// re-derives it — the Rust `sha256_hex` is the byte-exact twin of the SQL `encode(sha256(…),'hex')`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockContent {
+    pub content: String,
+    pub content_hash: String,
+}
+
+impl BlockContent {
+    /// Hash `raw` with the same function the chunk/body merkles use, so a block's stored `content_hash`
+    /// byte-matches what PR 5's finalize integrity check and PR 4's readback expect.
+    pub fn of(raw: &str) -> Self {
+        BlockContent {
+            content: raw.to_owned(),
+            content_hash: crate::content::sha256_hex(raw),
+        }
+    }
+}
+
+/// The full content sidecar (`p_content`): the flat `{chunk_id: {...}}` chunk map, PLUS an optional
+/// reserved `__blocks` key carrying each block's raw source bytes. The `__blocks` key is **extended
+/// onto** the chunk map, never a reshape — the projectors read the sidecar only by keyed chunk-UUID
+/// lookup and never iterate it, so an old projector simply never sees `__blocks` (both deploy-skew
+/// directions safe, no shape-sniffing, no two-deploy split). See migration
+/// `20260714000002_block_content_verbatim.sql`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContentSidecar {
+    #[serde(flatten)]
+    pub chunks: HashMap<String, ChunkContent>,
+    /// `{ <block-key>: {content, content_hash} }`. `<block-key>` is the block's **seq** on the
+    /// create/append paths and its **block id** on the mutate path (the update path hardcodes seq 0
+    /// and addresses blocks by id). Absent ⇒ no block carries verbatim bytes ⇒ the resource stays
+    /// `body_storage = 'derived'`.
+    #[serde(rename = "__blocks", default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<HashMap<String, BlockContent>>,
+}
+
+/// [`content_sidecar`] plus the reserved `__blocks` map keyed by block **seq** — the create/append
+/// sidecar. A block whose `raw_text` is `None` (the charter/scenario paths) contributes no `__blocks`
+/// entry; if no block carries bytes the `__blocks` key is omitted entirely (honest `derived`).
+pub fn content_sidecar_with_blocks(blocks: &[PreparedBlock]) -> ContentSidecar {
+    let chunks = content_sidecar(blocks);
+    let mut raw: HashMap<String, BlockContent> = HashMap::new();
+    for b in blocks {
+        if let Some(text) = &b.raw_text {
+            raw.insert(b.seq.to_string(), BlockContent::of(text));
+        }
+    }
+    ContentSidecar {
+        chunks,
+        blocks: (!raw.is_empty()).then_some(raw),
+    }
+}
+
 // ── the six live payloads ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -831,6 +886,7 @@ mod tests {
                 heading_depth: None,
             }],
             incorporated: vec![],
+            raw_text: None,
         };
         let m = BlockManifest::from(&b);
         let v = serde_json::to_value(&m).unwrap();
@@ -897,6 +953,7 @@ mod tests {
                 heading_depth: None,
             }],
             incorporated: vec![],
+            raw_text: None,
         };
         let side = content_sidecar(std::slice::from_ref(&b));
         let entry = side.get(&b.chunks[0].chunk_id.to_string()).unwrap();

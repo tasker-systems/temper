@@ -81,6 +81,7 @@ async fn revise_reaches_readout_tier_no_component_changes(pool: sqlx::PgPool) {
             incorporated: &[],
             block: BlockId::from(block_id),
             chunks: &prepared.chunks,
+            raw: None,
             emitter: EntityId::from(loaded.emitter),
         },
     )
