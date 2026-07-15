@@ -126,6 +126,33 @@ A failed embed is retried by the queue's reaper and marked `dead` after max atte
 bulk vs interactive ingest lives in [docs/upload-lifecycle.md](docs/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
 the full design is [docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md](docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md).
 
+## Server-side query-embed cold starts (issue #427)
+
+A **search** whose caller can't precompute an embedding — MCP tools, the web UI, `temper
+search --text-only` — is embedded **server-side inside the request**. On a **cold** Rust
+function instance that pays a one-time ONNX model load (ORT init + writing the bundled
+runtime to `/tmp` + reading the quantized model + first inference). Run inline that can
+exceed the query-embed budget (`TEMPER_QUERY_EMBED_BUDGET_MS`, default 8s), at which point
+the vector arm is silently dropped and the search degrades to FTS + graph with a
+`"vector ranking was unavailable"` diagnostic. On a low-traffic deploy that scales to zero
+between searches, *every* search can pay this — the symptom is "search never uses vectors."
+
+Two committed, target-agnostic mitigations in `vercel.json`, so every target inherits them:
+
+- **Function memory → CPU.** `functions."api/axum.rs"` and `functions."api/mcp.rs"` set
+  `memory: 3009` (Vercel scales CPU with memory), so the cold model load + first inference
+  fit inside the budget instead of timing out. This is the **durable** fix and it covers
+  **both** Rust functions (the MCP lambda is separate from the Axum one). `maxDuration: 60`
+  is headroom above the 8s budget so a cold request completes rather than being killed.
+- **Keep-warm cron.** `GET /api/embed/warm` (every 2 min) loads and exercises the embedder
+  so the serving instance's model cache is hot before a real search arrives. Same
+  `EMBED_DISPATCH_SECRET` bearer gate as `/api/embed/dispatch` (fail-closed when unset), so
+  it activates once that secret is set (see [Async embedding](#async-embedding-off-request-embed-drain-issue-299)
+  above — the same secret gates both). Best-effort: Vercel doesn't guarantee the cron and a
+  user request hit the same instance, and it warms the **Axum** function (the REST/web search
+  path); the MCP function relies on the memory lever plus its own traffic. Tune the cadence,
+  or the budget via `TEMPER_QUERY_EMBED_BUDGET_MS`, per target.
+
 ## Rollback
 
 Each target rolls back independently via Vercel's immutable deployments:
