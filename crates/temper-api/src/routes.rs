@@ -296,8 +296,6 @@ pub fn create_app(state: AppState) -> Router {
 
     let embed_internal = embed_internal_routes();
 
-    let cors = cors_layer(&state);
-
     let mut app = Router::new()
         .merge(public)
         .merge(auth_only)
@@ -309,6 +307,40 @@ pub fn create_app(state: AppState) -> Router {
         app =
             app.merge(SwaggerUi::new("/api-docs/ui").url("/api-docs/openapi.json", openapi_spec()));
     }
+
+    apply_transport_layers(app, state)
+}
+
+/// The internal/system-only app — the two non-user-auth surfaces (`internal_routes`,
+/// self-gated by the internal-signature middleware, and `embed_internal_routes`,
+/// self-gated by `EMBED_DISPATCH_SECRET`) with the same transport layers as
+/// [`create_app`], but none of the public/auth/gated API and no Swagger.
+///
+/// This exists so Vercel can serve these paths from a **separate function**
+/// (`api/internal.rs`) with its own `maxDuration`. The embed crons run ONNX
+/// warmups and drain passes that can exceed the 60s public-API ceiling; isolating
+/// them here lets that ceiling be raised for the crons without letting a public
+/// request hang for the same window. `create_app` still mounts these routes too,
+/// so a single-process deploy (local dev, e2e, self-hosted) keeps serving the full
+/// surface from one binary — the split matters only for Vercel's per-function
+/// timeout model.
+pub fn create_internal_app(state: AppState) -> Router {
+    let internal = internal_routes().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::internal_auth::require_internal_signature,
+    ));
+    let embed_internal = embed_internal_routes();
+
+    let app = Router::new().merge(internal).merge(embed_internal);
+
+    apply_transport_layers(app, state)
+}
+
+/// Apply the shared transport-layer stack (fallback, request decompression, HTTP
+/// tracing, CORS) and bind `state`. Shared by [`create_app`] and
+/// [`create_internal_app`] so both surfaces observe and trace requests identically.
+fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
+    let cors = cors_layer(&state);
 
     app.fallback(fallback_handler)
         .layer(RequestDecompressionLayer::new())

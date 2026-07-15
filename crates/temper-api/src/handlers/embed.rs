@@ -125,8 +125,11 @@ pub struct WarmSummary {
 /// server-side inside the request. On a cold instance that pays a one-time ONNX model load which, run
 /// inline, can exceed the query-embed budget (`TEMPER_QUERY_EMBED_BUDGET_MS`, default 8s) and silently
 /// drop the vector arm (issue #427). This endpoint loads and exercises the embedder so the process's
-/// model cache is hot before a real search arrives; a periodic cron (`vercel.json`) keeps the serving
-/// instance warm on a low-traffic deploy.
+/// model cache is hot; a periodic cron (`vercel.json`) keeps a warm instance on a low-traffic deploy.
+/// In the Vercel deploy it is routed to the dedicated `api/internal` function (alongside `dispatch`),
+/// so it keeps the **embed-drain worker** hot — where the repeated ONNX cost lives post-#299; the
+/// public search paths rely on the memory→CPU lever plus the graceful FTS degrade above. In a
+/// single-process deploy (local, self-hosted) it warms the one process that serves everything.
 ///
 /// Same gate as [`dispatch`]: bearer-secret (`EMBED_DISPATCH_SECRET`), fail-closed when unset — the
 /// warm path runs ONNX and must never be an open trigger. Idempotent and cheap after the first load.
