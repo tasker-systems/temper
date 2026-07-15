@@ -421,6 +421,28 @@ fn embed_and_pack_chunks(chunks: &[temper_ingest::chunk::ChunkData]) -> String {
     pack_chunks(&packed).expect("pack_chunks")
 }
 
+/// Pack a segment's already-chunked `ChunkData` with ZERO embeddings — same wire shape as
+/// `embed_and_pack_chunks` but without the (single-core, CI-slow) ONNX call. Valid because the block
+/// merkle that `resume_gap` and finalize's `expected_body_hash` compare is computed over the chunk
+/// **content_hashes**, never the vectors — so zero vectors leave every merkle identical while costing
+/// nothing. Used where a test only needs the blocks to LAND (with correct hashes), not to be embedded.
+#[cfg(feature = "test-embed")]
+fn pack_zero_embed(chunks: &[temper_ingest::chunk::ChunkData]) -> String {
+    let packed: Vec<PackedChunk> = chunks
+        .iter()
+        .map(|c| PackedChunk {
+            chunk_index: c.chunk_index,
+            header_path: c.header_path.clone(),
+            heading_depth: c.heading_depth,
+            content: c.content.clone(),
+            content_hash: c.content_hash.clone(),
+            embedding: vec![0.0_f32; 768],
+            embedded_with: None,
+        })
+        .collect();
+    pack_chunks(&packed).expect("pack_chunks")
+}
+
 /// A body sized to split into several segments under a small custom budget — small enough to
 /// keep the (ONNX-gated) test fast, large enough to leave a multi-segment gap to resume.
 #[cfg(feature = "test-embed")]
@@ -886,5 +908,215 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
     assert!(
         hits.iter().any(|h| h.resource_id == partial_id),
         "after finalize the same query must find it — otherwise the absence above proved nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: the CLI DISCARDS a corrupt upload on a finalize integrity failure (W2 PR 5)
+// ---------------------------------------------------------------------------
+
+/// **W2 PR 5: the CLI's integrity-failure RECOVERY path, driven end to end.**
+///
+/// When finalize returns `422 CONTENT_INTEGRITY` (the stored bytes don't match the source hash),
+/// `run_segmented_create` must NOT loop by resuming into the same failure — it must DISCARD the
+/// poisoned `in_progress` resource + the local resume manifest and surface an actionable error.
+///
+/// Forcing a real mismatch without a prod seam: the CLI computes a correct hash by construction, so
+/// this test (1) lands every segment via the client primitives WITHOUT finalizing, (2) writes the
+/// resume manifest the CLI will find, (3) CORRUPTS one block's stored RAW bytes directly in
+/// `kb_block_content` — which leaves the block's chunk-merkle (`block_body_hash`) untouched, so the
+/// CLI's `resume_gap` still sees every block as landed and skips straight to finalize — then (4)
+/// drives the real `temper resource create`, which resumes → finalizes → 422 → recovery. This
+/// simulates exactly the at-rest byte corruption the check exists to catch.
+#[cfg(feature = "test-embed")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_discards_a_corrupt_upload_on_integrity_failure(pool: PgPool) {
+    use temper_core::types::ingest::{AppendBlockPayload, SegmentedBegin};
+
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("corruptctx", None)
+        .await
+        .expect("create corruptctx context");
+
+    // A body over SEGMENT_BUDGET_BYTES ⇒ the CLI takes the segmented (run_segmented_create) path,
+    // the only path with the integrity-recovery branch. Minimal size that crosses one budget.
+    let budget = temper_ingest::stream::SEGMENT_BUDGET_BYTES;
+    let (content, _sections) =
+        generate_large_markdown(budget + 64 * 1024, "corrupt-recovery-test tail phrase");
+    let source_hash = temper_core::hash::sha256_hex(content.as_bytes());
+    let segments = plan_local_segments(&content, budget);
+    assert!(
+        segments.len() >= 2,
+        "need >=2 segments; got {}",
+        segments.len()
+    );
+
+    // (1) Land ALL segments via the primitives, NOT finalized — an in_progress resource.
+    let begin = app
+        .client
+        .ingest()
+        .begin_segmented(&IngestPayload {
+            segmented: Some(SegmentedBegin {
+                total_blocks_hint: Some(segments.len() as u32),
+                block_budget: budget as u32,
+                source_hash: Some(source_hash.clone()),
+            }),
+            goal: None,
+            title: "Corrupt Upload".to_string(),
+            origin_uri: format!("test://corrupt-{}", Uuid::new_v4()),
+            context_ref: "@me/corruptctx".to_string(),
+            home_cogmap_id: None,
+            doc_type_name: "research".to_string(),
+            content_hash: None,
+            content: segments[0].text.clone(),
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: Some(pack_zero_embed(&segments[0].chunked)),
+            act: Default::default(),
+            sources: Vec::new(),
+        })
+        .await
+        .expect("begin_segmented");
+    let resource_id = begin.resource_id;
+    for seg in segments.iter().skip(1) {
+        app.client
+            .ingest()
+            .append_block(
+                resource_id,
+                &AppendBlockPayload {
+                    seq: seg.info.seq,
+                    content: seg.text.clone(),
+                    content_hash: temper_core::hash::sha256_hex(seg.text.as_bytes()),
+                    chunks_packed: Some(pack_zero_embed(&seg.chunked)),
+                    sources: Vec::new(),
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("append seq {}: {e}", seg.info.seq));
+    }
+
+    // (2) Write the resume manifest the CLI's find_resumable will match (source_hash + budget +
+    // segmenter_version, finalized=false).
+    let landed = app
+        .client
+        .ingest()
+        .list_blocks(resource_id)
+        .await
+        .expect("list_blocks")
+        .blocks;
+    let manifest_path =
+        temper_cli::actions::ingest_manifest::manifest_path(app.vault_dir.path(), resource_id);
+    temper_cli::actions::ingest_manifest::store(
+        &manifest_path,
+        &temper_cli::actions::ingest_manifest::IngestManifest {
+            resource_id,
+            source_hash: source_hash.clone(),
+            block_budget: budget as u32,
+            segmenter_version: temper_cli::actions::ingest_manifest::SEGMENTER_VERSION,
+            correlation_id: begin.correlation_id,
+            blocks: landed,
+            finalized: false,
+        },
+    )
+    .expect("store manifest");
+
+    // (3) Corrupt seg 0's stored RAW bytes. This changes what the finalize integrity check hashes
+    // (concat of raw block bytes) WITHOUT touching the block chunk-merkle, so resume_gap stays empty
+    // and the CLI skips to finalize rather than trying (and failing) to re-append.
+    sqlx::query(
+        "UPDATE kb_block_content SET content = content || 'CORRUPT' \
+         WHERE block_revision_id = ( \
+             SELECT current_revision_id FROM kb_content_blocks \
+             WHERE resource_id = $1 AND seq = 0 AND NOT is_folded)",
+    )
+    .bind(resource_id)
+    .execute(&pool)
+    .await
+    .expect("corrupt stored bytes");
+
+    // (4) Drive the REAL CLI create → find_resumable → resume → finalize → 422 → recovery.
+    let big_path = app.vault_dir.path().join("corrupt.md");
+    std::fs::write(&big_path, &content).expect("write corrupt.md");
+    let body_flag = format!("@{}", big_path.to_str().unwrap());
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config = app
+        .vault_dir
+        .path()
+        .join("no-such-config.toml")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let cli_config = app.cli_config.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
+            temper_cli::commands::resource::create(
+                &cli_config,
+                temper_cli::commands::resource::CreateResourceArgs {
+                    open_meta: None,
+                    goal: None,
+                    doc_type: "research",
+                    title: "Corrupt Upload",
+                    context: Some("@me/corruptctx"),
+                    cogmap: None,
+                    mode: None,
+                    effort: None,
+                    task: None,
+                    body_flag: Some(body_flag),
+                    from: None,
+                    format: temper_cli::format::OutputFormat::Json,
+                    act: Default::default(),
+                    sources: Vec::new(),
+                    sources_as_edges: false,
+                    no_source: false,
+                },
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // The CLI must surface a distinct ContentIntegrity error (not a generic error, not success).
+    match result {
+        Err(temper_core::error::TemperError::ContentIntegrity(msg)) => assert!(
+            msg.contains("integrity") && msg.contains("discarded"),
+            "the error must explain what happened and that the upload was discarded; got: {msg}"
+        ),
+        other => panic!("expected a ContentIntegrity error from the CLI, got: {other:?}"),
+    }
+
+    // The poisoned resource was DISCARDED (soft-deleted) so it cannot linger as an un-finalizable
+    // in_progress leak, and it was never finalized.
+    let active: Option<bool> =
+        sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id = $1")
+            .bind(resource_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("query is_active");
+    assert_eq!(
+        active,
+        Some(false),
+        "the poisoned resource must be discarded (is_active=false), not left in_progress forever"
+    );
+    assert_eq!(
+        count_events(&pool, "resource_finalized", resource_id).await,
+        0,
+        "the corrupt upload must never have been finalized"
+    );
+
+    // The local resume manifest was removed, so a re-run starts a clean fresh upload rather than
+    // resuming straight back into the same integrity failure.
+    assert!(
+        !manifest_path.exists(),
+        "the resume manifest must be removed on an integrity failure"
     );
 }
