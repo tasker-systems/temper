@@ -421,6 +421,28 @@ fn embed_and_pack_chunks(chunks: &[temper_ingest::chunk::ChunkData]) -> String {
     pack_chunks(&packed).expect("pack_chunks")
 }
 
+/// Pack a segment's already-chunked `ChunkData` with ZERO embeddings — same wire shape as
+/// `embed_and_pack_chunks` but without the (single-core, CI-slow) ONNX call. Valid because the block
+/// merkle that `resume_gap` and finalize's `expected_body_hash` compare is computed over the chunk
+/// **content_hashes**, never the vectors — so zero vectors leave every merkle identical while costing
+/// nothing. Used where a test only needs the blocks to LAND (with correct hashes), not to be embedded.
+#[cfg(feature = "test-embed")]
+fn pack_zero_embed(chunks: &[temper_ingest::chunk::ChunkData]) -> String {
+    let packed: Vec<PackedChunk> = chunks
+        .iter()
+        .map(|c| PackedChunk {
+            chunk_index: c.chunk_index,
+            header_path: c.header_path.clone(),
+            heading_depth: c.heading_depth,
+            content: c.content.clone(),
+            content_hash: c.content_hash.clone(),
+            embedding: vec![0.0_f32; 768],
+            embedded_with: None,
+        })
+        .collect();
+    pack_chunks(&packed).expect("pack_chunks")
+}
+
 /// A body sized to split into several segments under a small custom budget — small enough to
 /// keep the (ONNX-gated) test fast, large enough to leave a multi-segment gap to resume.
 #[cfg(feature = "test-embed")]
@@ -957,7 +979,7 @@ async fn cli_discards_a_corrupt_upload_on_integrity_failure(pool: PgPool) {
             metadata: None,
             managed_meta: None,
             open_meta: None,
-            chunks_packed: Some(embed_and_pack_chunks(&segments[0].chunked)),
+            chunks_packed: Some(pack_zero_embed(&segments[0].chunked)),
             act: Default::default(),
             sources: Vec::new(),
         })
@@ -973,7 +995,7 @@ async fn cli_discards_a_corrupt_upload_on_integrity_failure(pool: PgPool) {
                     seq: seg.info.seq,
                     content: seg.text.clone(),
                     content_hash: temper_core::hash::sha256_hex(seg.text.as_bytes()),
-                    chunks_packed: Some(embed_and_pack_chunks(&seg.chunked)),
+                    chunks_packed: Some(pack_zero_embed(&seg.chunked)),
                     sources: Vec::new(),
                 },
             )
