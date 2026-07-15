@@ -1571,6 +1571,14 @@ export interface components {
              */
             body_hash: string;
         };
+        /**
+         * @description What guarantee a resource's body carries on read — a **surfaced projection** of coverage
+         *     (`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.
+         *     Orthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have
+         *     read back exactly, or only approximately?*
+         * @enum {string}
+         */
+        BodyStorage: "verbatim" | "derived";
         /** @description An aggregated cross-territory bridge (Tier-0). */
         Bridge: {
             /** Format: int32 */
@@ -3203,6 +3211,7 @@ export interface components {
              *     body trio, or the manifest join returned NULL).
              */
             body_hash?: string | null;
+            body_storage?: null | components["schemas"]["BodyStorage"];
             /**
              * Format: uuid
              * @description Set when the resource is homed in a cognitive map (Surface B).

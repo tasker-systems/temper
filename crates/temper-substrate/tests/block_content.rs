@@ -92,6 +92,14 @@ async fn body_storage(pool: &sqlx::PgPool, id: ResourceId) -> String {
         .unwrap()
 }
 
+/// The PR 4 read path (`GET /api/resources/{id}/content` → `readback::body`): verbatim when coverage
+/// is complete, the derived chunk reconstruction otherwise. Principal = the owner (visible to itself).
+async fn read_body(pool: &sqlx::PgPool, principal: ProfileId, id: ResourceId) -> String {
+    temper_substrate::readback::body(pool, principal, id)
+        .await
+        .unwrap()
+}
+
 // ── tests ──────────────────────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -122,6 +130,14 @@ async fn a_chunks_arm_create_stores_verbatim_bytes(pool: sqlx::PgPool) {
     assert_eq!(hash, expected_hash);
 
     assert_eq!(body_storage(&pool, id).await, "verbatim");
+
+    // PR 4: the read path returns the raw bytes byte-for-byte — CRLF and trailing newline intact,
+    // NOT the lossy chunk reconstruction.
+    assert_eq!(
+        read_body(&pool, owner, id).await,
+        body,
+        "a verbatim resource must read back byte-exact"
+    );
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -163,6 +179,19 @@ async fn mixed_coverage_is_derived_not_verbatim(pool: sqlx::PgPool) {
         body_storage(&pool, id).await,
         "derived",
         "partial coverage must NEVER be verbatim — that is how a short body looks complete"
+    );
+
+    // PR 4: the read path must NOT return the partial verbatim concat (just block 0's bytes) — the
+    // `HAVING` excludes the mixed-coverage resource, so it falls through to the derived reconstruction
+    // over the FULL chunk set (both blocks). This is the anti-silent-truncation guarantee.
+    let read = read_body(&pool, owner, id).await;
+    assert_ne!(
+        read, "block zero body\n",
+        "must not return the short partial-verbatim concat"
+    );
+    assert!(
+        read.contains("chunk text for block 1"),
+        "derived reconstruction must cover every live block, got: {read:?}"
     );
 }
 
@@ -217,6 +246,9 @@ async fn superseded_revisions_keep_their_own_bytes(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(current, "v2 body\n");
     assert_eq!(body_storage(&pool, id).await, "verbatim");
+
+    // PR 4: the read path returns the LIVE revision's bytes verbatim — never a superseded revision.
+    assert_eq!(read_body(&pool, owner, id).await, "v2 body\n");
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -266,6 +298,15 @@ async fn empty_body_with_real_chunks_is_derived_not_empty_verbatim(pool: sqlx::P
     assert_eq!(
         content_rows, 0,
         "an empty body stores no verbatim content row (the chunk carries the real content instead)"
+    );
+
+    // PR 4: the critical anti-regression — the reconcile-sentinel resource reads back its REAL
+    // (chunk-derived) content, never an empty body. A verbatim flag over zero bytes would have made
+    // `readback::body` return "" for a resource that actually has content.
+    let read = read_body(&pool, owner, id).await;
+    assert!(
+        read.contains("real distilled content"),
+        "empty-sentinel resource must read back its real derived content, got: {read:?}"
     );
 }
 

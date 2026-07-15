@@ -14,7 +14,7 @@ pub use graph::{
 };
 pub use managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceManifestRow};
 pub use resource::{
-    ContentChunk, ContentResponse, DeleteResponse, IngestState, ResourceCreateRequest,
+    BodyStorage, ContentChunk, ContentResponse, DeleteResponse, IngestState, ResourceCreateRequest,
     ResourceFacets, ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
     ResourceUpdateRequest, SortOrder,
 };

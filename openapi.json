@@ -6315,6 +6315,14 @@
           }
         }
       },
+      "BodyStorage": {
+        "type": "string",
+        "description": "What guarantee a resource's body carries on read — a **surfaced projection** of coverage\n(`kb_resources.body_storage`, recomputed by the block projectors), not an independently-set flag.\nOrthogonal to [`IngestState`]: that asks *are all the bytes here?*, this asks *do the bytes I have\nread back exactly, or only approximately?*",
+        "enum": [
+          "verbatim",
+          "derived"
+        ]
+      },
       "Bridge": {
         "type": "object",
         "description": "An aggregated cross-territory bridge (Tier-0).",
@@ -9306,6 +9314,17 @@
               "null"
             ],
             "description": "SHA-256 hash of the resource body content, from `kb_resource_manifests`.\n`None` when no manifest row exists (resource created via POST without a\nbody trio, or the manifest join returned NULL)."
+          },
+          "body_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodyStorage",
+                "description": "What guarantee does this body carry on read? `verbatim` — the body reads back **byte-for-byte**\nfrom the stored raw block bytes (`kb_block_content`, coverage-verified: every live block carries\nits source bytes). `derived` — the body is **reconstructed** from chunks (a lossy transform:\nCRLF→LF, trimmed, headings re-synthesized), which is the legacy path and any resource with only\npartial verbatim coverage. A *surfaced signal* derived from coverage, never an asserted flag.\n\n`Option` purely for **version skew** — the column is `NOT NULL` server-side (defaults `derived`),\nso a current server always sends it; `None` means the server predates W2 PR 3."
+              }
+            ]
           },
           "cogmap_id": {
             "type": [

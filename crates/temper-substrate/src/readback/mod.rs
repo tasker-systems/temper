@@ -341,6 +341,10 @@ pub struct ResourceRowParity {
     pub seq: Option<i64>,
     /// Denormalized body merkle hash (invariant) — `kb_resources.body_hash`.
     pub body_hash: Option<String>,
+    /// What guarantee the body carries on read — `verbatim` | `derived` (see `ResourceRow::body_storage`).
+    /// NOT a parity invariant: it is DERIVED from block content-coverage by the projectors, which replay
+    /// reproduces (it recomputes over the same live block set as it re-projects the create/append acts).
+    pub body_storage: String,
 }
 
 /// Port of production's full-row read (`resource_service::get_visible` / `resolve_by_uri`, behind
@@ -366,6 +370,7 @@ pub async fn resource_row(
                 r.updated,
                 r.body_hash,
                 r.ingest_state,
+                r.body_storage,
                 c.id              AS re_minted_context_id,
                 c.name            AS context_name,
                 c.slug            AS context_slug,
@@ -431,6 +436,7 @@ pub async fn resource_row(
         seq,
         body_hash: row.get("body_hash"),
         ingest_state: row.get("ingest_state"),
+        body_storage: row.get("body_storage"),
     })
 }
 
@@ -465,16 +471,31 @@ pub async fn trailing_breadcrumb(pool: &PgPool, resource: ResourceId) -> Result<
         .unwrap_or_default())
 }
 
-/// Reconstruct a resource's markdown body from its substrate chunks — the §9 body read floor.
-/// Reuses [`crate::content::reconstruct_body`] (the production `get_content` assembly) — the one body
-/// assembler (CONFORM, no second).
+/// Read a resource's markdown body — **verbatim when coverage is complete, derived otherwise** (the
+/// §9 body read floor, and the sole body assembler behind `GET /api/resources/{id}/content`).
 ///
-/// Reads the chunk tables UNQUALIFIED (like every sibling readback) so they resolve against the
-/// connection's search_path / the single post-collapse `public` schema.
+/// Two paths, tried in order:
 ///
-/// Keys by `new_id` directly — the resource id (preserved verbatim from production).
+/// 1. **Verbatim (W2 PR 3/4).** `string_agg` of the stored raw block bytes (`kb_block_content`,
+///    per-revision), in `seq` order, with `''` as the separator — the bytes already carry their own
+///    line terminators (PR 2's byte-exact segmenter), so blocks concat with nothing between them and
+///    the result is `sha256`-identical to what was uploaded. The `HAVING count(*) =
+///    count(bc.block_revision_id)` is the load-bearing guard: it makes a **short body impossible**. A
+///    resource with *any* content-less live block — a legacy pre-PR-3 row, or one with only partial
+///    verbatim coverage — returns **NO row** here (never a plausible-looking partial concat, which is
+///    exactly how an INNER JOIN would silently truncate), so `None` correctly falls through. An
+///    empty-block resource passes the `HAVING` (`0 = 0`) but `string_agg` over zero rows is SQL-NULL,
+///    which `.flatten()` maps to `None` — also correctly derived.
 ///
-/// Read-only; no writes. Runtime `sqlx::query` (NEVER the `query!` macros) — see the module-level note.
+/// 2. **Derived (legacy / partial coverage).** The unchanged chunk reconstruction via
+///    [`crate::content::reconstruct_body`] — a LOSSY transform (CRLF→LF, trimmed, headings
+///    re-synthesized), the one and only fallback assembler (CONFORM, no second). Survives solely to
+///    serve `derived` rows; `verbatim` rows never reach it.
+///
+/// Reads the tables UNQUALIFIED (like every sibling readback) so they resolve against the connection's
+/// search_path / the single post-collapse `public` schema. Keys by `new_id` directly — the resource id
+/// (preserved verbatim from production). Read-only; no writes. Runtime `sqlx::query` (NEVER the
+/// `query!` macros) — see the module-level note.
 pub async fn body(
     pool: &PgPool,
     principal: ProfileId,
@@ -482,6 +503,25 @@ pub async fn body(
 ) -> std::result::Result<String, ReadbackError> {
     use sqlx::Row;
     ensure_visible(pool, principal, new_id).await?;
+
+    // Path 1: verbatim, coverage-verified. `.flatten()` collapses both "no row" (partial coverage,
+    // HAVING excludes it) and "row with NULL agg" (zero live blocks) to `None` → the derived fallback.
+    let verbatim: Option<String> = sqlx::query_scalar(
+        "SELECT string_agg(bc.content, '' ORDER BY b.seq) \
+           FROM kb_content_blocks b \
+           LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
+          WHERE b.resource_id = $1 AND NOT b.is_folded \
+         HAVING count(*) = count(bc.block_revision_id)",
+    )
+    .bind(new_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    if let Some(body) = verbatim {
+        return Ok(body);
+    }
+
+    // Path 2: derived reconstruction (legacy pre-PR-3 rows, or partial verbatim coverage).
     let rows = sqlx::query(
         "SELECT c.chunk_index, COALESCE(c.header_path, '') AS header_path, \
                 COALESCE(c.heading_depth, 0::smallint) AS heading_depth, cc.content \
