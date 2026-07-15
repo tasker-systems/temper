@@ -23,6 +23,10 @@ similar = "2"
 temper-core = { path = "../temper-core" }
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }
+# Per-phase cold-load timing on the embed path (issue #451). Events are no-ops without a
+# subscriber (the CLI installs none), so this stays silent there and surfaces as JSON only on
+# the server, whose subscriber is configured in the Vercel function entrypoints.
+tracing = "0.1"
 
 # Performance-core detection (`cpu.rs`) reads `hw.perflevel0.logicalcpu`. macOS-only:
 # no other platform has a measured big-little story yet, so no other platform needs libc.
