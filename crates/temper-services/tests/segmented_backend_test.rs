@@ -391,6 +391,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
             FinalizePayload {
                 expected_blocks: 2,
                 expected_body_hash: out.body_hash,
+                expected_content_hash: None,
             },
             Surface::ApiHttp,
         )
@@ -494,6 +495,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
             FinalizePayload {
                 expected_blocks: 2,
                 expected_body_hash: actual_hash,
+                expected_content_hash: None,
             },
             Surface::ApiHttp,
         )
@@ -507,6 +509,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
             FinalizePayload {
                 expected_blocks: 5,
                 expected_body_hash: "deadbeef".to_string(),
+                expected_content_hash: None,
             },
             Surface::ApiHttp,
         )

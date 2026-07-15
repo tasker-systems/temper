@@ -207,13 +207,35 @@ text entering the search vector. **Embedding** reads chunk text exactly as today
 
 ## The integrity chain becomes real
 
-- **Per revision:** `content_hash = sha256(raw content bytes)`.
-- **Per resource:** `body_hash = sha256(concat(current revision content ORDER BY seq))` — the hash of the
-  actual document.
-- **At finalize:** the server recomputes over stored content and compares to the client's
-  `expected_body_hash`. **A mismatch fails the finalize.**
-- **`body_storage`** discriminates the guarantee: `verbatim` (byte-exact; `body_hash` is a true integrity
-  check) vs `derived` (legacy; reconstructed; `body_hash` attests chunks only).
+> **Correction (W2 PR 5, implemented).** An earlier draft of this section wrote
+> `body_hash = sha256(concat(current revision content ORDER BY seq))` and had finalize compare that to
+> `expected_body_hash`. **Both are wrong and were not shipped.** `body_hash` is the **two-level chunk
+> merkle** (per block, `sha256(concat of is_current chunk content_hashes)`; then the resource,
+> `sha256(concat of per-block hashes in seq order)`), and `expected_body_hash` is that same merkle
+> echoed back — a **concurrency token**, not a byte-integrity check. Redefining `body_hash` as
+> `sha256(concat block content)` would break the create-dedup precheck, the charter diff, and finalize,
+> all of which consume the merkle. The byte-integrity check is a **separate, new value**,
+> `expected_content_hash`, added without touching `body_hash`.
+
+- **Per revision:** `kb_block_content.content_hash = sha256(raw content bytes)` (bare hex).
+- **Per resource — two distinct hashes, do not conflate:**
+  - `body_hash` — the two-level **chunk merkle** (unchanged). Consumed by dedup, charter diff, and
+    finalize's *concurrency* check (`expected_body_hash`).
+  - `expected_content_hash` — bare-hex `sha256` of the **full raw body**, the true **byte-integrity**
+    value. Optional on the wire.
+- **At finalize:** the server checks the merkle (`expected_body_hash`, concurrency) as before, **and**,
+  when the caller supplied `expected_content_hash`, recomputes `sha256(concat of live block content in
+  seq order)` and compares. Either mismatch **fails the finalize** — the transaction rolls back,
+  `_project_resource_finalized` never runs, and the resource stays `in_progress` (resumable).
+- **`body_storage`** discriminates the guarantee: `verbatim` (byte-exact; the body reads back
+  identically) vs `derived` (legacy; reconstructed; lossy).
+
+**The gap, named honestly:** `expected_content_hash` runs **only at finalize**, so it covers the
+**segmented path only.** A one-shot create has no finalize (it is a single atomic transaction with no
+interruption window to detect), so the byte-integrity check never runs on it — and **every non-charter
+resource in production today is one-shot / single-block.** That is defensible (there is nothing to
+verify across acts on a one-shot create), but the integrity chain is closed for the segmented path, not
+universally. Say so rather than imply a guarantee that isn't there.
 
 ### One upstream change: the segmenter must stop normalizing
 
@@ -223,6 +245,12 @@ exact. It must preserve line endings verbatim, and its test must assert `join(""
 
 This is the *only* ingest-pipeline code change. `chunk.rs` is untouched — it may keep trimming, dropping
 empties, and normalizing, because it now feeds only the index.
+
+> **Correction (W2 PR 5).** "Chunks are identical before and after" holds for **existing rows** (no
+> re-chunk, no re-embed on migrate). It does **not** hold going forward: because the segmenter now hands
+> `chunk.rs` the **true bytes** (PR 2), a **CRLF source ingested after PR 2 chunks differently** than the
+> same source would have before — the chunker receives `\r\n` where it used to receive `\n`. The chunk
+> *code* is untouched; the chunk *output* for a CRLF source is not.
 
 ## Ingest lifecycle
 
@@ -273,8 +301,17 @@ success; different `content_hash` → conflict.**
 `uuid_generate_v7()`, never native `uuidv7()` — the latter passes PG18 dev/CI and breaks Neon's PG17.
 
 **No backfill.** Legacy rows have no `kb_block_content`, are labelled `derived`, and continue to read back
-through `reconstruct_body`. They **heal on their next write**. Their original bytes are unrecoverable — they
-were never stored — and this design refuses to launder a lossy reconstruction into "authoritative".
+through `reconstruct_body`. Their original bytes are unrecoverable — they were never stored — and this
+design refuses to launder a lossy reconstruction into "authoritative".
+
+> **Correction (W2 PR 5).** "They heal on their next write" is only **half** true, and the qualifier
+> matters. A **single-block** resource heals when its whole body is re-written (the update path stores
+> `raw_text`). But `resolve_target_block` (`writes.rs`) **refuses a whole-body update on a multi-block
+> resource** (`">1 block (pass --content-block to address one)"`), so a **multi-block** `derived` resource
+> **cannot heal into `verbatim` at all** — it can only be revised block-by-block, and no single revision
+> flips coverage to complete. The "heals on next write" claim holds in practice **only because all 2,219
+> non-charter production resources are single-block** — state the reason; do not rely on the coincidence
+> silently. `derived` should be expected to persist indefinitely for any multi-block legacy row.
 
 `reconstruct_body` (and `kb_chunk_content`'s role as the *only* copy of the document) can be retired once no
 `derived` rows remain — possibly not without a deliberate cutover.

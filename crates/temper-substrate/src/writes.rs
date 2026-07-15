@@ -1220,6 +1220,9 @@ pub struct FinalizeParams {
     pub resource: ResourceId,
     pub expected_blocks: u32,
     pub expected_body_hash: String,
+    /// Bare-hex sha256 of the full raw body — the byte-integrity check (W2 PR 5). `None` skips it
+    /// (MCP is honestly exempt; a legacy caller predates the field).
+    pub expected_content_hash: Option<String>,
     pub emitter: EntityId,
 }
 
@@ -1233,6 +1236,7 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
         resource_id: p.resource,
         expected_blocks: p.expected_blocks,
         expected_body_hash: p.expected_body_hash,
+        expected_content_hash: p.expected_content_hash,
     };
     let ev = sqlx::query_scalar!(
         "SELECT resource_finalize($1,$2,$3,$4)",

@@ -715,6 +715,12 @@ pub struct ResourceFinalized {
     pub resource_id: ResourceId,
     pub expected_blocks: u32,
     pub expected_body_hash: String,
+    /// Bare-hex sha256 of the full raw body, for the finalize integrity check (W2 PR 5). MUST be
+    /// omitted from the JSON when absent: `resource_finalize` guards on `p_payload ?
+    /// 'expected_content_hash'` (key **presence**), so a serialized `null` would wrongly trip the
+    /// check for a `None` (MCP / legacy) caller. `skip_serializing_if` keeps the key absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

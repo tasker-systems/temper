@@ -277,6 +277,7 @@ async fn finalize_validates_block_count_and_hash(pool: sqlx::PgPool) {
             resource: ctx.resource,
             expected_blocks: 5,
             expected_body_hash: actual_hash.clone(),
+            expected_content_hash: None,
             emitter: ctx.emitter,
         },
     )
@@ -290,6 +291,7 @@ async fn finalize_validates_block_count_and_hash(pool: sqlx::PgPool) {
             resource: ctx.resource,
             expected_blocks: 2,
             expected_body_hash: actual_hash,
+            expected_content_hash: None,
             emitter: ctx.emitter,
         },
     )
@@ -404,6 +406,7 @@ async fn concurrent_appends_preserve_body_hash(pool: sqlx::PgPool) {
             resource: ctx.resource,
             expected_blocks: block_chunk_hashes.len() as u32,
             expected_body_hash: expected,
+            expected_content_hash: None,
             emitter: ctx.emitter,
         },
     )

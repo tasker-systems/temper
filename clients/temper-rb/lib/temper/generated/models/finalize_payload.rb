@@ -18,13 +18,18 @@ module Temper::Generated
   class FinalizePayload < ApiModelBase
     attr_accessor :expected_blocks
 
+    # The server-computed chunk merkle, echoed back verbatim. A **concurrency** token (\"nothing changed between my last append and now\"), NOT an integrity check on the bytes — a non-chunking caller (MCP) cannot derive it, so the server hands it over. Opaque: echo it back, never parse it.
     attr_accessor :expected_body_hash
+
+    # Bare-hex sha256 of the **full raw body** uploaded — an **integrity** check over the actual bytes (distinct from `expected_body_hash`, which is the chunk merkle). When present, `resource_finalize` recomputes `sha256(concat of live block content in seq order)` and RAISEs on mismatch, rolling the finalize back and leaving the resource `in_progress` (resumable, never silently done).  `None` from a caller that does not hold the whole body — **MCP is honestly exempt** (its finalize tool never sees the full body, only per-block content) — or one predating this field; the check is then skipped. Bare hex (`sha256_hex`), NOT `compute_body_hash` (which prefixes `\"sha256:\"`); the DB stores bare hex, so a prefixed value would mismatch 100% of the time.
+    attr_accessor :expected_content_hash
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'expected_blocks' => :'expected_blocks',
-        :'expected_body_hash' => :'expected_body_hash'
+        :'expected_body_hash' => :'expected_body_hash',
+        :'expected_content_hash' => :'expected_content_hash'
       }
     end
 
@@ -42,13 +47,15 @@ module Temper::Generated
     def self.openapi_types
       {
         :'expected_blocks' => :'Integer',
-        :'expected_body_hash' => :'String'
+        :'expected_body_hash' => :'String',
+        :'expected_content_hash' => :'String'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'expected_content_hash'
       ])
     end
 
@@ -78,6 +85,10 @@ module Temper::Generated
         self.expected_body_hash = attributes[:'expected_body_hash']
       else
         self.expected_body_hash = nil
+      end
+
+      if attributes.key?(:'expected_content_hash')
+        self.expected_content_hash = attributes[:'expected_content_hash']
       end
     end
 
@@ -141,7 +152,8 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           expected_blocks == o.expected_blocks &&
-          expected_body_hash == o.expected_body_hash
+          expected_body_hash == o.expected_body_hash &&
+          expected_content_hash == o.expected_content_hash
     end
 
     # @see the `==` method
@@ -153,7 +165,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [expected_blocks, expected_body_hash].hash
+      [expected_blocks, expected_body_hash, expected_content_hash].hash
     end
 
     # Builds the object from hash

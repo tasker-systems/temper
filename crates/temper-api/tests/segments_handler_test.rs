@@ -140,6 +140,7 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
         .json(&FinalizePayload {
             expected_blocks: 2,
             expected_body_hash: actual_hash,
+            expected_content_hash: None,
         })
         .send()
         .await
@@ -149,6 +150,157 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
         204,
         "finalize should return 204; body: {}",
         finalize_resp.text().await.unwrap_or_default()
+    );
+}
+
+// ─── Test: finalize integrity — a wrong content hash fails and stays resumable ────────────────
+
+/// W2 PR 5: `expected_content_hash` is an INTEGRITY check over the raw bytes (distinct from
+/// `expected_body_hash`, the concurrency merkle). A finalize whose declared content hash does not
+/// match the stored bytes must RAISE — the transaction rolls back, `_project_resource_finalized`
+/// never runs, and the resource stays `in_progress` (still resumable, never silently done). The
+/// honest hash then finalizes it to `complete`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn finalize_rejects_wrong_content_hash_and_stays_resumable(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, context_id) = auth(&pool, "integrity").await;
+
+    // Begin (segment 0 = "first segment").
+    let begin_payload = IngestPayload {
+        title: "Integrity Doc".to_string(),
+        origin_uri: format!("test://integrity-{}", Uuid::new_v4()),
+        context_ref: context_id.to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        goal: None,
+        content_hash: None,
+        content: "first segment".to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+        sources: Vec::new(),
+        act: Default::default(),
+        segmented: Some(SegmentedBegin {
+            total_blocks_hint: Some(2),
+            block_budget: 262_144,
+            source_hash: Some("deadbeef".to_string()),
+        }),
+    };
+    let begin: SegmentedBeginResponse = app
+        .client
+        .post(app.url("/api/ingest"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&begin_payload)
+        .send()
+        .await
+        .expect("begin request failed")
+        .json()
+        .await
+        .expect("begin JSON");
+    let resource_id = begin.resource_id;
+
+    // Append seq 1 = "second segment".
+    let append_payload = AppendBlockPayload {
+        seq: 1,
+        content: "second segment".to_string(),
+        content_hash: temper_core::hash::sha256_hex(b"second segment"),
+        chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+        sources: Vec::new(),
+    };
+    let append_resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource_id}/blocks")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&append_payload)
+        .send()
+        .await
+        .expect("append request failed");
+    assert_eq!(append_resp.status().as_u16(), 200, "append should land");
+
+    // The stored verbatim body is the concat of the raw block bytes in seq order — no separator.
+    let good_content_hash = temper_core::hash::sha256_hex(b"first segmentsecond segment");
+    let body_merkle: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id=$1")
+        .bind(resource_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch body_hash");
+
+    // (1) WRONG content hash → finalize must fail; `expected_body_hash` (the merkle) is honest, so the
+    // only thing that can reject this is the new integrity check.
+    let bad_resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource_id}/finalize")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&FinalizePayload {
+            expected_blocks: 2,
+            expected_body_hash: body_merkle.clone(),
+            expected_content_hash: Some(temper_core::hash::sha256_hex(b"not the real body")),
+        })
+        .send()
+        .await
+        .expect("finalize request failed");
+    assert!(
+        !bad_resp.status().is_success(),
+        "a wrong content hash must fail finalize; got {}",
+        bad_resp.status()
+    );
+
+    // The rollback left the resource resumable: still `in_progress`, both blocks intact.
+    let state_after_bad: String =
+        sqlx::query_scalar("SELECT ingest_state FROM kb_resources WHERE id=$1")
+            .bind(resource_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch ingest_state");
+    assert_eq!(
+        state_after_bad, "in_progress",
+        "a failed integrity check must leave the resource resumable, not silently done"
+    );
+    let list: BlocksResponse = app
+        .client
+        .get(app.url(&format!("/api/resources/{resource_id}/blocks")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("list request failed")
+        .json()
+        .await
+        .expect("list JSON");
+    assert_eq!(
+        list.blocks.len(),
+        2,
+        "both segments still present after failed finalize"
+    );
+
+    // (2) HONEST content hash → finalize succeeds, resource is `complete`.
+    let good_resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource_id}/finalize")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&FinalizePayload {
+            expected_blocks: 2,
+            expected_body_hash: body_merkle,
+            expected_content_hash: Some(good_content_hash),
+        })
+        .send()
+        .await
+        .expect("finalize request failed");
+    assert_eq!(
+        good_resp.status().as_u16(),
+        204,
+        "the honest content hash must finalize; body: {}",
+        good_resp.text().await.unwrap_or_default()
+    );
+    let state_after_good: String =
+        sqlx::query_scalar("SELECT ingest_state FROM kb_resources WHERE id=$1")
+            .bind(resource_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch ingest_state");
+    assert_eq!(
+        state_after_good, "complete",
+        "honest finalize flips to complete"
     );
 }
 

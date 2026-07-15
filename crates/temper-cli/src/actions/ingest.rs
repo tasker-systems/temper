@@ -488,6 +488,11 @@ pub async fn run_segmented_create(
             &FinalizePayload {
                 expected_blocks: segments.len() as u32,
                 expected_body_hash,
+                // Integrity over the actual bytes. `source_hash` is the bare-hex sha256 of the full
+                // raw body (computed above for manifest keying); after PR 2 the segments rejoin
+                // byte-exact, so `concat(stored block bytes) == source` and this is the same value the
+                // finalize recompute produces. Bare hex — matches the DB's `encode(sha256(...),'hex')`.
+                expected_content_hash: Some(source_hash.clone()),
             },
         )
         .await

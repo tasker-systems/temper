@@ -216,6 +216,10 @@ pub async fn ingest_finalize(
             FinalizePayload {
                 expected_blocks: input.expected_blocks,
                 expected_body_hash: input.expected_body_hash,
+                // MCP is honestly EXEMPT, not covered: its finalize tool never sees the whole body,
+                // only per-block content, so it cannot supply a whole-body integrity hash. `None`
+                // skips the check — say so rather than imply a guarantee we don't have.
+                expected_content_hash: None,
             },
             Surface::Mcp,
         )

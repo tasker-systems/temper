@@ -2661,6 +2661,7 @@ impl Backend for DbBackend {
                 resource,
                 expected_blocks: payload.expected_blocks,
                 expected_body_hash: payload.expected_body_hash,
+                expected_content_hash: payload.expected_content_hash,
                 emitter,
             },
         )
