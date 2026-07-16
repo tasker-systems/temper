@@ -23,8 +23,13 @@
 --       exactly that — "the only bound that closes the cross-team leak." This function is the
 --       context-grain sibling of that construction: a context is in scope only when EVERY joined team
 --       reaches it (`HAVING count(DISTINCT team_id) = |joined teams|`), default-closed on the empty
---       join (⋂ over ∅ would be the universe — the leak, backwards). Single-team cogmaps (the common
---       case) are unaffected: for one team, intersection == union.
+--       join (⋂ over ∅ would be the universe — the leak, backwards). A team's reach is a context it
+--       OWNS directly OR one SHARED to it or any of its ANCESTORS (shares inherit down the team DAG
+--       via `team_ancestors`, exactly as vis_team / anchor_readable_by_profile expand context reach;
+--       ownership stays direct, since the model never propagates raw ownership across teams).
+--       team_ancestors is evaluated per joined team, so DAG siblings intersect on their mutually-
+--       shared common ground. Single-team cogmaps (the common case) are unaffected: for one team,
+--       intersection == union.
 --   (2) `steward_ingest_delta` gains `max_event_id uuid` — the newest `kb_events.id` in the delta
 --       window (NULL when the window is empty). `kb_events.id` is uuidv7, whose byte order IS time
 --       order, so `ORDER BY id DESC LIMIT 1` is the latest event — exactly the cursor `advance`
@@ -60,13 +65,23 @@ LANGUAGE sql STABLE AS $$
         SELECT team_id FROM kb_team_cogmaps WHERE cogmap_id = p_cogmap
     ),
     per_team AS (
+        -- A joined team reaches a context it OWNS directly. Ownership does NOT inherit down the team
+        -- DAG (a parent's unshared owned context is invisible to a child) — this mirrors the canonical
+        -- read model (context_visible_to's team-owned clause is direct membership, and vis_team /
+        -- anchor_readable_by_profile propagate reach only through shares, never raw ownership).
         SELECT j.team_id, c.id AS context_id
           FROM joined j
           JOIN kb_contexts c ON c.owner_table = 'kb_teams' AND c.owner_id = j.team_id
         UNION
+        -- ...or a context SHARED to it OR any of its ANCESTORS. Shares inherit DOWN the team DAG
+        -- (team_ancestors(j) = j ∪ its ancestors, up-traversal only), so a child reaches what a shared
+        -- parent holds — the same expansion vis_team / anchor_readable_by_profile use for context
+        -- reach. team_ancestors is evaluated PER joined team, so on a DAG (not a tree) siblings with
+        -- different ancestor sets intersect on exactly their mutually-shared common ground.
         SELECT j.team_id, ktc.context_id
           FROM joined j
-          JOIN kb_team_contexts ktc ON ktc.team_id = j.team_id
+          CROSS JOIN LATERAL team_ancestors(j.team_id) a
+          JOIN kb_team_contexts ktc ON ktc.team_id = a.team_id
     )
     SELECT pt.context_id
       FROM per_team pt
@@ -77,10 +92,12 @@ $$;
 
 COMMENT ON FUNCTION steward_team_contexts(uuid) IS
     'A steward cogmap''s ingest scope: the producer-INTERSECTION of its joined teams'' reachable '
-    'contexts (team-OWNED or team-SHARED), so a context is ingested only when EVERY joined team can '
-    'reach it. Context-grain sibling of resources_accessible_to_cogmap; closes the cross-team leak a '
-    'union would open on a multi-team cogmap. Default-closed on the empty join. The single definition '
-    'of ingest scope, shared by steward_ingest_delta and steward_event_in_ingest_window.';
+    'contexts, so a context is ingested only when EVERY joined team can reach it. A team reaches a '
+    'context it OWNS directly or one SHARED to it or an ANCESTOR (shares inherit down the team DAG via '
+    'team_ancestors; ownership does not). Context-grain sibling of resources_accessible_to_cogmap; '
+    'closes the cross-team leak a union would open on a multi-team cogmap. Default-closed on the empty '
+    'join. The single definition of ingest scope, shared by steward_ingest_delta and '
+    'steward_event_in_ingest_window.';
 
 DROP FUNCTION steward_ingest_delta(uuid, uuid);
 

@@ -363,6 +363,107 @@ mod tests {
         );
     }
 
+    /// The intersection expands each joined team's reach UP the team DAG (shares inherit down): a
+    /// context shared to a COMMON ANCESTOR of two joined child teams is reachable by both, so it is in
+    /// the intersection — while a context shared to only one child is not. This is the "mutual
+    /// ancestor up-traversal" the review asked for; on a DAG siblings intersect on their shared
+    /// common ground, not 1:1.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn intersection_expands_shares_up_the_team_dag(pool: PgPool) {
+        async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
+            sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+                .bind(slug)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+        async fn share_ctx(pool: &PgPool, owner: Uuid, slug: &str, team: Uuid) -> Uuid {
+            let ctx: Uuid = sqlx::query_scalar(
+                "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+            )
+            .bind(owner)
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+                .bind(ctx)
+                .bind(team)
+                .execute(pool)
+                .await
+                .unwrap();
+            ctx
+        }
+
+        // Parent P with two children T1, T2; a cogmap joined to BOTH children.
+        let p = mk_team(&pool, "p").await;
+        let t1 = mk_team(&pool, "t1").await;
+        let t2 = mk_team(&pool, "t2").await;
+        for child in [t1, t2] {
+            sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+                .bind(child)
+                .bind(p)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let member = insert_profile(&pool, "member").await;
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(t1)
+        .bind(member)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let entity: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'e') RETURNING id",
+        )
+        .bind(member)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let telos: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('telos', '') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let cogmap: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('map', $1) RETURNING id",
+        )
+        .bind(telos)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for team in [t1, t2] {
+            sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+                .bind(cogmap)
+                .bind(team)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let owner = insert_profile(&pool, "ctx_owner").await;
+        // Shared to the common PARENT — both children reach it via ancestor up-traversal.
+        let ctx_parent = share_ctx(&pool, owner, "cp", p).await;
+        // Shared to ONE child only — the other child cannot reach it.
+        let ctx_t1_only = share_ctx(&pool, owner, "c1", t1).await;
+        add_event(&pool, entity, "resource_created", ctx_parent).await;
+        add_event(&pool, entity, "resource_created", ctx_t1_only).await;
+
+        let d = ingest_delta(&pool, member.into(), cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            d.new_resources, 1,
+            "only the parent-shared context is in BOTH children's ancestor reach (intersection); \
+             the context shared to one child alone is excluded"
+        );
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn threshold_gates_on_new_resources(pool: PgPool) {
         let s = seed(&pool).await;
