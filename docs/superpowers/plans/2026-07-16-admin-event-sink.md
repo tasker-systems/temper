@@ -26,9 +26,16 @@
 - **Run `cargo make check` before every commit.**
 - **Do not run migrations against prod and do not merge PRs.** Stop at "PR up + CI green + summary".
 
-## Dependency (not a task in this plan)
+## Dependencies (not tasks in this plan)
 
-Task `019f6b06-c48f-7a81-a238-cdd6b131f3dc` — *"Legacy profiles have no emitter entities"* — must be **applied to prod before Task 5's first event fires**. `resolve_emitter` is `fetch_one` with no lazy creation, and two approved prod users have zero emitters. It ships independently; this plan assumes emitters exist.
+- **`019f6b06-c48f-7a81-a238-cdd6b131f3dc`** — *"Legacy profiles have no emitter entities"* — must be **applied to prod before Task 5's first event fires**. `resolve_emitter` is `fetch_one` with no lazy creation, and two approved prod users have zero emitters. Ships independently; this plan assumes emitters exist.
+- **`019f6b1b-59ea-7660-b631-3b811aea378d`** — *"`payload_schema` is RED on main and runs in no CI job"* — **BLOCKS Task 1.** The snapshot test fails on a clean checkout (schemars `$defs` ordering drift) and `scenario-schema` is wired into no CI job or cargo-make task, so nothing caught it. Task 1 adds two `AnchorTable` variants, which legitimately restales 5 snapshots — and that regen is indistinguishable from the pre-existing repo-wide churn until the baseline is green. **Do not start Task 1 until this lands.**
+
+> **Task 1 implementer, read this first.** After `019f6b1b` lands, your regen should touch **only**
+> the 5 snapshots carrying `AnchorTable` in their `$defs` (`resource_created`, `cogmap_seeded`,
+> `relationship_asserted`, `property_asserted`, `region_materialized`), and the only change in each
+> should be **two new enum values** (`kb_connections`, `kb_machine_clients`). If your regen churns
+> other files or reorders anything, the baseline was not actually green — stop and report.
 
 ## File Structure
 
