@@ -85,6 +85,8 @@ fn require_dispatch_secret(state: &AppState, headers: &HeaderMap, label: &str) -
     params(
         ("cap" = Option<i32>, Query, description = "Max resources to embed this pass"),
         ("redrive" = Option<bool>, Query, description = "Re-enqueue dead embed jobs before claiming (Phase 4 recovery)"),
+        // `shard` is intentionally NOT documented here: it is a cosmetic, cron-internal fan-out knob
+        // (SKIP LOCKED does the partitioning, not the value), not part of the public contract.
     ),
     responses((status = 200, description = "One embed-dispatch pass summary", body = EmbedDispatchSummary)),
 )]

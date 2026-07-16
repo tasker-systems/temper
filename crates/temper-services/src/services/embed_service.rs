@@ -542,6 +542,20 @@ mod tests {
             10,
             "two concurrent drainers drain every resource exactly once — no double-claim, none missed"
         );
+
+        // Stronger than the sum: every embed job reached a terminal `done` — none left behind
+        // pending/in_progress by a lost race.
+        let done: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_workflow_jobs \
+             WHERE persona = 'embed' AND dispatch_type = 'embed' AND status = 'done'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            done, 10,
+            "all 10 embed jobs reached done — no resource left behind"
+        );
     }
 
     // The wall-clock guard: a pass that is already past its deadline embeds nothing and re-enqueues the
