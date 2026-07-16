@@ -28,14 +28,26 @@
 
 ## Dependencies (not tasks in this plan)
 
-- **`019f6b06-c48f-7a81-a238-cdd6b131f3dc`** — *"Legacy profiles have no emitter entities"* — must be **applied to prod before Task 5's first event fires**. `resolve_emitter` is `fetch_one` with no lazy creation, and two approved prod users have zero emitters. Ships independently; this plan assumes emitters exist.
-- **`019f6b1b-59ea-7660-b631-3b811aea378d`** — *"`payload_schema` is RED on main and runs in no CI job"* — **BLOCKS Task 1.** The snapshot test fails on a clean checkout (schemars `$defs` ordering drift) and `scenario-schema` is wired into no CI job or cargo-make task, so nothing caught it. Task 1 adds two `AnchorTable` variants, which legitimately restales 5 snapshots — and that regen is indistinguishable from the pre-existing repo-wide churn until the baseline is green. **Do not start Task 1 until this lands.**
+- **`019f6b06-c48f-7a81-a238-cdd6b131f3dc`** — *"Legacy profiles have no emitter entities"* — ✅ **LANDED** (PR #465, merged `fca2ef01`; migration applied and verified in prod 2026-07-16). `gm-anirudh`, `lohjishan` and `anonymous` each carry all four surface emitters; `system` untouched. Task 5's first event has its emitters.
+- **`019f6b1b-59ea-7660-b631-3b811aea378d`** — *"`payload_schema` is RED on main and runs in no CI job"* — ✅ **LANDED** (PR #464). Baseline verified green 2026-07-16: `cargo make test-schema` → 110/110. Task 1 is unblocked.
 
-> **Task 1 implementer, read this first.** After `019f6b1b-59ea-7660-b631-3b811aea378d` lands, your regen should touch **only**
-> the 5 snapshots carrying `AnchorTable` in their `$defs` (`resource_created`, `cogmap_seeded`,
-> `relationship_asserted`, `property_asserted`, `region_materialized`), and the only change in each
-> should be **two new enum values** (`kb_connections`, `kb_machine_clients`). If your regen churns
-> other files or reorders anything, the baseline was not actually green — stop and report.
+> **Task 1 implementer, read this first.** Both blockers are landed and the baseline is verified
+> green. Your regen should touch **only the 4 snapshots carrying `AnchorTable` in their `$defs`**:
+> `resource_created`, `relationship_asserted`, `property_asserted`, `region_materialized`. The only
+> change in each is **two new enum values** (`kb_connections`, `kb_machine_clients`), plus a
+> one-line trailing-comma reflow on `kb_profiles` because it is no longer last — i.e. `4 files
+> changed, 12 insertions(+), 4 deletions(-)`. If your regen churns other files or reorders anything,
+> the baseline was not actually green — stop and report.
+>
+> **This tripwire previously said 5 snapshots including `cogmap_seeded`. That was wrong**, and is
+> corrected here: `CogmapSeeded` carries no `AnchorRef` field — its only `kb_profiles` mention is a
+> *description string* on `ProfileId`, which is not an `AnchorTable` reference. Verified 2026-07-16.
+>
+> **`cargo nextest run -p temper-substrate` does NOT catch this drift.** `tests/payload_schema.rs` is
+> `#![cfg(feature = "scenario-schema")]`, so it is compiled out of an unfeatured run: the snapshots go
+> stale silently and red only in CI's Unit job. Task 1 Step 5b regenerates them explicitly. And run it
+> **package-scoped** — `cargo make test-schema` does; `--workspace` emits a different schema (see
+> CLAUDE.md).
 
 ## File Structure
 
@@ -49,15 +61,24 @@
 | `crates/temper-api/src/handlers/admin_ledger.rs` (create) | HTTP transport for the read surface |
 | `crates/temper-cli/src/commands/admin_ledger.rs` (create) | `temper admin ledger` |
 | `crates/temper-mcp/src/tools/admin_ledger.rs` (create) | MCP parity |
-| `migrations/20260716000010_admin_event_types.sql` (create) | Event-type seeds + payload schemas |
-| `migrations/20260716000020_admin_ledger_epoch.sql` (create) | The epoch marker |
-| `migrations/20260716000030_admin_grant_fns.sql` (create) | `_admin_grant_created` / `_admin_grant_revoked` + projectors |
+| `migrations/20260717000010_admin_event_types.sql` (create) | Event-type seeds + payload schemas |
+| `migrations/20260717000020_admin_ledger_epoch.sql` (create) | The epoch marker |
+| `migrations/20260717000030_admin_grant_fns.sql` (create) | `_admin_grant_created` / `_admin_grant_revoked` + projectors |
+
+> **The migration numbers above were RENUMBERED from `20260716…` to `20260717…` (2026-07-16).** All
+> three original numbers are now taken on `main` and **applied to prod**: `20260716000010` is
+> `steward_ingest_delta_max_event_id`, and `20260716000020` is `backfill_legacy_profile_emitters`
+> (PR #465 — this plan's own dependency, which landed into the slot the plan had reserved).
+> A version collision is not a merge conflict — it surfaces as **only the DB-backed CI jobs failing
+> early on a `_sqlx_migrations_pkey` duplicate**, which reads like a flake and is not; re-running
+> does not help. **Re-check the highest applied version before creating any migration here** — more
+> may have landed since. `ls migrations/ | tail -3`.
 
 ---
 
 ### Task 1: The `references` contract — typed shape + `AnchorTable` extension
 
-`kb_events."references"` is `JSONB NOT NULL DEFAULT '[]'`, GIN-indexed (`idx_kb_events_references … USING GIN ("references" jsonb_path_ops)`), documented as `[{rel, target:{kind,id}}]`, and **never written in 9,835 events**. The `rel` vocabulary (`supersedes|derived_from|touches`) lives in a **comment, not a CHECK** — extending it needs no migration.
+`kb_events."references"` is `JSONB NOT NULL DEFAULT '[]'`, GIN-indexed (`idx_kb_events_references … USING GIN ("references" jsonb_path_ops)`), documented as `[{rel, target:{kind,id}}]`, and **never written — 0 rows carry it, re-verified against live prod 2026-07-16 at 13,405 events** (the spec quoted 9,835; the ledger grows, the invariant has not moved). The `rel` vocabulary (`supersedes|derived_from|touches`) lives in a **comment, not a CHECK** — extending it needs no migration.
 
 `AnchorTable` already has `Teams` and `Profiles` but lacks the admin subjects.
 
@@ -191,14 +212,35 @@ Expected: PASS (2 tests).
 Run: `cargo nextest run -p temper-substrate`
 Expected: PASS. If a `match` on `AnchorTable` fails to compile, add the two arms — do **not** add a `_ =>` catch-all (a new variant must stay a compile error).
 
+- [ ] **Step 5b: Regenerate the payload-schema snapshots — Step 5 CANNOT catch this**
+
+`AnchorTable` derives `schemars::JsonSchema` under `scenario-schema`, so two new variants restale
+every snapshot carrying it. **Step 5's unfeatured run does not see this**: `tests/payload_schema.rs`
+is `#![cfg(feature = "scenario-schema")]` and compiles out, so the drift is invisible locally and
+reds CI's Unit job.
+
+Run: `cargo make test-schema` → expect **FAIL** (`resource_created payload schema drifted`). That
+failure is the proof the drift is real.
+
+Then: `UPDATE_SCHEMA=1 cargo make test-schema`, and **inspect the diff against the tripwire above**:
+
+```bash
+git diff --stat -- crates/temper-substrate/tests/fixtures/payloads/
+# expect exactly: 4 files changed, 12 insertions(+), 4 deletions(-)
+```
+
+Re-run `cargo make test-schema` → expect PASS. Stage the regenerated snapshots **with** the code:
+they are one change, and the drift gate compares against git, so an unstaged-but-correct regen still
+fails `cargo make check`.
+
 - [ ] **Step 6: Commit**
 
 ```bash
 cargo make check
-git add crates/temper-substrate/src/payloads.rs
+git add crates/temper-substrate/src/payloads.rs crates/temper-substrate/tests/fixtures/payloads/
 git commit -m "feat(admin-ledger): typed references shape + admin AnchorTable variants
 
-kb_events.references has been empty for 9,835 events. It is the admin ledger's
+kb_events.references has never been written -- 0 of 13,405 events carry it. It is the admin ledger's
 read path: NULL-anchored admin events are invisible to every anchor-scoped
 reader by design, so identity lives in references where the GIN index finds it
 and no cognition reader looks.
@@ -1429,7 +1471,7 @@ actually ships."
 - **The remaining authority tier** (§6): machine provision/rebind/revoke/rotate, connection provision/revoke/attach_credential/grant-reach/affirm, `change_role`, `promote_admin`, `update_system_settings`, cogmap bind/unbind, context share/unshare, join-request review. Its own plan, written against this one's proven pattern. **Thread the actor into `promote_admin` and `update_system_settings`** — they take no `caller` today, which is a plumbing gap, not an auth hole.
 - **The principal-lifecycle tier** (§6): team create/delete/add_member/remove_member, invitations, SAML reconcile (whose actor is a system reconciler, not a profile — the actor model must handle it).
 - **`kb_teams.created_by`** — additive column so future teams record a creator independent of the sink (§11).
-- **Does a live profile-creation path still skip `provision_profile_entities`?** If invitation-accept or SAML creates profiles without it, `019f6b06-c48f-7a81-a238-cdd6b131f3dc`'s backfill is a treadmill.
+- ~~**Does a live profile-creation path still skip `provision_profile_entities`?**~~ **ANSWERED 2026-07-16 — no, and no task is needed.** Traced during `019f6b06`: the human path provisions (`profile_service.rs:155`), both machine paths provision (`machine_registration_service.rs:237`/`:295`), and `connection_service.rs:136` deliberately does *not* — it mints `<handle>@webhook` inline for a genuinely different shape, which is correct, not a gap. Every other `INSERT INTO kb_profiles` is test-only. The backfill is not a treadmill. **Related and worth knowing for Task 5:** sign-in cannot heal a missing emitter either — `resolve_or_create_from_claims` provisions *only* on its brand-new-profile branch; an existing profile returns early from the auth-link lookup or email reconciliation.
 
 ---
 

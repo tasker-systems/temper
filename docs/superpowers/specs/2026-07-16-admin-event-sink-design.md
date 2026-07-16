@@ -188,7 +188,7 @@ the writers are built against it.**
 
 The read path is `kb_events."references"` — `JSONB NOT NULL DEFAULT '[]'`, **GIN-indexed**
 (`idx_kb_events_references … USING GIN ("references" jsonb_path_ops)`), documented as *"Typed
-provenance pointers: `[{rel, target:{kind,id}}]`"*, and **never written in 9,835 events**. An admin
+provenance pointers: `[{rel, target:{kind,id}}]`"*, and **never written** (0 rows; 9,835 events at authoring, re-verified at 13,405 on 2026-07-16 — the count grows, the invariant does not). An admin
 event is precisely a typed provenance pointer at a subject with no cognition home. The `rel`
 vocabulary is a **comment, not a CHECK**, so extending it costs no constraint change.
 
