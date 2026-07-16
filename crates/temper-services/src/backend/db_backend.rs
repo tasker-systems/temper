@@ -2310,17 +2310,25 @@ impl Backend for DbBackend {
             return Err(TemperError::Forbidden);
         }
 
-        let event_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM kb_events WHERE id = $1) AS "exists!""#,
+        // Server-verified advance (issue #459): the target must be an event this cogmap actually
+        // ingests — a real kb_events row anchored to one of its team contexts — not any global
+        // kb_events.id. This guards the inverse failure: a blocked/empty tick can never move the
+        // watermark past content it never processed. `max_event_id` from steward_ingest_delta is by
+        // construction in this window, so a well-formed advance always passes. A non-ingested (or
+        // nonexistent) event collapses to one NotFound — no oracle distinguishing the two.
+        let in_window: bool = sqlx::query_scalar!(
+            r#"SELECT steward_event_in_ingest_window($1, $2) AS "in_window!""#,
+            *cmd.cogmap,
             cmd.event_id,
         )
         .fetch_one(&self.pool)
         .await
         .map_err(api_err)?;
-        if !event_exists {
+        if !in_window {
             return Err(TemperError::NotFound(format!(
-                "event {} not found",
-                cmd.event_id
+                "event {} is not in cognitive map {}'s ingest window",
+                cmd.event_id,
+                cmd.cogmap.uuid()
             )));
         }
 

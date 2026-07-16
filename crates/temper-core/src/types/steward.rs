@@ -40,6 +40,13 @@ pub struct IngestDelta {
     pub new_resources: i64,
     /// All `kb_events` anchored to the team's contexts since the watermark (total activity).
     pub new_events: i64,
+    /// The latest `kb_events.id` in the delta window — the value a completed tick passes straight to
+    /// `steward_advance_watermark` to mark this delta ingested. `None` when the delta is empty (no
+    /// events since the watermark), in which case there is nothing to advance to and the tick skips
+    /// the advance. Because `kb_events.id` is uuidv7 (its byte order is time order), the greatest
+    /// id in the window is the newest event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_event_id: Option<Uuid>,
     /// The threshold `new_resources` was compared against (the caller's, or the default).
     pub threshold: i64,
     /// Whether `new_resources >= threshold` — i.e. the steward should run.

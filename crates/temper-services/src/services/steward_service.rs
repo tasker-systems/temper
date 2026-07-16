@@ -42,7 +42,8 @@ pub async fn ingest_delta(
     let row = sqlx::query!(
         r#"
         SELECT new_resources AS "new_resources!: i64",
-               new_events    AS "new_events!: i64"
+               new_events    AS "new_events!: i64",
+               max_event_id  AS "max_event_id: Uuid"
           FROM steward_ingest_delta($1, $2)
         "#,
         *cogmap_id,
@@ -57,6 +58,7 @@ pub async fn ingest_delta(
         watermark,
         new_resources: row.new_resources,
         new_events: row.new_events,
+        max_event_id: row.max_event_id,
         threshold,
         exceeds_threshold: row.new_resources >= threshold,
     })
@@ -246,8 +248,10 @@ mod tests {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
         }
         add_event(&pool, s.entity, "relationship_asserted", s.ctx).await;
-        add_event(&pool, s.entity, "block_mutated", s.ctx).await;
-        // Noise in a context the team does not own — must be excluded from the delta.
+        // The last event IN the team context — the delta's max_event_id, uuidv7-newest of the window.
+        let last_team_event = add_event(&pool, s.entity, "block_mutated", s.ctx).await;
+        // Noise in a context the team does not own — must be excluded from the delta AND from its
+        // max_event_id, even though it is the newest event overall (inserted last → largest uuidv7).
         add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
 
         let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
@@ -259,9 +263,28 @@ mod tests {
             d.new_events, 5,
             "all 5 team-context events, excluding the other context"
         );
+        assert_eq!(
+            d.max_event_id,
+            Some(last_team_event),
+            "max_event_id is the newest IN-WINDOW event, not the newer out-of-scope noise event"
+        );
         assert_eq!(d.threshold, DEFAULT_STEWARD_INGEST_THRESHOLD);
         assert!(!d.exceeds_threshold, "3 < default threshold 5");
         assert_eq!(d.watermark, None, "no watermark set yet");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn delta_max_event_id_is_none_when_window_empty(pool: PgPool) {
+        let s = seed(&pool).await;
+        // No events at all → an empty window → nothing to advance to.
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(d.new_events, 0);
+        assert_eq!(
+            d.max_event_id, None,
+            "empty window has no max_event_id — the tick skips the advance"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -289,7 +312,7 @@ mod tests {
         add_event(&pool, s.entity, "resource_created", s.ctx).await;
         let e2 = add_event(&pool, s.entity, "resource_created", s.ctx).await;
         add_event(&pool, s.entity, "resource_created", s.ctx).await;
-        add_event(&pool, s.entity, "relationship_asserted", s.ctx).await;
+        let e4 = add_event(&pool, s.entity, "relationship_asserted", s.ctx).await;
 
         // A team member is not a cogmap author by default (D3b) — grant write, then advance to e2.
         grant_cogmap_write(&pool, s.cogmap, s.member).await;
@@ -313,6 +336,49 @@ mod tests {
             d.new_events, 2,
             "the trailing resource_created + relationship"
         );
+        assert_eq!(
+            d.max_event_id,
+            Some(e4),
+            "max_event_id is the newest event after the watermark, ready for the next advance"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn advance_rejects_event_outside_ingest_window(pool: PgPool) {
+        let s = seed(&pool).await;
+        // An event the cogmap ingests (team context) and one it does not (a context the team
+        // neither owns nor was shared) — same emitter, so the only difference is the anchor.
+        let in_window = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        let out_of_window = add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+
+        // Advancing to an event outside the cogmap's ingest window is rejected — the watermark can
+        // never move past content the steward did not (and could not) process.
+        let err = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: out_of_window,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, TemperError::NotFound(_)),
+            "out-of-window event → 404, no advance"
+        );
+
+        // The in-window event (what a real delta's max_event_id always is) advances cleanly.
+        let ack = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: in_window,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ack.value, in_window);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
