@@ -181,6 +181,31 @@ Set the env var with:
 
     vercel env add TEMPER_ONNX_INTRA_THREADS production   # enter: 2
 
+#### Shard fan-out (`vercel.json` crons)
+
+The drain fans out across N concurrent instances by registering N cron lines for the dispatch
+endpoint, each distinguished by a `?shard=k` query param. The param carries **no logic** — concurrent
+drainers partition the queue via the claim's `FOR UPDATE SKIP LOCKED`; the param only makes N distinct
+cron entries and is echoed into the trace. The committed default is **4** shards — cheap for a
+low-traffic deploy (empty claims return in milliseconds) and effective for bulk ingest.
+
+Size N from the bench-measured per-chunk cost: `N ≈ target_chunks_per_min / (55s worth of chunks per
+shard)`. At the measured 128 ms/chunk (threads=2) one shard drains ~430 chunks/min, so N=4 ≈ ~1,720
+chunks/min (~103k/hr). Vercel allows 100 crons/project, so headroom is large — but raise N only when
+the measured rate trails; more shards is more Vercel compute spend.
+
+`vercel.json` is **shared across every deploy of the repo** (temperkb.io and each enterprise project),
+so a deploy needing a different N edits it on its own deploy branch rather than bumping the committed
+default for everyone.
+
+> **Confirm the shard crons fire on first deploy.** The `?shard=k` query-string form of a cron `path`
+> is not documented by Vercel (their docs show only plain paths and path *segments*). It is expected to
+> work — the query string does not affect route matching, and the handler ignores the value — but
+> **verify on first deploy** via the dispatch logs / cron observability that all four fire. **Fallback
+> if they do not:** switch each cron `path` to a segment form (`/api/embed/dispatch/0` … `/3`) and add a
+> Vercel route `{ "src": "/api/embed/dispatch/(\\d+)", "dest": "/api/internal" }` above the existing
+> dispatch route; the handler needs no change (it already ignores the shard).
+
 ### Function timeouts: per-function, not per-route
 
 Vercel's `maxDuration` is set **per function** (the `functions` map, keyed by source file),

@@ -8,7 +8,10 @@
     }
   },
   "crons": [
-    { "path": "/api/embed/dispatch", "schedule": "* * * * *" },
+    { "path": "/api/embed/dispatch?shard=0", "schedule": "* * * * *" },
+    { "path": "/api/embed/dispatch?shard=1", "schedule": "* * * * *" },
+    { "path": "/api/embed/dispatch?shard=2", "schedule": "* * * * *" },
+    { "path": "/api/embed/dispatch?shard=3", "schedule": "* * * * *" },
     { "path": "/api/embed/warm", "schedule": "*/2 * * * *" }
   ],
   "functions": {
