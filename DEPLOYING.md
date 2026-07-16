@@ -158,6 +158,29 @@ Two committed, target-agnostic mitigations in `vercel.json`, so every target inh
   graceful FTS degrade, and live traffic. Tune the cadence, or the budget via
   `TEMPER_QUERY_EMBED_BUDGET_MS`, per target.
 
+### Embed-drain throughput knobs (per deploy)
+
+The async-embed drain scales by three env/cron knobs, tuned per deploy — none need a rebuild:
+
+- `TEMPER_ONNX_INTRA_THREADS=2` — use the `api/internal` function's ~1.7 vCPU (3009 MB) for ONNX
+  inference. Default is 1 (single core). Set to 2 on a bulk-ingest deploy for ~1.4–1.5× per
+  invocation (measured 1.42× on the throttled bed at 128 ms/chunk).
+  Applies process-wide, so the public function's in-request query-embed benefits too.
+- `TEMPER_EMBED_DISPATCH_DEADLINE_SECONDS` — per-invocation lifetime (default 55s = one cron cadence,
+  giving concurrency == number of shard crons). Raise toward 250 for the Option-B stacking model.
+- Shard cron count (`vercel.json`) — the number of concurrent drainers. See the throughput-scaling
+  spec for sizing N against a target chunks/min.
+
+**Safety floor: the embed function's `maxDuration` must stay ≥ 72 s.** A claim's ~64-chunk
+`embed_texts` is uninterruptible (~8 s at the measured 128 ms/chunk, threads=2), so a claim starting
+just under the 55 s deadline can run to ~63 s. 72 s leaves an ~8–9 s buffer. `api/internal` is 300 s
+today (far above), so this is a guardrail against anyone lowering it for the embed cron — surface it
+in the "operating temper" guidelines too.
+
+Set the env var with:
+
+    vercel env add TEMPER_ONNX_INTRA_THREADS production   # enter: 2
+
 ### Function timeouts: per-function, not per-route
 
 Vercel's `maxDuration` is set **per function** (the `functions` map, keyed by source file),

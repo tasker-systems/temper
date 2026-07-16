@@ -2063,19 +2063,26 @@ export interface components {
          */
         ElementKind: "node" | "edge";
         /**
-         * @description Outcome of one embed-dispatch pass (issue #299): how many resource-keyed embed jobs were claimed,
-         *     how many completed cleanly, how many failed (left for the reaper's retry→dead path), and the total
-         *     chunks embedded. Returned by the `/api/embed/dispatch` drain so a cron/operator has observability.
+         * @description Outcome of one embed-dispatch invocation (issue #299): across the invocation's claim loop, how
+         *     many resource-keyed embed jobs were claimed, how many completed cleanly, how many failed (left for
+         *     the reaper's retry→dead path), and the total chunks embedded. Returned by the
+         *     `/api/embed/dispatch` drain so a cron/operator has observability. (An invocation loop-drains: it
+         *     keeps claiming until the queue is empty or the wall-clock deadline is hit, so these counts span
+         *     many claims, not one — see the `claimed` field.)
          */
         EmbedDispatchSummary: {
             /**
              * Format: int64
-             * @description Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.
+             * @description Total chunks embedded across all jobs this invocation, whether they completed or were
+             *     re-enqueued.
              */
             chunks_embedded: number;
             /**
              * Format: int32
-             * @description Jobs claimed this pass (bounded by the dispatch cap).
+             * @description Total jobs claimed across the invocation's claim loop. Each loop iteration claims ≤ the
+             *     dispatch cap, so the invocation total routinely **exceeds** `cap` — and a re-enqueued partial
+             *     re-claimed on a later iteration is counted again. `claimed = 30` at `cap = 5` is a healthy long
+             *     invocation, not a bug.
              */
             claimed: number;
             /**
@@ -2090,16 +2097,18 @@ export interface components {
             failed: number;
             /**
              * Format: int32
-             * @description Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were
-             *     **re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger
-             *     than one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently
-             *     non-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.
+             * @description Jobs that embedded their per-claim chunk budget but still hold stale chunks, and were
+             *     **re-enqueued** to resume later (a subsequent claim this same invocation, or a later tick). Not
+             *     a failure — the normal path for a resource larger than one claim's budget (prod's biggest holds
+             *     939 chunks against a budget of 64). A persistently non-zero `partial` with `chunks_embedded`
+             *     climbing is a drain making progress, not a stuck one.
              */
             partial: number;
             /**
              * Format: int32
-             * @description Dead embed jobs re-enqueued this pass (Phase 4 re-drive). Zero unless the caller asked for a
-             *     re-drive (`?redrive=true`); these resources are then eligible for the same pass's claim.
+             * @description Dead embed jobs re-enqueued this invocation (Phase 4 re-drive). Zero unless the caller asked
+             *     for a re-drive (`?redrive=true`); these resources are then eligible for the invocation's claim
+             *     loop.
              */
             redriven: number;
         };
