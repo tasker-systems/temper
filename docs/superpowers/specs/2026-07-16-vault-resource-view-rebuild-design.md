@@ -131,6 +131,17 @@ and vault consume one layer. Atlas's Georgia/`#c9d1d9` become `--font-serif`/`--
 The alternative — lifting Atlas's scoped styles verbatim — is faster and entrenches the third
 dialect on two surfaces instead of one.
 
+**Half of this already exists.** `paletteStyleVars()` (`palette.ts:119`) emits
+`--dt-<type>:<hex>;` today. The new components need nothing more than `docTypeHue(doc_type)`
+→ `style="--hue: …"`, which is what TrailRail already does.
+
+**Sequencing — the Atlas pass is NOT in this work's PR.** Re-tokenizing Atlas's scoped styles
+is a refactor of a working, untested surface with no user-visible gain; bundling it with the
+vault rebuild makes one PR tell two stories, which the repo's own convention warns against.
+This work's scope is: **new components consume the token layer from birth, and the vault's
+`zinc-*` dialect dies with the page it lived on.** Atlas adoption lands separately, and the
+dialect count goes 3 → 2 here, 2 → 1 there.
+
 ### D4 — Layout: editorial masthead
 
 Properties sit under the title, full width, before the prose. The rail holds history and
@@ -296,16 +307,31 @@ which calls `readback::meta` — the same function whose unordered query is the 
 
 ## Testing
 
+**There is no component-test infrastructure, and this design does not add any.** `vite.config.ts`
+sets `environment: 'node'`; there is no jsdom and no `@testing-library`; **zero `.svelte` tests
+exist in the repo.** That is not an oversight — it is the Atlas pattern: the logic lives in pure
+modules that are tested hard (`trail.ts`, `eventSummary.ts`, `payloadRows.ts`, `neighbors.ts`),
+and the components that consume them are thin enough not to need it.
+
+This design follows that pattern rather than fighting it. Every decision that could be wrong
+lives in a pure module:
+
 | Layer | What |
 |---|---|
-| Unit (`properties.ts`) | ordering: `doc_type` first, managed in fixed order, open alphabetical; unknown keys sort to open |
-| Unit (`PropertyValue`) | scalar → one row; object → summary + expansion; array → indexed; null/empty |
+| Unit (`properties.ts`) | `mergeProperties` + ordering: `doc_type` first, managed in fixed order, open alphabetical; an unknown key sorts to open |
+| Unit (`propertyValue.ts`) | value classification: scalar / object / array, and the summary label (`{5 keys}`, `[2]`) |
+| Unit (`vault-url.ts`) | `resourceHref` returns a path for a cogmap-homed row — the 533-resource regression guard |
+| Unit (`graph-reads.paths.test.ts`) | the edges path builder |
 | Unit (Rust) | `readback::meta` returns the newest of two same-key rows — the D7 regression guard |
-| Component | a schemaless doc type renders; a cogmap-homed resource renders; empty trail says "No recorded history" |
-| e2e | `/vault/r/<uuid>` resolves for both homes; the context route 303s |
 
-The Rust test is the one that matters most — it is the only guard on a bug that was invisible
-because it was non-deterministic.
+The components are then declarative: `PropertySet` renders an ordered list it is handed;
+`PropertyValue` switches on a classification it is handed. Neither computes anything.
+
+The Rust test matters most — it is the only guard on a bug that was invisible *because* it was
+non-deterministic, and a test that asserts an unordered read would have passed against it.
+
+Not covered, and worth being explicit about: nothing asserts the page renders end-to-end.
+`/dev/vault` (follow-on 2) is where that becomes possible.
 
 ## Risks
 
