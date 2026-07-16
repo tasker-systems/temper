@@ -517,6 +517,47 @@ mod tests {
         assert_eq!(summary.chunks_embedded, 0);
     }
 
+    /// **The fan-out safety invariant.** Two drainers running concurrently against the same queue
+    /// must claim DISJOINT resources — `FOR UPDATE SKIP LOCKED` guarantees no resource is claimed by
+    /// both. With cap=1 the two passes interleave claim-by-claim; together they complete each
+    /// resource exactly once (sum of completed == the enqueued count), never twice, never missing one.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn concurrent_dispatch_ticks_claim_disjoint_resources(pool: PgPool) {
+        for i in 0..10 {
+            let r = a_named_resource(&pool, &format!("r{i}")).await;
+            workflow_job_service::enqueue_resource(&pool, r, "embed", "embed")
+                .await
+                .unwrap()
+                .expect("enqueue");
+        }
+
+        let (s1, s2) = tokio::join!(
+            dispatch_tick(&pool, Some(1), false),
+            dispatch_tick(&pool, Some(1), false),
+        );
+        let (s1, s2) = (s1.unwrap(), s2.unwrap());
+
+        assert_eq!(
+            s1.completed + s2.completed,
+            10,
+            "two concurrent drainers drain every resource exactly once — no double-claim, none missed"
+        );
+
+        // Stronger than the sum: every embed job reached a terminal `done` — none left behind
+        // pending/in_progress by a lost race.
+        let done: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_workflow_jobs \
+             WHERE persona = 'embed' AND dispatch_type = 'embed' AND status = 'done'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            done, 10,
+            "all 10 embed jobs reached done — no resource left behind"
+        );
+    }
+
     // The wall-clock guard: a pass that is already past its deadline embeds nothing and re-enqueues the
     // claimed job untouched (tallied `partial`, not `failed`), so the next tick resumes it. A
     // `Duration::ZERO` deadline forces the defer branch on the first check without sleeping. ONNX-free:
