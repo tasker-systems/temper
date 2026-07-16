@@ -485,7 +485,7 @@ mod tests {
 
     const PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn consume_returns_the_verifier_and_principal_once(pool: PgPool) {
         let nonce = create_intent(&pool, PRINCIPAL, "verifier-abc", Duration::from_secs(600))
             .await
@@ -497,7 +497,7 @@ mod tests {
     }
 
     /// The single-use invariant. A replayed state must not resolve.
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn a_second_consume_of_the_same_nonce_yields_none(pool: PgPool) {
         let nonce = create_intent(&pool, PRINCIPAL, "verifier-abc", Duration::from_secs(600))
             .await
@@ -508,7 +508,7 @@ mod tests {
     }
 
     /// TTL. An expired intent is indistinguishable from an unknown one.
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn an_expired_intent_yields_none(pool: PgPool) {
         let nonce = create_intent(&pool, PRINCIPAL, "v", Duration::from_secs(0))
             .await
@@ -517,12 +517,12 @@ mod tests {
         assert!(consume_intent(&pool, &nonce).await.unwrap().is_none());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn an_unknown_nonce_yields_none(pool: PgPool) {
         assert!(consume_intent(&pool, "never-issued").await.unwrap().is_none());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn nonces_are_unique_across_intents(pool: PgPool) {
         let a = create_intent(&pool, PRINCIPAL, "v", Duration::from_secs(600)).await.unwrap();
         let b = create_intent(&pool, PRINCIPAL, "v", Duration::from_secs(600)).await.unwrap();
@@ -696,7 +696,7 @@ In `crates/temper-services/src/services/profile_service.rs`, inside the existing
 ```rust
     /// The D3 invariant. Asserting the None alone would not catch a regression that
     /// creates the profile and THEN errors, so assert the absence of the row too.
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_only_refuses_an_unknown_sub_and_creates_no_profile(pool: PgPool) {
         let before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_profiles")
             .fetch_one(&pool)
@@ -714,7 +714,7 @@ In `crates/temper-services/src/services/profile_service.rs`, inside the existing
         assert_eq!(before, after, "lookup-only must not mint a profile");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_only_resolves_an_existing_linked_profile(pool: PgPool) {
         let claims = human_claims("auth0|existing", "someone@example.com");
         // The normal login path mints it once...
@@ -729,7 +729,7 @@ In `crates/temper-services/src/services/profile_service.rs`, inside the existing
     }
 
     /// A machine-shaped identity is refused here as it is everywhere else.
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_only_refuses_a_machine_shaped_identity(pool: PgPool) {
         let claims = human_claims("abc123@clients", "nobody@example.com");
         assert!(resolve_existing_human_from_claims(&pool, &claims).await.is_err());

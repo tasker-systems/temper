@@ -17,6 +17,7 @@ pub mod profile_service;
 pub mod reassign_service;
 pub mod resource_service;
 pub mod saml_provisioning_service;
+pub mod slack_link_service;
 pub mod steward_service;
 pub mod team_service;
 pub mod workflow_job_service;
