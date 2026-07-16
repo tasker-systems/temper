@@ -35,6 +35,7 @@ describe("decideIdentity", () => {
     expect(decideIdentity(HUMAN_WITH_TEAM)).toEqual({
       kind: "human",
       principalId: "slack:T012AB3CD:U024BE7LH",
+      auth: HUMAN_WITH_TEAM,
     });
   });
 
@@ -43,6 +44,7 @@ describe("decideIdentity", () => {
     expect(decideIdentity(HUMAN_NO_TEAM)).toEqual({
       kind: "human",
       principalId: "slack:U024BE7LH",
+      auth: HUMAN_NO_TEAM,
     });
   });
 
@@ -125,13 +127,27 @@ describe("isHumanPrincipal", () => {
 });
 
 describe("unlinkedPrompt", () => {
-  it("echoes the principalId whole", () => {
-    expect(unlinkedPrompt("slack:T012AB3CD:U024BE7LH")).toContain(
-      "slack:T012AB3CD:U024BE7LH",
+  it("carries the authorize URL", () => {
+    expect(unlinkedPrompt("https://temperkb.io/authorize/abc123")).toContain(
+      "https://temperkb.io/authorize/abc123",
     );
   });
+});
 
-  it("echoes a teamless principalId whole", () => {
-    expect(unlinkedPrompt("slack:U024BE7LH")).toContain("slack:U024BE7LH");
+describe("decideIdentity threads the caller's auth object through", () => {
+  it("exposes attributes.user_id on the accepted arm, unparsed from principalId", () => {
+    // The real SessionAuthContext carries decomposed Slack attributes
+    // alongside principalId/principalType. This fixture is wider than
+    // PrincipalLike to prove the generic threads it through intact.
+    const auth = {
+      principalId: "slack:T012AB3CD:U024BE7LH",
+      principalType: "user",
+      attributes: { user_id: "U024BE7LH", team_id: "T012AB3CD" },
+    };
+
+    const decision = decideIdentity(auth);
+
+    if (decision.kind !== "human") throw new Error("expected a human decision");
+    expect(decision.auth.attributes.user_id).toBe("U024BE7LH");
   });
 });

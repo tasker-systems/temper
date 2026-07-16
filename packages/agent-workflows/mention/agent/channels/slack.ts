@@ -2,6 +2,7 @@ import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
 import { decideIdentity, unlinkedPrompt } from "../lib/identity.js";
+import { requestAuthorizeUrl } from "../lib/link.js";
 
 /**
  * Slack channel for the @temper mention agent.
@@ -31,23 +32,29 @@ export default slackChannel({
     // an error reply to a bot is how mention loops start.
     if (decision.kind === "rejected") return null;
 
-    // Posting here is a pre-dispatch side effect on the inbound webhook side —
-    // the same seam eve's own default uses for its "Thinking..." indicator.
-    await ctx.thread.post(unlinkedPrompt(decision.principalId));
+    // The link challenge is a CREDENTIAL: whoever opens it binds their temper identity to
+    // this Slack principal. So it goes to the mentioning user ONLY — never `thread.post`,
+    // which is public. The user id comes from `attributes.user_id`; NEVER from parsing
+    // principalId, which has 2-4 segments.
+    const userId = decision.auth.attributes.user_id;
+    if (typeof userId !== "string") return null;
 
-    // Deliberately DROP rather than dispatch, even though this is a human we
-    // resolved and `auth` is right here.
-    //
-    // T1 has no temper reach, so a dispatched turn would run the model with no
-    // tools and nothing to ground an answer in — and since only `onAppMention`
-    // is overridden, the DEFAULT `message.completed` handler would post that
-    // answer to the thread. The user would get two replies: the prompt above,
-    // then an LLM improvising about a knowledge base it cannot read. Worse than
-    // useless — it is the "plausible answer under no identity" the agent's
-    // instructions forbid.
-    //
-    // T2 lands the account link; the linked branch dispatches `{ auth }` then.
-    // Until there is something a turn can honestly do, the prompt IS the reply.
+    try {
+      const authorizeUrl = await requestAuthorizeUrl(decision.principalId);
+      await ctx.thread.postEphemeral(userId, unlinkedPrompt(authorizeUrl));
+    } catch (err) {
+      // eve catches and logs a thrown error and drops the mention, so a failed intent
+      // would be silent. Tell the user something honest instead of nothing.
+      console.error("link intent failed", err);
+      await ctx.thread.postEphemeral(
+        userId,
+        "I couldn't start the account-connect flow just now. Please try again in a moment.",
+      );
+    }
+
+    // Deliberately DROP rather than dispatch (unchanged from T1). A turn under no identity
+    // would run the model with no tools and nothing to ground an answer in, and the default
+    // `message.completed` handler would post it. Until the link exists, the prompt IS the reply.
     return null;
   },
 });
