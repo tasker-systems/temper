@@ -114,27 +114,28 @@ describe('committed atlas fixtures', () => {
 		}
 	});
 
-	// The TrailRail "View full resource →" button is gated on `resourceHref(resourceRow)`
-	// being non-null. These two scenarios exercise both sides of that gate off real-shaped
-	// fixture data, so the harness has a live example of each and the gate stays honest.
-	it('nodeSelected is cogmap-homed → resourceHref is null → the bridge button is hidden', () => {
+	// The TrailRail "View full resource →" button used to be gated on
+	// `resourceHref(resourceRow)` being non-null, and these two scenarios asserted each
+	// side of that gate. The gate is gone: the resource route is home-agnostic, so both
+	// homes resolve. The fixtures still carry one of each home, which is what makes them
+	// worth asserting — this is now the live example that homing does NOT decide
+	// addressability.
+	it('nodeSelected is cogmap-homed → resourceHref still resolves (the 533-resource fix)', () => {
 		const rr = scenario('nodeSelected').resourceRow;
 		expect(rr).not.toBeNull();
 		expect(rr!.context_owner_ref).toBeNull();
 		expect(rr!.cogmap_id).not.toBeNull();
-		expect(resourceHref(rr!)).toBeNull();
+		expect(resourceHref(rr!)).toBe(`/vault/r/${rr!.id}`);
 	});
 
-	it('nodeSelectedContext is context-homed → resourceHref resolves → the bridge button shows', () => {
+	it('nodeSelectedContext is context-homed → resourceHref resolves to the same shape', () => {
 		const view = scenario('nodeSelectedContext');
 		expect(view.selection?.kind).toBe('node');
 		const rr = view.resourceRow;
 		expect(rr).not.toBeNull();
 		expect(rr!.context_owner_ref).not.toBeNull();
 		expect(rr!.cogmap_id).toBeNull();
-		expect(resourceHref(rr!)).toBe(
-			`/vault/${rr!.context_owner_ref}/${rr!.context_slug}/${rr!.doc_type_name}/${rr!.id}`
-		);
+		expect(resourceHref(rr!)).toBe(`/vault/r/${rr!.id}`);
 	});
 
 	it('home build entries carry a recency field and no leaked PII (Beat C)', () => {
