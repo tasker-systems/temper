@@ -18,30 +18,50 @@ npm run typecheck
 npm test
 ```
 
+## Where this deploys
+
+**Its own Vercel project** — not temperkb.io (that is `temper-ui`) and not `temper-cloud` (that is
+the API). This is an eve app with its own build, and it serves `POST /eve/v1/slack` itself. The
+`steward-agent` project is the established precedent for the shape.
+
 ## Setup
 
-The order matters: Slack validates the request URL when the app is created, so the deployment has
-to exist first.
+**Read this order and follow it exactly — the obvious order does not work.**
 
-### 1. Deploy the agent
+Slack refuses to save a request URL it cannot verify. eve verifies the request signature **first**
+and fails **closed**: with no `SLACK_SIGNING_SECRET` the `/eve/v1/slack` route returns `401`, and
+the `url_verification` branch is never reached (`verifyInbound` is the route's first statement;
+the handshake lives inside `handleEventPost`, past the gate). But the signing secret only exists
+once the Slack app exists.
 
-```bash
-VERCEL_USE_EXPERIMENTAL_FRAMEWORKS=1 vercel deploy --prod
-```
+That is a deadlock if you declare the request URL up front. So: **create the app with no event
+subscriptions, collect the secret, deploy with it, and declare the URL last.**
 
-The flag lets the Vercel CLI recognize eve as a framework during the build. Note the deployment
-host — the next step needs it.
+### 1. Create the Vercel project
 
-### 2. Create the Slack app from the manifest
+Match `steward-agent`'s shape:
 
-1. Edit [`slack-app-manifest.yml`](./slack-app-manifest.yml) and replace `<YOUR-DEPLOYMENT-HOST>`
-   in **both** `request_url` fields with the host from step 1. Keep the `/eve/v1/slack` path — it
-   is eve's default Slack route, and it serves both events and interactivity.
-2. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest**, pick the
-   workspace, and paste the edited YAML.
+- **Root Directory**: `packages/agent-workflows/mention`
+- **Git-connected** to `tasker-systems/temper`, production branch `main` — merging `main` deploys
+  it; any branch push gives a preview.
+- `sourceFilesOutsideRootDirectory` is **not** needed. (The steward requires it because it takes an
+  npm `file:` dependency on `clients/temper-ts`; this agent deliberately has no temper reach and no
+  such dep, so its root directory is self-contained.)
 
-Slack verifies the request URL at creation time by POSTing a `url_verification` challenge. If it
-fails, the deployment isn't reachable at that host — fix that before retrying.
+Note the deployment host — step 5 needs it. At this point every request 401s, which is expected and
+correct: there is no signing secret yet.
+
+> **Do not** run `eve deploy` / `vercel deploy` from inside this directory as a habit. It is not
+> fatal here (no sibling `file:` dep to miss, unlike the steward), but this repo deploys agents by
+> git push, and the CLI path is the one that silently breaks the moment a sibling dep is added.
+
+### 2. Create the Slack app from the manifest — as-is
+
+Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest**, pick the workspace,
+and paste [`slack-app-manifest.yml`](./slack-app-manifest.yml) **unmodified**.
+
+The event/interactivity block at the bottom is commented out on purpose. Leave it. With no event
+subscriptions declared, Slack has nothing to verify and the app is created cleanly.
 
 ### 3. Install to the workspace and copy the credentials
 
@@ -49,26 +69,30 @@ fails, the deployment isn't reachable at that host — fix that before retrying.
    (`xoxb-…`).
 2. **Basic Information** → *App Credentials* → copy the **Signing Secret**.
 
-### 4. Set the environment variables
+### 4. Set the environment variables and redeploy
 
 ```bash
 vercel env add SLACK_BOT_TOKEN production
 vercel env add SLACK_SIGNING_SECRET production
 ```
 
+Then redeploy so the functions pick them up (push to `main`, or redeploy from the dashboard).
+
 eve reads both from the environment because `agent/channels/slack.ts` omits `credentials`. See
-CLAUDE.md for why T1 uses the env fallback and how to move to Vercel Connect later.
+[CLAUDE.md](./CLAUDE.md) for why T1 uses the env fallback, why one deployment serves exactly one
+workspace, and what moving to Vercel Connect would and would not buy.
 
-### 5. Redeploy and point Slack at it
+### 5. Now declare the request URL
 
-Redeploy so the functions pick up the new env vars:
+In the app's **App Manifest** editor, uncomment the phase-2 block, replace `<YOUR-DEPLOYMENT-HOST>`
+with the host from step 1, and save. (Equivalently: enable **Event Subscriptions** and
+**Interactivity & Shortcuts** in the UI and paste the same URL into both.)
 
-```bash
-VERCEL_USE_EXPERIMENTAL_FRAMEWORKS=1 vercel deploy --prod
-```
+Slack POSTs a `url_verification` challenge. The secret is in place now, so eve verifies the
+signature, answers with the raw challenge string, and Slack accepts the URL on the first try.
 
-If the deployment host changed, update the request URL under **Event Subscriptions** and
-**Interactivity & Shortcuts** in the Slack app config to match.
+Adding the `message.im` subscription may prompt a **reinstall** to grant `im:history` — if Slack
+asks, reinstall and re-copy the bot token if it changed.
 
 ### 6. Verify
 
@@ -77,4 +101,12 @@ Invite the bot to a channel (`/invite @temper`) and mention it:
 > **@temper** hello
 
 It should reply in-thread with the unlinked prompt and your resolved principal
-(`slack:<team>:<user>`). That reply is T1's acceptance.
+(`slack:<team>:<user>`). **That reply is T1's acceptance.**
+
+## Troubleshooting
+
+| Symptom | Cause |
+| --- | --- |
+| Slack says the request URL didn't verify | `SLACK_SIGNING_SECRET` is unset or wrong on the deployment, or you declared the URL before step 4. eve returns `401` and Slack reports it as a failed handshake — the error names the URL, not the missing secret. |
+| The bot never responds, no error | The mention was dropped. `onAppMention` returns `null` for a bot-authored message (`principalType: "service"`) and for an authorless event — both silent by design. Check the function logs. |
+| `SLACK_BOT_TOKEN is required.` | `credentials` is omitted (intended), so eve fell through to the env var and found nothing. |
