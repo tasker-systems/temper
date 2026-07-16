@@ -57,8 +57,7 @@
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
 			if (focused < results.length) {
-				const href = resourceHref(results[focused]);
-				if (href) goto(href);
+				goto(resourceHref(results[focused]));
 				open = false;
 			} else if (query.trim()) {
 				goto(searchHref(query));
@@ -98,8 +97,7 @@
 						class="w-full text-left px-4 py-2.5 flex flex-col gap-0.5 transition-colors
 						       {i === focused ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}"
 						onclick={() => {
-							const href = resourceHref(row);
-							if (href) goto(href);
+							goto(resourceHref(row));
 							open = false;
 						}}
 					>

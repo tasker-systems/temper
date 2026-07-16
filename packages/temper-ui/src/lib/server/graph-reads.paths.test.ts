@@ -6,6 +6,7 @@ import {
 	contextCompositionPath,
 	contextPanoramaPath,
 	regionCompositionPath,
+	resourceEdgesPath,
 	teamsListPath,
 	trailPath
 } from './graph-reads';
@@ -23,6 +24,11 @@ describe('graph API path builders', () => {
 	});
 	it('teams list', () => {
 		expect(teamsListPath()).toBe('/api/teams');
+	});
+	it('builds the resource edges path', () => {
+		expect(resourceEdgesPath('019f420c-cf01-7bc1-87c9-09684b0fa69e')).toBe(
+			'/api/resources/019f420c-cf01-7bc1-87c9-09684b0fa69e/edges'
+		);
 	});
 	it('atlasHomePath', () => {
 		expect(atlasHomePath()).toBe('/api/graph/home');

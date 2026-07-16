@@ -61,8 +61,9 @@
 	function drillIn() {
 		if (node) goto(buildDrillNodeUrl($page.url, node.id));
 	}
-	// Bridge to the full resource page. null for cogmap-homed nodes (no context
-	// route) and for edges — gate the button on it.
+	// Bridge to the full resource page. Null only when the selection is an edge or
+	// the row has not loaded — the resource route is home-agnostic, so a
+	// cogmap-homed node (which used to have no URL at all) now resolves.
 	const viewHref = $derived(isNode && resourceRow ? resourceHref(resourceRow) : null);
 </script>
 
