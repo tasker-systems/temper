@@ -30,6 +30,10 @@ pub struct DispatchQuery {
     /// operator-gated so a persistently-failing resource stays observably `dead`.
     #[serde(default)]
     pub redrive: bool,
+    /// Cosmetic shard id — distinguishes the N cron lines that fan the drain out. Carries NO logic:
+    /// concurrent drainers partition the queue via the claim's `FOR UPDATE SKIP LOCKED`, so this is
+    /// only echoed into the trace for per-shard observability. See the throughput-scaling spec.
+    pub shard: Option<i32>,
 }
 
 /// Constant-time equality over the presented bearer token and the configured secret — avoids a
@@ -94,6 +98,7 @@ pub async fn dispatch(
 
     let summary = embed_service::dispatch_tick(&state.pool, q.cap, q.redrive).await?;
     tracing::info!(
+        shard = q.shard,
         redriven = summary.redriven,
         claimed = summary.claimed,
         completed = summary.completed,
@@ -225,6 +230,20 @@ const DEFAULT_REEMBED_LIMIT: i32 = 100;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shard param is cosmetic — it distinguishes the N fan-out cron lines and is echoed to the
+    /// trace, never used for logic (drainers partition via SKIP LOCKED). It must deserialize from the
+    /// query string, and its absence must remain valid (the single-cron and manual-trigger cases).
+    #[test]
+    fn dispatch_query_accepts_optional_shard() {
+        let with: DispatchQuery = serde_urlencoded::from_str("shard=3&cap=5").unwrap();
+        assert_eq!(with.shard, Some(3));
+        assert_eq!(with.cap, Some(5));
+
+        let without: DispatchQuery = serde_urlencoded::from_str("").unwrap();
+        assert_eq!(without.shard, None);
+        assert!(!without.redrive);
+    }
 
     /// The shared cron gate compares the presented bearer against the configured secret in constant
     /// time. It must accept ONLY an exact match and reject on any length or content difference — a
