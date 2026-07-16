@@ -51,11 +51,20 @@ for t in 1 2; do
     -e TEMPER_ONNX_MODEL_PATH=/repo/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx \
     -v "$PWD:/repo:ro" -v temper-embed-bench-target:/target -v temper-embed-bench-registry:/usr/local/cargo/registry \
     temper-embed-bench \
-    cargo run --release --locked -p temper-ingest --no-default-features --features embed-download \
+    cargo run --release --locked -p temper-ingest --no-default-features --features embed,embed-download \
       --example embed_bench -- /tmp/quant-$t.json
 done
 ```
 Expected: each run prints a per-chunk cost (ms/chunk) and peak RSS. `--cpus=1.47` ≈ the `api/internal` function's 3009 MB slice.
+
+> **Feature flags:** `embed_bench` has `required-features = ["embed"]`, but the arm64 bed needs the
+> download runtime, so enable **both** (`--features embed,embed-download`). The lib gates the bundled
+> `.so` branch as `all(embed, not(embed-download))`, so with both on the download path wins at runtime
+> while `required-features` is still satisfied — no Cargo.toml change needed.
+
+**Measured 2026-07-16** (arm64 bed, 1.47 vCPU, 945 chunks): threads=1 → 181.5 ms/chunk; threads=2 →
+128.2 ms/chunk (1.42× speedup); peak RSS 0.97 GB; cold load ~0.5 s. See the spec's *Results* section
+for the corrected throughput math (loop-drain ≈ 6.7×, N=4 ≈ 27×).
 
 - [ ] **Step 3: Record and derive**
 

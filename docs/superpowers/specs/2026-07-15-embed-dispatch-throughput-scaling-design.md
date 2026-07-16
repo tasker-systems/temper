@@ -180,6 +180,42 @@ Before merging PR A, run it at realistic 510-token chunks to derive:
 
 This is the post-mortem's own lesson applied: measure, don't reason from symptoms.
 
+### Results (measured 2026-07-16, throttled bed)
+
+`embed_bench` under `--cpus=1.47 --memory=3009m`, quantized bge-base, a 1.21 MB synthetic
+doc → **945 chunks** at ~510-token size. arm64 bed — indicative of the x86_64 deploy's
+compute *mechanism*, not exact silicon (README fidelity caveat applies).
+
+| intra threads | embed wall | per-chunk | peak RSS | cold load |
+|---|---|---|---|---|
+| 1 | 171.5 s | **181.5 ms** | 0.97 GB | 0.50 s |
+| 2 | 121.2 s | **128.2 ms** | 0.96 GB | 0.44 s |
+
+- **Thread speedup 1.42×** (threads=2 vs 1) — in range, low end of the expected 1.5–2×.
+- **Peak RSS 0.97 GB ≪ 3009 MB** — threads=2 is memory-safe; the 32-chunk window holds.
+- **Cold load ~0.5 s** — negligible; the warm cron mitigates it.
+
+**This corrects a spec estimate.** Real per-chunk cost at 510-token chunks is **128 ms
+(threads=2)** — ~25× the unrepresentative "5 ms warm" 1-token figure. A 64-chunk claim is
+therefore ~8.2 s of inference, so a 55 s invocation fits **~6–7 claims ≈ ~430 chunks**,
+not the ~25× hand-waved above. Restated throughput:
+
+| config | chunks/min | vs today (64/min) |
+|---|---|---|
+| today (1 cron, 1 claim) | 64 | 1× |
+| loop-drain + threads=2 (1 shard) | ~430 | ~6.7× |
+| + N=4 shards | ~1,720 | ~27× (~103k chunks/hr) |
+
+At ~27× the chunk rate, **N=4 is a sound judicious default**; raise N (cheap, ~98 slots
+free) only if the measured rate still trails the enterprise's target.
+
+**Deadline note for the loop-drain PR.** A single 64-chunk `embed_texts` is ~8.2 s
+*uninterruptible* (the per-job deadline check is between jobs, and one job embeds its
+whole ≤64-chunk batch in one call). So a claim starting just under a 55 s deadline can
+overrun to ~63 s — a few seconds into the next cadence. That is SKIP-LOCKED safe and far
+under `maxDuration` 300, so it is harmless; but if strict in-minute tiling is wanted, set
+the deadline to ~50 s **or** the per-claim budget to 32. 55 s stays the default.
+
 ## Decisions
 
 1. **Scale the clean, linear dimension (N shards), not the emergent, stacked one.**
