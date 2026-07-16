@@ -4,11 +4,11 @@
   "description": "Payload for the (now fired) `block_created` event — one appended segment.\nThe projector (`block_append` → `_project_blocks`) reads `resource_id` + the\nsingle-block manifest; the content sidecar carries the chunk prose/embeddings.",
   "type": "object",
   "properties": {
-    "resource_id": {
-      "$ref": "#/$defs/ResourceId"
-    },
     "block": {
       "$ref": "#/$defs/BlockManifest"
+    },
+    "resource_id": {
+      "$ref": "#/$defs/ResourceId"
     }
   },
   "required": [
@@ -16,8 +16,8 @@
     "block"
   ],
   "$defs": {
-    "ResourceId": {
-      "description": "A `kb_resources.id` value.",
+    "BlockId": {
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     },
@@ -27,16 +27,6 @@
       "properties": {
         "block_id": {
           "$ref": "#/$defs/BlockId"
-        },
-        "seq": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "role": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "chunks": {
           "type": "array",
@@ -50,6 +40,16 @@
           "items": {
             "$ref": "#/$defs/Incorporation"
           }
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
         }
       },
       "required": [
@@ -58,8 +58,8 @@
         "chunks"
       ]
     },
-    "BlockId": {
-      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
+    "ChunkId": {
+      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
       "type": "string",
       "format": "uuid"
     },
@@ -84,20 +84,15 @@
         "content_hash"
       ]
     },
-    "ChunkId": {
-      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
-      "type": "string",
-      "format": "uuid"
-    },
     "Incorporation": {
       "type": "object",
       "properties": {
-        "source": {
-          "$ref": "#/$defs/ProvenanceSource"
-        },
         "seq": {
           "type": "integer",
           "format": "int32"
+        },
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
         }
       },
       "required": [
@@ -160,6 +155,11 @@
           ]
         }
       ]
+    },
+    "ResourceId": {
+      "description": "A `kb_resources.id` value.",
+      "type": "string",
+      "format": "uuid"
     }
   }
 }

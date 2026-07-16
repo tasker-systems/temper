@@ -6,11 +6,11 @@
     "block_id": {
       "$ref": "#/$defs/BlockId"
     },
-    "source": {
-      "$ref": "#/$defs/ProvenanceSource"
-    },
     "scar": {
       "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/ProvenanceSource"
     }
   },
   "required": [

@@ -6,18 +6,11 @@
     "edge_id": {
       "$ref": "#/$defs/EdgeId"
     },
-    "source": {
-      "$ref": "#/$defs/AnchorRef"
-    },
-    "target": {
-      "$ref": "#/$defs/AnchorRef"
-    },
     "edge_kind": {
       "$ref": "#/$defs/EdgeKind"
     },
-    "polarity": {
-      "$ref": "#/$defs/EdgePolarity",
-      "default": "forward"
+    "home": {
+      "$ref": "#/$defs/AnchorRef"
     },
     "label": {
       "type": [
@@ -25,12 +18,19 @@
         "null"
       ]
     },
+    "polarity": {
+      "$ref": "#/$defs/EdgePolarity",
+      "default": "forward"
+    },
+    "source": {
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "target": {
+      "$ref": "#/$defs/AnchorRef"
+    },
     "weight": {
       "type": "number",
       "format": "double"
-    },
-    "home": {
-      "$ref": "#/$defs/AnchorRef"
     }
   },
   "required": [
@@ -42,20 +42,15 @@
     "home"
   ],
   "$defs": {
-    "EdgeId": {
-      "description": "A `kb_edges.id` value — a declared relationship assertion.\n\nReturned by `Backend::assert_relationship` and fed back into\nretype/reweight/fold. Post-WS6-flip there is a single substrate-backed\nbackend, so this is always a real `kb_edges` row id (not a backend-opaque\ncorrelation handle).",
-      "type": "string",
-      "format": "uuid"
-    },
     "AnchorRef": {
       "type": "object",
       "properties": {
-        "table": {
-          "$ref": "#/$defs/AnchorTable"
-        },
         "id": {
           "type": "string",
           "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
         }
       },
       "required": [
@@ -75,6 +70,11 @@
         "kb_teams",
         "kb_profiles"
       ]
+    },
+    "EdgeId": {
+      "description": "A `kb_edges.id` value — a declared relationship assertion.\n\nReturned by `Backend::assert_relationship` and fed back into\nretype/reweight/fold. Post-WS6-flip there is a single substrate-backed\nbackend, so this is always a real `kb_edges` row id (not a backend-opaque\ncorrelation handle).",
+      "type": "string",
+      "format": "uuid"
     },
     "EdgeKind": {
       "type": "string",

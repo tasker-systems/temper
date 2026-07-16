@@ -3,11 +3,11 @@
   "title": "PropertyAsserted",
   "type": "object",
   "properties": {
-    "property_id": {
-      "$ref": "#/$defs/PropertyId"
-    },
     "owner": {
       "$ref": "#/$defs/AnchorRef"
+    },
+    "property_id": {
+      "$ref": "#/$defs/PropertyId"
     },
     "property_key": {
       "type": "string"
@@ -26,20 +26,15 @@
     "weight"
   ],
   "$defs": {
-    "PropertyId": {
-      "description": "A `kb_properties.id` value — a facet/doc_type/block_role assertion.",
-      "type": "string",
-      "format": "uuid"
-    },
     "AnchorRef": {
       "type": "object",
       "properties": {
-        "table": {
-          "$ref": "#/$defs/AnchorTable"
-        },
         "id": {
           "type": "string",
           "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
         }
       },
       "required": [
@@ -59,6 +54,11 @@
         "kb_teams",
         "kb_profiles"
       ]
+    },
+    "PropertyId": {
+      "description": "A `kb_properties.id` value — a facet/doc_type/block_role assertion.",
+      "type": "string",
+      "format": "uuid"
     }
   }
 }
