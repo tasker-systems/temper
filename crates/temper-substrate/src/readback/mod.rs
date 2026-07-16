@@ -241,7 +241,8 @@ pub async fn meta(
     let rows = sqlx::query(
         "SELECT property_key, property_value
            FROM kb_properties
-          WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded",
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded
+          ORDER BY created, id",
     )
     .bind(new_id)
     .fetch_all(pool)
@@ -251,6 +252,15 @@ pub async fn meta(
     let mut open = Map::new();
     let mut doc_type: Option<String> = None;
 
+    // ORDER BY created, id + last-write-wins on the inserts below = newest wins.
+    // `facet_set` appends, so an updated facet leaves the superseded row live
+    // (13 resources in production). Without the ordering the planner serves this
+    // from `uq_kb_properties_active`, whose key order is (owner_table, owner_id,
+    // property_key, property_value) — so rows arrive sorted by VALUE and the
+    // jsonb-largest wins, which is only coincidentally the newest. `id` is a
+    // uuidv7 tiebreak for rows written in one transaction. Facet supersession
+    // itself is task 019f6d08-2b55-7ee0-b9ac-1959cf4d736b — this only makes the
+    // READ honest.
     for row in &rows {
         let key: String = row.get("property_key");
         let value: Value = row.get("property_value");

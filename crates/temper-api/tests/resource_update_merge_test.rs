@@ -324,3 +324,68 @@ async fn open_meta_partial_update_merges_by_key(pool: PgPool) {
 // `managed_hash` (db_backend sets it `None`; GET /meta returns `managed_hash: ""`),
 // so there is no recomputed hash to assert. The managed_meta merge it leaned on is
 // still covered by the partial-update tests above.
+
+/// Two non-folded rows for one key collapse to the NEWEST, deterministically.
+///
+/// `readback::meta`'s query had no ORDER BY and the reader map-inserts per row,
+/// so the survivor was whatever order Postgres returned. 13 production resources
+/// are in this state — all cogmap-homed, all facets updated via `facet_set`,
+/// which appends rather than folding. A resolved question could read as open,
+/// and differently between two reads.
+///
+/// Seeded with raw SQL on purpose: the API's meta path uses `property_set`
+/// (fold-then-insert) and cannot reach this state. `uq_kb_properties_active` is
+/// unique on (owner, key, VALUE) where not folded, so two rows sharing a key but
+/// differing in value are permitted — which is exactly the production shape.
+///
+/// **The facet goes resolved â reopened, deliberately.** Without an ORDER BY the
+/// planner serves this from `uq_kb_properties_active`, whose key order is
+/// (owner_table, owner_id, property_key, property_value) â so rows arrive sorted by
+/// VALUE, and the jsonb-largest value wins rather than the newest. For the
+/// open â resolved direction those two coincide ("open" < "resolved"), so that pair
+/// passes with or without the fix and proves nothing. Reopening inverts it: the
+/// newest value ("open") is the jsonb-smaller one, so an unordered read returns the
+/// superseded "resolved" and only `ORDER BY created` returns "open".
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn meta_collapses_a_repeated_key_to_the_newest_row(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, resource_id_str) =
+        setup_resource_with_open_meta(&app, &pool, json!({ "date": "2026-07-03" })).await;
+    let resource_id = Uuid::parse_str(&resource_id_str).expect("resource id");
+
+    // Both FKs are NOT NULL REFERENCES kb_events(id); the create already emitted one.
+    let event_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("an event exists after resource creation");
+
+    for (created, status) in [
+        ("2026-07-03T10:00:00Z", "resolved"),
+        ("2026-07-03T11:00:00Z", "open"),
+    ] {
+        sqlx::query(
+            "INSERT INTO kb_properties
+                 (owner_table, owner_id, property_key, property_value, weight,
+                  asserted_by_event_id, last_event_id, is_folded, created)
+             VALUES ('kb_resources', $1, 'facet', $2, 1.0, $3, $3, false, $4::timestamptz)",
+        )
+        .bind(resource_id)
+        .bind(json!({ "status": status }))
+        .bind(event_id)
+        .bind(created)
+        .execute(&pool)
+        .await
+        .expect("seed facet row");
+    }
+
+    // Repeated: an unordered read can return insertion order by luck.
+    for _ in 0..5 {
+        let open = fetch_open_meta(&app, &token, &resource_id_str).await;
+        assert_eq!(
+            open["facet"],
+            json!({ "status": "open" }),
+            "readback::meta must return the newest row for a repeated key, \
+             not the jsonb-largest value the unique index happens to order last"
+        );
+    }
+}
