@@ -242,9 +242,10 @@ use sqlx::PgPool;
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 use uuid::Uuid;
 
-mod common;
+// No `mod common;` — crates/temper-services/tests/ has no shared harness. The fixture is
+// inline, below (Step 2), matching context_read_predicate_test.rs.
 
-/// Insert a NULL-anchored admin event by hand. Task 8 replaces this with a real fire arm;
+/// Insert a NULL-anchored admin event by hand. Task 5 replaces this with a real fire arm;
 /// until then the read surface must be provable against a crafted row.
 async fn seed_admin_event(pool: &PgPool, emitter: Uuid, subject: Uuid, principal: Uuid) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
@@ -265,7 +266,7 @@ async fn seed_admin_event(pool: &PgPool, emitter: Uuid, subject: Uuid, principal
 
 #[sqlx::test]
 async fn list_by_subject_finds_the_admin_event(pool: PgPool) {
-    let f = common::admin_fixture(&pool).await;
+    let f = admin_fixture(&pool).await;
     let ev = seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
 
     let got = temper_services::services::admin_ledger_service::list_by_subject(
@@ -286,7 +287,7 @@ async fn list_by_subject_finds_the_admin_event(pool: PgPool) {
 
 #[sqlx::test]
 async fn the_admin_event_is_invisible_to_cognition(pool: PgPool) {
-    let f = common::admin_fixture(&pool).await;
+    let f = admin_fixture(&pool).await;
     seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
 
     // The firewall: a NULL-anchored event must not be counted by the steward's ingest delta.
@@ -305,7 +306,7 @@ async fn the_admin_event_is_invisible_to_cognition(pool: PgPool) {
 
 #[sqlx::test]
 async fn a_non_admin_cannot_read_the_ledger(pool: PgPool) {
-    let f = common::admin_fixture(&pool).await;
+    let f = admin_fixture(&pool).await;
     seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
 
     let err = temper_services::services::admin_ledger_service::list_by_subject(
@@ -605,7 +606,7 @@ async fn no_admin_payload_spells_a_trail_matched_key(pool: PgPool) {
 
 #[sqlx::test]
 async fn an_admin_event_never_appears_in_an_element_trail(pool: PgPool) {
-    let f = common::admin_fixture(&pool).await;
+    let f = admin_fixture(&pool).await;
     seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
 
     // element_trail_node over every resource the admin can see must return no admin event.
@@ -891,7 +892,7 @@ The proving pair. It catches the generic grant path **and** `connection_service:
 ```rust
 #[sqlx::test]
 async fn granting_writes_an_event_and_the_row(pool: PgPool) {
-    let f = common::admin_fixture(&pool).await;
+    let f = admin_fixture(&pool).await;
 
     let outcome = temper_services::services::access_service::grant_capability(
         &pool,
@@ -916,7 +917,7 @@ async fn granting_writes_an_event_and_the_row(pool: PgPool) {
 
 #[sqlx::test]
 async fn revoking_writes_an_event_even_though_the_row_is_deleted(pool: PgPool) {
-    let f = common::admin_fixture(&pool).await;
+    let f = admin_fixture(&pool).await;
     temper_services::services::access_service::grant_capability(
         &pool, f.admin_profile, &grant_req(f.context_id, f.team_id)).await.unwrap();
     temper_services::services::access_service::revoke_capability(
@@ -941,7 +942,7 @@ async fn the_connection_grant_reach_bypass_is_also_on_the_ledger(pool: PgPool) {
     // connection_service::grant_reach calls access_service::insert_grant DIRECTLY, bypassing
     // grant_capability (connection_service.rs:467). A service-layer sink would miss it; the
     // chokepoint must not.
-    let f = common::connection_fixture(&pool).await;
+    let f = connection_fixture(&pool).await;
 
     temper_services::services::connection_service::grant_reach(
         &pool, f.admin_profile, f.connection_id, f.team_id, None,
