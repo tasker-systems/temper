@@ -287,6 +287,82 @@ mod tests {
         );
     }
 
+    /// The ingest scope is the producer-INTERSECTION of the cogmap's joined teams, not the union. A
+    /// cogmap joined to two teams must ingest only contexts BOTH can reach — otherwise a high-privilege
+    /// team's context leaks down into the shared map that the other team reads (issue #459 review).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn ingest_scope_is_producer_intersection_across_joined_teams(pool: PgPool) {
+        let s = seed(&pool).await;
+        // s.ctx is OWNED by the seed team (already joined to s.cogmap). Join a SECOND team to the same
+        // cogmap: the map now spans two teams, so its scope collapses to what both reach.
+        // The seed team by slug — NOT via `kb_team_members WHERE profile_id = member`, which is
+        // ambiguous: the auto-join trigger also enrolls the member in the `temper-system` root team,
+        // so that query returns two rows and picks a team the cogmap is not joined to.
+        let seed_team: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'team'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let team_b: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('team-b', 'Team B') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+            .bind(s.cogmap)
+            .bind(team_b)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Activity in s.ctx — reachable by the seed team only. team_b cannot reach it, so with the
+        // cogmap now spanning both teams it drops out of the intersection: it must NOT count. (Under
+        // the old union it would have — the leak.)
+        for _ in 0..3 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+        let leaked = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            leaked.new_resources, 0,
+            "s.ctx is reachable by only one of the two joined teams — excluded by the intersection"
+        );
+        assert_eq!(leaked.new_events, 0);
+        assert_eq!(leaked.max_event_id, None);
+
+        // A context SHARED to BOTH teams IS in the intersection → its activity counts.
+        let shared_ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_profiles', $1, 'shared', 'Shared') RETURNING id",
+        )
+        .bind(s.outsider)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for team in [seed_team, team_b] {
+            sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+                .bind(shared_ctx)
+                .bind(team)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        add_event(&pool, s.entity, "resource_created", shared_ctx).await;
+
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            d.new_resources, 1,
+            "the shared context is in both teams' reach → in the intersection → counted"
+        );
+        assert!(
+            d.max_event_id.is_some(),
+            "the shared-context event is the window's newest, so it is advanceable"
+        );
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn threshold_gates_on_new_resources(pool: PgPool) {
         let s = seed(&pool).await;
