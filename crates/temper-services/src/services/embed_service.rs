@@ -62,15 +62,20 @@ pub async fn warm_embedder() -> ApiResult<usize> {
     Ok(dims)
 }
 
-/// Default wall-clock ceiling for one dispatch pass, in seconds. Sits well under the `api/internal`
-/// function's `maxDuration` (300s in `vercel.json`) so a pass returns cleanly rather than being killed
-/// mid-embed. The chunk budget ([`temper_substrate::embed::EMBED_CHUNK_BUDGET`], 64) bounds *work*, but
-/// the box's real ms/chunk is unmeasured (task `019f5892`) and a cold model load is paid before the
-/// first inference — so a work-bound alone cannot promise the pass finishes in time. This deadline
-/// converts "we hope 64 chunks fits" into "we provably stop claiming new work by T." The headroom
-/// between it and `maxDuration` must cover one in-flight embed (a single job embeds at most one
-/// 64-chunk batch) plus the re-enqueue writes and the response.
-pub const DEFAULT_EMBED_DISPATCH_DEADLINE_SECONDS: u64 = 200;
+/// Default per-invocation wall-clock lifetime for one loop-draining dispatch pass, in seconds.
+///
+/// Under loop-drain this is the **invocation lifetime**, not a single-pass guard: `dispatch_tick`
+/// keeps claiming until the queue is empty or this deadline is hit. Set to **55s** — just under the
+/// one-minute cron cadence — so each fire finishes before the next fires. Back-to-back invocations
+/// then tile the timeline with no stacking, making effective concurrency equal to the number of
+/// shard cron lines (the "predictable N" model, spec Option A): concurrency = N, cost linear in N,
+/// Neon connections bounded at ~N x 2.
+///
+/// `maxDuration` (300s in `vercel.json`) stays a pure safety ceiling far above this. To trade
+/// predictable concurrency for higher per-shard throughput (spec Option B), raise
+/// `TEMPER_EMBED_DISPATCH_DEADLINE_SECONDS` toward ~250 on a specific deploy: invocations then run
+/// near `maxDuration` and a minute-cadence cron stacks ~4 per shard (effective ~4N). No code change.
+pub const DEFAULT_EMBED_DISPATCH_DEADLINE_SECONDS: u64 = 55;
 
 /// Env override for the per-pass wall-clock ceiling, in seconds. A malformed or zero value falls back
 /// to the default rather than silently disabling the bound — mirroring `resolve_chunk_budget`. Retune
