@@ -1,0 +1,487 @@
+#![cfg(feature = "test-db")]
+//! The Slack account-link flow, end to end: intent → IdP → callback → link row.
+//!
+//! `test-db` green is a false signal for access-semantics changes, and this is squarely
+//! one — the callback authenticates a human against a token minted by an external IdP and
+//! decides whether a profile exists. That decision only exists once the HMAC gate, the
+//! intent burn, the token exchange and the JWKS verification are all in the same process.
+//! Hence this tier.
+//!
+//! Two things this file does that the sibling tests do not, both forced by the flow:
+//!
+//! 1. **The issuer is a wiremock server, not `"test-issuer"`.** `link_provider::derive`
+//!    builds the token endpoint from `AuthConfig.issuer`, so pointing the issuer anywhere
+//!    else would leave the exchange with nothing to talk to. Everything downstream follows:
+//!    the access token the stub returns must carry that same `iss`, because the callback
+//!    re-verifies it through the real JWKS path.
+//! 2. **The access token is a real JWT signed with the RSA fixture.** `resolve_existing`
+//!    runs `jsonwebtoken::decode` against the key store before it resolves anything, so an
+//!    opaque placeholder would fail *verification* and never reach the lookup — the tests
+//!    would pass for the wrong reason and prove nothing about lookup-only.
+
+mod common;
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use serde::Serialize;
+use sqlx::PgPool;
+use tokio::net::TcpListener;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+use temper_api::create_app;
+use temper_services::auth_config::{AuthConfig, AuthMode};
+use temper_services::config::{ApiConfig, SlackLinkConfig};
+use temper_services::state::{AppState, JwksKeyStore};
+
+/// The WHOLE opaque principal. Four segments' worth of Slack ids joined by colons —
+/// carried verbatim, never split (spec: the segment count is not ours to assume).
+const SLACK_PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
+
+/// Shared with the "mention agent" (this test, standing in for it). Gates the intent route.
+const SLACK_SECRET: &str = "slack-link-e2e-secret";
+
+const CLIENT_ID: &str = "slack-link-client";
+
+/// Matches `ApiConfig.auth_provider_name` below. The lookup-only resolve keys on
+/// `(auth_provider, external_user_id)` using the SERVER's configured provider name, so an
+/// "existing profile" means a `kb_profile_auth_links` row under exactly this string.
+const PROVIDER: &str = "test-provider";
+
+/// The authorization code the stub IdP accepts. Opaque to everything under test.
+const AUTH_CODE: &str = "test-authorization-code";
+
+// ---------------------------------------------------------------------------
+// Harness
+// ---------------------------------------------------------------------------
+
+/// A running API server whose configured issuer IS `idp` — see the module doc.
+struct SlackLinkApp {
+    addr: std::net::SocketAddr,
+    http: reqwest::Client,
+    /// Kept alive for the test's duration: dropping it stops serving the token endpoint.
+    idp: MockServer,
+}
+
+impl SlackLinkApp {
+    fn issuer(&self) -> String {
+        self.idp.uri()
+    }
+
+    fn callback_url(&self, state_nonce: &str) -> String {
+        format!(
+            "http://{}/api/auth/slack/callback?code={AUTH_CODE}&state={state_nonce}",
+            self.addr
+        )
+    }
+}
+
+/// Spawn the API with the Slack link fully configured and the issuer pointed at a stub IdP.
+///
+/// Mirrors `common::setup`'s server half (same RSA fixture, same static key store, same
+/// `create_app`); it does not reuse it because `setup` hard-codes `issuer: "test-issuer"`
+/// and `slack_link: None`, which are the two values this flow turns on.
+async fn setup_slack_app(pool: &PgPool) -> SlackLinkApp {
+    let idp = MockServer::start().await;
+
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
+            .expect("load test RSA public key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+
+    let api_config = ApiConfig {
+        database_url: "unused".to_string(),
+        auth: AuthConfig {
+            // The stub IdP. `link_provider::derive` turns this into `{issuer}/oauth/token`
+            // under `ExternalIdp`, which is the route the stub below mounts.
+            issuer: idp.uri(),
+            jwks_url: "unused".to_string(),
+            audience: common::TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
+        auth_provider_name: PROVIDER.to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+        internal_reconcile_secret: None,
+        embed_dispatch_secret: None,
+        vercel_connect: None,
+        slack_link: Some(SlackLinkConfig {
+            client_id: CLIENT_ID.to_string(),
+            hmac_secret: SLACK_SECRET.to_string(),
+            public_base_url: "https://temper.test".to_string(),
+        }),
+    };
+
+    let state = AppState::new(pool.clone(), jwks_store, api_config);
+    let app = create_app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("test server");
+    });
+
+    SlackLinkApp {
+        addr,
+        http: reqwest::Client::new(),
+        idp,
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct LinkJwtClaims {
+    sub: String,
+    email: String,
+    email_verified: bool,
+    iss: String,
+    aud: String,
+    iat: i64,
+    exp: i64,
+}
+
+/// Sign an access token the way the stub IdP would: same RSA fixture the server verifies
+/// against, `iss` set to the stub's own URI, `aud` the instance's audience.
+///
+/// `common::generate_test_jwt` cannot serve here — it hard-codes `iss: "test-issuer"`, and
+/// this instance's issuer is the stub. The `email` claim is present deliberately: the auth
+/// seam's email ladder would otherwise fall through to OIDC `/userinfo` discovery against
+/// the stub, testing the ladder instead of the link.
+fn sign_idp_access_token(issuer: &str, sub: &str, email: &str) -> String {
+    let key = EncodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.key"))
+        .expect("load test RSA private key");
+    let now = now_unix();
+    let claims = LinkJwtClaims {
+        sub: sub.to_string(),
+        email: email.to_string(),
+        email_verified: true,
+        iss: issuer.to_string(),
+        aud: common::TEST_AUDIENCE.to_string(),
+        iat: now,
+        exp: now + 3600,
+    };
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &key).expect("sign IdP JWT")
+}
+
+#[derive(Debug, Serialize)]
+struct StubTokenResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: u64,
+}
+
+/// Mount the RFC 6749 token endpoint on the stub, returning `access_token` on any exchange.
+async fn stub_token_endpoint(app: &SlackLinkApp, access_token: String) {
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(StubTokenResponse {
+            access_token,
+            refresh_token: "stub-refresh-token".to_string(),
+            expires_in: 86400,
+        }))
+        .mount(&app.idp)
+        .await;
+}
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_secs() as i64
+}
+
+/// POST `/internal/slack/link-intents` as the mention agent would: HMAC over the RAW body.
+///
+/// The signature is produced by `temper_core::internal_sig::sign` — the same function the
+/// gate verifies with — rather than re-derived here. A hand-rolled MAC would be testing this
+/// file's idea of the scheme against itself.
+async fn post_link_intent(
+    app: &SlackLinkApp,
+    principal: &str,
+    signature: Option<String>,
+) -> reqwest::Response {
+    let body = format!(r#"{{"slack_principal_id":"{principal}"}}"#);
+    let ts = now_unix();
+    let sig = signature.unwrap_or_else(|| {
+        temper_core::internal_sig::sign(SLACK_SECRET.as_bytes(), ts, body.as_bytes())
+    });
+
+    app.http
+        .post(format!("http://{}/internal/slack/link-intents", app.addr))
+        .header("Content-Type", "application/json")
+        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
+        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
+        .body(body)
+        .send()
+        .await
+        .expect("post link intent")
+}
+
+/// Mint an intent and return the opaque `state` the IdP would echo back to the callback.
+async fn mint_state_nonce(app: &SlackLinkApp) -> String {
+    let res = post_link_intent(app, SLACK_PRINCIPAL, None).await;
+    assert_eq!(
+        res.status(),
+        200,
+        "a correctly signed intent must be minted"
+    );
+
+    let body: serde_json::Value = res.json().await.expect("intent response is JSON");
+    let authorize_url = body["authorize_url"]
+        .as_str()
+        .expect("the response carries an authorize_url");
+
+    let url = reqwest::Url::parse(authorize_url).expect("authorize_url is a URL");
+    url.query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .expect("the authorize URL carries the opaque state")
+}
+
+/// Provision a profile through the REAL auto-provisioning path — an authenticated
+/// `GET /api/profile`, exactly as a first sign-in does.
+///
+/// Deliberately not a hand-written INSERT: the row this flow must find is the row the login
+/// path writes, and only the login path knows its full shape (profile + auth link under
+/// `PROVIDER` + the surface emitters). A fixture INSERT would let the two drift.
+async fn provision_profile(app: &SlackLinkApp, sub: &str, email: &str) {
+    let token = sign_idp_access_token(&app.issuer(), sub, email);
+    let res = app
+        .http
+        .get(format!("http://{}/api/profile", app.addr))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("GET /api/profile");
+    assert_eq!(
+        res.status(),
+        200,
+        "the token user must auto-provision on first authenticated request"
+    );
+}
+
+async fn count_profiles(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM kb_profiles")
+        .fetch_one(pool)
+        .await
+        .expect("count profiles")
+}
+
+async fn count_slack_links(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider = 'slack'")
+        .fetch_one(pool)
+        .await
+        .expect("count slack links")
+}
+
+async fn count_intents(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM kb_slack_link_intents")
+        .fetch_one(pool)
+        .await
+        .expect("count intents")
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/// **D3, the load-bearing invariant.** Connecting Slack is not a registration route.
+///
+/// The state and the code are both valid — the flow gets all the way to resolution — and the
+/// token names an identity no `kb_profile_auth_links` row knows. It must refuse WITHOUT
+/// minting anything.
+///
+/// The refusal message alone is not the assertion: a regression that swaps
+/// `authenticate_token_existing_only` for `authenticate_token` creates the profile and then
+/// fails somewhere downstream would still render a "not connected" page. The profile count
+/// is what actually holds the line, and the auto-join trigger on that INSERT is why it
+/// matters — a stray click would confer real team reach.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn callback_with_an_unknown_identity_creates_no_profile(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    // An identity with no auth-link row AND no email that could reconcile onto an existing
+    // profile — both rungs of the resolve must miss, or the test would pass by the wrong door.
+    let token = sign_idp_access_token(
+        &app.issuer(),
+        "idp-sub-with-no-temper-profile",
+        "nobody-e0d5c9@unlinked.invalid",
+    );
+    stub_token_endpoint(&app, token).await;
+
+    let state_nonce = mint_state_nonce(&app).await;
+    let before = count_profiles(&pool).await;
+
+    let res = app
+        .http
+        .get(app.callback_url(&state_nonce))
+        .send()
+        .await
+        .expect("GET callback");
+
+    assert_eq!(
+        res.status(),
+        200,
+        "the callback always renders a page — a human is looking at it"
+    );
+    let body = res.text().await.expect("callback body");
+    assert!(
+        body.contains("No temper account is linked"),
+        "the refusal must be the lookup-only one: {body}"
+    );
+
+    assert_eq!(
+        count_profiles(&pool).await,
+        before,
+        "lookup-only must not mint a profile"
+    );
+    assert_eq!(
+        count_slack_links(&pool).await,
+        0,
+        "a refused link must write no directory row"
+    );
+}
+
+/// **D6, the single-use invariant, end to end.**
+///
+/// The intent burn is an atomic conditional UPDATE, so the second callback with the SAME URL
+/// must find nothing — even though its code and state are byte-identical to the first's.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_replayed_state_is_rejected(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    let sub = "idp-sub-with-a-temper-profile";
+    let email = "linker-7f21a4@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let url = app.callback_url(&mint_state_nonce(&app).await);
+
+    let first = app
+        .http
+        .get(&url)
+        .send()
+        .await
+        .expect("first callback")
+        .text()
+        .await
+        .expect("first body");
+    assert!(
+        first.contains("Linked as"),
+        "the first callback must link: {first}"
+    );
+    assert_eq!(
+        count_slack_links(&pool).await,
+        1,
+        "the link is written once"
+    );
+
+    let second = app
+        .http
+        .get(&url)
+        .send()
+        .await
+        .expect("second callback")
+        .text()
+        .await
+        .expect("second body");
+    assert!(
+        second.contains("expired or was already used"),
+        "a replayed state must be refused: {second}"
+    );
+    assert_eq!(
+        count_slack_links(&pool).await,
+        1,
+        "the replay must not write a second row"
+    );
+}
+
+/// Re-linking the same Slack user is idempotent — a whole second intent + callback for the
+/// SAME principal and profile leaves exactly one directory row.
+///
+/// Distinct from the replay test: both flows here are legitimate and both succeed. The
+/// single row is `UNIQUE(auth_provider, auth_provider_user_id)` doing its job, not the
+/// intent burn refusing the second attempt.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    let sub = "idp-sub-relinker";
+    let email = "relinker-3c88b0@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    for attempt in 1..=2 {
+        let url = app.callback_url(&mint_state_nonce(&app).await);
+        let body = app
+            .http
+            .get(&url)
+            .send()
+            .await
+            .expect("callback")
+            .text()
+            .await
+            .expect("body");
+        assert!(
+            body.contains("Linked as"),
+            "link attempt {attempt} must succeed: {body}"
+        );
+    }
+
+    assert_eq!(
+        count_slack_links(&pool).await,
+        1,
+        "re-linking the same principal must upsert, not duplicate"
+    );
+}
+
+/// The HMAC gate on the intent route, asserted rather than assumed.
+///
+/// This gate is the whole reason Slack-side hijack is expensive. Slack user ids are visible
+/// to any workspace member, so an ungated intent endpoint would let anyone mint a link URL
+/// for anyone else's principal and bind it to their own profile. The gate reduces the attack
+/// from "read a public id" to "steal an ephemeral message only the victim can see" — so a
+/// forged signature must be refused, and it must leave no intent behind for a later guess to
+/// land on.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn link_intents_rejects_a_forged_signature(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    // Well-formed lowercase hex of the right length, signed with the WRONG key — the shape a
+    // real forgery has. A malformed string would prove only that hex decoding fails.
+    let forged = temper_core::internal_sig::sign(
+        b"not-the-slack-link-secret",
+        now_unix(),
+        format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#).as_bytes(),
+    );
+
+    let res = post_link_intent(&app, SLACK_PRINCIPAL, Some(forged)).await;
+    assert_eq!(res.status(), 401, "a forged signature must be refused");
+    assert_eq!(
+        count_intents(&pool).await,
+        0,
+        "a refused call must mint no intent"
+    );
+
+    // The gate must also refuse a caller who simply omits the signature rather than forging
+    // one — `require_signature_with` reads the headers before it reads the body, and a
+    // missing header must land in the same refusal, not skip the check.
+    let body = format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#);
+    let res = app
+        .http
+        .post(format!("http://{}/internal/slack/link-intents", app.addr))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .expect("post unsigned link intent");
+    assert_eq!(res.status(), 401, "an unsigned call must be refused");
+    assert_eq!(
+        count_intents(&pool).await,
+        0,
+        "an unsigned call must mint no intent"
+    );
+}
