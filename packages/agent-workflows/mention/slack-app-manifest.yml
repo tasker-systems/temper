@@ -1,0 +1,57 @@
+# Slack app manifest for the @temper mention agent.
+#
+# Paste into https://api.slack.com/apps -> "Create New App" -> "From a manifest".
+#
+# BEFORE PASTING: replace <YOUR-DEPLOYMENT-HOST> in the two request_url fields
+# with the agent's deployed host. The paths must stay exactly `/eve/v1/slack` —
+# that is eve's default Slack route, and it serves BOTH event subscriptions and
+# interactivity callbacks (override via `slackChannel({ route })` if you ever
+# move it). eve is HTTP-only; Socket Mode is not supported, so do not enable it.
+#
+# Slack will not accept the manifest until the request_url responds to its
+# url_verification challenge — deploy first, then create the app.
+#
+# `_metadata` (major_version/minor_version) is deliberately omitted: it is an
+# OPTIONAL field, and pinning a schema version we have not verified is a guess
+# that buys nothing. Slack applies its current default. Verified against
+# https://docs.slack.dev/reference/app-manifest — every field below is real.
+
+display_information:
+  name: temper
+  description: Ask temper about your team's knowledge base, from Slack.
+  background_color: "#2c2d30"
+
+features:
+  bot_user:
+    display_name: temper
+    always_online: false
+
+oauth_config:
+  scopes:
+    bot:
+      # Deliver `app_mention` events.
+      - app_mentions:read
+      # Post replies, typing indicators, and ephemeral messages.
+      - chat:write
+      # Read DM history (required by the `message.im` subscription below).
+      - im:history
+      # Open a DM to a user — needed by the `authorization.required` default
+      # handler's `postDirectMessage` delivery path (see CLAUDE.md).
+      - im:write
+      # Thread history for `threadContext` (conversations.replies) in public
+      # channels. Add `groups:history` for private channels and `mpim:history`
+      # for group DMs if the agent is invited to those.
+      - channels:history
+
+settings:
+  event_subscriptions:
+    request_url: https://<YOUR-DEPLOYMENT-HOST>/eve/v1/slack
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: true
+    request_url: https://<YOUR-DEPLOYMENT-HOST>/eve/v1/slack
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
