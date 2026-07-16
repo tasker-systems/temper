@@ -43,6 +43,10 @@ pub enum AnchorTable {
     Teams,
     #[serde(rename = "kb_profiles")]
     Profiles,
+    #[serde(rename = "kb_connections")]
+    Connections,
+    #[serde(rename = "kb_machine_clients")]
+    MachineClients,
 }
 
 impl From<HomeAnchor> for AnchorTable {
@@ -59,6 +63,73 @@ impl From<HomeAnchor> for AnchorTable {
 pub struct AnchorRef {
     pub table: AnchorTable,
     pub id: Uuid,
+}
+
+/// The `rel` vocabulary of `kb_events."references"`. The first three are the column's original
+/// documented set; `Subject`/`Principal` are the admin-ledger extension (spec 2026-07-16 §5). The
+/// vocabulary lives in a column COMMENT, not a CHECK, so this enum is the only enforcement — keep
+/// it exhaustive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefRel {
+    #[serde(rename = "supersedes")]
+    Supersedes,
+    #[serde(rename = "derived_from")]
+    DerivedFrom,
+    #[serde(rename = "touches")]
+    Touches,
+    /// What the act was performed ON (the grant's subject, the machine provisioned).
+    #[serde(rename = "subject")]
+    Subject,
+    /// WHO the act was performed FOR (the team granted, the profile promoted).
+    #[serde(rename = "principal")]
+    Principal,
+}
+
+/// `AnchorRef`'s wire shape inside `references`: `{kind, id}` rather than `{table, id}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefTarget {
+    pub kind: AnchorTable,
+    pub id: Uuid,
+}
+
+impl From<AnchorRef> for RefTarget {
+    fn from(a: AnchorRef) -> Self {
+        RefTarget {
+            kind: a.table,
+            id: a.id,
+        }
+    }
+}
+
+/// One typed provenance pointer in `kb_events."references"`.
+///
+/// This is the admin ledger's ONLY read path. Admin events are NULL-anchored (the cognition
+/// firewall), which makes them invisible to every anchor-scoped reader — so identity must live
+/// here, where the GIN index (`idx_kb_events_references`) can find it and no cognition reader
+/// looks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventRef {
+    pub rel: RefRel,
+    /// Spelled `target` with a `kind` field to match the column's documented shape.
+    pub target: RefTarget,
+}
+
+impl EventRef {
+    /// What the act was performed on.
+    pub fn subject(target: impl Into<RefTarget>) -> Self {
+        EventRef {
+            rel: RefRel::Subject,
+            target: target.into(),
+        }
+    }
+
+    /// Who the act was performed for.
+    pub fn principal(target: impl Into<RefTarget>) -> Self {
+        EventRef {
+            rel: RefRel::Principal,
+            target: target.into(),
+        }
+    }
 }
 
 impl AnchorRef {
@@ -1002,5 +1073,37 @@ mod tests {
             json.get("embedding").is_none(),
             "absent embedding key is the projector's NULL signal: {json}"
         );
+    }
+
+    #[test]
+    fn event_ref_serializes_to_the_documented_references_shape() {
+        let team = Uuid::parse_str("019f6055-6aea-7aa2-a133-61552dd3d7e4").unwrap();
+        let refs = vec![
+            EventRef::subject(AnchorRef {
+                table: AnchorTable::Connections,
+                id: team,
+            }),
+            EventRef::principal(AnchorRef {
+                table: AnchorTable::Teams,
+                id: team,
+            }),
+        ];
+        let json = serde_json::to_value(&refs).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([
+                {"rel": "subject",   "target": {"kind": "kb_connections", "id": team}},
+                {"rel": "principal", "target": {"kind": "kb_teams",       "id": team}},
+            ]),
+            "references must match the column's documented [{{rel, target:{{kind,id}}}}] shape"
+        );
+        let back: Vec<EventRef> = serde_json::from_value(json).unwrap();
+        assert_eq!(back, refs, "references must round-trip");
+    }
+
+    #[test]
+    fn machine_clients_anchor_serializes_as_the_ddl_spells_it() {
+        let j = serde_json::to_value(AnchorTable::MachineClients).unwrap();
+        assert_eq!(j, serde_json::json!("kb_machine_clients"));
     }
 }

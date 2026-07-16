@@ -52,7 +52,9 @@
         "kb_edges",
         "kb_content_blocks",
         "kb_teams",
-        "kb_profiles"
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients"
       ]
     },
     "PropertyId": {
