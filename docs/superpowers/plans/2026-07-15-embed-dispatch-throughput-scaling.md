@@ -383,6 +383,12 @@ The async-embed drain scales by three env/cron knobs, tuned per deploy — none 
 - Shard cron count (`vercel.json`) — the number of concurrent drainers. See the throughput-scaling
   spec for sizing N against a target chunks/min.
 
+**Safety floor: the embed function's `maxDuration` must stay ≥ 72 s.** A claim's ~64-chunk
+`embed_texts` is uninterruptible (~8 s at the measured 128 ms/chunk, threads=2), so a claim starting
+just under the 55 s deadline can run to ~63 s. 72 s leaves an ~8 s buffer. `api/internal` is 300 s
+today (far above), so this is a guardrail against anyone lowering it for the embed cron — surface it
+in the "operating temper" guidelines too.
+
 Set the env var with:
 
     vercel env add TEMPER_ONNX_INTRA_THREADS production   # enter: 2
