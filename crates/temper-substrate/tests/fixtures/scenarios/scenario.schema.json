@@ -23,71 +23,27 @@
     "steps"
   ],
   "$defs": {
-    "SeedRef": {
-      "description": "`seed:` is either a path to a seed document (resolved relative to the scenario file's directory)\nor the seed embedded inline. Untagged: a YAML string is a reference, a map is an embed.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/$defs/Seed"
-        }
-      ]
-    },
-    "Seed": {
-      "description": "The seed document (`tests/fixtures/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "cogmap": {
-          "$ref": "#/$defs/CogmapDef"
-        },
-        "world": {
-          "$ref": "#/$defs/WorldDef"
-        },
-        "resources": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ResourceDef"
-          }
-        },
-        "edges": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/EdgeDef"
-          }
-        },
-        "uses_lenses": {
-          "description": "Names of (system-seeded) lenses this seed's cogmap uses; validated up front.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "name",
-        "cogmap",
-        "world",
-        "resources",
-        "uses_lenses"
+    "CmpOp": {
+      "type": "string",
+      "enum": [
+        ">=",
+        ">",
+        "=="
       ]
     },
     "CogmapDef": {
       "type": "object",
       "properties": {
-        "telos": {
-          "$ref": "#/$defs/TelosDef"
+        "emitter": {
+          "description": "entity name (declared in `world.entities`)",
+          "type": "string"
         },
         "owner": {
           "description": "profile handle (declared in `world.profiles`)",
           "type": "string"
         },
-        "emitter": {
-          "description": "entity name (declared in `world.entities`)",
-          "type": "string"
+        "telos": {
+          "$ref": "#/$defs/TelosDef"
         }
       },
       "required": [
@@ -96,98 +52,53 @@
         "emitter"
       ]
     },
-    "TelosDef": {
-      "description": "The telos charter as real content-blocks (domain-B §1, content-block-primitive β): block-0 is the\n`statement`, blocks 1..n are the `questions` (each `question + \"\\n\\n\" + context`), then `framing`\nblocks situate the telos. Each block's kind is stamped as a `block_role` property\n(`statement`/`question`/`framing`) by the persist path — see `block_specs`. The loader\nturns this into an ordered prose list for `content::prepare_blocks`.",
-      "type": "object",
-      "properties": {
-        "title": {
-          "type": "string"
-        },
-        "statement": {
-          "type": "string"
-        },
-        "questions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/QuestionDef"
-          }
-        },
-        "framing": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        }
-      },
-      "required": [
-        "title",
-        "statement"
-      ]
-    },
-    "QuestionDef": {
-      "description": "A guiding question with its situating context. `context` defaults empty so a bare\n`{ question: ... }` is valid; a rich question-with-context naturally chunks into >1 window.",
-      "type": "object",
-      "properties": {
-        "question": {
-          "type": "string"
-        },
-        "context": {
-          "type": "string",
-          "default": ""
-        }
-      },
-      "required": [
-        "question"
-      ]
-    },
-    "WorldDef": {
-      "type": "object",
-      "properties": {
-        "profiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ProfileDef"
-          }
-        },
-        "entities": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/EntityDef"
-          }
-        }
-      },
-      "required": [
-        "profiles",
-        "entities"
-      ]
-    },
-    "ProfileDef": {
-      "type": "object",
-      "properties": {
-        "handle": {
-          "type": "string"
-        },
-        "display_name": {
-          "type": "string"
-        },
-        "system_access": {
-          "$ref": "#/$defs/SystemAccess"
-        }
-      },
-      "required": [
-        "handle",
-        "display_name",
-        "system_access"
-      ]
-    },
-    "SystemAccess": {
-      "description": "The `system_access` PG enum — a profile's platform-wide access tier. Typed\nin the YAML model so an invalid value fails at deserialization rather than at\nthe `$n::system_access` cast after the load transaction opens.",
+    "DriftTierName": {
+      "description": "The drift tier names as they appear in scenario YAML (`check: drift_tier, tier: readout`).",
       "type": "string",
       "enum": [
-        "none",
-        "approved",
-        "admin"
+        "fresh",
+        "readout",
+        "structural"
+      ]
+    },
+    "EdgeDef": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "to": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "kind"
+      ]
+    },
+    "EdgeKind": {
+      "type": "string",
+      "enum": [
+        "express",
+        "contains",
+        "leads_to",
+        "near"
       ]
     },
     "EntityDef": {
@@ -206,49 +117,211 @@
         "profile"
       ]
     },
-    "ResourceDef": {
-      "description": "A seed resource. It has no `home` selector: a seed instantiates a *cogmap*, and every resource it\ndeclares is homed in that cogmap by construction (`loader::load_resources`). Contexts are never\nseeded — a context accretes from real work and its telos is *derived* from that activity — so\nthere is nothing here to choose between. (The sibling access DSL does have a real `HomeDef`,\nbecause an access scenario stages resources across pre-existing cogmaps *and* contexts to probe\nthe gates.)",
-      "type": "object",
-      "properties": {
-        "key": {
-          "description": "local stable id — edges/asserts reference this",
-          "type": "string"
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "origin_uri": {
-          "type": "string"
-        },
-        "doc_type": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "body": {
-          "type": "string"
-        },
-        "facets": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FacetDef"
+    "Expectation": {
+      "description": "Internally tagged by `check:` (same serde_yaml constraint as `Step`).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "region_count"
             },
-            {
-              "type": "null"
+            "lens": {
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/$defs/CmpOp"
+            },
+            "value": {
+              "type": "integer",
+              "format": "int64"
             }
+          },
+          "required": [
+            "check",
+            "lens",
+            "op",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "co_region"
+            },
+            "expect": {
+              "type": "boolean"
+            },
+            "lens": {
+              "type": "string"
+            },
+            "members": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "check",
+            "lens",
+            "members",
+            "expect"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "cohesion_order"
+            },
+            "greater": {
+              "type": "string"
+            },
+            "lens": {
+              "type": "string"
+            },
+            "lesser": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "check",
+            "lens",
+            "greater",
+            "lesser"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "region_size"
+            },
+            "lens": {
+              "type": "string"
+            },
+            "member": {
+              "type": "string"
+            },
+            "value": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "check",
+            "lens",
+            "member",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "internal_tension"
+            },
+            "lens": {
+              "type": "string"
+            },
+            "member": {
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/$defs/CmpOp"
+            },
+            "value": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "check",
+            "lens",
+            "member",
+            "op",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "reproducible"
+            },
+            "lens": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "check",
+            "lens"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "fingerprint_differs"
+            },
+            "lens_a": {
+              "type": "string"
+            },
+            "lens_b": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "check",
+            "lens_a",
+            "lens_b"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "stale"
+            },
+            "expect": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "check",
+            "expect"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "type": "string",
+              "const": "drift_tier"
+            },
+            "lens": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/DriftTierName"
+            }
+          },
+          "required": [
+            "check",
+            "lens",
+            "tier"
           ]
         }
-      },
-      "required": [
-        "key",
-        "origin_uri",
-        "body"
       ]
     },
     "FacetDef": {
@@ -277,44 +350,136 @@
         }
       ]
     },
-    "EdgeDef": {
+    "ProfileDef": {
       "type": "object",
       "properties": {
-        "from": {
+        "display_name": {
           "type": "string"
         },
-        "to": {
+        "handle": {
           "type": "string"
         },
-        "kind": {
-          "$ref": "#/$defs/EdgeKind"
+        "system_access": {
+          "$ref": "#/$defs/SystemAccess"
+        }
+      },
+      "required": [
+        "handle",
+        "display_name",
+        "system_access"
+      ]
+    },
+    "QuestionDef": {
+      "description": "A guiding question with its situating context. `context` defaults empty so a bare\n`{ question: ... }` is valid; a rich question-with-context naturally chunks into >1 window.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "string",
+          "default": ""
         },
-        "label": {
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ]
+    },
+    "ResourceDef": {
+      "description": "A seed resource. It has no `home` selector: a seed instantiates a *cogmap*, and every resource it\ndeclares is homed in that cogmap by construction (`loader::load_resources`). Contexts are never\nseeded — a context accretes from real work and its telos is *derived* from that activity — so\nthere is nothing here to choose between. (The sibling access DSL does have a real `HomeDef`,\nbecause an access scenario stages resources across pre-existing cogmaps *and* contexts to probe\nthe gates.)",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "doc_type": {
           "type": [
             "string",
             "null"
           ],
           "default": null
         },
-        "weight": {
-          "type": "number",
-          "format": "double",
-          "default": 1.0
+        "facets": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FacetDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "description": "local stable id — edges/asserts reference this",
+          "type": "string"
+        },
+        "origin_uri": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "required": [
-        "from",
-        "to",
-        "kind"
+        "key",
+        "origin_uri",
+        "body"
       ]
     },
-    "EdgeKind": {
-      "type": "string",
-      "enum": [
-        "express",
-        "contains",
-        "leads_to",
-        "near"
+    "Seed": {
+      "description": "The seed document (`tests/fixtures/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
+      "type": "object",
+      "properties": {
+        "cogmap": {
+          "$ref": "#/$defs/CogmapDef"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeDef"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceDef"
+          }
+        },
+        "uses_lenses": {
+          "description": "Names of (system-seeded) lenses this seed's cogmap uses; validated up front.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "world": {
+          "$ref": "#/$defs/WorldDef"
+        }
+      },
+      "required": [
+        "name",
+        "cogmap",
+        "world",
+        "resources",
+        "uses_lenses"
+      ]
+    },
+    "SeedRef": {
+      "description": "`seed:` is either a path to a seed document (resolved relative to the scenario file's directory)\nor the seed embedded inline. Untagged: a YAML string is a reference, a map is an embed.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Seed"
+        }
       ]
     },
     "Step": {
@@ -324,18 +489,12 @@
           "description": "Add a concept resource to the map mid-runbook (one content-block body, optional facets). Its\n`key` joins the runner's key map for later steps. Home is always the scenario cogmap.",
           "type": "object",
           "properties": {
-            "key": {
+            "body": {
               "type": "string"
             },
-            "title": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "origin_uri": {
-              "type": "string"
+            "do": {
+              "type": "string",
+              "const": "create_resource"
             },
             "doc_type": {
               "type": [
@@ -343,9 +502,6 @@
                 "null"
               ],
               "default": null
-            },
-            "body": {
-              "type": "string"
             },
             "facets": {
               "anyOf": [
@@ -357,9 +513,18 @@
                 }
               ]
             },
-            "do": {
-              "type": "string",
-              "const": "create_resource"
+            "key": {
+              "type": "string"
+            },
+            "origin_uri": {
+              "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
             }
           },
           "required": [
@@ -373,6 +538,10 @@
           "description": "Set a resource's `facet` property (re-facet / re-weight). `resource` is a key.",
           "type": "object",
           "properties": {
+            "do": {
+              "type": "string",
+              "const": "set_facet"
+            },
             "resource": {
               "type": "string"
             },
@@ -384,10 +553,6 @@
               "type": "number",
               "format": "double",
               "default": 1.0
-            },
-            "do": {
-              "type": "string",
-              "const": "set_facet"
             }
           },
           "required": [
@@ -400,10 +565,11 @@
           "description": "Assert a typed edge between two keyed resources (replaces the old special-cased `emit_event`).",
           "type": "object",
           "properties": {
-            "from": {
-              "type": "string"
+            "do": {
+              "type": "string",
+              "const": "assert_edge"
             },
-            "to": {
+            "from": {
               "type": "string"
             },
             "kind": {
@@ -416,14 +582,13 @@
               ],
               "default": null
             },
+            "to": {
+              "type": "string"
+            },
             "weight": {
               "type": "number",
               "format": "double",
               "default": 1.0
-            },
-            "do": {
-              "type": "string",
-              "const": "assert_edge"
             }
           },
           "required": [
@@ -437,10 +602,11 @@
           "description": "Fold the live edge at `{from,to,kind}` coordinates (retire a relationship). The runner resolves\nthe non-folded edge to its id, then fires `relationship_fold`.",
           "type": "object",
           "properties": {
-            "from": {
-              "type": "string"
+            "do": {
+              "type": "string",
+              "const": "fold_edge"
             },
-            "to": {
+            "from": {
               "type": "string"
             },
             "kind": {
@@ -453,9 +619,8 @@
               ],
               "default": null
             },
-            "do": {
-              "type": "string",
-              "const": "fold_edge"
+            "to": {
+              "type": "string"
             }
           },
           "required": [
@@ -469,15 +634,15 @@
           "description": "Revise a concept resource's body prose (a content-only mutation: new chunk embeddings, no edge\nor facet change). Fires `block_mutated` on the resource's single body block. `resource` is a key.",
           "type": "object",
           "properties": {
-            "resource": {
-              "type": "string"
-            },
             "body": {
               "type": "string"
             },
             "do": {
               "type": "string",
               "const": "revise"
+            },
+            "resource": {
+              "type": "string"
             }
           },
           "required": [
@@ -489,12 +654,12 @@
         {
           "type": "object",
           "properties": {
-            "lens": {
-              "type": "string"
-            },
             "do": {
               "type": "string",
               "const": "materialize"
+            },
+            "lens": {
+              "type": "string"
             }
           },
           "required": [
@@ -523,228 +688,63 @@
         }
       ]
     },
-    "Expectation": {
-      "description": "Internally tagged by `check:` (same serde_yaml constraint as `Step`).",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "op": {
-              "$ref": "#/$defs/CmpOp"
-            },
-            "value": {
-              "type": "integer",
-              "format": "int64"
-            },
-            "check": {
-              "type": "string",
-              "const": "region_count"
-            }
-          },
-          "required": [
-            "check",
-            "lens",
-            "op",
-            "value"
-          ]
+    "SystemAccess": {
+      "description": "The `system_access` PG enum — a profile's platform-wide access tier. Typed\nin the YAML model so an invalid value fails at deserialization rather than at\nthe `$n::system_access` cast after the load transaction opens.",
+      "type": "string",
+      "enum": [
+        "none",
+        "approved",
+        "admin"
+      ]
+    },
+    "TelosDef": {
+      "description": "The telos charter as real content-blocks (domain-B §1, content-block-primitive β): block-0 is the\n`statement`, blocks 1..n are the `questions` (each `question + \"\\n\\n\" + context`), then `framing`\nblocks situate the telos. Each block's kind is stamped as a `block_role` property\n(`statement`/`question`/`framing`) by the persist path — see `block_specs`. The loader\nturns this into an ordered prose list for `content::prepare_blocks`.",
+      "type": "object",
+      "properties": {
+        "framing": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         },
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "members": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "expect": {
-              "type": "boolean"
-            },
-            "check": {
-              "type": "string",
-              "const": "co_region"
-            }
-          },
-          "required": [
-            "check",
-            "lens",
-            "members",
-            "expect"
-          ]
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionDef"
+          }
         },
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "greater": {
-              "type": "string"
-            },
-            "lesser": {
-              "type": "string"
-            },
-            "check": {
-              "type": "string",
-              "const": "cohesion_order"
-            }
-          },
-          "required": [
-            "check",
-            "lens",
-            "greater",
-            "lesser"
-          ]
+        "statement": {
+          "type": "string"
         },
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "member": {
-              "type": "string"
-            },
-            "value": {
-              "type": "integer",
-              "format": "int64"
-            },
-            "check": {
-              "type": "string",
-              "const": "region_size"
-            }
-          },
-          "required": [
-            "check",
-            "lens",
-            "member",
-            "value"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "member": {
-              "type": "string"
-            },
-            "op": {
-              "$ref": "#/$defs/CmpOp"
-            },
-            "value": {
-              "type": "number",
-              "format": "double"
-            },
-            "check": {
-              "type": "string",
-              "const": "internal_tension"
-            }
-          },
-          "required": [
-            "check",
-            "lens",
-            "member",
-            "op",
-            "value"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "check": {
-              "type": "string",
-              "const": "reproducible"
-            }
-          },
-          "required": [
-            "check",
-            "lens"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "lens_a": {
-              "type": "string"
-            },
-            "lens_b": {
-              "type": "string"
-            },
-            "check": {
-              "type": "string",
-              "const": "fingerprint_differs"
-            }
-          },
-          "required": [
-            "check",
-            "lens_a",
-            "lens_b"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "expect": {
-              "type": "boolean"
-            },
-            "check": {
-              "type": "string",
-              "const": "stale"
-            }
-          },
-          "required": [
-            "check",
-            "expect"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "lens": {
-              "type": "string"
-            },
-            "tier": {
-              "$ref": "#/$defs/DriftTierName"
-            },
-            "check": {
-              "type": "string",
-              "const": "drift_tier"
-            }
-          },
-          "required": [
-            "check",
-            "lens",
-            "tier"
-          ]
+        "title": {
+          "type": "string"
         }
+      },
+      "required": [
+        "title",
+        "statement"
       ]
     },
-    "CmpOp": {
-      "type": "string",
-      "enum": [
-        ">=",
-        ">",
-        "=="
-      ]
-    },
-    "DriftTierName": {
-      "description": "The drift tier names as they appear in scenario YAML (`check: drift_tier, tier: readout`).",
-      "type": "string",
-      "enum": [
-        "fresh",
-        "readout",
-        "structural"
+    "WorldDef": {
+      "type": "object",
+      "properties": {
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityDef"
+          }
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileDef"
+          }
+        }
+      },
+      "required": [
+        "profiles",
+        "entities"
       ]
     }
   }
