@@ -42,7 +42,8 @@ pub async fn ingest_delta(
     let row = sqlx::query!(
         r#"
         SELECT new_resources AS "new_resources!: i64",
-               new_events    AS "new_events!: i64"
+               new_events    AS "new_events!: i64",
+               max_event_id  AS "max_event_id: Uuid"
           FROM steward_ingest_delta($1, $2)
         "#,
         *cogmap_id,
@@ -57,6 +58,7 @@ pub async fn ingest_delta(
         watermark,
         new_resources: row.new_resources,
         new_events: row.new_events,
+        max_event_id: row.max_event_id,
         threshold,
         exceeds_threshold: row.new_resources >= threshold,
     })
@@ -246,8 +248,10 @@ mod tests {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
         }
         add_event(&pool, s.entity, "relationship_asserted", s.ctx).await;
-        add_event(&pool, s.entity, "block_mutated", s.ctx).await;
-        // Noise in a context the team does not own — must be excluded from the delta.
+        // The last event IN the team context — the delta's max_event_id, uuidv7-newest of the window.
+        let last_team_event = add_event(&pool, s.entity, "block_mutated", s.ctx).await;
+        // Noise in a context the team does not own — must be excluded from the delta AND from its
+        // max_event_id, even though it is the newest event overall (inserted last → largest uuidv7).
         add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
 
         let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
@@ -259,9 +263,172 @@ mod tests {
             d.new_events, 5,
             "all 5 team-context events, excluding the other context"
         );
+        assert_eq!(
+            d.max_event_id,
+            Some(last_team_event),
+            "max_event_id is the newest IN-WINDOW event, not the newer out-of-scope noise event"
+        );
         assert_eq!(d.threshold, DEFAULT_STEWARD_INGEST_THRESHOLD);
         assert!(!d.exceeds_threshold, "3 < default threshold 5");
         assert_eq!(d.watermark, None, "no watermark set yet");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn delta_max_event_id_is_none_when_window_empty(pool: PgPool) {
+        let s = seed(&pool).await;
+        // No events at all → an empty window → nothing to advance to.
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(d.new_events, 0);
+        assert_eq!(
+            d.max_event_id, None,
+            "empty window has no max_event_id — the tick skips the advance"
+        );
+    }
+
+    /// The change-detection scope is the UNION of the joined teams' reachable contexts — not the
+    /// intersection. A context reachable by ANY joined team counts, because this scope only drives the
+    /// "did anything change?" trigger + watermark; cross-team leak-safety is enforced downstream at the
+    /// resource grain (the cogmap-principal distillation), so over-approximating here is safe and a
+    /// narrower intersection would under-trigger. The boundary is still real: a context NO joined team
+    /// can reach is excluded.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn change_detection_scope_unions_joined_teams_reachable_contexts(pool: PgPool) {
+        let s = seed(&pool).await;
+        // Join a SECOND team to the cogmap. s.ctx is owned by the seed team only — team_b cannot reach
+        // it — yet under the union it still counts (this is change detection, not a visibility gate).
+        let team_b: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('team-b', 'Team B') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+            .bind(s.cogmap)
+            .bind(team_b)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        for _ in 0..3 {
+            add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        }
+        // Noise in a context NO joined team can reach (outsider-owned) — the union's outer boundary.
+        add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
+
+        let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            d.new_resources, 3,
+            "s.ctx is reachable by one joined team → in the union (change detection over-approximates; \
+             leak-safety is downstream, not here)"
+        );
+        assert_eq!(
+            d.new_events, 3,
+            "s.other_ctx is reachable by no joined team → excluded even from the union"
+        );
+        assert!(
+            d.max_event_id.is_some(),
+            "the newest in-scope event is advanceable"
+        );
+    }
+
+    /// The change-detection scope expands a joined team's reach UP the team DAG (shares inherit down):
+    /// a context shared to a joined team's ANCESTOR is reachable by that team, so it counts. A context
+    /// shared only to an unrelated team — one the cogmap is not joined to and that is not an ancestor
+    /// of a joined team — does not.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn change_detection_scope_expands_shares_up_the_team_dag(pool: PgPool) {
+        async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
+            sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+                .bind(slug)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+        async fn share_ctx(pool: &PgPool, owner: Uuid, slug: &str, team: Uuid) -> Uuid {
+            let ctx: Uuid = sqlx::query_scalar(
+                "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+            )
+            .bind(owner)
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+                .bind(ctx)
+                .bind(team)
+                .execute(pool)
+                .await
+                .unwrap();
+            ctx
+        }
+
+        // Parent P with child T (joined to the cogmap); an unrelated team U (not joined, not ancestor).
+        let p = mk_team(&pool, "p").await;
+        let t = mk_team(&pool, "t").await;
+        let u = mk_team(&pool, "u").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(t)
+            .bind(p)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let member = insert_profile(&pool, "member").await;
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(t)
+        .bind(member)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let entity: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'e') RETURNING id",
+        )
+        .bind(member)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let telos: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('telos', '') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let cogmap: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('map', $1) RETURNING id",
+        )
+        .bind(telos)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+            .bind(cogmap)
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let owner = insert_profile(&pool, "ctx_owner").await;
+        // Shared to T's ANCESTOR P — T reaches it via up-traversal → in scope.
+        let ctx_ancestor = share_ctx(&pool, owner, "cp", p).await;
+        // Shared to an unrelated team the cogmap is not joined to → out of scope.
+        let ctx_unrelated = share_ctx(&pool, owner, "cu", u).await;
+        add_event(&pool, entity, "resource_created", ctx_ancestor).await;
+        add_event(&pool, entity, "resource_created", ctx_unrelated).await;
+
+        let d = ingest_delta(&pool, member.into(), cogmap.into(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            d.new_resources, 1,
+            "the ancestor-shared context is reachable by the joined team via up-traversal; the \
+             unrelated team's context is not reachable by any joined team"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -289,7 +456,7 @@ mod tests {
         add_event(&pool, s.entity, "resource_created", s.ctx).await;
         let e2 = add_event(&pool, s.entity, "resource_created", s.ctx).await;
         add_event(&pool, s.entity, "resource_created", s.ctx).await;
-        add_event(&pool, s.entity, "relationship_asserted", s.ctx).await;
+        let e4 = add_event(&pool, s.entity, "relationship_asserted", s.ctx).await;
 
         // A team member is not a cogmap author by default (D3b) — grant write, then advance to e2.
         grant_cogmap_write(&pool, s.cogmap, s.member).await;
@@ -313,6 +480,49 @@ mod tests {
             d.new_events, 2,
             "the trailing resource_created + relationship"
         );
+        assert_eq!(
+            d.max_event_id,
+            Some(e4),
+            "max_event_id is the newest event after the watermark, ready for the next advance"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn advance_rejects_event_outside_ingest_window(pool: PgPool) {
+        let s = seed(&pool).await;
+        // An event the cogmap ingests (team context) and one it does not (a context the team
+        // neither owns nor was shared) — same emitter, so the only difference is the anchor.
+        let in_window = add_event(&pool, s.entity, "resource_created", s.ctx).await;
+        let out_of_window = add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
+
+        grant_cogmap_write(&pool, s.cogmap, s.member).await;
+        let backend = DbBackend::new(pool.clone(), s.member.into());
+
+        // Advancing to an event outside the cogmap's ingest window is rejected — the watermark can
+        // never move past content the steward did not (and could not) process.
+        let err = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: out_of_window,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, TemperError::NotFound(_)),
+            "out-of-window event → 404, no advance"
+        );
+
+        // The in-window event (what a real delta's max_event_id always is) advances cleanly.
+        let ack = backend
+            .advance_steward_watermark(AdvanceStewardWatermark {
+                cogmap: s.cogmap.into(),
+                event_id: in_window,
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ack.value, in_window);
     }
 
     #[sqlx::test(migrations = "../../migrations")]

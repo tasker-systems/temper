@@ -1,16 +1,17 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS(SELECT 1 FROM kb_events WHERE id = $1) AS \"exists!\"",
+  "query": "SELECT steward_event_in_ingest_window($1, $2) AS \"in_window!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "exists!",
+        "name": "in_window!",
         "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -18,5 +19,5 @@
       null
     ]
   },
-  "hash": "f343990fe091c6eb0a7ed0345ff918cdec79014f4dad78a55ad277cdba7d85fb"
+  "hash": "1b548387e6291aa45f1ae064d8ab02bf39309691f224b580ab2d4ca8bc903e86"
 }

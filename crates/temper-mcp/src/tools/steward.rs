@@ -27,10 +27,10 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
     match e {
         // Preserve the NotFound payload — the message already names *which* thing was not found
-        // ("cognitive map {id} not found" vs "event {id} not found"). Collapsing both to a fixed
-        // "cognitive map not found" masked a real event-not-found failure as a cogmap failure
-        // (advance_steward_watermark has two distinct NotFound exits: the cogmap gate and the
-        // kb_events existence check).
+        // ("cognitive map {id} not found" vs "event {id} is not in cognitive map {id}'s ingest
+        // window"). Collapsing both to a fixed "cognitive map not found" masked a real event failure
+        // as a cogmap failure (advance_steward_watermark has two distinct NotFound exits: the cogmap
+        // gate and the ingest-window check on the target event).
         TemperError::NotFound(msg) => {
             rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
         }

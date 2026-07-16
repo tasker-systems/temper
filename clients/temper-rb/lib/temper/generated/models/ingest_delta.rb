@@ -22,6 +22,9 @@ module Temper::Generated
     # Whether `new_resources >= threshold` — i.e. the steward should run.
     attr_accessor :exceeds_threshold
 
+    # The latest `kb_events.id` in the delta window — the value a completed tick passes straight to `steward_advance_watermark` to mark this delta ingested. `None` when the delta is empty (no events since the watermark), in which case there is nothing to advance to and the tick skips the advance. Because `kb_events.id` is uuidv7 (its byte order is time order), the greatest id in the window is the newest event.
+    attr_accessor :max_event_id
+
     # All `kb_events` anchored to the team's contexts since the watermark (total activity).
     attr_accessor :new_events
 
@@ -39,6 +42,7 @@ module Temper::Generated
       {
         :'cogmap_id' => :'cogmap_id',
         :'exceeds_threshold' => :'exceeds_threshold',
+        :'max_event_id' => :'max_event_id',
         :'new_events' => :'new_events',
         :'new_resources' => :'new_resources',
         :'threshold' => :'threshold',
@@ -61,6 +65,7 @@ module Temper::Generated
       {
         :'cogmap_id' => :'String',
         :'exceeds_threshold' => :'Boolean',
+        :'max_event_id' => :'String',
         :'new_events' => :'Integer',
         :'new_resources' => :'Integer',
         :'threshold' => :'Integer',
@@ -71,6 +76,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'max_event_id',
         :'watermark'
       ])
     end
@@ -101,6 +107,10 @@ module Temper::Generated
         self.exceeds_threshold = attributes[:'exceeds_threshold']
       else
         self.exceeds_threshold = nil
+      end
+
+      if attributes.key?(:'max_event_id')
+        self.max_event_id = attributes[:'max_event_id']
       end
 
       if attributes.key?(:'new_events')
@@ -223,6 +233,7 @@ module Temper::Generated
       self.class == o.class &&
           cogmap_id == o.cogmap_id &&
           exceeds_threshold == o.exceeds_threshold &&
+          max_event_id == o.max_event_id &&
           new_events == o.new_events &&
           new_resources == o.new_resources &&
           threshold == o.threshold &&
@@ -238,7 +249,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, exceeds_threshold, new_events, new_resources, threshold, watermark].hash
+      [cogmap_id, exceeds_threshold, max_event_id, new_events, new_resources, threshold, watermark].hash
     end
 
     # Builds the object from hash

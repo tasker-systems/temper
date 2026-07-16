@@ -7726,6 +7726,14 @@
             "type": "boolean",
             "description": "Whether `new_resources >= threshold` — i.e. the steward should run."
           },
+          "max_event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The latest `kb_events.id` in the delta window — the value a completed tick passes straight to\n`steward_advance_watermark` to mark this delta ingested. `None` when the delta is empty (no\nevents since the watermark), in which case there is nothing to advance to and the tick skips\nthe advance. Because `kb_events.id` is uuidv7 (its byte order is time order), the greatest\nid in the window is the newest event."
+          },
           "new_events": {
             "type": "integer",
             "format": "int64",

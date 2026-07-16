@@ -282,8 +282,14 @@ this run. Close with an outcome summarizing nodes / edges / facets / folds.
   call it between `create_resource` batches or before your edges and facets land.
 - **Id hygiene — a `kb_events.id`, not a `resource_id`.** Advance to the `max_event_id`
   from *this* tick's `steward_ingest_delta` — a real row in `kb_events` the session
-  observed. A node or edge id you just created is **not** an event row; passing one 404s as
-  "event … not found". The watermark is an *event* cursor, not a resource cursor.
+  observed. The advance is **server-verified**: the target must be an event this cogmap
+  actually ingests (anchored to one of its team contexts), which `max_event_id` always is.
+  A node or edge id you just created is **not** such an event; passing one 404s as
+  "event … is not in cognitive map …'s ingest window". The watermark is an *event* cursor
+  scoped to the map's own ingest, not a resource cursor.
+- **Empty window — nothing to advance.** When the delta is empty, `max_event_id` is
+  `null` (absent). There is nothing to mark ingested, so **skip the advance** and just
+  close — do not fabricate an id.
 
 Concretely: hold `delta.max_event_id` from the top of the tick, do every act, then pass
 that same `max_event_id` to `steward_advance_watermark` right before you close.
