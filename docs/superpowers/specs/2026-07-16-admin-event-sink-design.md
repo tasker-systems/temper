@@ -364,16 +364,27 @@ Sub-attacks that **fail**, and are therefore not obstacles:
   its companion warning applies with force: **a mutation-fn signature change is a write outage
   across deploy skew, and `main` auto-deploys.** Get the signatures right the first time.
 
-### Prerequisite — P0, lands first
+### Prerequisite — EXTRACTED, and it is not an admin-event problem
 
 `resolve_emitter` is `fetch_one` with no lazy creation (`crates/temper-substrate/src/writes.rs:50`);
-its own doc says a new marker *"needs its entity provisioned and backfilled (a migration) before any
-caller can send it."* **3 of 6 prod profiles have no emitter entity.** The first live admin act by one
-of them 500s.
+its own doc says a marker *"needs its entity provisioned and backfilled (a migration) before any
+caller can send it."*
 
-A migration provisioning emitters for every profile — on `cli` as well as `web`, since the admin
-surface is `temper admin …` — **lands before the first fire arm.** This is task 1, not a risk-register
-line.
+Probing prod for this spec surfaced that **two approved, active human profiles (`gm-anirudh`,
+`lohjishan`) have zero emitter entities and no `default` context** — `provision_profile_entities`
+(`crates/temper-services/src/services/profile_service.rs:451`) creates both and never ran for them.
+They predate the canonical schema and were almost certainly carried in by a legacy import.
+
+**This is a bug on the ordinary write path, not on the admin path.** Their first resource create
+500s, with no admin events involved. It is latent only because neither has ever written (0 resources
+each). It is therefore **extracted to its own task — `019f6b06-c48f-7a81-a238-cdd6b131f3dc`** — and
+ships independently of this arc rather than waiting behind it.
+
+Note for whoever writes that migration: `20260709000030_backfill_sdk_emitter_entities.sql` guards on
+`EXISTS (<handle>@web)`, which **structurally excludes exactly the profiles that need help** — they
+have no `@web` to key off. That guard shape must not be copied.
+
+**This spec assumes emitters exist.** `019f6b06` is a hard dependency of §9 step 4.
 
 ---
 
@@ -414,19 +425,23 @@ independent of the sink. Out of scope here.
 
 Additive-only on `main`; each step a forward migration.
 
-1. **Emitter backfill migration** (P0 — §7). Every profile has an emitter on `web` and `cli`.
-2. **`references` contract + the read surface.** `rel` vocabulary extension (`subject`, `principal`),
+**Dependency, not a step:** task `019f6b06-c48f-7a81-a238-cdd6b131f3dc` (legacy profiles have no
+emitter entities) ships independently and must be applied before step 4 fires its first event. It is
+not part of this arc — see §7.
+
+1. **`references` contract + the read surface.** `rel` vocabulary extension (`subject`, `principal`),
    the typed Rust shape, the two query axes, the authz gate (§5 — confirm first), DTO, and
-   API + CLI + MCP parity. Reads return only the epoch marker until step 5. **This ships something
+   API + CLI + MCP parity. Reads return only the epoch marker until step 4. **This ships something
    queryable before anything writes.**
-3. **The `element_trail` invariant + its test** (§5). Lands before any admin payload exists.
-4. **`admin_ledger_opened`** — the epoch marker at T.
-5. **The grant chokepoint** — `_admin_grant_created` / `_admin_grant_revoked`, `EventKind` variants,
+2. **The `element_trail` invariant + its test** (§5). Lands before any admin payload exists.
+3. **`admin_ledger_opened`** — the epoch marker at T.
+4. **The grant chokepoint** — `_admin_grant_created` / `_admin_grant_revoked`, `EventKind` variants,
    idempotent-re-apply projectors, `kb_access_grants` → `INPUT_TABLES`, actor threaded into
    `delete_grant`. This is the proving pair: it catches the generic path **and** `grant_reach`'s
-   bypass, and exercises replay ownership end-to-end.
-6. **The rest of the authority tier**, then the lifecycle tier (§6).
-7. **The doc amendments** (§10) land with step 5 — not before. The claim becomes true when the first
+   bypass, and exercises replay ownership end-to-end. **Depends on `019f6b06`.**
+5. **The rest of the authority tier**, then the lifecycle tier (§6). Its own plan, written once the
+   step-4 pattern exists — not this one.
+6. **The doc amendments** (§10) land with step 4 — not before. The claim becomes true when the first
    writer ships, not when the spec merges.
 
 The three actorless signatures (`delete_grant`, `promote_admin`, `update_system_settings`) are
@@ -441,7 +456,7 @@ either: it names the wrong **mechanism**.
 
 | file | line | issue |
 |---|---|---|
-| `docs/cognitive-maps/07-operating-temper.md` | 95 | *"settled"* — true only once writers ship (§9 step 7) |
+| `docs/cognitive-maps/07-operating-temper.md` | 95 | *"settled"* — true only once writers ship (§9 step 6) |
 | `07-operating-temper.md` | 96 | *"with an emitter and **a producing anchor**"* — **the anchor must be NULL** |
 | `07b-governance-and-administration.md` | frontmatter `description` | same claim |
 | `07b` | 17-18 | *"every one of those administrative acts is an event"* |
@@ -458,7 +473,7 @@ boundary the same paragraph guarantees. Anyone implementing from the docs would 
 The `07b` visualization placeholder — admin events flowing into *"a separate channel that does not
 feed the cognitive maps"* — survives as-is. NULL-anchoring implements it faithfully.
 
-**The two orphan `kb_event_types` rows stay.** `grant_created`/`grant_revoked` are step 5's types.
+**The two orphan `kb_event_types` rows stay.** `grant_created`/`grant_revoked` are step 4's types.
 They stop being orphans.
 
 ---
@@ -479,7 +494,7 @@ They stop being orphans.
 ## §12 — What this spec does not claim
 
 - It does not claim administration *is* event-sourced. It claims it will be, per §9, and that the
-  docs must not say otherwise until step 7.
+  docs must not say otherwise until step 6.
 - It does not claim the ledger reaches below the application. A `psql` command bypasses it, by
   design (§7).
 - It does not claim history is recoverable. **Eight of ~14 historical acts are gone**, and the
