@@ -36,8 +36,35 @@ dependencies = [
   "ts-check"
 ]
 
+[tasks.test-schema]
+description = "Run the payload JSON-Schema snapshot gate (no database, no ONNX). Regenerate: UPDATE_SCHEMA=1 cargo make test-schema"
+# PACKAGE-SCOPED ON PURPOSE — do NOT fold this into the `--workspace` run below.
+#
+# The emitted schema DEPENDS ON FEATURE UNIFICATION. Under `--workspace`, temper-core's `mcp` feature
+# (schemars derives) unifies in and the id newtypes emit INLINE; under `-p temper-substrate` they
+# emit as `$ref`s into `$defs`. Same structs, two different schemas, decided by the cargo invocation.
+#
+# `-p` is the authoritative shape because it is what the boot-seed stamps into
+# `kb_event_types.payload_schema` and what the regen command emits. Gating the workspace shape would
+# gate a schema nothing ever stamps.
+#
+# This ran NOWHERE before 2026-07-16 — no job, no task enabled `scenario-schema` — so it sat RED on
+# `main` while three payload fields (`segmented`, `telos_centroid`, `TelosConstants`) shipped with no
+# schema and prod's registry described an older payload than the code writes.
+command = "cargo"
+args = [
+  "nextest",
+  "run",
+  "-p",
+  "temper-substrate",
+  "--features",
+  "scenario-schema",
+  "--no-fail-fast"
+]
+
 [tasks.test]
-description = "Run tests (unit tests, no feature flags)"
+description = "Run tests (unit tests, no feature flags) + the payload-schema snapshot gate"
+dependencies = ["test-schema"]
 command = "cargo"
 args = ["nextest", "run", "--workspace", "--no-fail-fast"]
 

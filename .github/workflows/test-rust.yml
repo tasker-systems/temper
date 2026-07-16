@@ -99,6 +99,25 @@ jobs:
         # this is their home. They used to be two more hand-written invocations in the old embed job.
         run: cargo nextest run --workspace --features test-embed --locked --no-fail-fast
 
+      - name: Run payload JSON-Schema snapshot gate
+        # Its own step, PACKAGE-SCOPED, and that is not a filter — it is the only shape that means
+        # anything. The emitted schema depends on FEATURE UNIFICATION: under `--workspace`,
+        # temper-core's `mcp` feature (schemars derives) unifies in and the id newtypes emit INLINE;
+        # under `-p temper-substrate` they emit as `$ref`s into `$defs`. Same structs, two schemas.
+        # `-p` wins because it is what the boot-seed stamps into `kb_event_types.payload_schema` and
+        # what the regen command emits — gating the workspace shape would gate a schema nothing
+        # stamps. (This is why it cannot just ride the `--workspace` line above.)
+        #
+        # It lives in THIS job by intention: it needs no database and no ONNX, it only emits schemas
+        # from the payload structs and diffs them against the committed fixtures.
+        #
+        # It is here at all because it was NOWHERE. No job and no cargo-make task enabled
+        # `scenario-schema`, so the test was compiled out of every build and sat RED on `main` — the
+        # streaming_ingest_test rot, via a feature flag instead of an `-E` filter. Not cosmetic:
+        # `segmented`, `telos_centroid` and `TelosConstants` all shipped with no schema, and prod's
+        # registry has been describing an older payload than the code writes.
+        run: cargo nextest run -p temper-substrate --features scenario-schema --locked --no-fail-fast
+
   integration-tests:
     name: Integration & E2E Tests
     runs-on: ubuntu-latest
