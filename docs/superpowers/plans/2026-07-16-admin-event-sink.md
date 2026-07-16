@@ -211,6 +211,16 @@ The spec's central inversion: **the read path ships before any writer**, so the 
 - Modify: `crates/temper-services/src/services/mod.rs` (register the module)
 - Test: `crates/temper-services/tests/admin_ledger_test.rs`
 
+> **Verified plan/reality notes (2026-07-16):**
+> - `ApiError::NotFound` is a **unit variant** (`crates/temper-services/src/error.rs:9`), not
+>   `NotFound(String)`. Write `ApiError::NotFound` and `matches!(err, ApiError::NotFound)`.
+> - **`crates/temper-services/tests/common/` does not exist.** Every existing test in that
+>   directory defines its fixture **inline in its own file** (see `context_read_predicate_test.rs`,
+>   which declares `struct Org` at the top). Follow that convention — do **not** invent a shared
+>   `common` module.
+> - `steward_ingest_delta(p_cogmap uuid, p_watermark uuid)` takes a **cogmap**, not a team
+>   (`migrations/20260701000005_steward_ingest_watermark.sql:40`).
+
 **Interfaces:**
 - Consumes: `temper_substrate::payloads::{EventRef, RefRel, RefTarget, AnchorTable}` (Task 1).
 - Produces:
@@ -280,10 +290,12 @@ async fn the_admin_event_is_invisible_to_cognition(pool: PgPool) {
     seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
 
     // The firewall: a NULL-anchored event must not be counted by the steward's ingest delta.
+    // NOTE steward_ingest_delta(p_cogmap, p_watermark) takes a COGMAP, not a team
+    // (migrations/20260701000005_steward_ingest_watermark.sql:40).
     let new_events: i64 = sqlx::query_scalar(
         "SELECT new_events FROM steward_ingest_delta($1, NULL)",
     )
-    .bind(f.team_id)
+    .bind(f.cogmap_id)
     .fetch_one(&pool)
     .await
     .unwrap_or(0);
@@ -307,34 +319,46 @@ async fn a_non_admin_cannot_read_the_ledger(pool: PgPool) {
     .expect_err("an outsider must not read the admin ledger");
 
     assert!(
-        matches!(err, temper_services::ApiError::NotFound(_)),
+        matches!(err, temper_services::ApiError::NotFound),
         "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
     );
 }
 ```
 
-- [ ] **Step 2: Build the fixture**
+- [ ] **Step 2: Build the fixture — inline, in this file**
 
-Add to `crates/temper-services/tests/common/mod.rs` (create if absent, following `crates/temper-api/tests/common/` for the established shape):
+`crates/temper-services/tests/` has **no `common/` module**. Every test there declares its fixture
+inline (see `context_read_predicate_test.rs`, which opens with `struct Org`). Follow that.
+
+Replace the `mod common;` line with an inline fixture at the top of `admin_ledger_test.rs`:
 
 ```rust
-pub struct AdminFixture {
-    pub admin_profile: temper_core::types::ids::ProfileId,
-    pub admin_emitter: uuid::Uuid,
-    pub outsider_profile: temper_core::types::ids::ProfileId,
-    pub team_id: uuid::Uuid,
-    pub context_id: uuid::Uuid,
+struct AdminFixture {
+    admin_profile: temper_core::types::ids::ProfileId,
+    admin_emitter: Uuid,
+    outsider_profile: temper_core::types::ids::ProfileId,
+    team_id: Uuid,
+    cogmap_id: Uuid,
+    context_id: Uuid,
 }
 
-/// A system-admin with an emitter, an outsider, a team, and a context to grant on.
-pub async fn admin_fixture(pool: &sqlx::PgPool) -> AdminFixture {
-    // Build via the real service paths, never raw INSERTs, so the fixture cannot
-    // drift from production shape (fixtures that fill columns prod leaves empty lie).
-    todo!("construct via profile_service::provision_profile_entities + team_service::create_team")
+/// A system-admin with emitters, an outsider, a team, a cogmap, and a context to grant on.
+///
+/// **Build profiles through `profile_service`, never with raw INSERTs.**
+/// `provision_profile_entities` is what creates the `<handle>@<surface>` emitter that
+/// `resolve_emitter` (a `fetch_one`, no lazy creation) needs and that this ledger reads back.
+/// A fixture that hand-INSERTs a profile passes while production 500s — which is exactly the
+/// live bug recorded in task `019f6b06`.
+async fn admin_fixture(pool: &PgPool) -> AdminFixture {
+    // Read `context_read_predicate_test.rs` and `saml_provisioning_test.rs` first and reuse
+    // whatever profile/team construction they already do rather than inventing a third shape.
+    todo!("construct via profile_service (provisioning the emitters) + team_service::create_team")
 }
 ```
 
-**This `todo!()` is the one place this plan defers to the implementer** — the fixture must be built from whatever `common/` helpers already exist in `crates/temper-api/tests/common/`. Read those first and reuse. Do **not** hand-INSERT profiles: `provision_profile_entities` is what creates the emitter the ledger reads, and a fixture that skips it will pass while prod 500s.
+**This `todo!()` is the one place this plan defers to the implementer.** Read the two named test
+files first; match their construction. The one non-negotiable is that profiles come from
+`profile_service` so their emitters exist.
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -399,7 +423,9 @@ async fn gate(pool: &PgPool, caller: ProfileId) -> ApiResult<()> {
     if is_admin {
         return Ok(());
     }
-    Err(ApiError::NotFound("admin ledger".into()))
+    // Reads deny with 404, not 403 — the deny-split invariant. A 403 would confirm the ledger
+    // has something to hide about this subject.
+    Err(ApiError::NotFound)
 }
 
 pub async fn list_by_subject(
@@ -583,12 +609,13 @@ async fn an_admin_event_never_appears_in_an_element_trail(pool: PgPool) {
     seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
 
     // element_trail_node over every resource the admin can see must return no admin event.
+    // NOTE its RETURNS TABLE spells the type column `kind`, not `event_type`
+    // (migrations/20260706000002_element_trail_payload_actor.sql:27).
     let leaked: i64 = sqlx::query_scalar(
         r#"SELECT count(*)
              FROM kb_resources r
              CROSS JOIN LATERAL element_trail_node($1, r.id) AS tr
-             JOIN kb_event_types t ON t.name = tr.event_type
-            WHERE t.name = ANY($2)"#,
+            WHERE tr.kind = ANY($2)"#,
     )
     .bind(f.admin_profile.uuid())
     .bind(ADMIN_EVENT_TYPES_FOR_TEST)
@@ -842,6 +869,17 @@ The proving pair. It catches the generic grant path **and** `connection_service:
 - Modify: `crates/temper-services/src/services/access_service.rs:128,159`
 - Test: `crates/temper-services/tests/admin_ledger_test.rs`
 
+> **Verified plan/reality notes (2026-07-16):**
+> - `grant_capability(pool, caller, req: &GrantCapabilityRequest) -> ApiResult<GrantOutcome>` takes
+>   its request **by reference** (`access_service.rs:184`). Same for `revoke_capability` (`:213`).
+> - `GrantOutcome { granted: bool }` lives in `temper_core::types::cognitive_maps` (`:295-298`).
+>   `insert_grant`'s `ApiResult<bool>` contract must be preserved so this is unchanged.
+> - `grant_req`/`revoke_req` are **local helpers you write in the test file** — there is no
+>   `common` module in `crates/temper-services/tests/`.
+> - `_event_append`'s named params are confirmed: `p_references`, `p_correlation`
+>   (`migrations/20260624000002_canonical_functions.sql:765-774`). It `RAISE`s
+>   `'event_type % not seeded'` — so Task 4's migration must land before any fire.
+
 **Interfaces:**
 - Consumes: `EventRef`/`RefTarget` (Task 1), the event types (Task 4).
 - Produces: `EventKind::{AdminLedgerOpened, GrantCreated, GrantRevoked}`; SQL fns `_admin_grant_created`, `_admin_grant_revoked`; `insert_grant(conn, p: &InsertGrantParams, emitter: EntityId, ctx: EventContext) -> ApiResult<bool>`; `delete_grant(conn, subject_table, subject_id, principal_table, principal_id, revoker: ProfileId, emitter: EntityId, ctx: EventContext) -> ApiResult<bool>`.
@@ -858,7 +896,7 @@ async fn granting_writes_an_event_and_the_row(pool: PgPool) {
     let outcome = temper_services::services::access_service::grant_capability(
         &pool,
         f.admin_profile,
-        common::grant_req(f.context_id, f.team_id),
+        &grant_req(f.context_id, f.team_id),
     )
     .await
     .expect("grant_capability");
@@ -880,9 +918,9 @@ async fn granting_writes_an_event_and_the_row(pool: PgPool) {
 async fn revoking_writes_an_event_even_though_the_row_is_deleted(pool: PgPool) {
     let f = common::admin_fixture(&pool).await;
     temper_services::services::access_service::grant_capability(
-        &pool, f.admin_profile, common::grant_req(f.context_id, f.team_id)).await.unwrap();
+        &pool, f.admin_profile, &grant_req(f.context_id, f.team_id)).await.unwrap();
     temper_services::services::access_service::revoke_capability(
-        &pool, f.admin_profile, common::revoke_req(f.context_id, f.team_id)).await.unwrap();
+        &pool, f.admin_profile, &revoke_req(f.context_id, f.team_id)).await.unwrap();
 
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_access_grants WHERE subject_id=$1")
         .bind(f.context_id).fetch_one(&pool).await.unwrap();
