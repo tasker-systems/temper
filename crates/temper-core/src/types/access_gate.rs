@@ -142,6 +142,14 @@ pub struct Entitlements {
     pub join_request_status: Option<JoinRequestStatus>,
 }
 
+/// The command a rejected caller runs to request system access.
+///
+/// Lives here, beside the `SystemAccessDetails` it rides in, rather than as a
+/// literal at the surface that builds the payload: temper-api cannot see the
+/// clap tree, so a string authored there is gated by nothing. Here, temper-cli
+/// depends on temper-core and pins it against the real parser.
+pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \"...\"";
+
 /// Details included in the SystemAccessRequired error response.
 ///
 /// SECURITY NOTE: The `email` and `display_name` fields are safe to include

@@ -791,13 +791,19 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
                 None,
             )
         }
+        // The advertised remedy is the shared constant, not a literal: this surface
+        // and temper-api's 403 must name the same command, and it must be one that
+        // parses. Both drifted onto `temper team join` — which accepts a team
+        // invitation and has no `--message`, so it does not request access at all.
         AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            "Access to this temper instance requires approval. \
-             Visit https://temperkb.io/request-access or run \
-             `temper team join` in the CLI to request access. \
-             This error is terminal and should not be retried."
-                .to_string(),
+            format!(
+                "Access to this temper instance requires approval. \
+                 Visit https://temperkb.io/request-access or run \
+                 `{}` in the CLI to request access. \
+                 This error is terminal and should not be retried.",
+                temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
+            ),
             None,
         ),
         // An `Unauthorized` here is a terminal authentication denial, not a transient

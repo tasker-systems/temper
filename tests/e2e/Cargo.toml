@@ -21,6 +21,7 @@ test-embed = ["temper-cli/test-embed"]
 axum = "0.8"
 base64 = "0.22"
 chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
 filetime = "0.2"
 hex = "0.4"
 jsonwebtoken = "9"
@@ -30,6 +31,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
+# Splits the 403's advertised command the way a user's shell would, so
+# access_gate_test can hand clap the exact argv the user would have typed.
+shlex = "1"
 sqlx = { version = "0.8", features = [
   "migrate",
   "postgres",

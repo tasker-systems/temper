@@ -167,10 +167,31 @@ async fn enriched_403_contains_access_details(pool: sqlx::PgPool) {
         details["request_url"].as_str().is_some(),
         "request_url should be present"
     );
-    assert!(
-        details["cli_command"].as_str().is_some(),
-        "cli_command should be present"
-    );
+    let cli_command = details["cli_command"]
+        .as_str()
+        .expect("cli_command should be present");
+    assert_advertised_command_is_runnable(cli_command);
+}
+
+/// Asserts the remedy the server just put on the wire is a command the CLI can
+/// actually run.
+///
+/// `is_some()` was the whole assertion here once, and under it the 403 shipped
+/// advertising `temper team join --message "..."` — a real command that takes a
+/// positional invitation token and has no `--message`, so a user following the
+/// error accepted an invite instead of requesting access. Presence was never the
+/// property worth checking; runnability is. This is the end-to-end half of the
+/// pin (temper-cli's `access_gate` unit test covers the constant itself), and it
+/// is the only place the *wire value* is checked against the *real parser*.
+fn assert_advertised_command_is_runnable(advertised: &str) {
+    use clap::Parser;
+
+    let argv = shlex::split(advertised)
+        .unwrap_or_else(|| panic!("403 advertises `{advertised}`, which is not shell-splittable"));
+
+    if let Err(err) = temper_cli::cli::Cli::try_parse_from(&argv) {
+        panic!("403 advertises `{advertised}`, but the CLI cannot parse it: {err}");
+    }
 }
 
 // ---------------------------------------------------------------------------

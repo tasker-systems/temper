@@ -50,6 +50,9 @@ uuid = { version = "1", features = ["serde", "v7"] }
 validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
+# Splits an advertised command string the way a user's shell would, so the
+# access-gate test can hand clap the exact argv the user would have typed.
+shlex = "1"
 temp-env = "0.3"
 
 [features]
