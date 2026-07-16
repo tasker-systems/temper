@@ -1,0 +1,101 @@
+# Slack app manifest for the @temper mention agent.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THIS IS A TWO-PHASE MANIFEST. Paste it as-is FIRST. The event/interactivity
+# block at the bottom is commented out on purpose — do not uncomment it yet.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Why, precisely (verified in eve@0.18.1, not inferred):
+#
+#   eve verifies the request signature FIRST and fails CLOSED. `verifyInbound` is
+#   the first statement of the `/eve/v1/slack` route; with no SLACK_SIGNING_SECRET
+#   it throws, and the route answers `401 unauthorized`. The `url_verification`
+#   branch lives inside `handleEventPost`, which is reached ONLY after verification
+#   passes.
+#
+#   So a deployment that does not yet have the signing secret CANNOT answer Slack's
+#   handshake. And the signing secret only exists once the app exists. Declaring a
+#   request_url up front is therefore a deadlock: Slack refuses to save a URL it
+#   cannot verify, and the URL cannot verify until it holds a secret that does not
+#   exist yet.
+#
+#   The way out is to create the app with NO event subscriptions (nothing for Slack
+#   to verify), collect the secret, deploy with it, and only THEN declare the URL —
+#   at which point the handshake succeeds on the first try.
+#
+# Full setup: see README.md. The short version:
+#
+#   1. Create the Vercel project (git-connected, Root Directory
+#      `packages/agent-workflows/mention`) so a host exists.
+#   2. Paste THIS FILE, as-is, at https://api.slack.com/apps → Create New App →
+#      From a manifest.
+#   3. Install to the workspace → Bot User OAuth Token. Basic Information →
+#      Signing Secret.
+#   4. Set SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET on the Vercel project; redeploy.
+#   5. ONLY NOW: uncomment the block at the bottom, replace <YOUR-DEPLOYMENT-HOST>,
+#      and re-paste under the app's "App Manifest" editor. Slack verifies, and the
+#      secret is there to answer it.
+#
+# `_metadata` (major_version/minor_version) is deliberately omitted: it is an
+# OPTIONAL field, and pinning a schema version we have not verified is a guess that
+# buys nothing. Slack applies its current default. Field names verified against
+# https://docs.slack.dev/reference/app-manifest.
+#
+# NOTE: one app serves ONE workspace. That is a hard ceiling in eve +
+# @vercel/connect, not a setup choice — see CLAUDE.md before planning a
+# multi-workspace/community rollout.
+
+display_information:
+  name: temper
+  description: Ask temper about your team's knowledge base, from Slack.
+  background_color: "#2c2d30"
+
+features:
+  bot_user:
+    display_name: temper
+    always_online: false
+
+oauth_config:
+  scopes:
+    bot:
+      # Deliver `app_mention` events.
+      - app_mentions:read
+      # Post replies, typing indicators, and ephemeral messages.
+      - chat:write
+      # Read DM history (required by the `message.im` subscription in phase 2).
+      - im:history
+      # Open a DM to a user — needed by the `authorization.required` default
+      # handler's `postDirectMessage` delivery path (see CLAUDE.md).
+      - im:write
+      # Thread history for `threadContext` (conversations.replies) in public
+      # channels. Add `groups:history` for private channels and `mpim:history`
+      # for group DMs if the agent is invited to those.
+      - channels:history
+
+settings:
+  # eve is HTTP-only — Socket Mode is not supported. Leave this false.
+  socket_mode_enabled: false
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2 — uncomment ONLY after SLACK_SIGNING_SECRET is set and deployed.
+#
+# Replace <YOUR-DEPLOYMENT-HOST> with the mention agent's Vercel host (NOT
+# temperkb.io, and NOT temper-cloud — this agent is its own Vercel project, the
+# way `steward-agent` is). Keep the `/eve/v1/slack` path: it is eve's default
+# route and it serves BOTH events and interactivity.
+#
+# Paste the whole file, with this block uncommented, into the app's
+# "App Manifest" editor. Slack will POST a url_verification challenge; eve
+# verifies the signature and answers it with the raw challenge string.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#   event_subscriptions:
+#     request_url: https://<YOUR-DEPLOYMENT-HOST>/eve/v1/slack
+#     bot_events:
+#       - app_mention
+#       - message.im
+#   interactivity:
+#     is_enabled: true
+#     request_url: https://<YOUR-DEPLOYMENT-HOST>/eve/v1/slack

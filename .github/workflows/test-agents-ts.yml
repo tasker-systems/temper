@@ -68,3 +68,34 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  mention:
+    name: mention agent (typecheck, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: packages/agent-workflows/mention
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Unlike the steward, this agent has no temper-ts `file:` dependency — nothing to build
+      # first, so the install is a plain one. Still run from INSIDE this directory: it is
+      # deliberately not a root workspace member, and a root install fails on the root's bun
+      # overrides.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
