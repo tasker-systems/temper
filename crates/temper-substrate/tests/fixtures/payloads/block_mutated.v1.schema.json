@@ -14,10 +14,10 @@
     },
     "incorporated": {
       "type": "array",
+      "default": [],
       "items": {
         "$ref": "#/$defs/Incorporation"
-      },
-      "default": []
+      }
     }
   },
   "required": [
@@ -27,6 +27,11 @@
   "$defs": {
     "BlockId": {
       "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ChunkId": {
+      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
       "type": "string",
       "format": "uuid"
     },
@@ -51,20 +56,15 @@
         "content_hash"
       ]
     },
-    "ChunkId": {
-      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
-      "type": "string",
-      "format": "uuid"
-    },
     "Incorporation": {
       "type": "object",
       "properties": {
-        "source": {
-          "$ref": "#/$defs/ProvenanceSource"
-        },
         "seq": {
           "type": "integer",
           "format": "int32"
+        },
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
         }
       },
       "required": [

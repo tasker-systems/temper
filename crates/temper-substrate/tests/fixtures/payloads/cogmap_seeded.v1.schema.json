@@ -23,44 +23,8 @@
     "telos"
   ],
   "$defs": {
-    "CogmapId": {
-      "description": "A `kb_cogmaps.id` value — a cognitive map.",
-      "type": "string",
-      "format": "uuid"
-    },
-    "ProfileId": {
-      "description": "A `kb_profiles.id` value.",
-      "type": "string",
-      "format": "uuid"
-    },
-    "TelosManifest": {
-      "type": "object",
-      "properties": {
-        "resource_id": {
-          "$ref": "#/$defs/ResourceId"
-        },
-        "title": {
-          "type": "string"
-        },
-        "origin_uri": {
-          "type": "string"
-        },
-        "blocks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BlockManifest"
-          }
-        }
-      },
-      "required": [
-        "resource_id",
-        "title",
-        "origin_uri",
-        "blocks"
-      ]
-    },
-    "ResourceId": {
-      "description": "A `kb_resources.id` value.",
+    "BlockId": {
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     },
@@ -70,16 +34,6 @@
       "properties": {
         "block_id": {
           "$ref": "#/$defs/BlockId"
-        },
-        "seq": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "role": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "chunks": {
           "type": "array",
@@ -93,6 +47,16 @@
           "items": {
             "$ref": "#/$defs/Incorporation"
           }
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
         }
       },
       "required": [
@@ -101,8 +65,8 @@
         "chunks"
       ]
     },
-    "BlockId": {
-      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
+    "ChunkId": {
+      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
       "type": "string",
       "format": "uuid"
     },
@@ -127,26 +91,31 @@
         "content_hash"
       ]
     },
-    "ChunkId": {
-      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
+    "CogmapId": {
+      "description": "A `kb_cogmaps.id` value — a cognitive map.",
       "type": "string",
       "format": "uuid"
     },
     "Incorporation": {
       "type": "object",
       "properties": {
-        "source": {
-          "$ref": "#/$defs/ProvenanceSource"
-        },
         "seq": {
           "type": "integer",
           "format": "int32"
+        },
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
         }
       },
       "required": [
         "source",
         "seq"
       ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
     },
     "ProvenanceSource": {
       "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).",
@@ -202,6 +171,37 @@
             "value"
           ]
         }
+      ]
+    },
+    "ResourceId": {
+      "description": "A `kb_resources.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "TelosManifest": {
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BlockManifest"
+          }
+        },
+        "origin_uri": {
+          "type": "string"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "title",
+        "origin_uri",
+        "blocks"
       ]
     }
   }

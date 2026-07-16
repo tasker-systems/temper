@@ -3,20 +3,23 @@
   "title": "ResourceCreated",
   "type": "object",
   "properties": {
-    "resource_id": {
-      "$ref": "#/$defs/ResourceId"
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BlockManifest"
+      }
     },
-    "title": {
-      "type": "string"
-    },
-    "origin_uri": {
-      "type": "string"
+    "doc_type": {
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "home": {
       "$ref": "#/$defs/AnchorRef"
     },
-    "owner_profile_id": {
-      "$ref": "#/$defs/ProfileId"
+    "origin_uri": {
+      "type": "string"
     },
     "originator_profile_id": {
       "description": "The home's originator (§2: \"carrying its current originator/owner\"). Absent ⇒ the projector\nCOALESCEs it to `owner_profile_id` (the scenario path, where originator≡owner). Synthesis sets\nit explicitly so a production row whose originator differs from its owner survives the carry.",
@@ -29,17 +32,18 @@
         }
       ]
     },
-    "doc_type": {
-      "type": [
-        "string",
-        "null"
-      ]
+    "owner_profile_id": {
+      "$ref": "#/$defs/ProfileId"
     },
-    "blocks": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/BlockManifest"
-      }
+    "resource_id": {
+      "$ref": "#/$defs/ResourceId"
+    },
+    "segmented": {
+      "description": "This create OPENS a segmented ingest — block 0 has landed but the rest of the body has not, so\n`_project_resource_created` births the resource `ingest_state = 'in_progress'` and only\n`resource_finalize` may flip it to `complete`. `false` (the default) for every ordinary create,\nwhich is atomic and is therefore born complete.\n\nA plain flag, never content — it is safe in the ledger (the CAS rule bars only chunk prose and\nvectors). `skip_serializing_if` keeps an ordinary create's payload BYTE-IDENTICAL to today's, so\nthe create-dedup precheck is untouched; and its absence is what makes an old app's payload read\nas `complete` on a new projector (`coalesce(…, false)`). Additive in both skew directions.",
+      "type": "boolean"
+    },
+    "title": {
+      "type": "string"
     }
   },
   "required": [
@@ -51,20 +55,15 @@
     "blocks"
   ],
   "$defs": {
-    "ResourceId": {
-      "description": "A `kb_resources.id` value.",
-      "type": "string",
-      "format": "uuid"
-    },
     "AnchorRef": {
       "type": "object",
       "properties": {
-        "table": {
-          "$ref": "#/$defs/AnchorTable"
-        },
         "id": {
           "type": "string",
           "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
         }
       },
       "required": [
@@ -85,8 +84,8 @@
         "kb_profiles"
       ]
     },
-    "ProfileId": {
-      "description": "A `kb_profiles.id` value.",
+    "BlockId": {
+      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
       "type": "string",
       "format": "uuid"
     },
@@ -96,16 +95,6 @@
       "properties": {
         "block_id": {
           "$ref": "#/$defs/BlockId"
-        },
-        "seq": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "role": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "chunks": {
           "type": "array",
@@ -119,6 +108,16 @@
           "items": {
             "$ref": "#/$defs/Incorporation"
           }
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
         }
       },
       "required": [
@@ -127,8 +126,8 @@
         "chunks"
       ]
     },
-    "BlockId": {
-      "description": "A `kb_content_blocks.id` value — a resource's addressable interior unit.",
+    "ChunkId": {
+      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
       "type": "string",
       "format": "uuid"
     },
@@ -153,26 +152,26 @@
         "content_hash"
       ]
     },
-    "ChunkId": {
-      "description": "A `kb_chunks.id` value — one embedding window of a block's prose.",
-      "type": "string",
-      "format": "uuid"
-    },
     "Incorporation": {
       "type": "object",
       "properties": {
-        "source": {
-          "$ref": "#/$defs/ProvenanceSource"
-        },
         "seq": {
           "type": "integer",
           "format": "int32"
+        },
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
         }
       },
       "required": [
         "source",
         "seq"
       ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
     },
     "ProvenanceSource": {
       "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).",
@@ -229,6 +228,11 @@
           ]
         }
       ]
+    },
+    "ResourceId": {
+      "description": "A `kb_resources.id` value.",
+      "type": "string",
+      "format": "uuid"
     }
   }
 }

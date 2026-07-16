@@ -3,9 +3,6 @@
   "title": "LensCreated",
   "type": "object",
   "properties": {
-    "lens_id": {
-      "$ref": "#/$defs/LensId"
-    },
     "cogmap_id": {
       "anyOf": [
         {
@@ -16,32 +13,47 @@
         }
       ]
     },
+    "cos_floor": {
+      "type": "number",
+      "format": "double",
+      "default": 0.55
+    },
+    "knn_k": {
+      "type": "integer",
+      "format": "uint32",
+      "default": 12,
+      "minimum": 0
+    },
+    "lens_id": {
+      "$ref": "#/$defs/LensId"
+    },
     "name": {
       "type": "string"
-    },
-    "selection_kind": {
-      "type": "string"
-    },
-    "weights": {
-      "$ref": "#/$defs/LensWeights"
-    },
-    "salience": {
-      "$ref": "#/$defs/SalienceWeights"
     },
     "resolution": {
       "type": "number",
       "format": "double"
     },
-    "knn_k": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0,
-      "default": 12
+    "salience": {
+      "$ref": "#/$defs/SalienceWeights"
     },
-    "cos_floor": {
-      "type": "number",
-      "format": "double",
-      "default": 0.55
+    "selection_kind": {
+      "type": "string"
+    },
+    "telos": {
+      "$ref": "#/$defs/TelosConstants",
+      "default": {
+        "damper_completed": 0.4,
+        "damper_paused": 0.3,
+        "drift_epsilon": 1e-6,
+        "halflife_days": 30.0,
+        "sw_backlog": 0.35,
+        "sw_done": 0.0,
+        "sw_in_progress": 1.0
+      }
+    },
+    "weights": {
+      "$ref": "#/$defs/LensWeights"
     }
   },
   "required": [
@@ -53,24 +65,30 @@
     "resolution"
   ],
   "$defs": {
-    "LensId": {
-      "description": "A `kb_cogmap_lenses.id` value.",
+    "CogmapId": {
+      "description": "A `kb_cogmaps.id` value — a cognitive map.",
       "type": "string",
       "format": "uuid"
     },
-    "CogmapId": {
-      "description": "A `kb_cogmaps.id` value — a cognitive map.",
+    "LensId": {
+      "description": "A `kb_cogmap_lenses.id` value.",
       "type": "string",
       "format": "uuid"
     },
     "LensWeights": {
       "type": "object",
       "properties": {
-        "express": {
+        "contains": {
           "type": "number",
           "format": "double"
         },
-        "contains": {
+        "cos": {
+          "description": "The sparse exact-kNN cosine weight — the regime switch (spec §3.1). **Defaulted, not required:**\n`kb_events` is append-only, so the `lens_created` events for the pre-kernel lenses are immortal\nand carry no `cos` key. A required field would break `replay`'s round-trip through this struct\non every one of them. The default (0.0) is exactly what those lenses ARE — declared-only.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "express": {
           "type": "number",
           "format": "double"
         },
@@ -85,12 +103,6 @@
         "prop": {
           "type": "number",
           "format": "double"
-        },
-        "cos": {
-          "description": "The sparse exact-kNN cosine weight — the regime switch (spec §3.1). **Defaulted, not required:**\n`kb_events` is append-only, so the `lens_created` events for the pre-kernel lenses are immortal\nand carry no `cos` key. A required field would break `replay`'s round-trip through this struct\non every one of them. The default (0.0) is exactly what those lenses ARE — declared-only.",
-          "type": "number",
-          "format": "double",
-          "default": 0.0
         }
       },
       "required": [
@@ -104,7 +116,7 @@
     "SalienceWeights": {
       "type": "object",
       "properties": {
-        "telos": {
+        "central": {
           "type": "number",
           "format": "double"
         },
@@ -112,7 +124,7 @@
           "type": "number",
           "format": "double"
         },
-        "central": {
+        "telos": {
           "type": "number",
           "format": "double"
         }
@@ -122,6 +134,49 @@
         "ref",
         "central"
       ]
+    },
+    "TelosConstants": {
+      "description": "The goal-liveness constants (spec §3.4) — a context's telos is the liveness-weighted centroid of\nits goals, and these are the terms of that weighting.\n\nGrouped rather than flattened onto [`LensCreated`] because they travel as one calibration, and\nbecause they are read ONLY on the context branch of the telos: a cogmap declares its telos as a\ncharter resource and never consults them.\n\nDefaulted as a whole (`#[serde(default)]` on the field) for the same append-only reason as\n[`LensWeights::cos`]: `kb_events` is immutable, so every `lens_created` event written before T5\ncarries no `telos` key and must still round-trip through `replay`. The values below mirror the SQL\ncolumn defaults and `_project_lens_created`'s COALESCEs — one calibration, declared in three\nplaces that must agree, so replaying an old event reproduces exactly the row that already exists.",
+      "type": "object",
+      "properties": {
+        "damper_completed": {
+          "type": "number",
+          "format": "double",
+          "default": 0.4
+        },
+        "damper_paused": {
+          "type": "number",
+          "format": "double",
+          "default": 0.3
+        },
+        "drift_epsilon": {
+          "description": "Cosine-distance threshold above which a telos move triggers a salience-only refresh — gate 1 of\nthe two-clock trigger (spec §3.5).\n\nSmall by design, and NOT a deadband against a noisy baseline: the telos is a liveness-weighted\ncentroid, and a pure advance of wall-clock time scales every goal's liveness by one common\nfactor, which cancels in the normalisation. So time alone cannot rotate the telos — drift is\nfloat noise until the goal census actually changes. Epsilon clears that noise and nothing more;\nwidening it would only delay the refresh a closing task is supposed to trigger *now*.",
+          "type": "number",
+          "format": "double",
+          "default": 1e-6
+        },
+        "halflife_days": {
+          "type": "number",
+          "format": "double",
+          "default": 30.0
+        },
+        "sw_backlog": {
+          "type": "number",
+          "format": "double",
+          "default": 0.35
+        },
+        "sw_done": {
+          "description": "**Calibrated to 0.0**, and that is load-bearing rather than a rounding-down of 0.15. A positive\nweight here is summed over EVERY closed task under a goal, and closing a task *touches* it — so\nthe decay term is ~1.0 for exactly the tasks that just finished. Measured on the @me/temper\ncensus the spec nominates as its fixture (§3.4, §5), 0.15 ranked the `Maintenance` goal (68\ndone, 0 in progress) **first of 32**, above every arc under active development. Old completed\nwork is history, not purpose.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "sw_in_progress": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        }
+      }
     }
   }
 }
