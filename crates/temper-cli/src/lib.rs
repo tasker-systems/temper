@@ -1,3 +1,4 @@
+pub mod access_gate;
 pub mod actions;
 pub mod backend_select;
 pub mod cli;

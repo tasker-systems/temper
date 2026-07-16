@@ -52,7 +52,9 @@ pub async fn require_system_access(
                 access_mode: settings.access_mode,
                 join_request_status: own_request.map(|r| r.status),
                 request_url: Some("https://temperkb.io/request-access".to_string()),
-                cli_command: Some("temper team join --message \"...\"".to_string()),
+                cli_command: Some(
+                    temper_core::types::access_gate::REQUEST_ACCESS_COMMAND.to_string(),
+                ),
             };
             return Err(ApiError::SystemAccessRequired {
                 details: Box::new(details),
