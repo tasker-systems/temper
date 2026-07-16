@@ -157,6 +157,59 @@ async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiRes
     get_by_id(pool, ProfileId::from(profile_id)).await
 }
 
+/// Human path, LOOKUP-ONLY: link lookup → email reconcile → **refuse**.
+///
+/// `resolve_human_from_claims`'s steps 1-4 verbatim, minus step 5's create. It exists because
+/// connecting Slack is NOT a registration route: `create_new_profile_and_link` INSERTs
+/// `kb_profiles`, and that INSERT alone fires `trg_sync_system_membership` →
+/// `ensure_auto_join_memberships`, which in `open` mode (production's default) joins the new
+/// profile to EVERY auto-join team. That reach would be backed by no approved auth flow. There
+/// is no way to create the profile without it — the enrollment is a trigger, not a decision.
+///
+/// Steps 3-4 (`reconcile_by_email`) are KEPT: they attach a link to an EXISTING profile,
+/// creating nothing and firing no trigger. Refusing them would make Slack-connect behave
+/// differently from every other login for no safety gain.
+///
+/// Mirrors the machine arm, which is already lookup-or-reject (`resolve_machine_from_claims`).
+/// `Ok(None)` means "no such profile" — the caller renders one indistinguishable refusal.
+pub(crate) async fn resolve_existing_human_from_claims(
+    pool: &PgPool,
+    claims: &AuthClaims,
+) -> ApiResult<Option<Profile>> {
+    // 0: the machine-shape guard, identical to the create path's. A narrowing must not
+    // become a hole: a caller must not walk a machine identity past the registration gate
+    // by choosing the lookup-only door.
+    let machine_provider = claims.provider == crate::auth::MACHINE_PROVIDER_TAG;
+    let machine_shaped_id = claims.external_user_id.ends_with("@clients");
+    if machine_provider || machine_shaped_id {
+        tracing::warn!(
+            external_user_id = %claims.external_user_id,
+            provider = %claims.provider,
+            "machine gate: rejected (machine-shaped identity on the human lookup-only path)"
+        );
+        return Err(ApiError::Unauthorized(format!(
+            "identity '{}' is machine-shaped and cannot resolve to a human profile.",
+            claims.external_user_id
+        )));
+    }
+
+    // 1 & 2: direct lookup by provider + external user id.
+    if let Some(link) = lookup_link_by_provider(pool, claims).await? {
+        refresh_link_verification(pool, &link, claims).await?;
+        return get_by_id(pool, ProfileId::from(link.profile_id))
+            .await
+            .map(Some);
+    }
+
+    // 3 & 4: email reconciliation — attaches to an EXISTING profile; mints nothing.
+    if let Some(profile) = reconcile_by_email(pool, claims).await? {
+        return Ok(Some(profile));
+    }
+
+    // 5: deliberately absent. No create branch.
+    Ok(None)
+}
+
 /// Machine path: the registration gate (D2). Lookup-or-reject — there is no
 /// create branch, because `machine_registration_service::provision` creates the
 /// agent profile ahead of the machine's first call (D3).
@@ -803,6 +856,84 @@ mod tests {
         .await
         .unwrap();
         assert!(stored, "verified sign-in refreshes the stored flag");
+    }
+
+    /// A plain verified human principal — the shape the surrounding tests inline.
+    fn human_claims(sub: &str, email: &str) -> AuthClaims {
+        AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "test-provider".to_string(),
+            external_user_id: sub.to_string(),
+            email: email.to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        }
+    }
+
+    /// The D3 invariant. Asserting the None alone would not catch a regression that
+    /// creates the profile and THEN errors, so assert the absence of the row too.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_refuses_an_unknown_sub_and_creates_no_profile(pool: PgPool) {
+        let before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let claims = human_claims("auth0|never-seen-before", "nobody@example.com");
+        let resolved = resolve_existing_human_from_claims(&pool, &claims)
+            .await
+            .unwrap();
+        assert!(resolved.is_none(), "an unknown sub must not resolve");
+
+        let after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(before, after, "lookup-only must not mint a profile");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_resolves_an_existing_linked_profile(pool: PgPool) {
+        let claims = human_claims("auth0|existing", "someone@example.com");
+        // The normal login path mints it once...
+        let created = resolve_from_claims(&pool, &claims).await.unwrap();
+
+        // ...and lookup-only then finds that same profile.
+        let found = resolve_existing_human_from_claims(&pool, &claims)
+            .await
+            .unwrap()
+            .expect("an existing link must resolve");
+        assert_eq!(found.id, created.id);
+    }
+
+    /// Step 3-4 are KEPT: a verified email attaches to an EXISTING profile. This is the
+    /// probe that the narrowing removed *only* the create branch — if reconcile were
+    /// refused too, this resolves to None instead of the sibling profile.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_reconciles_a_verified_email_to_an_existing_profile(pool: PgPool) {
+        let existing =
+            resolve_from_claims(&pool, &human_claims("auth0|first", "shared@example.com"))
+                .await
+                .unwrap();
+
+        let mut other_provider = human_claims("auth0|second", "shared@example.com");
+        other_provider.provider = "other-provider".to_string();
+
+        let found = resolve_existing_human_from_claims(&pool, &other_provider)
+            .await
+            .unwrap()
+            .expect("a verified email must reconcile onto the existing profile");
+        assert_eq!(found.id, existing.id);
+    }
+
+    /// A machine-shaped identity is refused here as it is everywhere else.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_refuses_a_machine_shaped_identity(pool: PgPool) {
+        let claims = machine_shaped_human_claims("abc123@clients", "auth0");
+        assert!(resolve_existing_human_from_claims(&pool, &claims)
+            .await
+            .is_err());
     }
 
     fn machine_claims(client_id: &str) -> AuthClaims {
