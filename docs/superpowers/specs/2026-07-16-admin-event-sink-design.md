@@ -228,15 +228,95 @@ The live hazard is real: a grant with `subject_table='kb_resources'` *is about* 
 > and carried in `references`. A test asserts no admin event type ever appears in an
 > `element_trail_node`/`element_trail_edge` result.
 
-### Read authorization — **flagged for review**
+### Read authorization — **CHALLENGED AND CORRECTED (2026-07-16)**
 
-Proposed: **the read gate mirrors the write gate.** If you could perform the act, you may read the
-record of it — `is_system_admin` OR owner of the owning team, reusing `machine_authz::authorize`
-verbatim, introducing no new predicate (the move the connections migration itself made). System
-settings and `promote_admin` records are `is_system_admin`-only.
+**The principle stands: the read gate mirrors the write gate.** *If you could perform the act, you
+may read the record of it.* The principle was never in doubt. **The implementation named to carry it
+was wrong**, and the flag was justified.
 
-This is the one decision in this spec taken without adversarial challenge. It should be confirmed
-before the read surface is built.
+#### What was proposed, and why it fails
+
+> ~~`is_system_admin` OR owner of the owning team, reusing `machine_authz::authorize` verbatim,
+> introducing no new predicate.~~
+
+`machine_authz::authorize` is real (`machine_authz.rs:42`, `pub(crate)`) and does what the sentence
+says — `is_system_admin` OR `role_on_team(team) == Owner`, **failing closed when `team` is `None`**.
+But **it is not the gate the grant path uses**, so mirroring it does not mirror anything:
+
+| | predicate | source |
+|---|---|---|
+| **The grant WRITE gate** | `is_system_admin` OR `can(caller,'grant',subject)` | `access_service::can_administer_grant` — gates **both** `grant_capability` (`:189`) and `revoke` (`:218`) |
+| **The proposed READ gate** | `is_system_admin` OR `role_on_team(team)=Owner` | `machine_authz::authorize` — written for **machine registration** |
+
+A **capability on the subject** and a **role on a team** are different predicates over different
+things. `machine_authz::authorize` mirrors the *machine-registration* gate, which is why it reads as
+plausible — it is the right mirror for the wrong act.
+
+#### The refutation is empirical, not theoretical
+
+`can()` → `profile_explicit_grant OR derived_access_profile`, and `derived_access_profile`'s **grant
+arm for `kb_resources`** is:
+
+```sql
+WHEN p_subject_table = 'kb_resources' AND p_action = 'grant' THEN
+    EXISTS (SELECT 1 FROM kb_resource_homes h
+            WHERE h.resource_id = p_subject_id AND h.owner_profile_id = p_profile)
+```
+
+**A resource's owner can grant on it** — derived, no explicit grant, no team, no admin. Probed
+against the live prod predicates in a rolled-back transaction (an ordinary approved profile, its own
+context, its own resource):
+
+```
+ is_sysadmin | can_write_the_grant
+-------------+---------------------
+ f           | t
+```
+
+That user **writes** the grant. Now the proposed read gate: their resource is homed on a context with
+`owner_table = 'kb_profiles'`, so **there is no owning team** — `team = None` → `authorize` fails
+closed → **Forbidden**. *The actor cannot read the record of the act they just performed.* Not an
+edge case: sharing your own resource is the mainline admin act.
+
+> Note what is **not** the problem. Nobody is teamless — `trg_sync_personal_team` gives every profile
+> a `personal-<handle>` team they own (verified live). It is irrelevant: the personal team does not
+> own the profile's contexts (`owner_table='kb_profiles'`), so it is never the subject's owning team.
+> Reaching for it to rescue the gate would be inventing an ownership relation the schema does not
+> have.
+
+Two further asymmetries the probe surfaced:
+
+- **Cogmap grants have no derived grant arm at all** — `derived_access_profile` handles `kb_cogmaps`
+  for `read`/`write` but not `grant`, so it falls to `ELSE false`. Live prod's 4 cogmap grants have
+  **zero** profiles satisfying `can(…,'grant',…)`: only an explicit `can_grant` holder or a sysadmin
+  can administer them. A third distinct population.
+- **The gate is coherent only where an owning team exists.** `kb_connections` and
+  `kb_machine_clients` carry `owner_team_id`; grants on resources and cogmaps do not. One uniform
+  team-shaped gate cannot span the §6 catalogue.
+
+#### The decision
+
+**The read gate mirrors the ACTUAL write gate, per act type** — reusing the predicate that gated the
+write, never a lookalike:
+
+| record | read gate | mirrors |
+|---|---|---|
+| `grant_created` / `grant_revoked` | `is_system_admin` OR `can(caller,'grant',subject_table,subject_id)` | `access_service::can_administer_grant` |
+| machine provision / rebind / revoke | `machine_authz::authorize(owner_team)` | itself |
+| connection provision / revoke / grant-reach / affirm | `machine_authz::authorize(owner_team)` | itself |
+| `promote_admin`, `update_system_settings` | `is_system_admin` | itself |
+
+This is **more** faithful to the original principle than the original proposal, and it still
+introduces no new predicate — every entry is a call to the gate the write path already calls.
+Tighten a write gate and its read gate tightens with it; there is no second copy of the policy to
+drift. That is exactly the argument `machine_authz`'s own module doc makes for reaching the
+containment bar by *calling* the human predicates rather than restating them.
+
+**Task 2 implementer:** `gate()` therefore **dispatches on event type**, and its default arm is
+`is_system_admin` — fail closed. An act whose gate is not in the table above is admin-only to read
+until someone adds it deliberately. Do not write a single team-shaped gate for the whole ledger; the
+catalogue does not support one. `can_administer_grant` is currently a **private** fn in
+`access_service` — Task 2 must expose it (`pub(crate)`) rather than restate its body.
 
 ---
 
@@ -480,8 +560,33 @@ They stop being orphans.
 
 ## §11 — Open questions
 
-1. **Read authorization** (§5) — proposed as write-gate-mirroring, taken without adversarial
-   challenge. **Confirm before building the read surface.**
+1. ~~**Read authorization** (§5) — proposed as write-gate-mirroring, taken without adversarial
+   challenge.~~ **CHALLENGED AND SETTLED 2026-07-16.** The principle held; the named implementation
+   was refuted empirically against live prod predicates and corrected in §5. The gate now dispatches
+   on event type and mirrors the *actual* write gate per act. One sub-question is deliberately
+   carried forward — see 1b.
+
+1b. **The gate is present-tense; the ledger is past-tense.** *Deferred to the Task 2 read-surface PR
+   by decision (2026-07-16), where the gate is real code rather than a sentence.* Every predicate in
+   §5's table asks "may you do this **now**?", but every row it guards records something done
+   **then**. Three consequences, none currently decided:
+
+   - **The demoted actor.** Lose `can_grant` (or your Owner role) and you lose sight of records of
+     acts **you performed**. Your own authorship disappears from your view — arguably the one thing
+     an actor should always retain. Task 2 builds an **actor axis** (`query by actor`); the open
+     question is whether that axis is self-gating (you may always read your own acts) or subject to
+     the same subject-gate. Note this is precisely the shape of the defect that motivated the whole
+     spec: `kb_access_grants` overwrites `granted_by_profile_id` on upsert, destroying authorship.
+     Rebuilding a ledger that then hides authorship from its author would be a poor trade.
+   - **The vanished subject.** `revoke` is a hard `DELETE` (§2), and a connection or resource can be
+     removed. Once the subject is gone, `can(caller,'grant',subject)` is `false` for everyone, so a
+     `grant_revoked` record becomes readable **only by sysadmins** — the ledger keeps the row and
+     the gate hides it. "Who revoked this, and why?" is the question the record exists to answer.
+   - **Fails closed on a producer bug.** The gate's input (`subject_table`/`subject_id`) is derived
+     from the row it guards. `references` is `DEFAULT '[]'` with no CHECK, so a writer that forgets
+     to populate it yields a record nothing can resolve a subject for → admin-only, silently. Task 4's
+     payload schemas are the enforcement; there is no DB-level backstop. Compare the ghost-regions
+     class: a producer bug that a reader can never distinguish from an empty result.
 2. **`kb_teams.created_by`** — additive column so future teams record a creator. Follow-on task.
 3. **Multi-tenancy** — a self-hosted instance replaying its own ledger inherits §8's epoch semantics
    with different data. The epoch is per-instance. Unexamined.

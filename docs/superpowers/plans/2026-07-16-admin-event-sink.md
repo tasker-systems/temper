@@ -278,7 +278,21 @@ The spec's central inversion: **the read path ships before any writer**, so the 
   - `list_by_actor(pool: &PgPool, caller: ProfileId, actor: ProfileId, limit: i64, offset: i64) -> ApiResult<Vec<AdminLedgerEntry>>`
   - `ledger_epoch(pool: &PgPool) -> ApiResult<Option<DateTime<Utc>>>`
 
-**Authorization** (spec §5, flagged for review and confirmed): the read gate **mirrors the write gate** — `is_system_admin` OR owner of the owning team, reusing `machine_authz::authorize` semantics. No new predicate.
+**Authorization** (spec §5 — **challenged 2026-07-16; the principle held, the implementation was refuted and corrected. Read §5 before writing `gate()`.**):
+
+The read gate **mirrors the write gate** — but the *actual* write gate, **dispatched per event type**, never one uniform team-shaped predicate:
+
+| record | read gate | mirrors |
+|---|---|---|
+| `grant_created` / `grant_revoked` | `is_system_admin` OR `can(caller,'grant',subject_table,subject_id)` | `access_service::can_administer_grant` |
+| machine / connection acts | `machine_authz::authorize(owner_team)` | itself |
+| `promote_admin`, `update_system_settings` | `is_system_admin` | itself |
+
+Default arm: **`is_system_admin`** — fail closed. An act not in the table is admin-only to read until someone adds it deliberately.
+
+> ⚠️ **This line previously read "flagged for review and confirmed" and specified `machine_authz::authorize` for the whole ledger. It was never confirmed, and it was wrong.** That predicate is `is_system_admin OR role_on_team(team)=Owner`, failing closed on `team = None` — it gates *machine registration*, not grants. The grant path gates on `can_administer_grant` (`access_service.rs:189`/`:218`): `is_system_admin OR can(caller,'grant',subject)`. A capability on the subject is not a role on a team. Because `derived_access_profile` lets a **resource owner** grant on their own resource, and a profile-homed resource has **no owning team**, the old gate would have Forbidden the actor from reading the record of the act they had just performed — on the mainline path. Probed live: `is_sysadmin = f`, `can_write_the_grant = t`. Do not restore it.
+
+**Implementation note:** `can_administer_grant` is a **private** fn in `access_service` today. Expose it (`pub(crate)`) and call it — do **not** restate its body, or the read gate becomes a second copy of the policy and drifts from the write gate it exists to mirror.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1485,7 +1499,7 @@ actually ships."
 | §5 firewall is structural | Task 2 Step 5 (`the_admin_event_is_invisible_to_cognition`) |
 | §5 read path on `references`, two axes | Tasks 1, 2; index proven in Task 2 Step 6 |
 | §5 `element_trail` invariant + test | Task 3 |
-| §5 read authorization | Task 2 `gate()` |
+| §5 read authorization | Task 2 `gate()` — **corrected 2026-07-16**: dispatches per event type on the *actual* write gate; the original single `machine_authz::authorize` was refuted |
 | §6 catalogue | Task 5 (grant pair only); rest is follow-on, per scope |
 | §7 SQL-resident writers | Task 5 |
 | §7 replay ownership (`INPUT_TABLES`) | Task 5 Step 5; verified Step 8 |
