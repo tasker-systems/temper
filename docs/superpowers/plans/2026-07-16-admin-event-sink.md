@@ -22,13 +22,13 @@
 - **NULL anchor means "no cognition home", NOT "admin"** — `lens_created` is already in that bucket. Never write a reader that infers admin-ness from anchor nullity. Discriminate by event type or by `references`.
 - **Admin payload key ban:** no admin payload may spell a key `resource_id`, `block_id`, `edge_id`, or `owner:{table,id}`. `element_trail_node`/`element_trail_edge` match on payload key shape with no type filter and are gated only by `resources_visible_to` — a violation leaks authority records to any reader of the resource. Use `subject_table`/`subject_id` and carry identity in `references`.
 - **Typed structs over `serde_json::json!()`** for anything with a known shape.
-- **SQL macros** (`sqlx::query!`) for production queries; regenerate caches after SQL changes (see Task 8).
+- **SQL macros** (`sqlx::query!`) for production queries; regenerate caches after SQL changes (see Task 5).
 - **Run `cargo make check` before every commit.**
 - **Do not run migrations against prod and do not merge PRs.** Stop at "PR up + CI green + summary".
 
 ## Dependency (not a task in this plan)
 
-Task `019f6b06-c48f-7a81-a238-cdd6b131f3dc` — *"Legacy profiles have no emitter entities"* — must be **applied to prod before Task 8's first event fires**. `resolve_emitter` is `fetch_one` with no lazy creation, and two approved prod users have zero emitters. It ships independently; this plan assumes emitters exist.
+Task `019f6b06-c48f-7a81-a238-cdd6b131f3dc` — *"Legacy profiles have no emitter entities"* — must be **applied to prod before Task 5's first event fires**. `resolve_emitter` is `fetch_one` with no lazy creation, and two approved prod users have zero emitters. It ships independently; this plan assumes emitters exist.
 
 ## File Structure
 
@@ -637,7 +637,7 @@ const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] = &["admin_ledger_opened", "grant_crea
 - [ ] **Step 2: Run tests**
 
 Run: `cargo nextest run -p temper-services --features test-db --test admin_ledger_test -E 'test(payload) or test(element_trail)'`
-Expected: PASS immediately — Task 2's `seed_admin_event` already uses `subject_table`/`subject_id`. **A test that passes on first write is correct here**: it is a regression guard against Task 8 and the follow-on plan, not a red-green cycle. If `an_admin_event_never_appears_in_an_element_trail` fails, `element_trail_node`'s signature differs from the assumption — read `migrations/20260706000002_element_trail_payload_actor.sql:7-52` and fix the call, not the assertion.
+Expected: PASS immediately — Task 2's `seed_admin_event` already uses `subject_table`/`subject_id`. **A test that passes on first write is correct here**: it is a regression guard against Task 5 and the follow-on plan, not a red-green cycle. If `an_admin_event_never_appears_in_an_element_trail` fails, `element_trail_node`'s signature differs from the assumption — read `migrations/20260706000002_element_trail_payload_actor.sql:7-52` and fix the call, not the assertion.
 
 - [ ] **Step 3: Commit**
 
