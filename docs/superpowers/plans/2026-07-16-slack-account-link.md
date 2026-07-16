@@ -44,7 +44,7 @@
 
 | File | Responsibility |
 |---|---|
-| `migrations/20260716000020_slack_link_intents.sql` | `kb_slack_link_intents` |
+| `migrations/20260716000040_slack_link_intents.sql` | `kb_slack_link_intents` |
 | `crates/temper-services/src/services/slack_link_service.rs` | intent create/consume + link upsert (all SQL) |
 | `crates/temper-services/src/oauth_client.rs` | token exchange (the only HTTP in temper-services) |
 | `crates/temper-services/src/link_provider.rs` | mode-aware authorize/token URL derivation |
@@ -382,12 +382,12 @@ No behavior change. The CLI's existing login tests are the regression net."
 ## Task 2: `kb_slack_link_intents` migration
 
 **Files:**
-- Create: `migrations/20260716000020_slack_link_intents.sql`
+- Create: `migrations/20260716000040_slack_link_intents.sql`
 
 **Interfaces:**
 - Produces: table `kb_slack_link_intents(id, state_nonce, code_verifier, slack_principal_id, expires_at, consumed_at, created_at)`
 
-**Why a new table and not `kb_oauth_flow`:** that one is the AS's own bookkeeping with a `status CHECK IN ('pending_saml','code_issued','consumed')` (`migrations/20260701000006_saml_as_tables.sql:45-58`). Widening a shipped CHECK to carry client-side state would tangle the two halves of OAuth the spec separates. **Number 20 leaves a gap** for concurrent sibling sessions.
+**Why a new table and not `kb_oauth_flow`:** that one is the AS's own bookkeeping with a `status CHECK IN ('pending_saml','code_issued','consumed')` (`migrations/20260701000006_saml_as_tables.sql:45-58`). Widening a shipped CHECK to carry client-side state would tangle the two halves of OAuth the spec separates. **Number 40**: `…010` (steward delta) and `…020` (backfill legacy profile emitters) are ALREADY TAKEN on main — verified against `git ls-tree origin/main` and the local `_sqlx_migrations`. `…030` is left free as the sibling gap. Verify the number is still free before applying; if it collides, renumber UP and never reset the database.
 
 - [ ] **Step 1: Write the migration**
 
@@ -443,7 +443,7 @@ Expected: the seven columns, `state_nonce` UNIQUE, `consumed_at` nullable.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add migrations/20260716000020_slack_link_intents.sql
+git add migrations/20260716000040_slack_link_intents.sql
 git commit -m "feat(slack-link): kb_slack_link_intents — client-side OAuth flow state
 
 Distinct from kb_oauth_flow, which is the AS's bookkeeping for flows IT
