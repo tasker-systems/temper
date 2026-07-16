@@ -163,7 +163,8 @@ Two committed, target-agnostic mitigations in `vercel.json`, so every target inh
 The async-embed drain scales by three env/cron knobs, tuned per deploy — none need a rebuild:
 
 - `TEMPER_ONNX_INTRA_THREADS=2` — use the `api/internal` function's ~1.7 vCPU (3009 MB) for ONNX
-  inference. Default is 1 (single core). Set to 2 on a bulk-ingest deploy for ~1.5–2× per invocation.
+  inference. Default is 1 (single core). Set to 2 on a bulk-ingest deploy for ~1.4–1.5× per
+  invocation (measured 1.42× on the throttled bed at 128 ms/chunk).
   Applies process-wide, so the public function's in-request query-embed benefits too.
 - `TEMPER_EMBED_DISPATCH_DEADLINE_SECONDS` — per-invocation lifetime (default 55s = one cron cadence,
   giving concurrency == number of shard crons). Raise toward 250 for the Option-B stacking model.
@@ -172,7 +173,7 @@ The async-embed drain scales by three env/cron knobs, tuned per deploy — none 
 
 **Safety floor: the embed function's `maxDuration` must stay ≥ 72 s.** A claim's ~64-chunk
 `embed_texts` is uninterruptible (~8 s at the measured 128 ms/chunk, threads=2), so a claim starting
-just under the 55 s deadline can run to ~63 s. 72 s leaves an ~8 s buffer. `api/internal` is 300 s
+just under the 55 s deadline can run to ~63 s. 72 s leaves an ~8–9 s buffer. `api/internal` is 300 s
 today (far above), so this is a guardrail against anyone lowering it for the embed cron — surface it
 in the "operating temper" guidelines too.
 

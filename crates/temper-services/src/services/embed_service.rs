@@ -233,9 +233,11 @@ pub async fn redrive(pool: &PgPool, cap: Option<i32>) -> ApiResult<u32> {
     Ok(redriven.len() as u32)
 }
 
-/// Run one embed-dispatch pass: (optionally re-drive dead jobs →) reap → claim up to `cap` embed jobs
-/// → embed each resource → complete the clean ones. Returns a [`EmbedDispatchSummary`] for
-/// cron/operator observability. `cap` defaults to [`DEFAULT_EMBED_DISPATCH_CAP`] when `None`.
+/// Run one embed-dispatch invocation: (optionally re-drive dead jobs →) reap once → then **loop**
+/// {claim up to `cap` embed jobs → embed each resource → complete the clean ones, re-enqueue the
+/// rest} until the queue is empty or the wall-clock deadline is hit. Returns a
+/// [`EmbedDispatchSummary`] (whose counts span the whole loop, not one claim) for cron/operator
+/// observability. `cap` defaults to [`DEFAULT_EMBED_DISPATCH_CAP`] when `None`.
 ///
 /// When `redrive` is set, dead embed jobs are re-enqueued (up to `cap` resources) *before* the claim,
 /// so a single operator call both revives and drains them. The per-minute cron passes `redrive = false`
@@ -289,8 +291,9 @@ async fn dispatch_tick_inner(
     let start = std::time::Instant::now();
 
     // Do-while shape: always run at least one claim, then stop once past the deadline. Checking the
-    // deadline AFTER a full claim (not before the first) guarantees every invocation makes progress
-    // even under a pathologically small deadline — and preserves the ZERO-deadline defer semantics
+    // deadline AFTER a full claim (not before the first) guarantees every invocation runs at least
+    // one claim attempt and can never spin, even under a pathologically small deadline — and preserves
+    // the ZERO-deadline defer semantics
     // the wall-clock test asserts (claim once, defer the batch, break).
     loop {
         let claimed = workflow_job_service::claim_resource(
@@ -349,7 +352,10 @@ async fn dispatch_tick_inner(
                         // More stale chunks than this claim's budget: complete + re-enqueue so a
                         // later iteration (this invocation, or the next tick) resumes it with a
                         // fresh budget. Complete-then-enqueue (not hold the lease) keeps the reaper's
-                        // attempt count clean for large resources.
+                        // attempt count clean for large resources. The two writes are NOT atomic: a
+                        // crash between them strands the resource with no job — and there is no
+                        // automatic stale sweep (`enqueue_stale` is operator-triggered), so recovery
+                        // is the next operator `temper admin reembed` over a scope containing it.
                         workflow_job_service::complete_resource(
                             pool,
                             job.resource_id,

@@ -7275,7 +7275,7 @@
       },
       "EmbedDispatchSummary": {
         "type": "object",
-        "description": "Outcome of one embed-dispatch pass (issue #299): how many resource-keyed embed jobs were claimed,\nhow many completed cleanly, how many failed (left for the reaper's retry→dead path), and the total\nchunks embedded. Returned by the `/api/embed/dispatch` drain so a cron/operator has observability.",
+        "description": "Outcome of one embed-dispatch invocation (issue #299): across the invocation's claim loop, how\nmany resource-keyed embed jobs were claimed, how many completed cleanly, how many failed (left for\nthe reaper's retry→dead path), and the total chunks embedded. Returned by the\n`/api/embed/dispatch` drain so a cron/operator has observability. (An invocation loop-drains: it\nkeeps claiming until the queue is empty or the wall-clock deadline is hit, so these counts span\nmany claims, not one — see the `claimed` field.)",
         "required": [
           "redriven",
           "claimed",
@@ -7288,13 +7288,13 @@
           "chunks_embedded": {
             "type": "integer",
             "format": "int64",
-            "description": "Total chunks embedded across all jobs this pass, whether they completed or were re-enqueued.",
+            "description": "Total chunks embedded across all jobs this invocation, whether they completed or were\nre-enqueued.",
             "minimum": 0
           },
           "claimed": {
             "type": "integer",
             "format": "int32",
-            "description": "Jobs claimed this pass (bounded by the dispatch cap).",
+            "description": "Total jobs claimed across the invocation's claim loop. Each loop iteration claims ≤ the\ndispatch cap, so the invocation total routinely **exceeds** `cap` — and a re-enqueued partial\nre-claimed on a later iteration is counted again. `claimed = 30` at `cap = 5` is a healthy long\ninvocation, not a bug.",
             "minimum": 0
           },
           "completed": {
@@ -7312,13 +7312,13 @@
           "partial": {
             "type": "integer",
             "format": "int32",
-            "description": "Jobs that embedded their per-pass chunk budget but still hold stale chunks, and were\n**re-enqueued** to resume on a later tick. Not a failure — the normal path for a resource larger\nthan one pass's budget (prod's biggest holds 939 chunks against a budget of 64). A persistently\nnon-zero `partial` with `chunks_embedded` climbing is a drain making progress, not a stuck one.",
+            "description": "Jobs that embedded their per-claim chunk budget but still hold stale chunks, and were\n**re-enqueued** to resume later (a subsequent claim this same invocation, or a later tick). Not\na failure — the normal path for a resource larger than one claim's budget (prod's biggest holds\n939 chunks against a budget of 64). A persistently non-zero `partial` with `chunks_embedded`\nclimbing is a drain making progress, not a stuck one.",
             "minimum": 0
           },
           "redriven": {
             "type": "integer",
             "format": "int32",
-            "description": "Dead embed jobs re-enqueued this pass (Phase 4 re-drive). Zero unless the caller asked for a\nre-drive (`?redrive=true`); these resources are then eligible for the same pass's claim.",
+            "description": "Dead embed jobs re-enqueued this invocation (Phase 4 re-drive). Zero unless the caller asked\nfor a re-drive (`?redrive=true`); these resources are then eligible for the invocation's claim\nloop.",
             "minimum": 0
           }
         }
