@@ -271,116 +271,120 @@ async fn dispatch_tick_inner(
     workflow_job_service::reap(pool, "embed lease expired").await?;
 
     let cap = cap.unwrap_or(DEFAULT_EMBED_DISPATCH_CAP);
-    let claimed = workflow_job_service::claim_resource(
-        pool,
-        persona,
-        dispatch,
-        cap,
-        DEFAULT_EMBED_LEASE_SECONDS,
-    )
-    .await?;
 
     let mut summary = EmbedDispatchSummary {
         redriven,
-        claimed: claimed.len() as u32,
         ..Default::default()
     };
 
-    // ONE chunk allowance for the WHOLE invocation, spent across every claimed job. Not per-resource:
-    // this loop is serial and lives inside a serverless function, so a per-resource budget would let
-    // `cap` (5) resources multiply it — 5 x 64 = 320 chunks of single-threaded ONNX in one request.
-    // That is the same timeout cliff, moved. A job that finds the allowance spent embeds nothing,
-    // reports what remains, and is re-enqueued below to resume next tick.
-    let mut budget = temper_substrate::embed::resolve_chunk_budget();
-
-    // Hard wall-clock ceiling on the pass (see `resolve_dispatch_deadline`). Checked before each job:
-    // once past it, the remaining claimed jobs are re-enqueued untouched to resume next tick rather
-    // than held `in_progress` — a held lease is not reclaimable for DEFAULT_EMBED_LEASE_SECONDS (600s,
-    // deliberately > maxDuration), so leaving them would stall those resources for ~10 minutes.
+    // Hard wall-clock ceiling on the whole invocation (see `resolve_dispatch_deadline`). With
+    // loop-drain the deadline is the *invocation lifetime*, not a single-pass guard: we keep
+    // claiming until the queue is empty or the deadline is hit, so one invocation fills its
+    // wall-clock instead of returning after a single ~64-chunk claim.
     let start = std::time::Instant::now();
 
-    for job in claimed {
-        if start.elapsed() >= deadline {
-            // Deadline reached: defer this job (and, by the same check, every one after it). This is
-            // the same non-failure re-enqueue as the budget-exhaustion path below — 0 chunks embedded
-            // this pass, job resumed on a later tick — so it is tallied as `partial`, not `failed`.
-            workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
-                .await?;
-            workflow_job_service::enqueue_resource(pool, job.resource_id, persona, dispatch)
-                .await?;
-            tracing::info!(
-                resource_id = %job.resource_id,
-                elapsed_ms = start.elapsed().as_millis() as u64,
-                "embed dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
-            );
-            summary.partial += 1;
-            continue;
+    // Do-while shape: always run at least one claim, then stop once past the deadline. Checking the
+    // deadline AFTER a full claim (not before the first) guarantees every invocation makes progress
+    // even under a pathologically small deadline — and preserves the ZERO-deadline defer semantics
+    // the wall-clock test asserts (claim once, defer the batch, break).
+    loop {
+        let claimed = workflow_job_service::claim_resource(
+            pool,
+            persona,
+            dispatch,
+            cap,
+            DEFAULT_EMBED_LEASE_SECONDS,
+        )
+        .await?;
+        if claimed.is_empty() {
+            break; // queue drained — nothing left to do this invocation
         }
-        match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget).await {
-            Ok(progress) => {
-                summary.chunks_embedded += progress.embedded;
-                budget -= progress.embedded as i64;
-                if progress.is_complete() {
-                    // Fully drained → complete the job (frees the single-flight slot).
-                    workflow_job_service::complete_resource(
-                        pool,
-                        job.resource_id,
-                        persona,
-                        dispatch,
-                    )
+        summary.claimed += claimed.len() as u32;
+
+        // ONE chunk allowance per CLAIM (see `EMBED_CHUNK_BUDGET`), refreshed each iteration. The
+        // deadline bounds the invocation; this bounds one claim's inference so no single
+        // `embed_texts` call is ever large — which is what retires the single-large-resource cliff:
+        // a 939-chunk resource embeds 64, re-enqueues, and is simply re-claimed on a later iteration.
+        let mut budget = temper_substrate::embed::resolve_chunk_budget();
+
+        for job in claimed {
+            if start.elapsed() >= deadline {
+                // Past the deadline: defer this job (and every one after it) — re-enqueue untouched
+                // to resume next tick rather than hold a lease (a held lease looks like a crash to
+                // the reaper and is not reclaimable for DEFAULT_EMBED_LEASE_SECONDS). Tallied
+                // `partial`, not `failed` — 0 chunks embedded, job resumed later.
+                workflow_job_service::complete_resource(pool, job.resource_id, persona, dispatch)
                     .await?;
-                    summary.completed += 1;
-                } else {
-                    // The resource holds more stale chunks than one pass may embed. Complete this job
-                    // and enqueue a fresh one so the next tick resumes it.
-                    //
-                    // Complete-then-enqueue rather than holding the lease: a held lease looks to the
-                    // reaper exactly like a CRASHED job, so each pass would burn an attempt and a large
-                    // resource would hit max-attempts and go `dead` long before it finished. Prod's
-                    // largest resource is 939 chunks against a 64-chunk budget — ~15 passes — so it
-                    // would reliably die. Re-enqueueing gives each pass a clean attempt count.
-                    //
-                    // The two statements are not atomic; a crash between them leaves the resource with
-                    // NO job — and there is no automatic stale sweep to notice (`enqueue_stale` is
-                    // operator-triggered, by design, so a re-embed can be aimed at one resource before
-                    // it is aimed at 31k). So be honest about the recovery path: the resource's chunks
-                    // are still stale, and the next `temper admin reembed` over any scope containing it
-                    // re-derives that and re-enqueues it. Nothing is lost; it simply waits for the
-                    // operator rather than healing on its own.
-                    workflow_job_service::complete_resource(
-                        pool,
-                        job.resource_id,
-                        persona,
-                        dispatch,
-                    )
+                workflow_job_service::enqueue_resource(pool, job.resource_id, persona, dispatch)
                     .await?;
-                    workflow_job_service::enqueue_resource(
-                        pool,
-                        job.resource_id,
-                        persona,
-                        dispatch,
-                    )
-                    .await?;
-                    tracing::info!(
+                tracing::info!(
+                    resource_id = %job.resource_id,
+                    elapsed_ms = start.elapsed().as_millis() as u64,
+                    "embed dispatch hit its wall-clock deadline; re-enqueued job for the next tick"
+                );
+                summary.partial += 1;
+                continue;
+            }
+            match temper_substrate::embed::embed_resource_chunks(pool, job.resource_id, budget)
+                .await
+            {
+                Ok(progress) => {
+                    summary.chunks_embedded += progress.embedded;
+                    budget -= progress.embedded as i64;
+                    if progress.is_complete() {
+                        workflow_job_service::complete_resource(
+                            pool,
+                            job.resource_id,
+                            persona,
+                            dispatch,
+                        )
+                        .await?;
+                        summary.completed += 1;
+                    } else {
+                        // More stale chunks than this claim's budget: complete + re-enqueue so a
+                        // later iteration (this invocation, or the next tick) resumes it with a
+                        // fresh budget. Complete-then-enqueue (not hold the lease) keeps the reaper's
+                        // attempt count clean for large resources.
+                        workflow_job_service::complete_resource(
+                            pool,
+                            job.resource_id,
+                            persona,
+                            dispatch,
+                        )
+                        .await?;
+                        workflow_job_service::enqueue_resource(
+                            pool,
+                            job.resource_id,
+                            persona,
+                            dispatch,
+                        )
+                        .await?;
+                        tracing::info!(
+                            resource_id = %job.resource_id,
+                            embedded = progress.embedded,
+                            remaining = progress.remaining,
+                            "embed job partially drained; re-enqueued for the next tick"
+                        );
+                        summary.partial += 1;
+                    }
+                }
+                Err(e) => {
+                    // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then
+                    // dead at max attempts). One bad resource never aborts the pass.
+                    tracing::warn!(
                         resource_id = %job.resource_id,
-                        embedded = progress.embedded,
-                        remaining = progress.remaining,
-                        "embed job partially drained; re-enqueued for the next tick"
+                        attempts = job.attempts,
+                        error = %e,
+                        "embed job failed; leaving for reaper retry"
                     );
-                    summary.partial += 1;
+                    summary.failed += 1;
                 }
             }
-            Err(e) => {
-                // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then dead at
-                // max attempts). Observable via the summary + the job's last_error on reap.
-                tracing::warn!(
-                    resource_id = %job.resource_id,
-                    attempts = job.attempts,
-                    error = %e,
-                    "embed job failed; leaving for reaper retry"
-                );
-                summary.failed += 1;
-            }
+        }
+
+        // Stop looping once past the deadline — checked after a full claim, so ≥1 claim always runs.
+        if start.elapsed() >= deadline {
+            break;
         }
     }
 
@@ -993,5 +997,32 @@ mod tests {
         );
         assert_eq!(summary.completed, 1);
         assert_eq!(summary.failed, 0);
+    }
+
+    /// **The loop-drain gate.** Three enqueued resources with cap=1 → one resource per claim. A
+    /// single-claim pass (the old behavior) would drain exactly ONE and return; loop-drain must drain
+    /// all THREE inside one invocation by re-claiming until the queue is empty. Chunkless resources
+    /// keep this ONNX-free (embed is a clean no-op).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn dispatch_tick_loop_drains_multiple_claims_in_one_pass(pool: PgPool) {
+        for name in ["a", "b", "c"] {
+            let r = a_named_resource(&pool, name).await;
+            workflow_job_service::enqueue_resource(&pool, r, "embed", "embed")
+                .await
+                .unwrap()
+                .expect("enqueue");
+        }
+
+        let summary = dispatch_tick(&pool, Some(1), false).await.unwrap();
+        assert_eq!(
+            summary.claimed, 3,
+            "loop-drain re-claims until the queue is empty — not just one claim"
+        );
+        assert_eq!(summary.completed, 3);
+        assert_eq!(summary.failed, 0);
+
+        // Idempotent: a second pass finds nothing.
+        let again = dispatch_tick(&pool, Some(1), false).await.unwrap();
+        assert_eq!(again.claimed, 0);
     }
 }
