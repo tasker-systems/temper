@@ -1,0 +1,13 @@
+[package]
+name = "temper-auth"
+version = "0.1.0"
+edition = "2021"
+description = "Shared OAuth2 PKCE mechanics for temper's client and server surfaces"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+url = "2"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"

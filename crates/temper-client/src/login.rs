@@ -12,6 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
 
+use temper_auth::{build_authorize_url, generate_pkce_pair, AuthorizeParams, TokenResponse};
+
 use crate::auth::{self, StoredAuth};
 use crate::error::{ClientError, Result};
 
@@ -34,74 +36,8 @@ pub struct OAuthConfig {
 }
 
 // ---------------------------------------------------------------------------
-// PKCE helpers
-// ---------------------------------------------------------------------------
-
-/// Generate a PKCE code_verifier and its S256 code_challenge.
-pub fn generate_pkce_pair() -> (String, String) {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use sha2::{Digest, Sha256};
-
-    // 32 random bytes -> 43-character base64url string
-    let random_bytes: [u8; 32] = rand::random();
-    let verifier = URL_SAFE_NO_PAD.encode(random_bytes);
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-
-    (verifier, challenge)
-}
-
-/// Build the full authorization URL with PKCE parameters.
-///
-/// Uses `CLI_CALLBACK_URL` as the redirect_uri and passes the localhost port
-/// via the OAuth2 `state` parameter. The callback relay on temperkb.io reads
-/// the port from `state` and redirects the authorization code to localhost.
-pub fn build_authorize_url(
-    config: &OAuthConfig,
-    port: u16,
-    code_challenge: &str,
-) -> crate::error::Result<String> {
-    let scope = config.scopes.join(" ");
-
-    // `authorize_url` comes from user config (config.toml / provider) — a malformed value is a
-    // configuration fault, not a programming bug, so propagate it instead of panicking.
-    let mut url = url::Url::parse(&config.authorize_url).map_err(|e| {
-        crate::error::ClientError::NotConfigured(format!(
-            "authorize_url is not a valid URL ({:?}): {e}",
-            config.authorize_url
-        ))
-    })?;
-
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", &config.client_id)
-        .append_pair("redirect_uri", &config.callback_url)
-        .append_pair("code_challenge", code_challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("state", &port.to_string())
-        .append_pair("scope", &scope);
-
-    if let Some(audience) = &config.audience {
-        url.query_pairs_mut().append_pair("audience", audience);
-    }
-
-    Ok(url.to_string())
-}
-
-// ---------------------------------------------------------------------------
 // Token exchange
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, serde::Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[expect(
-        dead_code,
-        reason = "deserialized from the token response but unused — the access token is what we persist and decode for claims"
-    )]
-    id_token: Option<String>,
-    refresh_token: Option<String>,
-    expires_in: Option<u64>,
-}
 
 /// Exchange an authorization code for tokens at the token endpoint.
 async fn exchange_code(
@@ -158,7 +94,17 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
 
     // Build authorization URL and open browser.
     // The redirect_uri points to temperkb.io which relays the code to localhost.
-    let auth_url = build_authorize_url(config, port, &code_challenge)?;
+    let auth_url = build_authorize_url(&AuthorizeParams {
+        authorize_url: config.authorize_url.clone(),
+        client_id: config.client_id.clone(),
+        audience: config.audience.clone(),
+        redirect_uri: config.callback_url.clone(),
+        scopes: config.scopes.clone(),
+        // The relay on temperkb.io reads the loopback port back out of `state`.
+        state: port.to_string(),
+        code_challenge: code_challenge.clone(),
+    })
+    .map_err(|e| crate::error::ClientError::NotConfigured(e.to_string()))?;
 
     info!("Opening browser for authentication...");
     open::that(&auth_url)
@@ -344,20 +290,21 @@ mod tests {
 
     #[test]
     fn authorize_url_contains_required_params() {
-        let config = OAuthConfig {
+        let (_verifier, challenge) = generate_pkce_pair();
+        let params = AuthorizeParams {
             authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
-            token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
             client_id: "test-client-id".to_string(),
             audience: Some("https://temperkb.io/api".to_string()),
-            callback_url: "https://temperkb.io/api/auth/cli-callback".to_string(),
+            redirect_uri: "https://temperkb.io/api/auth/cli-callback".to_string(),
             scopes: vec![
                 "openid".to_string(),
                 "profile".to_string(),
                 "email".to_string(),
             ],
+            state: 12345u16.to_string(),
+            code_challenge: challenge.clone(),
         };
-        let (_verifier, challenge) = generate_pkce_pair();
-        let url = build_authorize_url(&config, 12345, &challenge).unwrap();
+        let url = build_authorize_url(&params).unwrap();
         assert!(url.contains("response_type=code"));
         assert!(url.contains("client_id=test-client-id"));
         assert!(url.contains("code_challenge_method=S256"));
@@ -370,16 +317,17 @@ mod tests {
 
     #[test]
     fn authorize_url_without_audience() {
-        let config = OAuthConfig {
+        let (_verifier, challenge) = generate_pkce_pair();
+        let params = AuthorizeParams {
             authorize_url: "https://example.com/authorize".to_string(),
-            token_url: "https://example.com/token".to_string(),
             client_id: "test".to_string(),
             audience: None,
-            callback_url: "https://example.com/callback".to_string(),
+            redirect_uri: "https://example.com/callback".to_string(),
             scopes: vec!["openid".to_string()],
+            state: 9999u16.to_string(),
+            code_challenge: challenge,
         };
-        let (_verifier, challenge) = generate_pkce_pair();
-        let url = build_authorize_url(&config, 9999, &challenge).unwrap();
+        let url = build_authorize_url(&params).unwrap();
         assert!(!url.contains("audience="));
     }
 
