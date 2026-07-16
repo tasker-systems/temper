@@ -444,17 +444,17 @@ module Temper::Generated
     # @param profile_id [String] Member profile ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [nil]
+    # @return [RemoveMemberOutcome]
     def remove_member(id, profile_id, opts = {})
-      remove_member_with_http_info(id, profile_id, opts)
-      nil
+      data, _status_code, _headers = remove_member_with_http_info(id, profile_id, opts)
+      data
     end
 
     # @param id [String] Team ID
     # @param profile_id [String] Member profile ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    # @return [Array<(RemoveMemberOutcome, Integer, Hash)>] RemoveMemberOutcome data, response status code and response headers
     def remove_member_with_http_info(id, profile_id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: TeamsApi.remove_member ...'
@@ -479,6 +479,8 @@ module Temper::Generated
 
       # header parameters
       header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
       header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
 
       # form parameters
@@ -488,7 +490,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type]
+      return_type = opts[:debug_return_type] || 'RemoveMemberOutcome'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

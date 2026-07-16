@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
+use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
     AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
     TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
@@ -388,7 +389,7 @@ pub async fn remove_member(
     caller: ProfileId,
     team_id: Uuid,
     target: Uuid,
-) -> ApiResult<()> {
+) -> ApiResult<RemoveMemberOutcome> {
     // Auth before writes: manager, or self-leave.
     let is_self = *caller == target;
     if !is_self {
@@ -433,7 +434,37 @@ pub async fn remove_member(
                 .to_string(),
         ));
     }
-    Ok(())
+
+    // Removal succeeded. Surface (read-only) the reach the removed member still
+    // OWNS in this team's contexts, so the caller can hand it off deliberately via
+    // `reassign_team_resources`. The scope query is membership-independent, so it is
+    // correct post-delete; we reuse the exact definition the handoff moves, so the
+    // warning and the handoff can never disagree.
+    let owned = crate::services::reassign_service::team_scoped_owned(pool, team_id, target).await?;
+    // Group by context IDENTITY (context_id), not by row adjacency: a slug is unique
+    // only per-owner, so two distinct contexts can share a slug and interleave in the
+    // result — an adjacency fold would split one into duplicate entries. A map keyed
+    // on context_id is order-independent and preserves first-seen order for stable output.
+    let mut contexts: Vec<ResidualContext> = Vec::new();
+    let mut index: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
+    for row in &owned {
+        match index.get(&row.context_id) {
+            Some(&i) => contexts[i].count += 1,
+            None => {
+                index.insert(row.context_id, contexts.len());
+                contexts.push(ResidualContext {
+                    context_ref: row.context_ref.clone(),
+                    count: 1,
+                });
+            }
+        }
+    }
+    Ok(RemoveMemberOutcome {
+        residual_owned: ResidualOwnedReach {
+            count: owned.len() as u32,
+            contexts,
+        },
+    })
 }
 
 /// Change an existing member's role. Owner/maintainer only. Cannot create a
@@ -575,6 +606,27 @@ mod lifecycle_tests {
         rid
     }
 
+    /// A profile-owned context shared to `team` via `kb_team_contexts` — the
+    /// offboarding shape: a personal context whose resources the team can reach.
+    async fn mk_shared_profile_context(pool: &PgPool, owner: Uuid, team: Uuid, slug: &str) -> Uuid {
+        let ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+        )
+        .bind(owner)
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+            .bind(ctx)
+            .bind(team)
+            .execute(pool)
+            .await
+            .unwrap();
+        ctx
+    }
+
     async fn is_visible(pool: &PgPool, profile: Uuid, resource: Uuid) -> bool {
         sqlx::query_scalar!(
             "SELECT EXISTS(SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
@@ -614,6 +666,85 @@ mod lifecycle_tests {
 
         let denied = team_detail(&pool, ProfileId::from(outsider), team).await;
         assert!(matches!(denied, Err(ApiError::NotFound)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn remove_member_surfaces_residual_owned_reach(pool: PgPool) {
+        // owner removes `leaver`, who owns 2 resources in a shared context + 0 elsewhere.
+        let owner = mk_profile(&pool, "owner").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, leaver, "member", "native").await;
+
+        let shared = mk_shared_profile_context(&pool, leaver, team, "shared").await;
+        let _r1 = mk_homed_resource(&pool, shared, leaver).await;
+        let _r2 = mk_homed_resource(&pool, shared, leaver).await;
+
+        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
+            .await
+            .expect("removal ok");
+        assert_eq!(outcome.residual_owned.count, 2);
+        assert_eq!(outcome.residual_owned.contexts.len(), 1);
+        assert_eq!(outcome.residual_owned.contexts[0].count, 2);
+        assert!(outcome.residual_owned.contexts[0]
+            .context_ref
+            .ends_with("/shared"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn remove_member_residual_groups_same_slug_contexts_by_identity(pool: PgPool) {
+        // Two DISTINCT contexts sharing the slug "docs" (slug is unique only per-owner),
+        // both shared to the team, both holding leaver-owned resources. Resources are
+        // inserted interleaved (A, B, A); kb_resources.id is uuid_generate_v7 (monotonic),
+        // so `ORDER BY slug, resource_id` yields the non-adjacent sequence A, B, A. The
+        // fold must group by context IDENTITY — an adjacency fold would split A in two.
+        let owner = mk_profile(&pool, "owner").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let carol = mk_profile(&pool, "carol").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, leaver, "member", "native").await;
+
+        let ctx_a = mk_shared_profile_context(&pool, carol, team, "docs").await; // @carol/docs
+        let ctx_b = mk_shared_profile_context(&pool, leaver, team, "docs").await; // @leaver/docs
+
+        let _r1 = mk_homed_resource(&pool, ctx_a, leaver).await;
+        let _r2 = mk_homed_resource(&pool, ctx_b, leaver).await;
+        let _r3 = mk_homed_resource(&pool, ctx_a, leaver).await;
+
+        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
+            .await
+            .expect("removal ok");
+        assert_eq!(outcome.residual_owned.count, 3);
+        assert_eq!(
+            outcome.residual_owned.contexts.len(),
+            2,
+            "one entry per context identity, not per row-run"
+        );
+        let by_ref: std::collections::HashMap<&str, u32> = outcome
+            .residual_owned
+            .contexts
+            .iter()
+            .map(|c| (c.context_ref.as_str(), c.count))
+            .collect();
+        assert_eq!(by_ref.get("@carol/docs"), Some(&2));
+        assert_eq!(by_ref.get("@leaver/docs"), Some(&1));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn remove_member_residual_is_empty_when_nothing_owned(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, leaver, "member", "native").await;
+
+        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
+            .await
+            .expect("removal ok");
+        assert_eq!(outcome.residual_owned.count, 0);
+        assert!(outcome.residual_owned.contexts.is_empty());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
+use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
     TeamUpdateRequest,
@@ -169,7 +170,7 @@ pub async fn delete(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 204, description = "Member removed"),
+        (status = 200, description = "Member removed; residual owned-resource reach reported", body = RemoveMemberOutcome),
         (status = 403, description = "Forbidden (not owner/maintainer and not self)"),
         (status = 404, description = "Member not found"),
         (status = 409, description = "Cannot remove last owner or SAML-provisioned row"),
@@ -179,15 +180,15 @@ pub async fn remove_member(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
-) -> ApiResult<StatusCode> {
-    team_service::remove_member(
+) -> ApiResult<Json<RemoveMemberOutcome>> {
+    let outcome = team_service::remove_member(
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         team_id,
         profile_id,
     )
     .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(outcome))
 }
 
 #[utoipa::path(

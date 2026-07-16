@@ -139,8 +139,11 @@ lib/temper/generated/models/reconcile_telos.rb
 lib/temper/generated/models/reconcile_telos_block.rb
 lib/temper/generated/models/reconcile_tombstone.rb
 lib/temper/generated/models/relationship_ack.rb
+lib/temper/generated/models/remove_member_outcome.rb
 lib/temper/generated/models/residual_bucket.rb
+lib/temper/generated/models/residual_context.rb
 lib/temper/generated/models/residual_groups.rb
+lib/temper/generated/models/residual_owned_reach.rb
 lib/temper/generated/models/resource_annotate_request.rb
 lib/temper/generated/models/resource_create_request.rb
 lib/temper/generated/models/resource_detail.rb
