@@ -5732,8 +5732,15 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Member removed"
+          "200": {
+            "description": "Member removed; residual owned-resource reach reported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveMemberOutcome"
+                }
+              }
+            }
           },
           "403": {
             "description": "Forbidden (not owner/maintainer and not self)"
@@ -9208,6 +9215,18 @@
           }
         }
       },
+      "RemoveMemberOutcome": {
+        "type": "object",
+        "description": "Response to a member removal (or self-leave): the removal happened; this\nreports the residual owned-resource reach so the caller can hand it off.",
+        "required": [
+          "residual_owned"
+        ],
+        "properties": {
+          "residual_owned": {
+            "$ref": "#/components/schemas/ResidualOwnedReach"
+          }
+        }
+      },
       "ResidualBucket": {
         "type": "object",
         "description": "One residual bucket: a distinct value of the group key, and how many otherwise\nuncontained resources carry it.",
@@ -9222,6 +9241,25 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "ResidualContext": {
+        "type": "object",
+        "description": "One team context a removed member still owns resources in, with the count.",
+        "required": [
+          "context_ref",
+          "count"
+        ],
+        "properties": {
+          "context_ref": {
+            "type": "string",
+            "description": "Decorated context ref `{owner_ref}/{slug}`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -9241,6 +9279,27 @@
           },
           "group_key": {
             "type": "string"
+          }
+        }
+      },
+      "ResidualOwnedReach": {
+        "type": "object",
+        "description": "The resources a removed member still OWNS in the team's contexts — the reach\nan admin should hand off via `team reassign`. `count == 0` is the clean case.",
+        "required": [
+          "count",
+          "contexts"
+        ],
+        "properties": {
+          "contexts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResidualContext"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },

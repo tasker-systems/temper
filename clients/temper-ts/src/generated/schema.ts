@@ -3118,6 +3118,13 @@ export interface components {
             edge_handle: string;
         };
         /**
+         * @description Response to a member removal (or self-leave): the removal happened; this
+         *     reports the residual owned-resource reach so the caller can hand it off.
+         */
+        RemoveMemberOutcome: {
+            residual_owned: components["schemas"]["ResidualOwnedReach"];
+        };
+        /**
          * @description One residual bucket: a distinct value of the group key, and how many otherwise
          *     uncontained resources carry it.
          */
@@ -3126,6 +3133,13 @@ export interface components {
             count: number;
             value: string;
         };
+        /** @description One team context a removed member still owns resources in, with the count. */
+        ResidualContext: {
+            /** @description Decorated context ref `{owner_ref}/{slug}`. */
+            context_ref: string;
+            /** Format: int32 */
+            count: number;
+        };
         /**
          * @description The residue of a context, grouped. `buckets` is empty (never null) when every
          *     resource reaches a container — the healthy steady state.
@@ -3133,6 +3147,15 @@ export interface components {
         ResidualGroups: {
             buckets: components["schemas"]["ResidualBucket"][];
             group_key: string;
+        };
+        /**
+         * @description The resources a removed member still OWNS in the team's contexts — the reach
+         *     an admin should hand off via `team reassign`. `count == 0` is the clean case.
+         */
+        ResidualOwnedReach: {
+            contexts: components["schemas"]["ResidualContext"][];
+            /** Format: int32 */
+            count: number;
         };
         /**
          * @description Request body for annotating a resource's block with provenance sources (issue #355) —
@@ -7448,12 +7471,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Member removed */
-            204: {
+            /** @description Member removed; residual owned-resource reach reported */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RemoveMemberOutcome"];
+                };
             };
             /** @description Forbidden (not owner/maintainer and not self) */
             403: {

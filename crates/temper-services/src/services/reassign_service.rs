@@ -131,6 +131,60 @@ pub async fn reassign_resource(
     Ok(())
 }
 
+/// A resource owned by a given profile and homed in a context shared to a given
+/// team. The single definition of "what a departing member still owns in this
+/// team" — consumed by both the bulk handoff (the move set) and `remove_member`'s
+/// residual surfacing (the count + per-context breakdown), so the two can never drift.
+pub struct ScopedOwnedRow {
+    pub resource_id: Uuid,
+    pub context_id: Uuid,
+    /// Decorated context ref `{owner_ref}/{slug}` (owner_ref: `@handle` | `+slug`).
+    pub context_ref: String,
+}
+
+/// Resources owned by `profile_id` and homed in a context shared to `team_id`.
+/// Ordered by `(context slug, resource_id)` for stable output only — consumers
+/// that group by context MUST key on `context_id` (a slug is unique only per-owner,
+/// so two distinct contexts can share a slug and are NOT guaranteed to be adjacent).
+pub async fn team_scoped_owned(
+    pool: &PgPool,
+    team_id: Uuid,
+    profile_id: Uuid,
+) -> ApiResult<Vec<ScopedOwnedRow>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT h.resource_id AS "resource_id!",
+               c.id          AS "context_id!",
+               c.slug        AS "slug!",
+               CASE c.owner_table
+                 WHEN 'kb_teams'    THEN '+' || t.slug
+                 WHEN 'kb_profiles' THEN '@' || p.handle
+               END AS "owner_ref!"
+        FROM kb_team_contexts tc
+        JOIN kb_resource_homes h
+          ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
+        JOIN kb_contexts c ON c.id = tc.context_id
+        LEFT JOIN kb_teams    t ON c.owner_table = 'kb_teams'    AND t.id = c.owner_id
+        LEFT JOIN kb_profiles p ON c.owner_table = 'kb_profiles' AND p.id = c.owner_id
+        WHERE tc.team_id = $1 AND h.owner_profile_id = $2
+        ORDER BY c.slug, h.resource_id
+        "#,
+        team_id,
+        profile_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ScopedOwnedRow {
+            resource_id: r.resource_id,
+            context_id: r.context_id,
+            context_ref: format!("{}/{}", r.owner_ref, r.slug),
+        })
+        .collect())
+}
+
 /// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every resource owned by
 /// `from` and homed in a context shared to `team_id`. Auth: caller manages the team AND
 /// `to` is a member of it. One transaction; returns the reassigned resource ids.
@@ -170,20 +224,12 @@ pub async fn reassign_team_resources(
         return Err(ApiError::Forbidden);
     }
 
-    // Scope read: resources owned by `from` AND homed in a context shared to the team.
-    let targets: Vec<Uuid> = sqlx::query_scalar!(
-        r#"
-        SELECT h.resource_id
-        FROM kb_team_contexts tc
-        JOIN kb_resource_homes h
-          ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
-        WHERE tc.team_id = $1 AND h.owner_profile_id = $2
-        "#,
-        team_id,
-        from_profile_id,
-    )
-    .fetch_all(pool)
-    .await?;
+    // Scope read: the shared definition (owned by `from` ∩ homed in a team-shared context).
+    let targets: Vec<Uuid> = team_scoped_owned(pool, team_id, from_profile_id)
+        .await?
+        .into_iter()
+        .map(|r| r.resource_id)
+        .collect();
     if targets.is_empty() {
         return Ok(Vec::new());
     }
@@ -345,6 +391,33 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn team_scoped_owned_matches_bulk_scope(pool: PgPool) {
+        // Same fixture shape as `bulk_reassigns_only_owned_and_scoped`.
+        let leaver = mk_profile(&pool, "leaver").await;
+        let other = mk_profile(&pool, "other").await;
+        let team = mk_team(&pool, "acme").await;
+
+        let shared = mk_context(&pool, "shared", leaver).await;
+        share_ctx(&pool, shared, team).await;
+        let private = mk_context(&pool, "private", leaver).await; // NOT shared to team
+
+        let in_scope = mk_homed_resource(&pool, shared, leaver).await; // owned + scoped → listed
+        let _out_scope = mk_homed_resource(&pool, private, leaver).await; // owned, not scoped → excluded
+        let _not_leaver = mk_homed_resource(&pool, shared, other).await; // scoped, other owner → excluded
+
+        let rows = team_scoped_owned(&pool, team, *leaver)
+            .await
+            .expect("scope read");
+        let ids: Vec<uuid::Uuid> = rows.iter().map(|r| r.resource_id).collect();
+        assert_eq!(ids, vec![in_scope]);
+        assert!(
+            rows[0].context_ref.ends_with("/shared"),
+            "decorated ref: {}",
+            rows[0].context_ref
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

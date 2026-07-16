@@ -260,12 +260,13 @@ pub async fn leave_remote(
         .get()
         .await
         .map_err(crate::commands::client_err)?;
-    client
+    let outcome = client
         .teams()
         .remove_member(team_id, me.id)
         .await
         .map_err(crate::commands::client_err)?;
     output::success("You have left the team.");
+    print_residual_nudge(team, &me.id.to_string(), &outcome.residual_owned);
     Ok(())
 }
 
@@ -279,13 +280,41 @@ pub async fn remove_member_remote(
     let team_id = resolve_team_id(client, team).await?;
     let profile_id = uuid::Uuid::parse_str(profile)
         .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))?;
-    client
+    let outcome = client
         .teams()
         .remove_member(team_id, profile_id)
         .await
         .map_err(crate::commands::client_err)?;
     output::success("Member removed.");
+    print_residual_nudge(team, profile, &outcome.residual_owned);
     Ok(())
+}
+
+/// On a non-empty residual reach, nudge toward the existing ownership handoff.
+/// Owned resources in the team's contexts keep the removed member as their owner
+/// (and, post-D1, their access) until handed off — surface, don't sweep.
+fn print_residual_nudge(
+    team: &str,
+    from: &str,
+    reach: &temper_core::types::reassign::ResidualOwnedReach,
+) {
+    if reach.count == 0 {
+        return;
+    }
+    let ctxs: Vec<&str> = reach
+        .contexts
+        .iter()
+        .map(|c| c.context_ref.as_str())
+        .collect();
+    output::warning(format!(
+        "{} still owns {} resource(s) in: {}. Hand them off with:\n  \
+         temper team reassign {} --from {} --to <member-uuid>",
+        from,
+        reach.count,
+        ctxs.join(", "),
+        team,
+        from,
+    ));
 }
 
 /// Change a member's role (owner/maintainer).

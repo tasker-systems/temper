@@ -387,3 +387,84 @@ async fn http_create_child_of_foreign_team_is_403(pool: PgPool) {
         "non-member creating a child must be 403 Forbidden"
     );
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn http_remove_member_returns_residual_reach_body(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    // Owner creates a team; a leaver joins as member.
+    let owner_email = format!("http-rm-owner-{}@example.com", Uuid::new_v4());
+    let owner = common::fixtures::create_test_profile(&app.pool, &owner_email).await;
+    let team = team_service::create_team(
+        &app.pool,
+        ProfileId::from(owner),
+        &req("http-offboard", None, None),
+    )
+    .await
+    .expect("team")
+    .id;
+    let leaver_email = format!("http-rm-leaver-{}@example.com", Uuid::new_v4());
+    let leaver = common::fixtures::create_test_profile(&app.pool, &leaver_email).await;
+    team_service::add_member(
+        &app.pool,
+        ProfileId::from(owner),
+        team,
+        &AddMemberRequest {
+            profile_id: leaver,
+            role: TeamRole::Member,
+        },
+    )
+    .await
+    .expect("add leaver");
+
+    // Leaver owns a resource in a personal context shared to the team.
+    let ctx: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, 'off-ctx', 'off-ctx') RETURNING id",
+    )
+    .bind(leaver)
+    .fetch_one(&app.pool)
+    .await
+    .expect("ctx");
+    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+        .bind(ctx)
+        .bind(team)
+        .execute(&app.pool)
+        .await
+        .expect("share");
+    let rid: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ('r','r') RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("res");
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+           (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(rid)
+    .bind(ctx)
+    .bind(leaver)
+    .execute(&app.pool)
+    .await
+    .expect("home");
+
+    // Owner removes the leaver via HTTP → 200 + residual body.
+    let token = common::generate_test_jwt(&format!("test|{owner}"), &owner_email);
+    let resp = app
+        .client
+        .delete(app.url(&format!("/api/teams/{team}/members/{leaver}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("delete member request");
+
+    assert_eq!(resp.status(), 200, "removal returns 200 with a body");
+    let body: temper_core::types::reassign::RemoveMemberOutcome = resp.json().await.expect("json");
+    assert_eq!(body.residual_owned.count, 1);
+    assert_eq!(body.residual_owned.contexts.len(), 1);
+    assert!(body.residual_owned.contexts[0]
+        .context_ref
+        .ends_with("/off-ctx"));
+}
