@@ -287,21 +287,17 @@ mod tests {
         );
     }
 
-    /// The ingest scope is the producer-INTERSECTION of the cogmap's joined teams, not the union. A
-    /// cogmap joined to two teams must ingest only contexts BOTH can reach — otherwise a high-privilege
-    /// team's context leaks down into the shared map that the other team reads (issue #459 review).
+    /// The change-detection scope is the UNION of the joined teams' reachable contexts — not the
+    /// intersection. A context reachable by ANY joined team counts, because this scope only drives the
+    /// "did anything change?" trigger + watermark; cross-team leak-safety is enforced downstream at the
+    /// resource grain (the cogmap-principal distillation), so over-approximating here is safe and a
+    /// narrower intersection would under-trigger. The boundary is still real: a context NO joined team
+    /// can reach is excluded.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn ingest_scope_is_producer_intersection_across_joined_teams(pool: PgPool) {
+    async fn change_detection_scope_unions_joined_teams_reachable_contexts(pool: PgPool) {
         let s = seed(&pool).await;
-        // s.ctx is OWNED by the seed team (already joined to s.cogmap). Join a SECOND team to the same
-        // cogmap: the map now spans two teams, so its scope collapses to what both reach.
-        // The seed team by slug — NOT via `kb_team_members WHERE profile_id = member`, which is
-        // ambiguous: the auto-join trigger also enrolls the member in the `temper-system` root team,
-        // so that query returns two rows and picks a team the cogmap is not joined to.
-        let seed_team: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'team'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        // Join a SECOND team to the cogmap. s.ctx is owned by the seed team only — team_b cannot reach
+        // it — yet under the union it still counts (this is change detection, not a visibility gate).
         let team_b: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_teams (slug, name) VALUES ('team-b', 'Team B') RETURNING id",
         )
@@ -315,61 +311,36 @@ mod tests {
             .await
             .unwrap();
 
-        // Activity in s.ctx — reachable by the seed team only. team_b cannot reach it, so with the
-        // cogmap now spanning both teams it drops out of the intersection: it must NOT count. (Under
-        // the old union it would have — the leak.)
         for _ in 0..3 {
             add_event(&pool, s.entity, "resource_created", s.ctx).await;
         }
-        let leaked = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
-            .await
-            .unwrap();
-        assert_eq!(
-            leaked.new_resources, 0,
-            "s.ctx is reachable by only one of the two joined teams — excluded by the intersection"
-        );
-        assert_eq!(leaked.new_events, 0);
-        assert_eq!(leaked.max_event_id, None);
-
-        // A context SHARED to BOTH teams IS in the intersection → its activity counts.
-        let shared_ctx: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-             VALUES ('kb_profiles', $1, 'shared', 'Shared') RETURNING id",
-        )
-        .bind(s.outsider)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        for team in [seed_team, team_b] {
-            sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
-                .bind(shared_ctx)
-                .bind(team)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        add_event(&pool, s.entity, "resource_created", shared_ctx).await;
+        // Noise in a context NO joined team can reach (outsider-owned) — the union's outer boundary.
+        add_event(&pool, s.entity, "resource_created", s.other_ctx).await;
 
         let d = ingest_delta(&pool, s.member.into(), s.cogmap.into(), None)
             .await
             .unwrap();
         assert_eq!(
-            d.new_resources, 1,
-            "the shared context is in both teams' reach → in the intersection → counted"
+            d.new_resources, 3,
+            "s.ctx is reachable by one joined team → in the union (change detection over-approximates; \
+             leak-safety is downstream, not here)"
+        );
+        assert_eq!(
+            d.new_events, 3,
+            "s.other_ctx is reachable by no joined team → excluded even from the union"
         );
         assert!(
             d.max_event_id.is_some(),
-            "the shared-context event is the window's newest, so it is advanceable"
+            "the newest in-scope event is advanceable"
         );
     }
 
-    /// The intersection expands each joined team's reach UP the team DAG (shares inherit down): a
-    /// context shared to a COMMON ANCESTOR of two joined child teams is reachable by both, so it is in
-    /// the intersection — while a context shared to only one child is not. This is the "mutual
-    /// ancestor up-traversal" the review asked for; on a DAG siblings intersect on their shared
-    /// common ground, not 1:1.
+    /// The change-detection scope expands a joined team's reach UP the team DAG (shares inherit down):
+    /// a context shared to a joined team's ANCESTOR is reachable by that team, so it counts. A context
+    /// shared only to an unrelated team — one the cogmap is not joined to and that is not an ancestor
+    /// of a joined team — does not.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn intersection_expands_shares_up_the_team_dag(pool: PgPool) {
+    async fn change_detection_scope_expands_shares_up_the_team_dag(pool: PgPool) {
         async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
             sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
                 .bind(slug)
@@ -396,23 +367,21 @@ mod tests {
             ctx
         }
 
-        // Parent P with two children T1, T2; a cogmap joined to BOTH children.
+        // Parent P with child T (joined to the cogmap); an unrelated team U (not joined, not ancestor).
         let p = mk_team(&pool, "p").await;
-        let t1 = mk_team(&pool, "t1").await;
-        let t2 = mk_team(&pool, "t2").await;
-        for child in [t1, t2] {
-            sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
-                .bind(child)
-                .bind(p)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        let t = mk_team(&pool, "t").await;
+        let u = mk_team(&pool, "u").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(t)
+            .bind(p)
+            .execute(&pool)
+            .await
+            .unwrap();
         let member = insert_profile(&pool, "member").await;
         sqlx::query(
             "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
         )
-        .bind(t1)
+        .bind(t)
         .bind(member)
         .execute(&pool)
         .await
@@ -437,30 +406,28 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        for team in [t1, t2] {
-            sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
-                .bind(cogmap)
-                .bind(team)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+            .bind(cogmap)
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let owner = insert_profile(&pool, "ctx_owner").await;
-        // Shared to the common PARENT — both children reach it via ancestor up-traversal.
-        let ctx_parent = share_ctx(&pool, owner, "cp", p).await;
-        // Shared to ONE child only — the other child cannot reach it.
-        let ctx_t1_only = share_ctx(&pool, owner, "c1", t1).await;
-        add_event(&pool, entity, "resource_created", ctx_parent).await;
-        add_event(&pool, entity, "resource_created", ctx_t1_only).await;
+        // Shared to T's ANCESTOR P — T reaches it via up-traversal → in scope.
+        let ctx_ancestor = share_ctx(&pool, owner, "cp", p).await;
+        // Shared to an unrelated team the cogmap is not joined to → out of scope.
+        let ctx_unrelated = share_ctx(&pool, owner, "cu", u).await;
+        add_event(&pool, entity, "resource_created", ctx_ancestor).await;
+        add_event(&pool, entity, "resource_created", ctx_unrelated).await;
 
         let d = ingest_delta(&pool, member.into(), cogmap.into(), None)
             .await
             .unwrap();
         assert_eq!(
             d.new_resources, 1,
-            "only the parent-shared context is in BOTH children's ancestor reach (intersection); \
-             the context shared to one child alone is excluded"
+            "the ancestor-shared context is reachable by the joined team via up-traversal; the \
+             unrelated team's context is not reachable by any joined team"
         );
     }
 

@@ -2310,12 +2310,13 @@ impl Backend for DbBackend {
             return Err(TemperError::Forbidden);
         }
 
-        // Server-verified advance (issue #459): the target must be an event this cogmap actually
-        // ingests — a real kb_events row anchored to one of its team contexts — not any global
-        // kb_events.id. This guards the inverse failure: a blocked/empty tick can never move the
-        // watermark past content it never processed. `max_event_id` from steward_ingest_delta is by
-        // construction in this window, so a well-formed advance always passes. A non-ingested (or
-        // nonexistent) event collapses to one NotFound — no oracle distinguishing the two.
+        // Watermark hygiene (issue #459): the advance target must be a real kb_events row within this
+        // cogmap's change-detection scope (anchored to a context some joined team can reach), not any
+        // global kb_events.id — so the cursor can't jump to a resource id or an unrelated event.
+        // `max_event_id` from steward_ingest_delta is in this scope by construction, so a well-formed
+        // advance always passes. A non-scoped (or nonexistent) event collapses to one NotFound — no
+        // oracle distinguishing the two. (Cross-team content leak-safety is enforced downstream at the
+        // resource grain by the cogmap-principal distillation, not here.)
         let in_window: bool = sqlx::query_scalar!(
             r#"SELECT steward_event_in_ingest_window($1, $2) AS "in_window!""#,
             *cmd.cogmap,
