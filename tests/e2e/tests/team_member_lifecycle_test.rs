@@ -193,9 +193,10 @@ async fn team_member_lifecycle_matrix(pool: sqlx::PgPool) {
         "cannot grant owner via role change"
     );
 
-    // 7. Member self-leaves -> 204. Re-add as a plain member for the next steps.
+    // 7. Member self-leaves -> 200 with the residual-owned-reach body. Re-add as a
+    //    plain member for the next steps.
     let status = delete_member(&app, &member_token, team.id, member_id).await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "member can self-leave");
+    assert_eq!(status, StatusCode::OK, "member can self-leave");
 
     app.client
         .teams()
