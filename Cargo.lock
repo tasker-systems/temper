@@ -5813,6 +5813,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
+ "temper-auth",
  "temper-core",
  "temper-ingest",
  "temper-substrate",

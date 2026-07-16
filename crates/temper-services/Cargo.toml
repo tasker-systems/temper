@@ -5,6 +5,7 @@ edition = "2021"
 description = "Shared business-logic + auth-infra layer for temper-api and temper-mcp"
 
 [dependencies]
+temper-auth = { path = "../temper-auth" }
 temper-core = { path = "../temper-core", features = ["web-api"] }
 temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-substrate = { path = "../temper-substrate" }

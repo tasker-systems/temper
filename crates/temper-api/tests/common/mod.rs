@@ -322,6 +322,7 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
         vercel_connect: None,
+        slack_link: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);
@@ -373,6 +374,7 @@ pub async fn setup_test_app_with_config(
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
         vercel_connect: None,
+        slack_link: None,
     };
     configure(&mut config);
 

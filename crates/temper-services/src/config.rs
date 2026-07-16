@@ -25,6 +25,24 @@ pub struct ApiConfig {
     /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
     /// hardcoded; a self-hosted operator sets their own.
     pub vercel_connect: Option<VercelConnectConfig>,
+    /// Slack account-link configuration. `None` when the three env vars are not all
+    /// set — the link flow's endpoints are then disabled rather than half-configured.
+    pub slack_link: Option<SlackLinkConfig>,
+}
+
+/// Slack account-link configuration. `None` when the three values are not all present —
+/// a partial set is treated as unconfigured, so the endpoints are disabled rather than
+/// half-configured (the `parse_vercel_connect` precedent).
+#[derive(Debug, Clone)]
+pub struct SlackLinkConfig {
+    /// The OAuth client the link flow authorizes as. Its redirect_uri must be registered:
+    /// Auth0's Allowed Callback URLs, or `AS_CLIENTS` on an AS instance.
+    pub client_id: String,
+    /// Shared with the mention agent; gates `POST /internal/slack/link-intents`.
+    /// Distinct from `INTERNAL_RECONCILE_SECRET`: a different principal gets a different secret.
+    pub hmac_secret: String,
+    /// This instance's public origin, used to build the callback redirect_uri.
+    pub public_base_url: String,
 }
 
 impl ApiConfig {
@@ -78,6 +96,7 @@ impl ApiConfig {
                 .filter(|s| !s.is_empty()),
             embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
             vercel_connect: parse_vercel_connect(&lookup),
+            slack_link: parse_slack_link(&lookup),
         })
     }
 }
@@ -93,5 +112,16 @@ fn parse_vercel_connect(lookup: impl Fn(&str) -> Option<String>) -> Option<Verce
         project_id: get("VERCEL_CONNECT_PROJECT_ID")?,
         team_id: get("VERCEL_CONNECT_TEAM_ID")?,
         team_slug: get("VERCEL_CONNECT_TEAM_SLUG")?,
+    })
+}
+
+/// Build the Slack link config from env — `Some` only when all three values are
+/// present and non-empty (the `parse_vercel_connect` all-or-nothing precedent).
+fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLinkConfig> {
+    let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
+    Some(SlackLinkConfig {
+        client_id: get("SLACK_LINK_CLIENT_ID")?,
+        hmac_secret: get("SLACK_LINK_SECRET")?,
+        public_base_url: get("PUBLIC_BASE_URL")?,
     })
 }

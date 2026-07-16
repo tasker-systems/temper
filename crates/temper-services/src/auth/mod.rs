@@ -311,6 +311,7 @@ mod tests {
             internal_reconcile_secret: None,
             embed_dispatch_secret: None,
             vercel_connect: None,
+            slack_link: None,
         };
         AppState::new(
             pool,
