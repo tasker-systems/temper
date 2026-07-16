@@ -25,26 +25,29 @@ export default slackChannel({
    * silently swallow the mention.
    */
   async onAppMention(ctx: SlackContext, message: SlackMessage) {
-    const auth = defaultSlackAuth(message, ctx);
-    const decision = decideIdentity(auth);
+    const decision = decideIdentity(defaultSlackAuth(message, ctx));
 
     // Bots and authorless events never dispatch. Dropping is silent by design:
     // an error reply to a bot is how mention loops start.
     if (decision.kind === "rejected") return null;
 
-    // T1's acceptance: the resolved principal is echoed back, whole.
-    try {
-      await ctx.thread.post(unlinkedPrompt(decision.principalId));
-    } catch (error) {
-      console.error("mention: unlinked prompt delivery failed", {
-        principalId: decision.principalId,
-        error,
-      });
-    }
+    // Posting here is a pre-dispatch side effect on the inbound webhook side —
+    // the same seam eve's own default uses for its "Thinking..." indicator.
+    await ctx.thread.post(unlinkedPrompt(decision.principalId));
 
-    // The decision above already proved `auth` is a non-null human; it is
-    // passed on verbatim because dispatch needs the whole SessionAuthContext
-    // (attributes, authenticator, issuer), not just the principal.
-    return { auth };
+    // Deliberately DROP rather than dispatch, even though this is a human we
+    // resolved and `auth` is right here.
+    //
+    // T1 has no temper reach, so a dispatched turn would run the model with no
+    // tools and nothing to ground an answer in — and since only `onAppMention`
+    // is overridden, the DEFAULT `message.completed` handler would post that
+    // answer to the thread. The user would get two replies: the prompt above,
+    // then an LLM improvising about a knowledge base it cannot read. Worse than
+    // useless — it is the "plausible answer under no identity" the agent's
+    // instructions forbid.
+    //
+    // T2 lands the account link; the linked branch dispatches `{ auth }` then.
+    // Until there is something a turn can honestly do, the prompt IS the reply.
+    return null;
   },
 });

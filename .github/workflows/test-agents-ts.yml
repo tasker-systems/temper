@@ -69,6 +69,14 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # NOTE: this job does NOT run `npm run build`, so it cannot catch an eve
+  # DISCOVERY failure (missing `instructions.md`, an unregistered channel) —
+  # those are build-time only, and typecheck/vitest are both blind to them. The
+  # steward deploys on merge to `main`, so such a break surfaces as a failed
+  # production deploy rather than a red PR. The `mention` job below runs the
+  # build for exactly this reason; the steward's job wants the same treatment,
+  # left out here only because it is a different agent's narrative.
+
   mention:
     name: mention agent (typecheck, vitest)
     runs-on: ubuntu-latest
@@ -99,3 +107,11 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      # The gate that matters, and the one that was missing: eve resolves the agent by
+      # DISCOVERY at build time — authored instructions, channels, routes. A missing
+      # `agent/instructions.md` fails the build while typecheck and vitest both stay green,
+      # so the first sign of it is a failed Vercel deploy. That is exactly how it shipped
+      # once. Build here instead of finding out in prod.
+      - name: Build (eve discovery)
+        run: npm run build
