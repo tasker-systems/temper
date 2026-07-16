@@ -384,7 +384,7 @@ Note for whoever writes that migration: `20260709000030_backfill_sdk_emitter_ent
 `EXISTS (<handle>@web)`, which **structurally excludes exactly the profiles that need help** — they
 have no `@web` to key off. That guard shape must not be copied.
 
-**This spec assumes emitters exist.** `019f6b06` is a hard dependency of §9 step 4.
+**This spec assumes emitters exist.** `019f6b06-c48f-7a81-a238-cdd6b131f3dc` is a hard dependency of §9 step 4.
 
 ---
 
@@ -438,7 +438,7 @@ not part of this arc — see §7.
 4. **The grant chokepoint** — `_admin_grant_created` / `_admin_grant_revoked`, `EventKind` variants,
    idempotent-re-apply projectors, `kb_access_grants` → `INPUT_TABLES`, actor threaded into
    `delete_grant`. This is the proving pair: it catches the generic path **and** `grant_reach`'s
-   bypass, and exercises replay ownership end-to-end. **Depends on `019f6b06`.**
+   bypass, and exercises replay ownership end-to-end. **Depends on `019f6b06-c48f-7a81-a238-cdd6b131f3dc`.**
 5. **The rest of the authority tier**, then the lifecycle tier (§6). Its own plan, written once the
    step-4 pattern exists — not this one.
 6. **The doc amendments** (§10) land with step 4 — not before. The claim becomes true when the first
@@ -485,7 +485,7 @@ They stop being orphans.
 2. **`kb_teams.created_by`** — additive column so future teams record a creator. Follow-on task.
 3. **Multi-tenancy** — a self-hosted instance replaying its own ledger inherits §8's epoch semantics
    with different data. The epoch is per-instance. Unexamined.
-4. **Should this task link to the ledger-as-readable-surface goal (`019f51e3`)?** The task deferred
+4. **Should this task link to the ledger-as-readable-surface goal (`019f51e3-726b-75e3-ab55-0b80524073f2`)?** The task deferred
    the link pending sub-question 1. Sub-question 1 is answered — the ledger *does* admit admin acts —
    and D7 makes this a ledger-read-surface deliverable. **Link it.**
 

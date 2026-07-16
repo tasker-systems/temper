@@ -31,7 +31,7 @@
 - **`019f6b06-c48f-7a81-a238-cdd6b131f3dc`** — *"Legacy profiles have no emitter entities"* — must be **applied to prod before Task 5's first event fires**. `resolve_emitter` is `fetch_one` with no lazy creation, and two approved prod users have zero emitters. Ships independently; this plan assumes emitters exist.
 - **`019f6b1b-59ea-7660-b631-3b811aea378d`** — *"`payload_schema` is RED on main and runs in no CI job"* — **BLOCKS Task 1.** The snapshot test fails on a clean checkout (schemars `$defs` ordering drift) and `scenario-schema` is wired into no CI job or cargo-make task, so nothing caught it. Task 1 adds two `AnchorTable` variants, which legitimately restales 5 snapshots — and that regen is indistinguishable from the pre-existing repo-wide churn until the baseline is green. **Do not start Task 1 until this lands.**
 
-> **Task 1 implementer, read this first.** After `019f6b1b` lands, your regen should touch **only**
+> **Task 1 implementer, read this first.** After `019f6b1b-59ea-7660-b631-3b811aea378d` lands, your regen should touch **only**
 > the 5 snapshots carrying `AnchorTable` in their `$defs` (`resource_created`, `cogmap_seeded`,
 > `relationship_asserted`, `property_asserted`, `region_materialized`), and the only change in each
 > should be **two new enum values** (`kb_connections`, `kb_machine_clients`). If your regen churns
@@ -356,7 +356,7 @@ struct AdminFixture {
 /// `provision_profile_entities` is what creates the `<handle>@<surface>` emitter that
 /// `resolve_emitter` (a `fetch_one`, no lazy creation) needs and that this ledger reads back.
 /// A fixture that hand-INSERTs a profile passes while production 500s — which is exactly the
-/// live bug recorded in task `019f6b06`.
+/// live bug recorded in task `019f6b06-c48f-7a81-a238-cdd6b131f3dc`.
 async fn admin_fixture(pool: &PgPool) -> AdminFixture {
     // Read `context_read_predicate_test.rs` and `saml_provisioning_test.rs` first and reuse
     // whatever profile/team construction they already do rather than inventing a third shape.
@@ -1429,7 +1429,7 @@ actually ships."
 - **The remaining authority tier** (§6): machine provision/rebind/revoke/rotate, connection provision/revoke/attach_credential/grant-reach/affirm, `change_role`, `promote_admin`, `update_system_settings`, cogmap bind/unbind, context share/unshare, join-request review. Its own plan, written against this one's proven pattern. **Thread the actor into `promote_admin` and `update_system_settings`** — they take no `caller` today, which is a plumbing gap, not an auth hole.
 - **The principal-lifecycle tier** (§6): team create/delete/add_member/remove_member, invitations, SAML reconcile (whose actor is a system reconciler, not a profile — the actor model must handle it).
 - **`kb_teams.created_by`** — additive column so future teams record a creator independent of the sink (§11).
-- **Does a live profile-creation path still skip `provision_profile_entities`?** If invitation-accept or SAML creates profiles without it, `019f6b06`'s backfill is a treadmill.
+- **Does a live profile-creation path still skip `provision_profile_entities`?** If invitation-accept or SAML creates profiles without it, `019f6b06-c48f-7a81-a238-cdd6b131f3dc`'s backfill is a treadmill.
 
 ---
 
@@ -1449,7 +1449,7 @@ actually ships."
 | §7 replay ownership (`INPUT_TABLES`) | Task 5 Step 5; verified Step 8 |
 | §7 correlation threading | Task 5 Step 6 (`grant_reach`) |
 | §7 `EventKind` + projectors or replay breaks | Task 5 Step 4; verified Step 8 |
-| §7 emitter prerequisite | Extracted → `019f6b06`; noted as a dependency |
+| §7 emitter prerequisite | Extracted → `019f6b06-c48f-7a81-a238-cdd6b131f3dc`; noted as a dependency |
 | §8 epoch, no backfill | Task 4 |
 | §9 sequencing | Task order (read → invariant → epoch → writer → surfaces → docs) |
 | §10 doc amendments | Task 7 |
