@@ -64,28 +64,34 @@ describe('contextGraphHref', () => {
 });
 
 describe('resourceHref', () => {
-	it('builds the full resource path for a context-homed resource', () => {
-		expect(resourceHref(makeRow({}))).toBe(`/vault/@j-cole-taylor/temper/task/${ID}`);
+	it('returns a ref route for a cogmap-homed row (the 533-resource fix)', () => {
+		const row = makeRow({
+			context_owner_ref: null,
+			context_slug: null,
+			cogmap_id: 'x',
+			cogmap_name: 'Map',
+			doc_type_name: 'concept'
+		});
+		expect(resourceHref(row)).toBe(`/vault/r/${ID}`);
 	});
 
-	it('uses the exact doc_type and the bare id (no decorated ref)', () => {
-		expect(resourceHref(makeRow({ doc_type_name: 'session' }))).toBe(
-			`/vault/@j-cole-taylor/temper/session/${ID}`
-		);
+	it('returns the same ref route for a context-homed row', () => {
+		const row = makeRow({
+			context_owner_ref: '@j-cole-taylor',
+			context_slug: 'temper',
+			doc_type_name: 'task'
+		});
+		expect(resourceHref(row)).toBe(`/vault/r/${ID}`);
 	});
 
-	it('percent-encodes the doc_type segment', () => {
-		expect(resourceHref(makeRow({ doc_type_name: 'a b' }))).toBe(
-			`/vault/@j-cole-taylor/temper/a%20b/${ID}`
-		);
+	it('never returns null, whatever the home', () => {
+		expect(resourceHref(makeRow({ context_owner_ref: null, context_slug: null }))).toBeTruthy();
 	});
 
-	it('returns null for a cogmap-homed resource (null context fields)', () => {
-		expect(
-			resourceHref(
-				makeRow({ context_owner_ref: null, context_slug: null, cogmap_id: 'x', cogmap_name: 'Map' })
-			)
-		).toBe(null);
+	it('ignores doc_type — the route resolves on the id alone', () => {
+		// The old path carried an encoded doc_type segment. Resolution was always
+		// trailing-UUID-only, so it never disambiguated anything.
+		expect(resourceHref(makeRow({ doc_type_name: 'a b' }))).toBe(`/vault/r/${ID}`);
 	});
 });
 
