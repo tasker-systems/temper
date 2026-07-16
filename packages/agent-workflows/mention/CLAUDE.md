@@ -78,7 +78,56 @@ which is why parsing is never necessary.
    has to be ephemeral or DM. (`postDirectMessage` needs the `im:write` scope — already in the
    manifest.) eve's *default* handler additionally posts a public link-free status and edits it on
    `authorization.completed`; that public post is framework-owned and not reachable from an override.
-2. **Credentials: Connect is the eventual path.** T1 uses the raw env fallback
+2. **ONE DEPLOYMENT SERVES ONE SLACK WORKSPACE.** This is a hard ceiling, not a convention, and it
+   is the single most important fact on this page. Verified end-to-end in eve@0.18.1 +
+   `@vercel/connect@0.2.2`:
+
+   - `SlackBotToken = string | (() => Promise<string> | string)` — the function form takes **no
+     arguments**. Terminal call is `await e()` (`eve/dist/src/compiled/@chat-adapter/slack/api.js`).
+     There is no seam through which a team id could arrive.
+   - Slack bot tokens are **app-scoped**: one token per workspace install, shared by every user in
+     it. `connectSlackCredentials` pins `subject: { type: "app" }` and says so.
+   - `connectSlackCredentials(connector, params)` closes over `params` at **module load**:
+     `botToken: () => getToken(connector, { ...params, subject: { type: "app" } }, options)`.
+     `getToken` POSTs `https://api.vercel.com/v1/connect/token/<connector>` with exactly those
+     construction-time params; the ambient auth is the deployment's Vercel OIDC token, which
+     identifies the **deployment**, never the Slack workspace.
+   - Its cache key is `JSON.stringify({connector, ...params})` — **request-invariant**. Every request
+     in a deployment shares one entry. That alone proves single-install intent.
+   - `@vercel/connect` contains **zero** `AsyncLocalStorage` / ambient request context.
+   - eve **does** parse `team_id` off the inbound webhook and hands it to `buildSlackBinding`, but it
+     is used only for `slack.teamId` and session `state` — **never routed toward the token**.
+
+   **So `installationId` is not a tenancy knob.** It means *"if your connector holds several
+   installs, name which one THIS DEPLOYMENT uses."* The docstring's "invoked once per inbound
+   webhook … multi-workspace tenancy handled server-side" conflates **rotation** (a fresh token for a
+   *fixed* install — which is real) with **tenancy** (which is not reachable this way).
+
+   **The capability exists one layer down and is unwired.** eve vendors a `SlackAdapter`
+   (`dist/src/compiled/@chat-adapter/slack/index.js`) with genuine multi-workspace machinery —
+   `installationProvider` (docstring: *"for multi-workspace apps using external token management
+   (e.g. Vercel Connect)"*), `withBotToken`, `setInstallation`, `tokenClientCache`, and an
+   `AsyncLocalStorage`. **`slackChannel` never imports it** — it takes only the stateless primitives
+   from `.../slack/api.js`, whose options are `{ apiUrl?, fetch?, token }` with no context. Different
+   module; no shared state.
+
+   Consequence for the two deployment stories:
+
+   | | Slack app | Credentials | Works today? |
+   | --- | --- | --- | --- |
+   | **Self-hosted** | one per customer workspace, request_url = their host | their own signing secret + bot token | **Yes.** One app : one workspace : one temper. Raw env is the *correct* choice here, not a compromise. |
+   | **temperkb.io community** (one public @temper any workspace installs) | one app, request_url = temperkb.io | per-workspace token minted at OAuth install | **No.** Structurally impossible via `SLACK_BOT_TOKEN` *or* `connectSlackCredentials`. |
+
+   Known options for the community case, none free: (a) one deployment per workspace — works
+   unchanged, does not scale to a public app; (b) hand-roll the thunk — supply the ambient context
+   eve doesn't, parsing `team_id` off the inbound body into your own ALS and calling `getToken` with
+   a per-request `installationId`. `getToken` is exported and per-install cache keys fall out for
+   free, **but ALS does not survive an await boundary crossed by the workflow runtime**, and
+   `slackChannel.js` dispatches under `waitUntil(...)` — unverified and worth its own spike before
+   committing; (c) upstream: have `slackChannel` route through `SlackAdapter`'s
+   `installationProvider`, which is already built for exactly this.
+
+3. **Credentials: Connect is the eventual path.** T1 uses the raw env fallback
    (`SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`) so the app is reproducible from the committed
    `slack-app-manifest.yml` and needs no feature-flagged Vercel CLI. eve's documented default is
    Vercel Connect — `connectSlackCredentials("slack/<uid>")` from `@vercel/connect/eve`, returning
