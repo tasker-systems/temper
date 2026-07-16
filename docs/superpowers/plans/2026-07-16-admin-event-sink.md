@@ -61,7 +61,7 @@
 | `crates/temper-api/src/handlers/admin_ledger.rs` (create) | HTTP transport for the read surface |
 | `crates/temper-cli/src/commands/admin_ledger.rs` (create) | `temper admin ledger` |
 | `crates/temper-mcp/src/tools/admin_ledger.rs` (create) | MCP parity |
-| `migrations/20260717000010_admin_event_types.sql` (create) | Event-type seeds + payload schemas |
+| `migrations/20260717000010_admin_event_types.sql` (create) | Event-type seeds + payload schemas; **also NULLs the two stale registry rows** (folds in `019f6b48-a562-7871-a48d-87945a796c7e`) |
 | `migrations/20260717000020_admin_ledger_epoch.sql` (create) | The epoch marker |
 | `migrations/20260717000030_admin_grant_fns.sql` (create) | `_admin_grant_created` / `_admin_grant_revoked` + projectors |
 
@@ -721,18 +721,20 @@ Lands before any admin payload exists so the invariant is never retrofitted."
 ### Task 4: Event types + payload schemas + the epoch marker
 
 **Files:**
-- Create: `migrations/20260716000010_admin_event_types.sql`
-- Create: `migrations/20260716000020_admin_ledger_epoch.sql`
+- Create: `migrations/20260717000010_admin_event_types.sql`
+- Create: `migrations/20260717000020_admin_ledger_epoch.sql`
 
 **Interfaces:**
-- Produces: `kb_event_types` rows `admin_ledger_opened`, and payload schemas on the pre-existing `grant_created`/`grant_revoked` rows. One `admin_ledger_opened` event.
+- Produces: `kb_event_types` rows `admin_ledger_opened`, and payload schemas on the pre-existing `grant_created`/`grant_revoked` rows. One `admin_ledger_opened` event. **Also NULLs the two stale registry rows** — see below.
 - Consumes: nothing.
+
+> **This task now also closes `019f6b48-a562-7871-a48d-87945a796c7e`** (*"Prod `kb_event_types` carries stale payload schemas — repo is fixed, the registry is not"*), folded in here by decision (2026-07-16, with Pete) rather than shipped as its own migration. This is the first thing to touch `payload_schema` since the boot-seed, so it is the natural and cheapest place: a separate migration would touch the same column twice for no benefit. **Decision: NULL `region_materialized` and `lens_created`, do not re-stamp** — a reader can handle "unregistered"; a reader cannot detect "confidently wrong". Reasoning in Step 1's migration comment. **The task's recurrence question ("what keeps registry == repo after the next payload change?") must be answered in this PR** — see the callout after Step 1.
 
 `grant_created`/`grant_revoked` **already exist** in `kb_event_types` (seeded 2026-06-24, `migrations/20260624000003_canonical_seed.sql:51-52`) with NULL `payload_schema` and zero events. They are not dropped — they are this task's types. Their schemas get filled.
 
 - [ ] **Step 1: Write the event-types migration**
 
-Create `migrations/20260716000010_admin_event_types.sql`:
+Create `migrations/20260717000010_admin_event_types.sql`:
 
 ```sql
 -- Admin-ledger event types (spec 2026-07-16 §9 step 3).
@@ -814,11 +816,59 @@ UPDATE kb_event_types SET payload_schema = $js${
   }
 }$js$::jsonb
 WHERE name = 'grant_revoked';
+
+-- ── NULL the two STALE registry rows (task 019f6b48-a562-7871-a48d-87945a796c7e) ──
+--
+-- This migration is the first thing to touch kb_event_types.payload_schema since the boot-seed, so
+-- it is where the registry's other half gets fixed rather than leaving a second pass to schedule.
+--
+-- PR #464 fixed the REPO side of the payload_schema rot (the committed fixtures match the Rust types
+-- again). It could not fix the REGISTRY: kb_event_types rows are stamped ONCE at boot-seed and never
+-- re-stamp themselves. So prod's only two non-NULL schemas are both STALE -- they describe an older
+-- payload than the code writes:
+--
+--   region_materialized -- does not know `telos_centroid`  (208 events written)
+--   lens_created        -- does not know `TelosConstants`  (3 events written)
+--
+-- DECISION (2026-07-16, with Pete): NULL them, do not re-stamp. NULL is explicitly legitimate --
+-- 20260624000001_canonical_schema.sql:445-447 blesses it as "unregistered/permissive", and 31 of 33
+-- types already are. A reader can handle "unregistered"; a reader CANNOT detect "confidently wrong".
+-- The emitters spec publishes this registry as the contract for external writers, so a stale schema
+-- actively lies to them -- and that stops being theoretical as kb_connections emitters come online.
+-- Re-stamping is the other option and was rejected here only because it must be RIGHT to be worth
+-- doing, and getting it right is a deliberate registration pass over the whole catalogue, not a
+-- rider on this migration.
+--
+-- Additive-only: touches a metadata column, no shape. Nothing validates payloads against
+-- payload_schema at write time (_event_append just resolves the type id and inserts), so this
+-- changes no behavior -- it removes a false claim.
+UPDATE kb_event_types
+   SET payload_schema = NULL
+ WHERE name IN ('region_materialized', 'lens_created');
 ```
+
+> **The recurrence question — answer it in this PR, do not just NULL and move on.**
+> The root cause of `019f6b48-a562-7871-a48d-87945a796c7e` is that **nothing re-stamps**: the
+> boot-seed does it once, and every later payload change silently drifts the registry from the repo.
+> NULLing the two liars removes today's false claim; it does **not** stop the next one. This
+> migration itself proves the point — it hand-writes `grant_created`/`grant_revoked` schemas that will
+> drift from `payloads.rs` the moment someone edits those structs, and nothing will notice.
+>
+> This is the same rot that produced `019f6b1b-59ea-7660-b631-3b811aea378d` (`payload_schema` red in
+> no CI job) and `scenario-schema` (a feature gating tests that ran nowhere): **a contract with no
+> gate is a contract that drifts.** Say plainly in the PR what keeps registry == repo after the next
+> payload change — a CI check, a release-ritual step, or a boot-seed re-stamp — or record that it is
+> knowingly unsolved and re-file it. Do not leave it implied.
+>
+> Note the tension worth surfacing: the committed fixtures are generated from the Rust types by
+> `UPDATE_SCHEMA=1 cargo make test-schema`, but these migration schemas are **hand-written JSON**.
+> Two sources for one contract is the drift, restated. A follow-on that stamps the registry FROM the
+> generated fixtures would close it properly; this task is not scoped to build that, but it is the
+> honest recommendation.
 
 - [ ] **Step 2: Write the epoch migration**
 
-Create `migrations/20260716000020_admin_ledger_epoch.sql`:
+Create `migrations/20260717000020_admin_ledger_epoch.sql`:
 
 ```sql
 -- The admin ledger's epoch (spec 2026-07-16 §8).
@@ -864,14 +914,29 @@ SELECT et.id,
 cargo make docker-up
 cargo sqlx migrate run
 psql "$DATABASE_URL" -c "SELECT t.name, e.payload->>'opened_at' AS opened_at, e.producing_anchor_table FROM kb_events e JOIN kb_event_types t ON t.id=e.event_type_id WHERE t.name='admin_ledger_opened';"
+
+# The two stale registry rows are NULLed, and nothing else lost a schema.
+psql "$DATABASE_URL" -c "SELECT name, payload_schema IS NOT NULL AS has_schema FROM kb_event_types WHERE payload_schema IS NOT NULL ORDER BY name;"
 ```
 
-Expected: exactly one row; `producing_anchor_table` is **NULL**.
+Expected: exactly one `admin_ledger_opened` row; `producing_anchor_table` is **NULL**.
+
+Expected from the second query: **exactly `grant_created` and `grant_revoked`** — and nothing else.
+`region_materialized` and `lens_created` must be **absent** (NULLed by Step 1). If either still
+appears, the NULL did not apply. If a *third* name appears, someone stamped a schema this plan does
+not know about — stop and report rather than NULLing it too.
+
+> ⚠️ **A local run does not prove the prod fix.** A fresh local DB is boot-seeded from the current
+> repo, so its `region_materialized`/`lens_created` rows may be absent, correct, or stale depending
+> on seed state — the NULL can be a no-op locally and still be the whole point in prod, where those
+> two rows carry the stale schemas (208 and 3 events respectively). **Verify against prod after
+> Pete applies**, exactly as `019f6b06-c48f-7a81-a238-cdd6b131f3dc` did: the guard's behavior on the
+> environment that has the bad data is the only verification that counts.
 
 - [ ] **Step 4: Verify idempotency**
 
 ```bash
-psql "$DATABASE_URL" -f migrations/20260716000020_admin_ledger_epoch.sql
+psql "$DATABASE_URL" -f migrations/20260717000020_admin_ledger_epoch.sql
 psql "$DATABASE_URL" -c "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id=e.event_type_id WHERE t.name='admin_ledger_opened';"
 ```
 
@@ -905,8 +970,8 @@ Expected: PASS.
 
 ```bash
 cargo make check
-git add migrations/20260716000010_admin_event_types.sql \
-        migrations/20260716000020_admin_ledger_epoch.sql \
+git add migrations/20260717000010_admin_event_types.sql \
+        migrations/20260717000020_admin_ledger_epoch.sql \
         crates/temper-services/tests/admin_ledger_test.rs
 git commit -m "feat(admin-ledger): event types, payload schemas, and the epoch marker
 
@@ -927,7 +992,7 @@ finally get the payload schemas they never had."
 The proving pair. It catches the generic grant path **and** `connection_service::grant_reach`'s bypass (`connection_service.rs:467`, `:486`), which calls `insert_grant` directly — a service-layer sink would miss it. It also exercises replay ownership end-to-end.
 
 **Files:**
-- Create: `migrations/20260716000030_admin_grant_fns.sql`
+- Create: `migrations/20260717000030_admin_grant_fns.sql`
 - Modify: `crates/temper-substrate/src/events.rs` (EventKind + SeedAction arms)
 - Modify: `crates/temper-substrate/src/replay.rs:88` (INPUT_TABLES)
 - Modify: `crates/temper-services/src/services/access_service.rs:128,159`
@@ -1028,7 +1093,7 @@ Expected: FAIL — no events written.
 
 - [ ] **Step 3: Write the SQL functions**
 
-Create `migrations/20260716000030_admin_grant_fns.sql`:
+Create `migrations/20260717000030_admin_grant_fns.sql`:
 
 ```sql
 -- The grant chokepoint, SQL-resident (spec 2026-07-16 §7).
@@ -1281,7 +1346,7 @@ cargo make prepare-services
 cargo make prepare-api
 cargo make prepare-e2e
 cargo make check
-git add migrations/20260716000030_admin_grant_fns.sql \
+git add migrations/20260717000030_admin_grant_fns.sql \
         crates/temper-substrate/src/events.rs \
         crates/temper-substrate/src/replay.rs \
         crates/temper-services/src/services/access_service.rs \
