@@ -1,4 +1,5 @@
 pub mod access_service;
+pub mod admin_ledger_service;
 pub mod cogmap_service;
 pub mod connection_service;
 pub mod context_graph_service;

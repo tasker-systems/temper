@@ -269,6 +269,45 @@ The spec's central inversion: **the read path ships before any writer**, so the 
 >   `common` module.
 > - `steward_ingest_delta(p_cogmap uuid, p_watermark uuid)` takes a **cogmap**, not a team
 >   (`migrations/20260701000005_steward_ingest_watermark.sql:40`).
+>
+> **Second pre-dispatch pass (2026-07-16, on branch `jct/admin-ledger-read-service`).** The pass
+> above verified the *names* this task calls. It did not verify the *predicate* this task's own
+> code proposed, and that is where the defects were. Three blockers and four corrections, all
+> folded into the steps below. Recorded because the shape repeats: **the gap was never in the APIs
+> the plan borrowed — it was in the SQL the plan wrote itself.**
+>
+> - **`system_access = 'admin'` is NOT this codebase's admin predicate.** Live
+>   `is_system_admin(p_profile_id)` is *owner of the gating team*
+>   (`kb_team_members.role='owner'` on `kb_system_settings.gating_team_slug`) — it never reads
+>   `kb_profiles.system_access`. Probed on dev, they diverge on the only row present:
+>   `handle=system, system_access=admin, (system_access='admin')=t, is_system_admin()=f`.
+>   `access_service::is_system_admin` is already **`pub`** (`access_service.rs:43`) — call it.
+>   Restating it in SQL was both a second copy of the policy *and* a copy of the wrong policy.
+> - **`can_administer_grant` is `access_service.rs:62`**, signature
+>   `(pool, caller, subject_table: &str, subject_id: Uuid) -> ApiResult<bool>`; it gates
+>   `grant_capability` (`:189`) and `revoke` (`:218`). `pub(crate)` suffices — `admin_ledger_service`
+>   is in the same crate.
+> - **`AnchorTable` has no `as_str`/`Display`** — its only string form is the serde rename
+>   (`payloads.rs:31-50`). `can_administer_grant` takes `&str`. Add `AnchorTable::as_str()` beside
+>   the enum; do not round-trip through `serde_json::to_string` (stringly-typed, and it quotes).
+> - **The GIN probe shape is CORRECT — verified, and Step 6 as originally written would have
+>   denied it.** See Step 6.
+> - `grant_created`/`grant_revoked` are **already seeded** (`20260624000003_canonical_seed.sql:51-52`),
+>   so the test's `WHERE et.name = 'grant_created'` resolves today. `admin_ledger_opened` does not
+>   exist until Task 4 — harmless, `= ANY($1)` simply matches nothing and `ledger_epoch` returns
+>   `None`.
+> - `kb_events` allows the both-NULL anchor (`CHECK ((producing_anchor_table IS NULL) =
+>   (producing_anchor_id IS NULL))`), and `kb_events_append_only` fires `BEFORE DELETE OR UPDATE`
+>   only — the seed INSERT is fine.
+>
+> **And the reason none of that would have been caught: the specced tests could not fail on it.**
+> The original three tests are *all* satisfied by an `is_system_admin`-only gate — admin reads,
+> outsider denied, firewall holds. None exercises the middle, and the middle is §5's whole
+> correction. So the original Step 4's gate would have gone green, been reviewed against a plan
+> whose prose said something else, and shipped. A fourth test (`the_grant_writer_can_read_their_own
+> _grant_record`) now covers it, with a probe step that proves it fails on the old gate. **Where a
+> plan's prose and its code disagree, the tests decide which one ships — so check what the tests
+> can actually distinguish.**
 
 **Interfaces:**
 - Consumes: `temper_substrate::payloads::{EventRef, RefRel, RefTarget, AnchorTable}` (Task 1).
@@ -293,6 +332,85 @@ Default arm: **`is_system_admin`** — fail closed. An act not in the table is a
 > ⚠️ **This line previously read "flagged for review and confirmed" and specified `machine_authz::authorize` for the whole ledger. It was never confirmed, and it was wrong.** That predicate is `is_system_admin OR role_on_team(team)=Owner`, failing closed on `team = None` — it gates *machine registration*, not grants. The grant path gates on `can_administer_grant` (`access_service.rs:189`/`:218`): `is_system_admin OR can(caller,'grant',subject)`. A capability on the subject is not a role on a team. Because `derived_access_profile` lets a **resource owner** grant on their own resource, and a profile-homed resource has **no owning team**, the old gate would have Forbidden the actor from reading the record of the act they had just performed — on the mainline path. Probed live: `is_sysadmin = f`, `can_write_the_grant = t`. Do not restore it.
 
 **Implementation note:** `can_administer_grant` is a **private** fn in `access_service` today. Expose it (`pub(crate)`) and call it — do **not** restate its body, or the read gate becomes a second copy of the policy and drifts from the write gate it exists to mirror.
+
+#### The gate cannot be a prelude — it must select the type set (amended 2026-07-16)
+
+> This plan's original Step 4 shipped `gate(pool, caller)` called **before** `fetch()`, whose body
+> was `is_admin → Ok, else NotFound`. That is not the gate this section describes, and the gap is
+> **structural, not editorial**: a gate that runs before the query cannot dispatch on event type,
+> because no event type is known until rows come back. Fixing the body in place is impossible;
+> the shape has to change.
+
+**Invert it.** Do not fetch rows and then filter them — **compute what the caller may read, then
+ask only for that.** The subject is a *parameter* of `list_by_subject`, so the whole §5 table can be
+evaluated **once, before the query**, yielding the set of event types this caller may read *for this
+subject*. That set becomes the `t.name = ANY($1)` bind the query already had.
+
+```rust
+/// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
+/// `subject` — empty means "nothing", which the caller turns into 404.
+///
+/// One gate call per act family, NOT one per row: the subject is fixed, so the answer is too.
+/// Per-row gating would be an N+1 (two queries per row) AND would silently break LIMIT/OFFSET —
+/// filtering after the window means page 2 is not the second 50 readable rows, it is whatever
+/// survived of the second 50 raw rows.
+async fn readable_event_types(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: RefTarget,
+) -> ApiResult<Vec<&'static str>> {
+    // Admin reads everything; one query, and the common admin path stops here.
+    if access_service::is_system_admin(pool, caller).await? {
+        return Ok(ADMIN_EVENT_TYPES.to_vec());
+    }
+
+    let mut readable = Vec::new();
+
+    // grant_created / grant_revoked → mirrors access_service::can_administer_grant.
+    // (is_system_admin is already OR-ed inside it; we short-circuited above, so this is the
+    // can_grant arm doing the work.)
+    if access_service::can_administer_grant(pool, caller, subject.kind.as_str(), subject.id).await? {
+        readable.push("grant_created");
+        readable.push("grant_revoked");
+    }
+
+    // admin_ledger_opened → the epoch marker. is_system_admin only; handled by the arm above.
+    // Machine/connection acts → machine_authz::authorize(owner_team). NOT REACHED IN THIS TASK:
+    //   no such event type exists until step 5 of the spec's §9, and ADMIN_EVENT_TYPES does not
+    //   list one. When one is added, it gets an arm HERE, and the default below keeps it
+    //   admin-only until someone does.
+    //
+    // Default: absent from this fn ⇒ admin-only ⇒ fail closed.
+    Ok(readable)
+}
+```
+
+This keeps every property §5 asked for — dispatch per event type, no new predicate, no second copy
+of the policy, fail-closed default — and it costs **two queries regardless of page size**, both
+already indexed. An act type nobody added an arm for is unreadable by non-admins: that is the
+default arm, expressed as *absence from the returned set* rather than as a match arm nobody wrote.
+
+**The actor axis (`list_by_actor`) does not have this shape**, and cannot until §11.1b is decided —
+see the decision step below. Its rows span many subjects and many types, so there is no single
+subject to evaluate the table against.
+
+- [x] **Step 0: Close §11.1b's first sub-question — is the actor axis self-gating? (ADDED 2026-07-16)**
+
+**CLOSED 2026-07-16: SELF-GATING.** Decision + the live probe behind it are recorded in **spec
+§11.1b** — read it before Step 4; do not reconstruct the reasoning from this summary.
+
+- `caller == actor` ⇒ **all** the caller's own admin acts, **no per-subject gate**, conditioned only
+  on `access_service::has_system_access(caller)`. Keep your history unless you lose the front door.
+- `caller != actor` ⇒ `is_system_admin` or 404.
+
+Call `has_system_access`, do not assume it. Both surfaces gate it upstream already
+(`temper-api/src/middleware/system_access.rs:38`, `temper-mcp/src/service.rs:85`), so this is
+defense in depth against a route wired without the layer — and it is the same function, not a
+restatement. It is vacuous under `access_mode='open'` (short-circuits true); that is intended.
+
+The other two consequences (the vanished subject; fail-closed on a producer bug) are **recorded, not
+resolved, by this task** — they need no code here, and §11.1b now carries both to Task 5, where the
+first writer is actually built.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -387,7 +505,121 @@ async fn a_non_admin_cannot_read_the_ledger(pool: PgPool) {
         "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
     );
 }
+
+/// THE TEST THIS SUITE WAS MISSING (added 2026-07-16). The three tests above are all satisfied by
+/// an `is_system_admin`-only gate — admin reads, outsider is denied, neither exercises the middle.
+/// But the middle **is** §5's entire correction: a non-admin who could WRITE the grant must be able
+/// to READ the record of it. Without this test the refuted gate passes green, and so does the
+/// original Step 4 body. A suite that cannot fail on the bug the spec was rewritten to prevent is
+/// not a suite, it is decoration.
+///
+/// `derived_access_profile` gives a resource's owner `can(…,'grant',…)` on it — derived, no
+/// explicit grant, no team, no admin. Probed live in §5: `is_sysadmin=f, can_write_the_grant=t`.
+#[sqlx::test]
+async fn the_grant_writer_can_read_their_own_grant_record(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // The owner of the subject: not an admin, but `can_administer_grant` is true for them.
+    // Assert BOTH halves first — if the fixture silently made them an admin, this test would
+    // pass while proving nothing.
+    assert!(
+        !access_service::is_system_admin(&pool, f.owner_profile).await.unwrap(),
+        "the grant writer must NOT be an admin, or this test proves nothing"
+    );
+
+    seed_admin_event(&pool, f.admin_emitter, f.owned_resource_id, f.team_id).await;
+
+    let got = temper_services::services::admin_ledger_service::list_by_subject(
+        &pool,
+        f.owner_profile,
+        RefTarget { kind: AnchorTable::Resources, id: f.owned_resource_id },
+        50,
+        0,
+    )
+    .await
+    .expect("the actor who could write this grant must be able to read its record");
+
+    assert_eq!(got.len(), 1, "the grant writer sees the record of the act they could perform");
+}
+
+/// §11.1b, decided 2026-07-16: the actor axis is SELF-GATING. This is the test that distinguishes
+/// it from a subject-gated axis — the actor authored the act but cannot administer its subject, so
+/// under subject-gating they would lose sight of their own authorship. Which is the exact defect
+/// this whole spec exists to undo.
+#[sqlx::test]
+async fn the_actor_keeps_their_own_history_without_the_capability(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // An act authored BY the owner, ON a subject the owner cannot administer (the admin's
+    // context, not theirs). Authorship and capability deliberately pulled apart.
+    seed_admin_event(&pool, f.owner_emitter, f.context_id, f.team_id).await;
+
+    // The subject axis denies them — they have no can_grant on this subject. This half must hold
+    // or the test is not exercising the distinction.
+    let subject_err = temper_services::services::admin_ledger_service::list_by_subject(
+        &pool,
+        f.owner_profile,
+        RefTarget { kind: AnchorTable::Contexts, id: f.context_id },
+        50,
+        0,
+    )
+    .await
+    .expect_err("no capability on this subject ⇒ the subject axis denies");
+    assert!(matches!(subject_err, temper_services::ApiError::NotFound));
+
+    // The actor axis returns it anyway. That is the decision.
+    let mine = temper_services::services::admin_ledger_service::list_by_actor(
+        &pool,
+        f.owner_profile,
+        f.owner_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("an actor always reads their own acts");
+
+    assert_eq!(mine.len(), 1, "authorship survives the loss of capability over the subject");
+    assert_eq!(mine[0].actor_profile_id, f.owner_profile.uuid());
+}
+
+/// The other half of the decision: reading SOMEONE ELSE's history is an audit, and audits are
+/// admin-only. Self-gating widens the actor's own view; it must not widen anyone else's.
+#[sqlx::test]
+async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
+
+    let err = temper_services::services::admin_ledger_service::list_by_actor(
+        &pool,
+        f.outsider_profile,
+        f.admin_profile,
+        50,
+        0,
+    )
+    .await
+    .expect_err("a non-admin must not audit another profile's acts");
+    assert!(matches!(err, temper_services::ApiError::NotFound));
+
+    // ...and the admin may.
+    let audit = temper_services::services::admin_ledger_service::list_by_actor(
+        &pool,
+        f.admin_profile,
+        f.admin_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("an admin audits");
+    assert_eq!(audit.len(), 1);
+}
 ```
+
+> The fixture therefore also needs `owner_profile`, `owner_emitter` and `owned_resource_id`: a
+> non-admin profile, its emitter (it authors events in the actor-axis tests), and a resource it owns
+> (homed on its own context, `owner_table='kb_profiles'` — which is exactly the shape that has **no
+> owning team** and refuted the original gate). Add all three to `AdminFixture`.
+> Note the seeds above anchor on the **resource** in one test and the **context** in another, so
+> `seed_admin_event`'s hardcoded `'kb_contexts'` subject kind must become a parameter.
 
 - [ ] **Step 2: Build the fixture — inline, in this file**
 
@@ -413,10 +645,32 @@ struct AdminFixture {
 /// `resolve_emitter` (a `fetch_one`, no lazy creation) needs and that this ledger reads back.
 /// A fixture that hand-INSERTs a profile passes while production 500s — which is exactly the
 /// live bug recorded in task `019f6b06-c48f-7a81-a238-cdd6b131f3dc`.
+///
+/// **`admin_profile` is not an admin because a column says so.** `is_system_admin(p)` is
+/// *owner of the gating team* — it reads `kb_team_members`, joined to the team whose slug is
+/// `kb_system_settings.gating_team_slug`. It never looks at `kb_profiles.system_access`. So this
+/// fixture MUST, or every admin assertion below is vacuous:
+///   1. create the team,
+///   2. `UPDATE kb_system_settings SET gating_team_slug = <that team's slug>` — it is **empty**
+///      out of the box, and an empty slug means *nobody is admin* (the deliberate bootstrap:
+///      `is_system_admin` returns false for everyone until an operator names the team),
+///   3. add `admin_profile` to it with `role = 'owner'` — `member` is not enough.
+/// Setting `system_access = 'admin'` does NOT do this. It fires `trg_sync_system_membership`,
+/// which auto-joins teams carrying an `auto_join_role` (`temper-system` carries `watcher`) — a
+/// *watcher*, not an owner of the gating team. Verified on dev: the `system` profile has
+/// `system_access = 'admin'` and `is_system_admin() = f`.
+///
+/// Assert this in the fixture rather than trusting it — a fixture whose admin is not an admin
+/// makes `a_non_admin_cannot_read_the_ledger` pass for the wrong reason (everyone is a non-admin).
 async fn admin_fixture(pool: &PgPool) -> AdminFixture {
     // Read `context_read_predicate_test.rs` and `saml_provisioning_test.rs` first and reuse
     // whatever profile/team construction they already do rather than inventing a third shape.
-    todo!("construct via profile_service (provisioning the emitters) + team_service::create_team")
+    todo!(
+        "construct via profile_service (provisioning the emitters) + team_service::create_team; \
+         then point gating_team_slug at that team and make admin_profile its OWNER; \
+         then assert access_service::is_system_admin(pool, admin_profile) is true, and that \
+         is_system_admin(pool, outsider_profile) is false"
+    )
 }
 ```
 
@@ -454,6 +708,7 @@ use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{EventRef, RefTarget};
 use uuid::Uuid;
 
+use crate::services::access_service;
 use crate::{ApiError, ApiResult};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -473,24 +728,8 @@ pub struct AdminLedgerEntry {
 /// anchor nullity would silently absorb system-config events; discriminate by type.
 const ADMIN_EVENT_TYPES: &[&str] = &["admin_ledger_opened", "grant_created", "grant_revoked"];
 
-/// The read gate mirrors the write gate: if you could perform the act, you may read the record
-/// of it. Reads deny with 404, not 403 (the deny-split invariant).
-async fn gate(pool: &PgPool, caller: ProfileId) -> ApiResult<()> {
-    let is_admin: bool = sqlx::query_scalar!(
-        "SELECT (system_access = 'admin') AS \"is_admin!\" FROM kb_profiles WHERE id = $1",
-        caller.uuid()
-    )
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or(false);
-
-    if is_admin {
-        return Ok(());
-    }
-    // Reads deny with 404, not 403 — the deny-split invariant. A 403 would confirm the ledger
-    // has something to hide about this subject.
-    Err(ApiError::NotFound)
-}
+// `readable_event_types` (above, in the Authorization section) IS the gate. There is no
+// `gate(pool, caller)` prelude — a prelude cannot dispatch on event type, which is the whole of §5.
 
 pub async fn list_by_subject(
     pool: &PgPool,
@@ -499,11 +738,32 @@ pub async fn list_by_subject(
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
-    gate(pool, caller).await?;
-    let probe = serde_json::json!([{ "target": subject }]);
-    fetch(pool, Some(probe), None, limit, offset).await
+    let types = readable_event_types(pool, caller, subject).await?;
+    if types.is_empty() {
+        // Reads deny with 404, not 403 — the deny-split invariant. A 403 would confirm the
+        // ledger has something to hide about this subject.
+        return Err(ApiError::NotFound);
+    }
+
+    // The `rel` is pinned to `subject` deliberately. `[{"target": …}]` alone would also match a
+    // `principal` or `touches` reference to the same id — "every act performed FOR this team"
+    // silently answering a query that says "performed ON it". jsonb_path_ops containment indexes
+    // the fuller object just as well (verified: Bitmap Index Scan, Step 6).
+    let probe = serde_json::json!([{ "rel": "subject", "target": subject }]);
+    fetch(pool, &types, Some(probe), None, limit, offset).await
 }
 
+/// The actor axis is **self-gating** (spec §11.1b, decided 2026-07-16): you may always read the
+/// record of acts you performed. Losing a capability, a role, or ownership of a subject does not
+/// take your own history from you — only losing system access does, because then you are not a
+/// reader at all.
+///
+/// Deliberately NOT subject-gated. The defect that motivated this whole spec is
+/// `kb_access_grants` destroying `granted_by_profile_id` on upsert; a ledger that restores
+/// authorship and then hides it from its author would be a poor trade. Probed live: §5's
+/// `can_grant` arm carries ZERO of prod's 5 real grants, so a subject-gate here would today mean
+/// "admins only" — and ownership is mutable (`rehome`/`reassign` ship), so the demoted actor is
+/// reachable by ordinary usage, not just by demotion.
 pub async fn list_by_actor(
     pool: &PgPool,
     caller: ProfileId,
@@ -511,8 +771,22 @@ pub async fn list_by_actor(
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
-    gate(pool, caller).await?;
-    fetch(pool, None, Some(actor.uuid()), limit, offset).await
+    // The front door, called rather than assumed. Both surfaces gate this upstream already
+    // (temper-api middleware, temper-mcp service) — this is defense in depth against a future
+    // route wired without the layer, and it is the same predicate, not a second copy of it.
+    // Vacuous under access_mode='open', where has_system_access short-circuits true. Intended.
+    if !access_service::has_system_access(pool, caller).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // Reading someone else's history is an audit, and audits are admin-only.
+    if caller != actor && !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // No per-subject gate: that is the decision. The full catalogue is correct here precisely
+    // because the axis is the caller's own authorship (or an admin's audit).
+    fetch(pool, ADMIN_EVENT_TYPES, None, Some(actor.uuid()), limit, offset).await
 }
 
 /// The epoch: admin history begins here. NOT a backfill marker — everything before this is
@@ -530,6 +804,8 @@ pub async fn ledger_epoch(pool: &PgPool) -> ApiResult<Option<DateTime<Utc>>> {
 
 async fn fetch(
     pool: &PgPool,
+    // The gate's output, not the whole catalogue: `readable_event_types` decided this.
+    types: &[&str],
     subject_probe: Option<serde_json::Value>,
     actor: Option<Uuid>,
     limit: i64,
@@ -549,7 +825,11 @@ async fn fetch(
             ORDER BY e.occurred_at DESC, e.id DESC
             LIMIT $4 OFFSET $5"#,
     )
-    .bind(ADMIN_EVENT_TYPES)
+    // The authorized set, NOT ADMIN_EVENT_TYPES. Binding the catalogue here would make the gate
+    // decorative — it would compute a type set and then query for every type anyway.
+    // If the `Encode` bound on `&[&str]` does not resolve, collect to `Vec<String>` — do not
+    // reach for string interpolation.
+    .bind(types)
     .bind(subject_probe)
     .bind(actor)
     .bind(limit)
@@ -584,21 +864,50 @@ pub mod admin_ledger_service;
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cargo nextest run -p temper-services --features test-db --test admin_ledger_test`
-Expected: PASS (3 tests).
+Expected: PASS (6 tests — three added 2026-07-16: the grant-writer test, and the two actor-axis
+tests carrying §11.1b's decision).
 
 If `the_admin_event_is_invisible_to_cognition` fails, **stop** — the firewall is the design's load-bearing claim. Do not adjust the test to pass; report it.
+
+If `the_grant_writer_can_read_their_own_grant_record` fails, **stop** — that is the refuted gate
+resurrecting, and the fix is the gate, never the test. Softening it to `expect_err` would restore
+exactly the defect §5 was rewritten to prevent, and it would look like a passing suite.
+
+**Probe the suite before believing it (`feedback_differential_testing_over_handwritten_expectations`,
+`feedback_ground_in_data_not_ast`).** Temporarily replace `readable_event_types`' body with
+`Ok(if access_service::is_system_admin(pool, caller).await? { ADMIN_EVENT_TYPES.to_vec() } else { vec![] })`
+— i.e. this plan's original Step 4 gate, modulo its wrong admin predicate. Confirm
+`the_grant_writer_can_read_their_own_grant_record` goes **red** and the other three stay green. If
+it does not go red, the test is not testing the gate. Revert the probe.
 
 - [ ] **Step 6: Prove the GIN index is used, not a seq scan**
 
 The whole read path rests on `idx_kb_events_references`. A containment query that seq-scans 13k rows is a design failure hiding as a passing test.
 
-Run against the dev DB:
+> **AMENDED 2026-07-16 — this step, as originally written, returns a false negative and instructs
+> you to "fix" a probe that is already correct.** Dev's `kb_events` holds **4 rows**. At that size
+> the planner picks `Seq Scan` for *any* predicate, index-compatible or not — it is measuring the
+> table, not the probe. The original step said "If it shows `Seq Scan`, the probe shape does not
+> match `jsonb_path_ops` containment — fix the probe, not the index," which on this database is
+> advice to break a working query. **Already run, both ways, on the amended branch:** plain
+> `EXPLAIN` → `Seq Scan`; `SET enable_seqscan=off` → `Bitmap Index Scan on
+> idx_kb_events_references`. **The probe shape is correct.** What this step actually checks is
+> that the probe *can* use the index — so take the planner's choice off the table:
 
 ```bash
-psql "$DATABASE_URL" -c "EXPLAIN SELECT id FROM kb_events WHERE \"references\" @> '[{\"target\":{\"kind\":\"kb_contexts\",\"id\":\"019f6055-6aea-7aa2-a133-61552dd3d7e4\"}}]'::jsonb;"
+psql "$DATABASE_URL" -c "SET enable_seqscan=off; EXPLAIN SELECT id FROM kb_events WHERE \"references\" @> '[{\"rel\":\"subject\",\"target\":{\"kind\":\"kb_contexts\",\"id\":\"019f6055-6aea-7aa2-a133-61552dd3d7e4\"}}]'::jsonb;"
 ```
 
-Expected: a `Bitmap Index Scan on idx_kb_events_references`. If it shows `Seq Scan`, the probe shape does not match `jsonb_path_ops` containment — fix the probe, not the index.
+Expected: `Bitmap Index Scan on idx_kb_events_references`. If it *still* shows `Seq Scan` with
+seqscan disabled, the probe genuinely cannot use `jsonb_path_ops` — then, and only then, fix the
+probe.
+
+Note the probe now pins `"rel":"subject"`, matching the amended `list_by_subject`. Containment
+indexes the fuller object identically — a narrower probe is not a slower one.
+
+Both indexes this task's two axes rest on are confirmed present on dev:
+`idx_kb_events_references gin ("references" jsonb_path_ops)` and
+`idx_kb_events_emitter btree (emitter_entity_id, occurred_at DESC)`. Neither needs creating.
 
 - [ ] **Step 7: Regenerate the sqlx cache and commit**
 
@@ -606,10 +915,16 @@ Expected: a `Bitmap Index Scan on idx_kb_events_references`. If it shows `Seq Sc
 cargo sqlx prepare --workspace -- --all-features
 cargo make prepare-services
 cargo make check
+# NOTE: `crates/temper-services/tests/common/mod.rs` was staged here in the original plan and
+# does NOT exist — Steps 1-2 say so themselves, and `git add` fails the whole command on an
+# unmatched pathspec. The fixture is inline. Removed 2026-07-16.
+# `payloads.rs` is staged because this task adds `AnchorTable::as_str()` (see the notes).
 git add crates/temper-services/src/services/admin_ledger_service.rs \
         crates/temper-services/src/services/mod.rs \
+        crates/temper-services/src/services/access_service.rs \
+        crates/temper-substrate/src/payloads.rs \
         crates/temper-services/tests/admin_ledger_test.rs \
-        crates/temper-services/tests/common/mod.rs \
+        docs/superpowers/plans/2026-07-16-admin-event-sink.md \
         .sqlx crates/temper-services/.sqlx
 git commit -m "feat(admin-ledger): read surface on kb_events.references
 

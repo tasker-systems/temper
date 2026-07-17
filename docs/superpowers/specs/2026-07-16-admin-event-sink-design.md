@@ -569,24 +569,83 @@ They stop being orphans.
 1b. **The gate is present-tense; the ledger is past-tense.** *Deferred to the Task 2 read-surface PR
    by decision (2026-07-16), where the gate is real code rather than a sentence.* Every predicate in
    §5's table asks "may you do this **now**?", but every row it guards records something done
-   **then**. Three consequences, none currently decided:
+   **then**. Three consequences:
 
-   - **The demoted actor.** Lose `can_grant` (or your Owner role) and you lose sight of records of
-     acts **you performed**. Your own authorship disappears from your view — arguably the one thing
-     an actor should always retain. Task 2 builds an **actor axis** (`query by actor`); the open
-     question is whether that axis is self-gating (you may always read your own acts) or subject to
-     the same subject-gate. Note this is precisely the shape of the defect that motivated the whole
-     spec: `kb_access_grants` overwrites `granted_by_profile_id` on upsert, destroying authorship.
-     Rebuilding a ledger that then hides authorship from its author would be a poor trade.
-   - **The vanished subject.** `revoke` is a hard `DELETE` (§2), and a connection or resource can be
-     removed. Once the subject is gone, `can(caller,'grant',subject)` is `false` for everyone, so a
-     `grant_revoked` record becomes readable **only by sysadmins** — the ledger keeps the row and
-     the gate hides it. "Who revoked this, and why?" is the question the record exists to answer.
-   - **Fails closed on a producer bug.** The gate's input (`subject_table`/`subject_id`) is derived
-     from the row it guards. `references` is `DEFAULT '[]'` with no CHECK, so a writer that forgets
-     to populate it yields a record nothing can resolve a subject for → admin-only, silently. Task 4's
-     payload schemas are the enforcement; there is no DB-level backstop. Compare the ghost-regions
-     class: a producer bug that a reader can never distinguish from an empty result.
+   - **The demoted actor. — DECIDED 2026-07-16: the actor axis is SELF-GATING.** Lose `can_grant`
+     (or your Owner role) and you would lose sight of records of acts **you performed**. Your own
+     authorship disappears from your view — arguably the one thing an actor should always retain.
+
+     **The decision:** `list_by_actor(caller, actor)` where `caller == actor` returns **all** the
+     caller's own admin acts, with **no per-subject gate** — conditioned only on the caller still
+     having system access at all. `caller != actor` is `is_system_admin` or 404.
+
+     > **Retaining your own history is conditioned on still being *in* the system, and on nothing
+     > else** (Pete, 2026-07-16). Lose a capability, a role, or the ownership of a subject, and you
+     > keep the record of what you did. Lose **system access** — the front door — and you keep
+     > nothing, because you are no longer a reader at all. `access_service::has_system_access` is
+     > that predicate; Task 2 **calls** it rather than assuming it. Both surfaces already enforce it
+     > upstream (`temper-api/src/middleware/system_access.rs:38` and `temper-mcp/src/service.rs:85`
+     > both route through `temper_services::auth::require_system_access`), so the in-service call is
+     > defense in depth against a future route wired without the layer — not a second copy of the
+     > policy, since it calls the same function. Note it is vacuous under `access_mode = 'open'`,
+     > where `has_system_access` short-circuits true for everyone; that is correct and intended.
+
+     **Why, empirically** (probed live 2026-07-16, read-only in `BEGIN`/`ROLLBACK`). The tempting
+     reading is that this is academic — of prod's 5 access grants, **0** have an author who has
+     since lost the ability to administer them. **Disaggregating refutes that reading.** All 5 are
+     carried by the **admin arm alone** (`via_can_grant_arm = f` on every one), all 5 authored by
+     the single sysadmin among 6 profiles. §5's `can_grant` arm carries **zero** of the real
+     population — so a pure subject-gate is, today, "admins only" wearing a dispatch table.
+
+     The arm is real, though, and the check that looked like a counter-example confirms it: prod's
+     one `kb_resources` grant was authored by someone who is **not** the resource's owner, and that
+     owner — an agent principal, not an admin — **does** satisfy `can(…,'grant',…)`. So the
+     mechanism works; it simply has not been exercised, because the 5 non-admin profiles have
+     authored **zero** grants between them. **The population that exercises this gate is entirely
+     ahead of us, not behind us**, and "nobody is locked out today" is a fact about adoption, not
+     about the design.
+
+     Two further reasons the subject-gate is the wrong mirror for this axis:
+
+     - **It makes your own history contingent on a mutable relation unrelated to authorship.**
+       Ownership is not stable — `rehome` and `reassign` ship today, and `revoke` is a hard
+       `DELETE`. The demoted actor is reachable by ordinary product usage, not only by demotion.
+     - **It is the only shape that works.** Self-gating is O(1). Subject-gating this axis re-gates
+       every row (two queries each) *and* breaks `LIMIT`/`OFFSET`, because filtering after the
+       window means page 2 is not the second 50 readable rows.
+
+     **The adversarial case, and why it does not land.** Self-gating lets a demoted actor read a
+     record whose subject they can no longer see. But the record is past-tense and it is *their own
+     act*: it reflects back something they already witnessed, and says nothing about whether the
+     grant still stands. This is the reasoning `SystemAccessDetails` already makes — reflecting the
+     caller's own identity back is not disclosure. The `element_trail` ban (§5) keeps admin payloads
+     lean enough that no side-channel rides along. The only thing it leaks is *existence*, to the
+     person who caused it.
+
+     This is precisely the shape of the defect that motivated the whole spec: `kb_access_grants`
+     overwrites `granted_by_profile_id` on upsert, destroying authorship. Rebuilding a ledger that
+     then hides authorship from its author would be a poor trade.
+   - **The vanished subject. — RECORDED; PARTLY ANSWERED by the decision above; carried to Task 5.**
+     `revoke` is a hard `DELETE` (§2), and a connection or resource can be removed. Once the subject
+     is gone, `can(caller,'grant',subject)` is `false` for everyone, so a `grant_revoked` record
+     becomes readable **only by sysadmins** — the ledger keeps the row and the gate hides it. "Who
+     revoked this, and why?" is the question the record exists to answer.
+
+     Self-gating the actor axis answers this **for the revoker** — they keep their own act
+     regardless of whether its subject still exists — which is the single most likely reader of it.
+     It does **not** answer it for anyone else, who still needs `is_system_admin`. Task 2 needs no
+     code for this; revisit in **Task 5**, where `_admin_grant_revoked` is actually written and the
+     payload that must survive its subject gets its shape.
+   - **Fails closed on a producer bug. — RECORDED; carried to Task 5.** The gate's input
+     (`subject_table`/`subject_id`) is derived from the row it guards. `references` is
+     `DEFAULT '[]'` with no CHECK, so a writer that forgets to populate it yields a record nothing
+     can resolve a subject for → admin-only, silently. Task 4's payload schemas are the enforcement;
+     there is no DB-level backstop. Compare the ghost-regions class: a producer bug that a reader
+     can never distinguish from an empty result.
+
+     Task 2 cannot act on this — it builds no writer. It belongs to **Task 5**, which builds the
+     first one. Note the failure mode is *invisible from the read side by construction*: an empty
+     `references` and a subject you may not read are the same empty result.
 2. **`kb_teams.created_by`** — additive column so future teams record a creator. Follow-on task.
 3. **Multi-tenancy** — a self-hosted instance replaying its own ledger inherits §8's epoch semantics
    with different data. The epoch is per-instance. Unexamined.

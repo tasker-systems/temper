@@ -49,6 +49,33 @@ pub enum AnchorTable {
     MachineClients,
 }
 
+impl AnchorTable {
+    /// The DDL table name, exactly as the `#[serde(rename)]` above spells it.
+    ///
+    /// Exists because the authorization predicates take the table as a `&str`
+    /// (`can(p_principal_table, …, p_subject_table, …)`, and hence
+    /// `access_service::can_administer_grant`), and the admin ledger has to hand them one.
+    /// Deliberately NOT `serde_json::to_string` — that yields a *quoted* `"kb_contexts"`, which
+    /// matches no row, and it launders a typed enum through a string round-trip to reach a value
+    /// the type already knows.
+    ///
+    /// No `_ =>` arm: a new variant must be a compile error here, not a silent wrong table name.
+    /// `anchor_table_str_matches_the_serde_rename` pins the two spellings together.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AnchorTable::Contexts => "kb_contexts",
+            AnchorTable::Cogmaps => "kb_cogmaps",
+            AnchorTable::Resources => "kb_resources",
+            AnchorTable::Edges => "kb_edges",
+            AnchorTable::ContentBlocks => "kb_content_blocks",
+            AnchorTable::Teams => "kb_teams",
+            AnchorTable::Profiles => "kb_profiles",
+            AnchorTable::Connections => "kb_connections",
+            AnchorTable::MachineClients => "kb_machine_clients",
+        }
+    }
+}
+
 impl From<HomeAnchor> for AnchorTable {
     fn from(a: HomeAnchor) -> Self {
         match a {
@@ -1105,5 +1132,32 @@ mod tests {
     fn machine_clients_anchor_serializes_as_the_ddl_spells_it() {
         let j = serde_json::to_value(AnchorTable::MachineClients).unwrap();
         assert_eq!(j, serde_json::json!("kb_machine_clients"));
+    }
+
+    /// `as_str` feeds the authz predicates (`can(…, p_subject_table, …)`) while the serde rename
+    /// feeds `references`. They name the same table and must never disagree: a drifted `as_str`
+    /// would silently gate the admin ledger against the WRONG table — `can()` falls through to
+    /// `ELSE false`, so the failure is a fail-closed 404, not an error anyone would trace back
+    /// here. Asserted differentially against serde rather than against a second hand-written
+    /// list, so there is exactly one source of truth for the spelling.
+    #[test]
+    fn anchor_table_str_matches_the_serde_rename() {
+        for t in [
+            AnchorTable::Contexts,
+            AnchorTable::Cogmaps,
+            AnchorTable::Resources,
+            AnchorTable::Edges,
+            AnchorTable::ContentBlocks,
+            AnchorTable::Teams,
+            AnchorTable::Profiles,
+            AnchorTable::Connections,
+            AnchorTable::MachineClients,
+        ] {
+            assert_eq!(
+                serde_json::to_value(t).unwrap(),
+                serde_json::json!(t.as_str()),
+                "as_str() must equal the serde rename for {t:?}"
+            );
+        }
     }
 }
