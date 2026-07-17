@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Resource view — editorial masthead + Atlas rail</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  /* ---------------------------------------------------------------
+     Resource view. Layout A (editorial masthead) + nested-value
+     treatment B (scalar inline, structured expands).
+     Spec: docs/superpowers/specs/2026-07-16-vault-resource-view-rebuild-design.md
+
+     Doc-type hue arrives as --hue, set on .rv from palette.ts
+     (promoted to tokens per D3). Everything below derives from it —
+     set --hue and the whole view re-tints.
+     --------------------------------------------------------------- */
+  .rv {
+    --hue: #e8942e; /* concept */
+    background: var(--obsidian-2);
+    border: 1px solid var(--rule-2);
+    border-radius: 3px;
+    display: grid;
+    grid-template-columns: 1fr 260px;
+    overflow: hidden;
+    max-width: 980px;
+  }
+  .rv-main { min-width: 0; }
+
+  /* --- masthead --- */
+  .rv-masthead { padding: 18px 22px; border-bottom: 1px solid var(--rule); }
+  .rv-eyebrow {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: color-mix(in srgb, var(--hue) 80%, white);
+  }
+  .rv-title {
+    font-family: var(--serif); font-weight: 400; font-size: 25px; line-height: 1.25;
+    color: var(--hue); margin: 8px 0 0; letter-spacing: -0.01em;
+  }
+  .rv-home {
+    display: inline-flex; align-items: center; gap: 5px; margin-top: 11px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em;
+    padding: 2px 7px; border-radius: 2px;
+    border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent);
+    color: color-mix(in srgb, var(--hue) 72%, white);
+    background: color-mix(in srgb, var(--hue) 8%, transparent);
+  }
+
+  /* --- property set --- */
+  .rv-props { padding: 14px 22px 16px; border-bottom: 1px solid var(--rule); background: var(--card-bg-2); }
+  .rv-label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--graphite-2); margin-bottom: 9px;
+  }
+  .rv-dl { margin: 0; }
+  .rv-row { display: grid; grid-template-columns: 132px 1fr; gap: 10px; padding: 3px 0; align-items: start; }
+  .rv-row dt { font-family: var(--mono); font-size: 11px; color: var(--graphite); }
+  .rv-row dd { margin: 0; font-family: var(--mono); font-size: 11px; color: var(--chalk); min-width: 0; word-break: break-word; }
+  /* managed keys tint toward the hue; open keys stay neutral (D2) */
+  .rv-row.is-managed dt { color: color-mix(in srgb, var(--hue) 52%, var(--graphite)); }
+  .rv-rule { border: 0; border-top: 1px dashed var(--rule-2); margin: 8px 0; }
+
+  /* --- nested values (D5) --- */
+  .rv-toggle {
+    font-family: var(--mono); font-size: 11px; background: none; border: 0; padding: 0;
+    color: color-mix(in srgb, var(--hue) 70%, white); cursor: pointer; letter-spacing: 0.02em;
+  }
+  .rv-toggle:hover { color: color-mix(in srgb, var(--hue) 90%, white); }
+  .rv-sub {
+    border-left: 1px solid color-mix(in srgb, var(--hue) 25%, transparent);
+    margin: 5px 0 5px 3px; padding-left: 11px;
+  }
+  .rv-sub .rv-row { grid-template-columns: 116px 1fr; }
+  .rv-item { font-family: var(--mono); font-size: 10.5px; color: var(--chalk); padding: 2px 0; }
+  .rv-item .i { color: var(--graphite-2); margin-right: 7px; }
+  [hidden] { display: none !important; }
+
+  /* --- body --- */
+  .rv-body { padding: 18px 22px 24px; }
+  .rv-body h4 { font-family: var(--serif); font-size: 15px; margin: 0 0 9px; color: var(--parchment); font-weight: 600; }
+  .rv-body p { font-size: 13px; line-height: 1.65; color: var(--chalk); margin: 0 0 10px; }
+  .rv-body code { font-family: var(--mono); font-size: 11.5px; color: var(--temper-blue); }
+
+  /* --- rail --- */
+  .rv-rail { background: var(--card-bg); border-left: 1px solid color-mix(in srgb, var(--hue) 22%, transparent); }
+  .rv-sec { padding: 12px 14px; border-top: 1px solid var(--rule); }
+  .rv-sec:first-child { border-top: 0; }
+  .rv-ev { padding: 4px 0; }
+  .rv-ev-k { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--hue) 70%, white); }
+  .rv-ev-s { font-family: var(--serif); font-size: 11px; color: var(--chalk); margin: 1px 0; font-style: italic; }
+  .rv-ev-m { font-family: var(--mono); font-size: 9px; color: var(--graphite-2); }
+  .rv-edge { padding: 4px 0; font-family: var(--mono); font-size: 10.5px; }
+  .rv-edge-r { color: var(--graphite); }
+  .rv-edge-p { color: var(--chalk); }
+  .rv-edge-w { color: var(--graphite-2); font-size: 9px; }
+  .rv-empty { font-family: var(--serif); font-style: italic; font-size: 11px; color: var(--graphite-2); }
+
+  .note { max-width: 980px; margin: 0 0 16px; }
+  .note h1 { font-family: var(--serif); font-size: 17px; font-weight: 600; margin: 0 0 5px; }
+  .note p { font-size: 12px; color: var(--graphite); line-height: 1.55; margin: 0; }
+  .note code { font-family: var(--mono); font-size: 11px; color: var(--temper-blue); }
+  .swatches { display: flex; gap: 5px; margin: 16px 0 0; max-width: 980px; flex-wrap: wrap; }
+  .sw { font-family: var(--mono); font-size: 9px; padding: 3px 8px; border-radius: 2px; cursor: pointer;
+        border: 1px solid rgba(255,255,255,0.12); background: none; color: var(--graphite); }
+  .sw:hover { color: var(--parchment); border-color: rgba(255,255,255,0.3); }
+</style>
+</head>
+<body>
+
+<div class="note">
+  <h1>Resource view — editorial masthead + Atlas rail</h1>
+  <p>
+    Layout <strong>A</strong>: properties are identity, so they sit with the title before the prose;
+    the rail carries what <em>happened to</em> the resource. Nested values use treatment
+    <strong>B</strong>: one key = one row, depth opt-in. Real content — a cogmap-homed
+    <code>concept</code>, one of the 533 with no vault URL before this work. Hue is
+    <code>--hue</code>, set from <code>palette.ts</code>; click a doc type to re-tint.
+  </p>
+</div>
+
+<div class="swatches">
+  <button class="sw" onclick="tint('#e8942e')">concept</button>
+  <button class="sw" onclick="tint('#f7c62b')">fact</button>
+  <button class="sw" onclick="tint('#e24fc0')">theme</button>
+  <button class="sw" onclick="tint('#a95cf0')">question</button>
+  <button class="sw" onclick="tint('#34cf7e')">task</button>
+  <button class="sw" onclick="tint('#3a8ae8')">goal</button>
+  <button class="sw" onclick="tint('#9aa5b5')">kernel_landmark (no schema → FALLBACK_HUE)</button>
+</div>
+
+<div class="rv" id="rv" style="margin-top:16px">
+  <div class="rv-main">
+
+    <div class="rv-masthead">
+      <div class="rv-eyebrow" id="eyebrow">CONCEPT</div>
+      <h2 class="rv-title">[question] What doc-type vocabulary should the map register for its expressive node labels?</h2>
+      <span class="rv-home">◈ COGMAP · team-self-cognition</span>
+    </div>
+
+    <div class="rv-props">
+      <div class="rv-label">Properties · 5</div>
+      <dl class="rv-dl">
+        <!-- 1. doc_type always first -->
+        <div class="rv-row is-managed"><dt>doc_type</dt><dd>concept</dd></div>
+        <!-- 2. managed temper-* keys, fixed order -->
+        <div class="rv-row is-managed"><dt>temper-status</dt><dd>resolved</dd></div>
+        <div class="rv-row is-managed"><dt>temper-provenance</dt><dd>steward-authored</dd></div>
+        <hr class="rv-rule">
+        <!-- 3. open keys, alphabetical -->
+        <div class="rv-row"><dt>date</dt><dd>2026-07-03</dd></div>
+        <div class="rv-row">
+          <dt>facet</dt>
+          <dd>
+            <button class="rv-toggle" aria-expanded="true" onclick="tog(this,'f1')">⌄ {2 keys}</button>
+            <div class="rv-sub" id="f1">
+              <div class="rv-row"><dt>node_label</dt><dd>question</dd></div>
+              <div class="rv-row"><dt>status</dt><dd>resolved</dd></div>
+            </div>
+          </dd>
+        </div>
+        <div class="rv-row">
+          <dt>tags</dt>
+          <dd>
+            <button class="rv-toggle" aria-expanded="false" onclick="tog(this,'t1')">› [2]</button>
+            <div class="rv-sub" id="t1" hidden>
+              <div class="rv-item"><span class="i">0</span>doc-types</div>
+              <div class="rv-item"><span class="i">1</span>vocabulary</div>
+            </div>
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="rv-body">
+      <h4>The question</h4>
+      <p>
+        The map registers node labels drawn from a fixed doc-type vocabulary. Whether that vocabulary
+        should be closed to the fourteen named types or open to arbitrary strings has never been
+        settled — it was assumed closed and never tested.
+      </p>
+      <p>
+        The kernel already carries <code>kernel_landmark</code>, which no Rust schema names, and the
+        cogmap birth path stamps <code>cogmap_charter</code>. So the closed reading is already false
+        in production; the only question left is whether that was intended.
+      </p>
+    </div>
+  </div>
+
+  <aside class="rv-rail">
+    <div class="rv-sec">
+      <div class="rv-label">History · 6</div>
+      <div class="rv-ev">
+        <div class="rv-ev-k">Property set</div>
+        <div class="rv-ev-s">status → resolved</div>
+        <div class="rv-ev-m">steward · 3d ago</div>
+      </div>
+      <div class="rv-ev">
+        <div class="rv-ev-k">Facet set</div>
+        <div class="rv-ev-s">node_label → question</div>
+        <div class="rv-ev-m">steward · 5d ago · <span style="color:#8fd8a8">high</span></div>
+      </div>
+      <div class="rv-ev">
+        <div class="rv-ev-k">Relationship asserted</div>
+        <div class="rv-ev-s">derived_from → Doc-type vocabulary</div>
+        <div class="rv-ev-m">steward · 12d ago</div>
+      </div>
+      <div class="rv-ev">
+        <div class="rv-ev-k">Created</div>
+        <div class="rv-ev-m">j-cole-taylor · 13d ago</div>
+      </div>
+    </div>
+
+    <div class="rv-sec">
+      <div class="rv-label">Edges · 3</div>
+      <div class="rv-edge">
+        <span class="rv-edge-r">derived_from →</span>
+        <span class="rv-edge-p">Doc-type vocabulary</span>
+        <span class="rv-edge-w">· 0.9</span>
+      </div>
+      <div class="rv-edge">
+        <span class="rv-edge-r">relates_to →</span>
+        <span class="rv-edge-p">Teach-agents goal</span>
+        <span class="rv-edge-w">· 1.0</span>
+      </div>
+      <div class="rv-edge">
+        <span class="rv-edge-r">← contradicts</span>
+        <span class="rv-edge-p">Closed vocabulary</span>
+        <span class="rv-edge-w">· 0.7 · neg</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+  // Sections vanish when empty (Atlas convention) — except History, which says so.
+  function tog(btn, id) {
+    const el = document.getElementById(id);
+    const open = el.hasAttribute('hidden');
+    if (open) el.removeAttribute('hidden'); else el.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', String(open));
+    btn.textContent = btn.textContent.replace(open ? '›' : '⌄', open ? '⌄' : '›');
+  }
+  const NAMES = {
+    '#e8942e': 'CONCEPT', '#f7c62b': 'FACT', '#e24fc0': 'THEME', '#a95cf0': 'QUESTION',
+    '#34cf7e': 'TASK', '#3a8ae8': 'GOAL', '#9aa5b5': 'KERNEL_LANDMARK'
+  };
+  function tint(hue) {
+    document.getElementById('rv').style.setProperty('--hue', hue);
+    document.getElementById('eyebrow').textContent = NAMES[hue] || 'RESOURCE';
+  }
+</script>
+</body>
+</html>

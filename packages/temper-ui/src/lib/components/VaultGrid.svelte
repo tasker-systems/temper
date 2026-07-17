@@ -78,8 +78,7 @@
 		if (ev.eventSource !== 'click' || !ev.row) return;
 		const row = rowLookup.get(String(ev.row));
 		if (!row) return;
-		const href = resourceHref(row);
-		if (href) goto(href);
+		goto(resourceHref(row));
 	}
 
 	function handleSort(ev: { key: string | number; order?: 'asc' | 'desc' }) {

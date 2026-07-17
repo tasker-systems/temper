@@ -58,15 +58,16 @@ export function isContextGraphLocation(
 }
 
 /**
- * Full-resource path for a context-homed resource. Returns `null` for a
- * cogmap-homed resource (its `context_*` fields are null) so callers can gate
- * the affordance rather than emit a broken URL. The final segment is the bare
- * `id`: the route resolves trailing-UUID-only, and `ResourceRow` carries no
- * resource slug to decorate with.
+ * Path to a resource, for any home. Resolution is trailing-UUID-only, so the
+ * route needs nothing but the id — home is a rendered fact, not a routing
+ * precondition (spec D1).
+ *
+ * This used to return `null` for a cogmap-homed resource (context_* are null),
+ * which stranded 533 of 2330 active resources: VaultGrid listed them and
+ * no-opped on click. It cannot return null now.
  */
-export function resourceHref(row: ResourceRow): string | null {
-	if (!row.context_owner_ref || !row.context_slug) return null;
-	return `/vault/${row.context_owner_ref}/${encodeURIComponent(row.context_slug)}/${encodeURIComponent(row.doc_type_name)}/${row.id}`;
+export function resourceHref(row: ResourceRow): string {
+	return `/vault/r/${row.id}`;
 }
 
 export function searchHref(query: string): string {

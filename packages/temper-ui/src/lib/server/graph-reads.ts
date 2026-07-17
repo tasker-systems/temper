@@ -7,6 +7,7 @@
  */
 import { apiGet, apiPost } from '$lib/server/api';
 import type { AtlasSubgraph, SliceRequest } from '$lib/types/generated/graph_atlas';
+import type { GraphEdgeRow } from '$lib/types/generated/graph';
 import type { EventTrail, ElementKind } from '$lib/types/generated/element_trail';
 import type { AtlasHome } from '$lib/types/generated/graph_home';
 import type { ContextPanorama } from '$lib/types/generated/graph_context';
@@ -53,6 +54,8 @@ export const teamsListPath = (): string => `/api/teams`;
 
 export const resourceRowPath = (id: string): string => `/api/resources/${id}`;
 
+export const resourceEdgesPath = (id: string): string => `/api/resources/${id}/edges`;
+
 export const readAtlasHome = (token: string): Promise<AtlasHome> =>
 	apiGet<AtlasHome>(atlasHomePath(), token);
 
@@ -82,6 +85,10 @@ export const listTeams = (token: string): Promise<TeamRow[]> =>
 
 export const readResourceRow = (token: string, id: string): Promise<ResourceRow> =>
 	apiGet<ResourceRow>(resourceRowPath(id), token);
+
+/** Edges incident to one resource. Rows are peer-denormalized — no subgraph load. */
+export const readResourceEdges = (token: string, id: string): Promise<GraphEdgeRow[]> =>
+	apiGet<GraphEdgeRow[]>(resourceEdgesPath(id), token);
 
 /** Beat E — the context door. `context_ref` is a decorated ref (`@me/temper`) or a bare
  *  UUID; it contains `/` and `@`, so it MUST be percent-encoded into the query string. */
