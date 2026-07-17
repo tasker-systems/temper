@@ -40,6 +40,9 @@ fn payload_schemas_match_snapshots() {
     check::<p::BlockMutated>("block_mutated");
     check::<p::BlockFolded>("block_folded");
     check::<p::BlockProvenanceCorrected>("block_provenance_corrected");
+    check::<p::AdminLedgerOpened>("admin_ledger_opened");
+    check::<p::GrantCreated>("grant_created");
+    check::<p::GrantRevoked>("grant_revoked");
 }
 
 #[test]

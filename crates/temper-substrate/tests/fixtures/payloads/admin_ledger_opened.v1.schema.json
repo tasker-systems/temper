@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdminLedgerOpened",
+  "description": "`admin_ledger_opened` — the ledger's epoch marker. The time is the event's own `occurred_at`\n(`ledger_epoch` reads it there); the payload carries only the human note that says why nothing\nprecedes it. No `opened_at` field — a timestamp in a payload duplicates `occurred_at` and this\nmodule's rule is that derived/carried state (timestamps included) never lives in the payload.",
+  "type": "object",
+  "properties": {
+    "note": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "note"
+  ]
+}
