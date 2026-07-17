@@ -59,15 +59,21 @@ export default slackChannel({
 
       // Ephemeral on BOTH arms. The unlinked one carries a credential; the linked one is
       // per-mention status noise no channel asked for.
-      await ctx.thread.postEphemeral(userId, reply);
+      //
+      // Pass `{ text }`, NOT a bare string. eve normalizes a bare string to `{ markdown }`,
+      // which becomes Slack's `markdown_text` field — supported by chat.postMessage but NOT
+      // chat.postEphemeral, which then returns ok:false and eve throws. That throw is
+      // swallowed by eve's dispatcher, so the symptom is total silence, not an error. eve's
+      // own default authorization.required handler passes `{ blocks, text }` for exactly this
+      // reason. `{ text }` routes to the plain `text` field, which postEphemeral supports.
+      await ctx.thread.postEphemeral(userId, { text: reply });
     } catch (err) {
       // eve catches and logs a thrown error and drops the mention, so a failed call would
       // be silent. Tell the user something honest instead of nothing.
       console.error("link state lookup failed", err);
-      await ctx.thread.postEphemeral(
-        userId,
-        "I couldn't check your temper account just now. Please try again in a moment.",
-      );
+      await ctx.thread.postEphemeral(userId, {
+        text: "I couldn't check your temper account just now. Please try again in a moment.",
+      });
     }
 
     // Deliberately DROP rather than dispatch, on BOTH arms. Unlinked, a turn would run the
