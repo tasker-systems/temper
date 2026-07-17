@@ -28,6 +28,22 @@ use temper_substrate::payloads::{AnchorTable, RefTarget};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
+/// The admin event types this suite scans for. Mirrors the (private) `ADMIN_EVENT_TYPES` in
+/// `admin_ledger_service` — a test-local copy because that const is not (and should not be) part of
+/// the service's public API; a two-element drift here is caught by
+/// `no_admin_payload_spells_a_trail_matched_key`, which asserts every one of these types.
+const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] =
+    &["admin_ledger_opened", "grant_created", "grant_revoked"];
+
+/// Keys the `element_trail_*` functions match on by shape, with **no** event-type filter. An admin
+/// payload spelling any of these would leak an authority record into a cognition read gated only by
+/// `resources_visible_to` (spec 2026-07-16 §5). Derived from the live function bodies:
+/// `element_trail_node` matches `resource_id`, `owner.{table,id}`, `block_id`
+/// (`migrations/20260706000002_element_trail_payload_actor.sql:32,35-36,39`); `element_trail_edge`
+/// matches `edge_id` (`:14`). Subjects are spelled `subject_table`/`subject_id` and carried in
+/// `references` instead.
+const BANNED_ADMIN_PAYLOAD_KEYS: &[&str] = &["resource_id", "block_id", "edge_id", "owner"];
+
 /// A real system-admin, an outsider, and a non-admin who nonetheless owns a resource (and so can
 /// administer grants on it — the middle case §5 was rewritten to protect).
 struct AdminFixture {
@@ -593,4 +609,122 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
             .await
             .expect("the gating team's owner keeps system access under invite_only");
     assert_eq!(admin_still_reads.len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 3 (spec 2026-07-16 §5): the element_trail payload-key invariant.
+//
+// `element_trail_node`/`element_trail_edge` match purely on payload KEY SHAPE with NO event-type
+// filter, gated only by `resources_visible_to`. An admin payload spelling `resource_id` — natural,
+// since a grant whose subject is a resource *is about* that resource — would surface WHO was granted
+// access to it to any reader of the resource. These land before any admin payload exists (Tasks 4/5)
+// so the invariant is never retrofitted. Both are written to be able to FAIL: seeded via the
+// canonical `seed_admin_event`, with positive controls, because this whole spec §5 exists because an
+// earlier suite's tests *could not fail* on the defect they nominally guarded.
+// ---------------------------------------------------------------------------------------------
+
+/// The corpus invariant: no admin payload — across every admin event type — spells a key the
+/// `element_trail_*` functions match on. Non-vacuous today because it scans REAL payloads written by
+/// `seed_admin_event` (the canonical writer until Task 5's fire arm replaces it), for both subject
+/// kinds an admin act can carry. Spell a banned key in that writer and this fails immediately.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn no_admin_payload_spells_a_trail_matched_key(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // Both subject kinds, through the canonical writer, so the scan runs against real payloads
+    // rather than an empty corpus (which would pass vacuously).
+    seed_admin_event(
+        &pool,
+        f.admin_emitter,
+        AnchorTable::Contexts,
+        f.context_id,
+        f.team_id,
+    )
+    .await;
+    seed_admin_event(
+        &pool,
+        f.admin_emitter,
+        AnchorTable::Resources,
+        f.owned_resource_id,
+        f.team_id,
+    )
+    .await;
+
+    let bad: Vec<(String, String)> = sqlx::query_as(
+        r#"SELECT t.name, k.key
+             FROM kb_events e
+             JOIN kb_event_types t ON t.id = e.event_type_id
+             CROSS JOIN LATERAL jsonb_object_keys(e.payload) AS k(key)
+            WHERE t.name = ANY($1) AND k.key = ANY($2)"#,
+    )
+    .bind(ADMIN_EVENT_TYPES_FOR_TEST)
+    .bind(BANNED_ADMIN_PAYLOAD_KEYS)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        bad.is_empty(),
+        "admin payloads must not spell element_trail-matched keys — these leak authority records \
+         to any reader of the resource. Use subject_table/subject_id + references. Offenders: {bad:?}"
+    );
+}
+
+/// The end-to-end guard: an admin event that is *about a resource* must still never surface in that
+/// resource's element trail. The event stays out for exactly one reason — its payload spells
+/// `subject_table`/`subject_id`, never `resource_id`. Spell the banned key and this fails.
+///
+/// Non-vacuous by construction. The subject is `f.owned_resource_id` (a real `kb_resources` row the
+/// owner can see — asserted below), and the seeded event is *about* it, so if the writer ever spelled
+/// `resource_id`, `element_trail_node` would surface it to the owner and `leaked` would be > 0. A
+/// context-subject event, by contrast, could never match a node trail and so could never fail — the
+/// vacuity this test is deliberately shaped to avoid.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_event_never_appears_in_an_element_trail(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // Positive control: the scanning profile genuinely sees the subject resource, so the trail scan
+    // below actually covers it. Without this the `leaked == 0` assertion could hold vacuously.
+    let owner_sees_it: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
+    )
+    .bind(f.owner_profile.uuid())
+    .bind(f.owned_resource_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        owner_sees_it,
+        "the owner must see their own resource, or the trail scan below is vacuous"
+    );
+
+    // An admin event ABOUT that resource — the payload most tempted to spell `resource_id`.
+    seed_admin_event(
+        &pool,
+        f.admin_emitter,
+        AnchorTable::Resources,
+        f.owned_resource_id,
+        f.team_id,
+    )
+    .await;
+
+    // element_trail_node over every resource the owner can see must return no admin event.
+    // NOTE its RETURNS TABLE spells the type column `kind`, not `event_type`
+    // (migrations/20260706000002_element_trail_payload_actor.sql:27).
+    let leaked: i64 = sqlx::query_scalar(
+        r#"SELECT count(*)
+             FROM kb_resources r
+             CROSS JOIN LATERAL element_trail_node($1, r.id) AS tr
+            WHERE tr.kind = ANY($2)"#,
+    )
+    .bind(f.owner_profile.uuid())
+    .bind(ADMIN_EVENT_TYPES_FOR_TEST)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        leaked, 0,
+        "no admin event may surface in a cognition element trail"
+    );
 }
