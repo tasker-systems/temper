@@ -16,10 +16,17 @@ returns a `LinkState` discriminated union mirroring the Rust `SlackLinkStateResp
 arm costs a write. If you find yourself adding a nullable field to that union, you are rebuilding
 the bug: the two arms carry disjoint data on purpose.
 
-**Both arms are `postEphemeral`, and both drop.** The unlinked message carries a credential and must
-never reach a public channel; the linked one is per-mention status noise no channel asked for. The
-linked arm has nothing to dispatch *to* yet, so it says so honestly — no task numbers, no dates, no
-internal plans in user-facing copy.
+**Both arms deliver a channel-root ephemeral, and both drop.** The unlinked message carries a
+credential and must never reach a public channel; the linked one is per-mention status noise no
+channel asked for. The linked arm has nothing to dispatch *to* yet, so it says so honestly — no task
+numbers, no dates, no internal plans in user-facing copy.
+
+> **Deliver via `ctx.slack.request("chat.postEphemeral", { channel, user, text })`, NOT
+> `ctx.thread.postEphemeral`.** The thread helper inherits the mention's `thread_ts`, so the
+> ephemeral lands in a thread the user isn't viewing — invisible, no badge, indistinguishable from a
+> dropped mention (this cost a live debugging session). The raw request also returns `{ ok, error }`
+> instead of throwing on `ok:false`, so a delivery failure surfaces (a public, credential-free error
+> line) instead of being swallowed by eve's dispatcher. Do not "simplify" it back.
 
 ## eve inbound identity contract (verified against eve@0.18.1)
 
