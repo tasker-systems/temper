@@ -14,6 +14,9 @@ use crate::templates::{CommandWrapperTemplate, SkillTemplate};
 // ── Static content (compiled into the binary) ────────────────────────────────
 
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
+static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
+static IMPLEMENTATION_GROUNDING_MD: &str =
+    include_str!("../../skill-content/implementation-grounding.md");
 static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
@@ -530,6 +533,8 @@ fn check_expected_files(skill_dir: &Path) {
         "SKILL.md",
         "reference.md",
         "subagent-guidance.md",
+        "plan-verification.md",
+        "implementation-grounding.md",
         "session-lifecycle.md",
         "cognitive-maps.md",
         "teams.md",
@@ -643,6 +648,17 @@ pub fn generate_skill_files_with_hash(
         "subagent-guidance.md".to_string(),
         SUBAGENT_GUIDANCE_MD.to_string(),
     );
+    // The grounding pair. Shipped at the skill root beside `subagent-guidance.md` — NOT into
+    // `guidance/`, which is the user's namespace (install only creates it; it writes nothing
+    // there, and shipping into it would clobber user files on every regen).
+    files.insert(
+        "plan-verification.md".to_string(),
+        PLAN_VERIFICATION_MD.to_string(),
+    );
+    files.insert(
+        "implementation-grounding.md".to_string(),
+        IMPLEMENTATION_GROUNDING_MD.to_string(),
+    );
     files.insert(
         "session-lifecycle.md".to_string(),
         SESSION_LIFECYCLE_MD.to_string(),
@@ -739,6 +755,34 @@ mod tests {
         }
     }
 
+    /// **Shipping a guidance file is not the same as making it reachable.**
+    ///
+    /// `implementation-grounding.md` existed and was correct for weeks while SKILL.md's procedural
+    /// steps named only `guidance/fundamentals.md` — so no session ever loaded it, and plans kept
+    /// shipping invention laundered as grounding. The router is what makes a supporting file real:
+    /// agents execute the numbered steps, not the directory listing.
+    ///
+    /// So this pins the wiring, not the file's existence. A supporting file the router never names
+    /// is dead content, and it fails silently — which is exactly how it rotted the first time.
+    #[test]
+    fn every_shipped_guidance_file_is_named_by_the_router() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let skill_md = files.get("SKILL.md").expect("SKILL.md");
+
+        for guidance in [
+            "subagent-guidance.md",
+            "plan-verification.md",
+            "implementation-grounding.md",
+        ] {
+            assert!(
+                skill_md.contains(guidance),
+                "SKILL.md never mentions `{guidance}`, so no session will read it — ship it in the \
+                 router's steps or do not ship it at all"
+            );
+        }
+    }
+
     #[test]
     fn test_generate_skill_files_contains_expected_keys() {
         let config = test_config();
@@ -747,6 +791,8 @@ mod tests {
         assert!(files.contains_key("SKILL.md"));
         assert!(files.contains_key("reference.md"));
         assert!(files.contains_key("subagent-guidance.md"));
+        assert!(files.contains_key("plan-verification.md"));
+        assert!(files.contains_key("implementation-grounding.md"));
         assert!(files.contains_key("session-lifecycle.md"));
         assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("teams.md"));
