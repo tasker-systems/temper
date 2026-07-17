@@ -186,7 +186,7 @@ by two independent mechanisms. What remains is only "victim not yet linked, atta
 first-link message" — already narrow, and still gated by D5's HMAC.
 
 **"Start fresh" is an explicit disconnect**, not a side effect of linking again. It does not exist
-yet and is filed as its own task. That is the correct shape: an affordance a user deliberately
+yet and is filed as task `019f703c-6d00-77c3-80ea-5b4255534117`. That is the correct shape: an affordance a user deliberately
 invokes on their *own* link, not a capability handed to whoever completes a login against someone
 else's principal.
 
