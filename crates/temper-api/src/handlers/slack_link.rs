@@ -229,13 +229,35 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
         })?;
 
     // Auth before write: the profile is resolved and gated above this line.
-    slack_link_service::upsert_slack_link(
+    //
+    // A principal binds ONCE. If it is already bound to a different profile the write is
+    // refused rather than moved — see `link_slack_principal` and spec D4.
+    let outcome = slack_link_service::link_slack_principal(
         &state.pool,
         profile.profile.id,
         &intent.slack_principal_id,
     )
     .await
     .map_err(|_| "Something went wrong saving the link. Mention @temper again.".to_string())?;
+
+    if outcome == slack_link_service::SlackLinkOutcome::AlreadyLinkedToAnotherProfile {
+        tracing::warn!(
+            profile_id = %profile.profile.id,
+            "slack link: refused (principal already bound to a different profile)",
+        );
+        // DELIBERATE, BOUNDED DISCLOSURE. This message admits the principal IS linked, which
+        // the generic "no temper account is linked" refusal does not. That is the right
+        // trade: the legitimate user needs to understand why their link failed and what to do
+        // about it, and collapsing this into the generic message would actively mislead them
+        // — they'd be told to sign in at temperkb.io, which would not help. An attacker who
+        // stole a link URL learns only that their attack failed. The other profile's handle is
+        // NOT named: which account holds it is not theirs to learn.
+        return Err(
+            "This Slack account is already connected to a different temper account. \
+                    Disconnect it there first, then mention @temper again to reconnect."
+                .into(),
+        );
+    }
 
     // T3 SEAM. The exchange requested `offline_access`, so `tokens.refresh_token` is the
     // per-user grant -- its own independent family, never an export of the user's CLI grant.

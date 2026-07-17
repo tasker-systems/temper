@@ -114,37 +114,69 @@ pub async fn lookup_linked_handle(
     Ok(row.map(|r| r.handle))
 }
 
-/// Write the directory row `slack:<team>:<user> -> profile`.
+/// What a link attempt did. A typed outcome rather than a bool: the refusal is not an error
+/// (nothing went wrong) and not a success (nothing was written), and the handler needs to say
+/// something specific about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlackLinkOutcome {
+    /// The row now binds this principal to the requested profile — freshly inserted, or
+    /// already there and re-stamped.
+    Linked,
+    /// The principal is already bound to a DIFFERENT profile. Nothing was written; the
+    /// existing binding stands.
+    AlreadyLinkedToAnotherProfile,
+}
+
+/// Write the directory row `slack:<team>:<user> -> profile`. **The principal binds once.**
 ///
-/// Idempotent on re-link via `UNIQUE(auth_provider, auth_provider_user_id)`. A conflict that
-/// carries a DIFFERENT profile_id is a rebind, and it is allowed by design: binding requires
-/// authenticating AS the target profile, so a principal can only ever bind to the
-/// authenticator's own profile. See spec D4.
+/// There is no rebind. A temper profile is only ever SAML/OAuth-provisioned and identity
+/// converges on one profile per human (auth links + email reconcile), so there is no "other
+/// account" for a principal to move to. The same-profile case is idempotent — re-running the
+/// flow re-stamps `linked_at` and succeeds. A different-profile attempt is REFUSED:
+/// `AlreadyLinkedToAnotherProfile`, no write. "Start fresh" is an explicit **disconnect**, a
+/// separate affordance that does not exist yet — not a side effect of linking again.
+///
+/// **This is what closes the already-linked half of the URL-theft threat.** The residual attack
+/// is: steal the victim's ephemeral link URL, complete the login as yourself, and bind their
+/// principal to your profile so their future `@temper` writes land in your KB. That attack
+/// *requires* rebind when the victim is already linked. Refusing it here closes that case
+/// outright, and D9 means an already-linked victim is never issued a URL to steal in the first
+/// place. Only "victim not yet linked, attacker steals their first-link message" remains.
+///
+/// The guard is the `WHERE` on the `DO UPDATE`, which makes it **atomic** — no read-then-write
+/// TOCTOU. On a different-profile conflict the update matches no row, so the statement returns
+/// zero rows rather than raising: refusal is a row count, not an error. Verified against the
+/// real database, not inferred.
 ///
 /// `email` stays NULL: Slack supplies no email on the wire, which is exactly why the link is
 /// keyed on the opaque principal.
-pub async fn upsert_slack_link(
+pub async fn link_slack_principal(
     pool: &PgPool,
     profile_id: Uuid,
     slack_principal_id: &str,
-) -> ApiResult<()> {
-    sqlx::query!(
+) -> ApiResult<SlackLinkOutcome> {
+    let row = sqlx::query!(
         r#"
         INSERT INTO kb_profile_auth_links
             (id, profile_id, auth_provider, auth_provider_user_id)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (auth_provider, auth_provider_user_id)
-        DO UPDATE SET profile_id = EXCLUDED.profile_id, linked_at = now()
+        DO UPDATE SET linked_at = now()
+        WHERE kb_profile_auth_links.profile_id = EXCLUDED.profile_id
+        RETURNING profile_id
         "#,
         Uuid::now_v7(),
         profile_id,
         SLACK_AUTH_PROVIDER,
         slack_principal_id,
     )
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
 
-    Ok(())
+    Ok(match row {
+        Some(_) => SlackLinkOutcome::Linked,
+        None => SlackLinkOutcome::AlreadyLinkedToAnotherProfile,
+    })
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -224,7 +256,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_yields_the_handle_when_a_link_row_exists(pool: PgPool) {
         let profile_id = insert_profile(&pool, "j-cole-taylor").await;
-        upsert_slack_link(&pool, profile_id, PRINCIPAL)
+        link_slack_principal(&pool, profile_id, PRINCIPAL)
             .await
             .unwrap();
 
@@ -247,7 +279,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_does_not_match_a_different_principal(pool: PgPool) {
         let profile_id = insert_profile(&pool, "someone-else").await;
-        upsert_slack_link(&pool, profile_id, PRINCIPAL)
+        link_slack_principal(&pool, profile_id, PRINCIPAL)
             .await
             .unwrap();
 
@@ -257,22 +289,69 @@ mod tests {
             .is_none());
     }
 
-    /// D4's rebind, at the layer that implements it: binding the principal to a DIFFERENT
-    /// profile moves the link rather than duplicating it. Tested here because the mention flow
-    /// no longer offers a linked user a fresh challenge, so the e2e tier cannot reach this.
+    /// **There is no rebind.** Binding a principal that is already bound to a DIFFERENT
+    /// profile is refused, and refused WITHOUT writing.
+    ///
+    /// The return value is only half the assertion. A regression that reports the refusal and
+    /// still lets the write land — the old `DO UPDATE SET profile_id` with a bolted-on check,
+    /// say — would pass a return-value-only test while silently doing the exact thing this
+    /// refusal exists to prevent. So the row itself is the load-bearing assertion: it must
+    /// still name the ORIGINAL profile.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_rebind_moves_the_link_rather_than_duplicating_it(pool: PgPool) {
+    async fn binding_to_a_different_profile_is_refused_and_writes_nothing(pool: PgPool) {
         let first = insert_profile(&pool, "first-owner").await;
         let second = insert_profile(&pool, "second-owner").await;
 
-        upsert_slack_link(&pool, first, PRINCIPAL).await.unwrap();
-        upsert_slack_link(&pool, second, PRINCIPAL).await.unwrap();
+        assert_eq!(
+            link_slack_principal(&pool, first, PRINCIPAL).await.unwrap(),
+            SlackLinkOutcome::Linked,
+        );
+        assert_eq!(
+            link_slack_principal(&pool, second, PRINCIPAL)
+                .await
+                .unwrap(),
+            SlackLinkOutcome::AlreadyLinkedToAnotherProfile,
+            "a principal binds once — moving it to another profile must be refused",
+        );
 
         assert_eq!(
             lookup_linked_handle(&pool, PRINCIPAL).await.unwrap(),
-            Some("second-owner".to_string()),
-            "the rebind must win — UNIQUE(auth_provider, auth_provider_user_id) keeps one row",
+            Some("first-owner".to_string()),
+            "the refusal must leave the row pointing at the ORIGINAL profile — asserting only \
+             the return value would pass even if the write landed",
         );
+    }
+
+    /// The same-profile case is idempotent: it succeeds, and it keeps exactly one row.
+    ///
+    /// This is the half of the conditional upsert the refusal above must not break. The row
+    /// count is asserted directly because `lookup_linked_handle` uses `fetch_optional` and
+    /// would happily report the handle off the first of two duplicate rows.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn binding_the_same_profile_twice_is_idempotent(pool: PgPool) {
+        let profile_id = insert_profile(&pool, "same-owner").await;
+
+        for attempt in 1..=2 {
+            assert_eq!(
+                link_slack_principal(&pool, profile_id, PRINCIPAL)
+                    .await
+                    .unwrap(),
+                SlackLinkOutcome::Linked,
+                "attempt {attempt} for the same profile must succeed",
+            );
+        }
+
+        let rows: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_profile_auth_links
+              WHERE auth_provider = $1 AND auth_provider_user_id = $2",
+            SLACK_AUTH_PROVIDER,
+            PRINCIPAL,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap_or_default();
+        assert_eq!(rows, 1, "re-linking the same profile must not duplicate");
     }
 
     /// A deactivated profile is still LINKED. Reporting `None` here would loop the user into a
@@ -280,7 +359,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_still_reports_a_deactivated_profile_as_linked(pool: PgPool) {
         let profile_id = insert_profile(&pool, "gone-away").await;
-        upsert_slack_link(&pool, profile_id, PRINCIPAL)
+        link_slack_principal(&pool, profile_id, PRINCIPAL)
             .await
             .unwrap();
         sqlx::query!(

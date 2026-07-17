@@ -454,6 +454,119 @@ async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
     );
 }
 
+/// **There is no rebind, end to end.** A callback whose token resolves to a DIFFERENT profile
+/// than the principal's existing link is refused, and the original link stands.
+///
+/// This is the security half of the design, at the tier where it is real. The residual
+/// URL-theft threat is: steal the victim's ephemeral link message, complete the login as
+/// yourself, and bind their principal to YOUR profile — every future `@temper` from the victim
+/// then writes into your KB. Refusing here closes that attack for an already-linked victim
+/// outright (and D9 means they are never issued a URL to steal in the first place).
+///
+/// The page text is not the load-bearing assertion — the row is. A regression that renders the
+/// refusal while the write still lands would pass a text-only check and leak exactly what the
+/// refusal exists to prevent. So: the link must still point at the ORIGINAL profile.
+///
+/// Both intents are minted before either callback runs, for the same forced reason as the
+/// idempotency test above: `link-state` answers `linked` once the first callback lands, so
+/// there is no other route to a second callback.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_callback_for_a_principal_linked_to_another_profile_is_refused(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    let victim_sub = "idp-sub-victim";
+    let victim_email = "victim-4a19c2@example.invalid";
+    let attacker_sub = "idp-sub-attacker";
+    let attacker_email = "attacker-8d02fe@example.invalid";
+    provision_profile(&app, victim_sub, victim_email).await;
+    provision_profile(&app, attacker_sub, attacker_email).await;
+
+    // Two intents for the SAME principal, minted while it is still unlinked.
+    let victim_url = app.callback_url(&mint_state_nonce(&app).await);
+    let attacker_url = app.callback_url(&mint_state_nonce(&app).await);
+
+    // The victim links first. The stub hands back the victim's token.
+    stub_token_endpoint(
+        &app,
+        sign_idp_access_token(&app.issuer(), victim_sub, victim_email),
+    )
+    .await;
+    let first = app
+        .http
+        .get(&victim_url)
+        .send()
+        .await
+        .expect("victim callback")
+        .text()
+        .await
+        .expect("victim body");
+    assert!(first.contains("Linked as"), "the victim must link: {first}");
+
+    let victim_profile_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT profile_id FROM kb_profile_auth_links \
+         WHERE auth_provider = 'slack' AND auth_provider_user_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("the victim's link row exists");
+
+    // Now the attacker completes the stolen URL, authenticating as THEMSELVES.
+    //
+    // `reset()` is load-bearing, not tidiness: wiremock sorts mounted mocks by priority with a
+    // STABLE sort and every mock here has the default priority, so the FIRST-registered match
+    // wins forever (`mock_set.rs:63-68`). Simply mounting a second `/oauth/token` stub would
+    // NOT shadow the victim's — the exchange would keep returning the victim's token, the
+    // callback would resolve to the victim's own profile, and this test would report a green
+    // "no rebind" while never once attempting one.
+    app.idp.reset().await;
+    stub_token_endpoint(
+        &app,
+        sign_idp_access_token(&app.issuer(), attacker_sub, attacker_email),
+    )
+    .await;
+    let res = app
+        .http
+        .get(&attacker_url)
+        .send()
+        .await
+        .expect("attacker callback");
+    assert_eq!(
+        res.status(),
+        200,
+        "the callback always renders a page — a human is looking at it"
+    );
+    let second = res.text().await.expect("attacker body");
+
+    assert!(
+        second.contains("already connected to a different temper account"),
+        "the rebind must be refused, and say so: {second}"
+    );
+    assert!(
+        !second.contains("Linked as"),
+        "the refusal must not render the success page: {second}"
+    );
+
+    assert_eq!(
+        count_slack_links(&pool).await,
+        1,
+        "the refusal must not add a row"
+    );
+    let after: uuid::Uuid = sqlx::query_scalar(
+        "SELECT profile_id FROM kb_profile_auth_links \
+         WHERE auth_provider = 'slack' AND auth_provider_user_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("the link row survives");
+    assert_eq!(
+        after, victim_profile_id,
+        "the link must STILL point at the original profile — a refusal that renders the right \
+         page while the write lands is the exact bug this test exists to catch",
+    );
+}
+
 /// **The re-prompt regression.** A linked user must be told they are linked — and must cost
 /// nothing to tell.
 ///

@@ -41,10 +41,11 @@ Slack: @temper …                 (principal slack:T0BH…:U0BH… from attribu
         (0 rows ⇒ unknown | expired | replayed — one indistinguishable rejection)
       → exchange_code(code, verifier, redirect_uri) → { access_token, refresh_token }
       → resolve profile LOOKUP-ONLY from the token's sub   (refuse if absent)
-      → upsert kb_profile_auth_links
-        ON CONFLICT (auth_provider, auth_provider_user_id) DO UPDATE SET profile_id
+      → link kb_profile_auth_links  (conditional: same profile ⇒ idempotent,
+        different profile ⇒ REFUSED, no write — there is no rebind, D4)
       → [T3 seam: refresh_token → vault]
       ← 200 text/html  "✅ Linked as @j-cole-taylor"
+                    |  "Already connected to a different temper account"
 ```
 
 ## Decisions
@@ -135,26 +136,62 @@ Implementation: a lookup-only human resolution in temper-services — a **narrow
 path, mirroring the machine arm, which is already lookup-or-reject by design
 (`resolve_machine_from_claims`, `profile_service.rs:169`). Not a new write path.
 
-### D4 — rebind is a feature, not a threat
+### D4 — there is no rebind; the principal binds once
 
 **To bind a Slack principal to profile P you must authenticate as P.** The token's `sub` is the only
 thing naming the temper side. So a principal can only ever be bound **to the authenticator's own
-profile**; there is no move that binds it to someone else's. Profile takeover does not exist here.
+profile**; there is no move that binds it to someone else's. **Profile takeover does not exist
+here** — that remains true and is the load-bearing half of this decision.
 
-The direction of harm inverts accordingly: if B links A's Slack principal to B's profile, B has not
-taken anything from A — B has handed *A* the keys to *B's* profile. Whoever completes the login bears
-the risk. That is self-harm, not attack, and not the design's job to prevent.
+What does not follow from it — and what an earlier draft of this section asserted — is that
+*rebinding* a principal from profile P to profile Q should therefore be a supported feature.
+**It should not, and it is refused.**
 
-Re-link is therefore just: someone authed as B and claimed principal U. If they control U it is
-legitimate — the account-move case, which should work. Many links → one profile is the intent:
-a person's `auth0`/SAML link and their `slack` link converge on one profile, and
-`UNIQUE(auth_provider, auth_provider_user_id)` is what makes it safe (each link owned by at most
-one profile). The upsert is
-`ON CONFLICT (auth_provider, auth_provider_user_id) DO UPDATE SET profile_id`, satisfying the
-acceptance criterion's idempotency for the same-profile case and permitting the move for the rest.
+**There is no "other account" to move to.** A temper profile is only ever SAML/OAuth-provisioned,
+and identity already converges on one profile per human: the auth links and `reconcile_by_email`
+(`profile_service.rs:263`) exist precisely so that a person's `auth0`/SAML identity and any other
+identity land on the *same* profile. "Many links → one profile" is the intent, and it is satisfied
+by convergence, not by moving a link between profiles. The account-move case the earlier draft
+imagined has no referent.
 
-**No confirm step, and no audit event as a control.** An earlier draft proposed one; it answered a
-threat the auth gate already closes.
+The honest account of where `DO UPDATE SET profile_id` came from: **it is the default shape of an
+idempotent upsert**, reached for because the acceptance criterion asks for idempotency, and then
+rationalized after the fact into a feature. Idempotency needs only the *same-profile* conflict to
+succeed. Moving the row was a side effect that got a justification written for it.
+
+So the write is conditional (`slack_link_service::link_slack_principal`):
+
+```sql
+INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (auth_provider, auth_provider_user_id)
+DO UPDATE SET linked_at = now()
+WHERE kb_profile_auth_links.profile_id = EXCLUDED.profile_id
+RETURNING profile_id
+```
+
+Same profile ⇒ a row comes back ⇒ `Linked` (idempotent, as the acceptance criterion requires).
+Different profile ⇒ the `DO UPDATE` matches nothing ⇒ **zero rows, no error, no write** ⇒
+`AlreadyLinkedToAnotherProfile`. The guard rides *inside* the statement, so the check is atomic —
+a read-then-write would be a TOCTOU on exactly the thing being defended. A typed outcome, not a
+bool: refusal is neither an error nor a success, and the callback needs to say something specific.
+
+**Reversing this closes a security hole, which is the real reason to do it.** D5 names the residual
+threat: steal a victim's ephemeral link URL, complete the login as yourself, and bind their
+principal to *your* profile — every future `@temper` from the victim then writes into your KB, and
+the exfiltration is victim-authored content. **That attack requires rebind when the victim is
+already linked.** With rebind refused, the already-linked victim's callback refuses outright; and
+per D9 they are never issued a URL to steal in the first place. That case closes **completely**,
+by two independent mechanisms. What remains is only "victim not yet linked, attacker steals their
+first-link message" — already narrow, and still gated by D5's HMAC.
+
+**"Start fresh" is an explicit disconnect**, not a side effect of linking again. It does not exist
+yet and is filed as its own task. That is the correct shape: an affordance a user deliberately
+invokes on their *own* link, not a capability handed to whoever completes a login against someone
+else's principal.
+
+**No confirm step, and no audit event as a control.** Both answered a threat that is now refused
+outright rather than mediated.
 
 ### D5 — the HMAC gates an agent→API call, never the user-clicked URL
 
@@ -290,11 +327,15 @@ dispatch *to* yet — reads under proven identity are T4 — so it says exactly 
 ephemerally: the unlinked message is a credential, and the linked one is per-mention status noise no
 public channel asked for.
 
-**Consequence worth naming: re-link is no longer reachable by mentioning again.** A linked user is
-never issued a fresh challenge, so D4's rebind cannot be driven from Slack. The upsert stays
-idempotent and the rebind stays correct where it is still reachable (two mentions before either link
-is clicked — the e2e test models exactly this, and it is the only route to a second callback). A
-deliberate "connect a different account" affordance is a **separate feature**; it was previously
+**Consequence worth naming: a linked user is never issued a fresh challenge.** This is the second of
+the two mechanisms that close the already-linked half of D4's URL-theft threat, and it is
+independent of the first: there is no URL to steal, *and* a stolen one would be refused at the write.
+Neither relies on the other.
+
+The only route to a second callback at all is two mentions before either link is clicked — the e2e
+tests model exactly this, both for the same-profile case (idempotent, one row) and for the
+different-profile case (refused, original row stands). A deliberate "connect a different account"
+affordance is a **separate feature** and would be an explicit **disconnect** (D4); it was previously
 reachable only as a side effect of the re-prompt bug, which is not a design.
 
 ## Components
@@ -336,11 +377,13 @@ public function serves it.
 ### New: `GET /api/auth/slack/callback` (temper-api)
 
 The registered `redirect_uri`. Consumes the intent (D6), exchanges the code, resolves the profile
-lookup-only (D3), upserts the link (D4), hands the RT to T3's seam, renders the success page (D7).
+lookup-only (D3), writes the link (D4) — or renders the "already connected to a different temper
+account" refusal — hands the RT to T3's seam, renders the success page (D7).
 
 ### New: link service functions (temper-services)
 
-The upsert, plus `lookup_linked_handle` — the `kb_profile_auth_links ⋈ kb_profiles` read backing
+`link_slack_principal` (the conditional write, returning `SlackLinkOutcome`), plus
+`lookup_linked_handle` — the `kb_profile_auth_links ⋈ kb_profiles` read backing
 D9's linked arm, returning the profile's slug (the `kb_profiles.handle` column; the Rust `Profile`
 maps it to `slug`). SQL lives in the service layer; never inline in a handler.
 
@@ -399,7 +442,7 @@ The flow needs the **e2e tier**. `test-db` green is a false signal for access-se
 this is squarely one. Note `cargo make test-e2e` compiles out `test-embed`-gated tests; use
 `cargo make test-e2e-embed` where relevant.
 
-The three load-bearing tests:
+The four load-bearing tests:
 
 1. **Lookup-only refuses an unknown `sub` — and no `kb_profiles` row appears.** This is the D3
    invariant, and asserting the refusal alone would not catch a regression that creates the profile
@@ -409,6 +452,17 @@ The three load-bearing tests:
    invariant. The count is the assertion, not the status: a regression that answers correctly and
    *still* mints the junk row on the way would pass a status-only check, and the waste would be
    invisible and unbounded. Count before, count after, unchanged.
+4. **A callback resolving to a DIFFERENT profile than the principal's existing link is refused —
+   and the row still names the ORIGINAL profile.** The D4 invariant, at both tiers (service and
+   e2e). The return value and the page text are *not* the assertion: a regression that reports the
+   refusal while the write lands would pass either check while doing the exact thing the refusal
+   exists to prevent. The row is what holds the line.
+
+Note for the e2e case: wiremock sorts mounted mocks by priority with a **stable** sort, so with equal
+priorities the **first-registered** match wins permanently. Mounting a second `/oauth/token` stub
+does not shadow the first — the attacker's exchange would silently return the victim's token and the
+test would go green having never attempted a rebind. `MockServer::reset()` between the two is
+load-bearing.
 
 ## Ops / deployment
 
@@ -439,7 +493,9 @@ Callback URLs, or the client's `AS_CLIENTS` entry on an AS instance.
   (`packages/agent-workflows/mention/CLAUDE.md:53-56`), so `reconcile_by_email`
   (`profile_service.rs:263`) is not merely undesirable here — it is **inexpressible**. The link is
   the trust root.
-- **A confirm step on rebind** (D4), and **an audit event as a security control** (D4).
+- **Rebind itself** (D4) — moving a principal from one profile to another is refused, not mediated.
+  A confirm step and an audit event were both considered as *controls on* rebind; refusing the
+  operation outright retires the question they were answering.
 - **Management-API mint** (D1), **in-process AS minting** (D2), **extending `kb_oauth_flow`** (D6),
   **Slack posts from temper-api** (D7).
 
