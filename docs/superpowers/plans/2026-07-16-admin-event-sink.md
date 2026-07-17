@@ -941,6 +941,27 @@ by anchor nullity — lens_created already lives in the NULL bucket."
 
 ### Task 3: The `element_trail` payload-key invariant
 
+> **SHIPPED 2026-07-17.** Two tests appended to `crates/temper-services/tests/admin_ledger_test.rs`:
+> `no_admin_payload_spells_a_trail_matched_key` and `an_admin_event_never_appears_in_an_element_trail`.
+> Pre-dispatch against `main` (which had moved since 2026-07-16 — Task 2 shipped as PR #475) found
+> two API-drift corrections to the sketch below, plus one design correction. The sketch below is
+> left as the original design; **read the shipped file for the exact tests** — they differ per the
+> three corrections here:
+>
+> - **Seed arity.** Task 2's shipped `seed_admin_event` is **5-arg** —
+>   `(pool, emitter, subject_kind: AnchorTable, subject, principal)` — not the 4-arg form sketched
+>   here. Every call passes an `AnchorTable`.
+> - **Test attribute.** Every test in the file uses `#[sqlx::test(migrator = "temper_services::MIGRATOR")]`,
+>   not bare `#[sqlx::test]` (the workspace migrations are not on `./migrations` relative to the crate).
+> - **Non-vacuity (the design correction).** The original sketch seeded a **context**-subject event
+>   and asserted it stays out of a **node** trail. But `element_trail_node` matches only
+>   `resource_id`/`owner`/`block_id` — a context-subject payload can *never* match it, so that test
+>   passes whether or not the ban exists: it **cannot fail**. That is the precise defect §5 itself was
+>   born from ("the specced tests could not fail on it"). Both tests are now seeded through the
+>   canonical writer with **positive controls** so they genuinely can go red — proven by injecting
+>   `resource_id` into the writer and watching both fail (corpus scan reports the offender; trail scan
+>   reports `leaked > 0`).
+
 `element_trail_node`/`element_trail_edge` (`migrations/20260706000002_element_trail_payload_actor.sql:7-52`) have **no event-type filter**. They match purely on payload key shape and are gated only by `resources_visible_to(p_profile)` (`:47-49`). An admin payload spelling `resource_id` — natural, since a grant with `subject_table='kb_resources'` *is about* a resource — would surface **who was granted access to it** to any reader of that resource.
 
 This lands **before any admin payload exists**, so the invariant is never retrofitted.
