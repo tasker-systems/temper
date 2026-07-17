@@ -22,6 +22,9 @@ upfront; read only what the current task requires.
 ### Supporting Files
 - `reference.md` — CLI commands, stages, mode/effort definitions
 - `subagent-guidance.md` — 10 universal principles for dispatched subagents
+- `plan-verification.md` — Verify a plan's claims against the code **before** dispatching from it
+- `implementation-grounding.md` — For anyone **writing a plan, or writing code from one** —
+  including you, in the main loop. Inject verbatim into plan-writing/implementing subagents.
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
@@ -31,8 +34,17 @@ upfront; read only what the current task requires.
 One file per mode/effort combination. Read only the one that matches the current task.
 
 ### Extension Files (`guidance/`)
-User-created guidance files. Read and apply any files found here.
-`guidance/fundamentals.md` contains project-specific principles if it exists.
+**Read every file in `guidance/` — all of them.** These are user-created; each one exists because
+something went wrong once. `guidance/fundamentals.md` contains project-specific principles if it
+exists.
+
+> **Read all guidance — here and in the Supporting Files above — as principles, not checklists.**
+> Each carries a worked example from the incident that produced it. The example is **evidence for**
+> the principle, never the **scope of** it. So the thought *"this guidance doesn't cover my case"*
+> is the failure mode itself, not a finding — and *"ritual A misses this, ritual B misses this, so
+> I'll add ritual C"* is that failure mode mid-sentence, growing an unbounded catalogue of edge
+> cases instead of reasoning from the theme. When you get there, stop and ask what the principle is
+> **for**. It almost always already covers you; what it will not do is match your case by shape.
 
 ## On Task Start
 
@@ -54,7 +66,8 @@ User-created guidance files. Read and apply any files found here.
 2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
 4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
-5. Check for `guidance/fundamentals.md`:
+5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
+   as principles, not checklists (see *Extension Files*). Then check `guidance/fundamentals.md`:
    - If it exists, read it and apply its principles
    - If it doesn't, offer: "This context has no project fundamentals. Want to set them up? (`/temper init`)"
 6. Check auto-memory for user plugin preferences (skills they've said they rely on)
@@ -75,7 +88,8 @@ User-created guidance files. Read and apply any files found here.
 3. Read the most recent session note: copy the `ref` of the most recent session row, then `temper resource show <ref>`
    - Match the session by its `slug`/`title` column in the `resource list` output (a unique substring is enough), then copy that row's `ref`
 4. If the task is not already in-progress, move it: `temper resource update <ref> --stage in-progress`
-5. Check for `guidance/fundamentals.md` — read if it exists
+5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/`
+   — as principles, not checklists (see *Extension Files*)
 6. Check auto-memory for user plugin preferences
 7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 8. Ask: "Resuming from last session. Found these skills: [list]. Want subagents to use any? Any other quality gates?"
@@ -91,7 +105,8 @@ User-created guidance files. Read and apply any files found here.
 3. If tasks exist, ask: "Working on one of these, or something new?"
    - If existing task: pivot to **On Task Resume** with that slug
    - If new: continue as open session
-4. Check for `guidance/fundamentals.md` — read if it exists
+4. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/`
+   — as principles, not checklists (see *Extension Files*)
 5. Check auto-memory for user plugin preferences
 6. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 7. Proceed with the user's request. At session end, save via:
@@ -238,6 +253,14 @@ Before dispatching any subagent:
 1. Read `subagent-guidance.md`
 2. Include all applicable principles in the subagent prompt (verbatim, not summarized)
 3. Include project fundamentals from `guidance/fundamentals.md` if available
+3b. **If the subagent will write a plan, or write code from one, inject
+   `implementation-grounding.md` verbatim.** That is what it exists for, and it is the guidance
+   most often skipped.
+
+> **This applies to you, too.** When *you* write a plan in the main loop, nobody dispatches you, so
+> nothing injects anything — and that is exactly how an ungrounded plan gets authored and then
+> stamped "verified" by its own author. Load `implementation-grounding.md` and apply it to your own
+> drafting before you ask anyone else to follow it.
 4. Include any user-selected plugin skills
 
 ## Session Lifecycle
