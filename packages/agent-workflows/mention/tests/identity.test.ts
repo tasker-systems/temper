@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideIdentity,
   isHumanPrincipal,
+  linkedPrompt,
   unlinkedPrompt,
   type PrincipalLike,
 } from "../agent/lib/identity.js";
@@ -35,6 +36,7 @@ describe("decideIdentity", () => {
     expect(decideIdentity(HUMAN_WITH_TEAM)).toEqual({
       kind: "human",
       principalId: "slack:T012AB3CD:U024BE7LH",
+      auth: HUMAN_WITH_TEAM,
     });
   });
 
@@ -43,6 +45,7 @@ describe("decideIdentity", () => {
     expect(decideIdentity(HUMAN_NO_TEAM)).toEqual({
       kind: "human",
       principalId: "slack:U024BE7LH",
+      auth: HUMAN_NO_TEAM,
     });
   });
 
@@ -125,13 +128,47 @@ describe("isHumanPrincipal", () => {
 });
 
 describe("unlinkedPrompt", () => {
-  it("echoes the principalId whole", () => {
-    expect(unlinkedPrompt("slack:T012AB3CD:U024BE7LH")).toContain(
-      "slack:T012AB3CD:U024BE7LH",
+  it("carries the authorize URL", () => {
+    expect(unlinkedPrompt("https://temperkb.io/authorize/abc123")).toContain(
+      "https://temperkb.io/authorize/abc123",
     );
   });
+});
 
-  it("echoes a teamless principalId whole", () => {
-    expect(unlinkedPrompt("slack:U024BE7LH")).toContain("slack:U024BE7LH");
+describe("linkedPrompt", () => {
+  it("names the handle", () => {
+    expect(linkedPrompt("j-cole-taylor")).toContain("@j-cole-taylor");
+  });
+
+  it("never asks a linked user to connect again", () => {
+    // The regression this whole branch exists to kill: a linked user was told to link on
+    // every mention, forever. If the linked reply ever grows a URL or the word "connect",
+    // we are back where we started.
+    const message = linkedPrompt("j-cole-taylor");
+    expect(message.toLowerCase()).not.toContain("connect your account");
+    expect(message).not.toContain("http");
+  });
+
+  it("does not leak task numbers or internal plans", () => {
+    // It is allowed to say "not yet". It is not allowed to say "in T4".
+    expect(linkedPrompt("someone")).not.toMatch(/\bT\d\b/);
+  });
+});
+
+describe("decideIdentity threads the caller's auth object through", () => {
+  it("exposes attributes.user_id on the accepted arm, unparsed from principalId", () => {
+    // The real SessionAuthContext carries decomposed Slack attributes
+    // alongside principalId/principalType. This fixture is wider than
+    // PrincipalLike to prove the generic threads it through intact.
+    const auth = {
+      principalId: "slack:T012AB3CD:U024BE7LH",
+      principalType: "user",
+      attributes: { user_id: "U024BE7LH", team_id: "T012AB3CD" },
+    };
+
+    const decision = decideIdentity(auth);
+
+    if (decision.kind !== "human") throw new Error("expected a human decision");
+    expect(decision.auth.attributes.user_id).toBe("U024BE7LH");
   });
 });

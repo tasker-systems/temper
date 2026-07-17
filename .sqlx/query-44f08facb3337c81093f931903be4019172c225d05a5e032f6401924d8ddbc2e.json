@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_slack_link_intents\n           SET consumed_at = now()\n         WHERE state_nonce = $1\n           AND consumed_at IS NULL\n           AND expires_at > now()\n        RETURNING code_verifier, slack_principal_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code_verifier",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "slack_principal_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "44f08facb3337c81093f931903be4019172c225d05a5e032f6401924d8ddbc2e"
+}

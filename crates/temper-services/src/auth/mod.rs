@@ -23,6 +23,10 @@
 //! Entry points:
 //! - [`authenticate_token`] — the token path. Verified [`RawJwtClaims`] + the raw
 //!   token ⇒ authenticated profile. Both surfaces' every authed request.
+//! - [`authenticate_token_existing_only`] — the same token path, LOOKUP-ONLY: it
+//!   refuses rather than provisioning. For flows that authenticate a human but are
+//!   not registration routes (the Slack account-link callback). Same seam, same
+//!   Level 1 gate; it differs only in never minting a profile.
 //! - [`resolve_federated_human`] — the federated path. An assertion already
 //!   authenticated out-of-band (SAML/HMAC, no JWT) ⇒ resolved-or-JIT'd profile.
 //! - [`require_system_access`] — Level 2, consuming proof of Level 1.
@@ -97,17 +101,38 @@ pub async fn authenticate_token(
     raw: &RawJwtClaims,
     token: &str,
 ) -> Result<AuthenticatedProfile, AuthzError> {
-    let claims = match classify(raw) {
-        Principal::Machine(machine) => machine,
+    let claims = claims_from_token(state, raw, token).await?;
+
+    authenticate(&state.pool, &claims).await
+}
+
+/// The classify + human-email-ladder block, shared by both token entry points.
+///
+/// Private, and it stays private: it is the *only* constructor of a human `AuthClaims` on
+/// the token path, so both entry points are guaranteed to agree on classification, provider
+/// name and the email ladder. A surface reaches it only by handing in a `RawJwtClaims` it
+/// verified — never an `AuthClaims` it authored.
+///
+/// The machine arm must NOT run the email ladder: an M2M principal has no email and no
+/// `/userinfo` to ask, so a ladder on that path would be an authentication failure dressed
+/// as a lookup. That ordering is load-bearing — see
+/// `machine_token_authenticates_without_running_the_email_ladder`.
+async fn claims_from_token(
+    state: &AppState,
+    raw: &RawJwtClaims,
+    token: &str,
+) -> Result<AuthClaims, AuthzError> {
+    match classify(raw) {
+        Principal::Machine(machine) => Ok(machine),
         Principal::Refuse(why) => {
             tracing::warn!(sub = %raw.sub, why, "rejected: unclassifiable machine-shaped token");
-            return Err(AuthzError::Refused(why));
+            Err(AuthzError::Refused(why))
         }
         Principal::Human => {
             let (email, email_verified) = email::resolve_email_from_claims(state, raw, token)
                 .await
                 .map_err(AuthzError::EmailResolution)?;
-            AuthClaims {
+            Ok(AuthClaims {
                 principal_kind: PrincipalKind::Human,
                 provider: state.config.auth_provider_name.clone(),
                 external_user_id: raw.sub.clone(),
@@ -115,11 +140,41 @@ pub async fn authenticate_token(
                 email_verified,
                 exp: raw.exp,
                 iat: raw.iat,
-            }
+            })
         }
-    };
+    }
+}
 
-    authenticate(&state.pool, &claims).await
+/// **The token path, LOOKUP-ONLY.** A verified JWT ⇒ an *existing* profile, or a refusal.
+///
+/// Same seam as [`authenticate_token`] — it takes raw claims and the bearer, and builds the
+/// `AuthClaims` itself via `claims_from_token`, so no surface can hand it forged ones. It
+/// differs in exactly one way: it never provisions.
+///
+/// Used by the Slack account-link callback. Connecting Slack is not a registration route: the
+/// profile INSERT that auto-provisioning performs fires `trg_sync_system_membership`, which in
+/// `open` mode joins EVERY auto-join team. See the T2 spec, D3.
+///
+/// Level 1's post-resolution gate is **not** skipped: this shares `gate_resolved_profile`
+/// with `authenticate`, so an inactive profile is refused here exactly as it is on the login
+/// path. Level 2 ([`require_system_access`]) remains the caller's to apply, identical to the
+/// login path.
+pub async fn authenticate_token_existing_only(
+    state: &AppState,
+    raw: &RawJwtClaims,
+    token: &str,
+) -> Result<AuthenticatedProfile, AuthzError> {
+    let claims = claims_from_token(state, raw, token).await?;
+
+    let profile = profile_service::resolve_existing_human_from_claims(&state.pool, &claims)
+        .await
+        .map_err(AuthzError::ProfileResolution)?
+        .ok_or_else(|| {
+            tracing::info!(sub = %raw.sub, "slack link: refused (no existing temper profile)");
+            AuthzError::Refused("no existing temper profile for this identity")
+        })?;
+
+    gate_resolved_profile(profile, &claims)
 }
 
 /// **The federated path.** An identity asserted by a trusted peer, not a token.
@@ -170,6 +225,24 @@ pub(crate) async fn authenticate(
         .await
         .map_err(AuthzError::ProfileResolution)?;
 
+    gate_resolved_profile(profile, claims)
+}
+
+/// Level 1's post-resolution tail: every gate that applies *after* a profile is resolved,
+/// whichever door resolved it.
+///
+/// Factored out so [`authenticate`] (resolve-or-provision) and
+/// [`authenticate_token_existing_only`] (lookup-only) cannot drift: a narrowing that skipped
+/// a gate would be a hole, not a narrowing. It is deliberately the *whole* tail — resolution
+/// is the only thing the two paths do differently, so anything after it belongs here, and a
+/// future Level 1 gate added here binds both paths by construction.
+///
+/// Takes the profile by value and returns the [`AuthenticatedProfile`] so that constructing
+/// one without passing the gate requires going out of your way.
+fn gate_resolved_profile(
+    profile: Profile,
+    claims: &AuthClaims,
+) -> Result<AuthenticatedProfile, AuthzError> {
     if !profile.is_active {
         return Err(AuthzError::Deactivated {
             profile_id: profile.id,
@@ -238,6 +311,7 @@ mod tests {
             internal_reconcile_secret: None,
             embed_dispatch_secret: None,
             vercel_connect: None,
+            slack_link: None,
         };
         AppState::new(
             pool,
@@ -432,6 +506,95 @@ mod tests {
         .await
         .expect("federated resolve (repeat)");
         assert_eq!(again.id, profile.id);
+    }
+
+    /// The narrowing, at the seam: an unknown identity is refused rather than provisioned.
+    /// The profile-count assertion is the load-bearing half — a regression that provisions
+    /// and *then* errors would still return Err, so refusing is not the same as not minting.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_token_path_refuses_unknown_identity_without_provisioning(pool: PgPool) {
+        let before = profile_count(&pool).await;
+
+        let err = authenticate_token_existing_only(
+            &state(pool.clone()),
+            &human_raw("auth0|stranger", Some("stranger@example.test")),
+            "tok",
+        )
+        .await
+        .expect_err("an unknown identity must not authenticate on the lookup-only path");
+
+        assert!(
+            matches!(err, AuthzError::Refused(why) if why.contains("no existing temper profile")),
+            "expected Refused, got {err:?}"
+        );
+        assert_eq!(
+            profile_count(&pool).await,
+            before,
+            "the lookup-only path must provision nothing (D3)"
+        );
+    }
+
+    /// Level 1's post-resolution gate is NOT skipped by the narrowing. Without the shared
+    /// `gate_resolved_profile` call this returns Ok and hands a deactivated profile to the
+    /// Slack callback — a lookup-only path that resolves an inactive account is a hole.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_token_path_still_refuses_a_deactivated_profile(pool: PgPool) {
+        let id = seed_linked_human(&pool, "auth0|gone", "gone@example.test").await;
+        sqlx::query("UPDATE kb_profiles SET is_active = false WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("deactivate");
+
+        let err = authenticate_token_existing_only(
+            &state(pool.clone()),
+            &human_raw("auth0|gone", None),
+            "tok",
+        )
+        .await
+        .expect_err("a deactivated profile must be refused on the lookup-only path too");
+
+        assert!(
+            matches!(err, AuthzError::Deactivated { profile_id } if profile_id == id),
+            "expected Deactivated, got {err:?}"
+        );
+    }
+
+    /// The happy path: an existing, active, linked human resolves — the narrowing removed
+    /// the create branch and nothing else.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_token_path_resolves_an_existing_active_human(pool: PgPool) {
+        let expected = seed_linked_human(&pool, "auth0|known", "known@example.test").await;
+
+        let authed = authenticate_token_existing_only(
+            &state(pool.clone()),
+            &human_raw("auth0|known", None),
+            "tok",
+        )
+        .await
+        .expect("an existing linked human resolves on the lookup-only path");
+
+        assert_eq!(authed.profile.id, expected);
+    }
+
+    /// The narrowing must not become a door: a machine token that authenticates fine on the
+    /// login path must not reach a profile through the lookup-only path either.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_only_token_path_refuses_a_registered_machine(pool: PgPool) {
+        register_machine(&pool, "lookup-only-client").await;
+
+        let err = authenticate_token_existing_only(
+            &state(pool.clone()),
+            &machine_raw("lookup-only-client"),
+            "tok",
+        )
+        .await
+        .expect_err("a machine must not resolve a human profile via the lookup-only path");
+
+        assert!(
+            matches!(err, AuthzError::ProfileResolution(ApiError::Unauthorized(ref m)) if m.contains("machine-shaped")),
+            "expected a machine-shaped refusal, got {err:?}"
+        );
     }
 
     // Helper: build AuthClaims for a synthetic principal.

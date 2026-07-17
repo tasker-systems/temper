@@ -449,6 +449,7 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
         vercel_connect: None,
+        slack_link: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);
@@ -552,6 +553,7 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
         vercel_connect: None,
+        slack_link: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);

@@ -1,7 +1,8 @@
 import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
-import { decideIdentity, unlinkedPrompt } from "../lib/identity.js";
+import { decideIdentity, linkedPrompt, unlinkedPrompt } from "../lib/identity.js";
+import { requestLinkState } from "../lib/link.js";
 
 /**
  * Slack channel for the @temper mention agent.
@@ -31,23 +32,49 @@ export default slackChannel({
     // an error reply to a bot is how mention loops start.
     if (decision.kind === "rejected") return null;
 
-    // Posting here is a pre-dispatch side effect on the inbound webhook side —
-    // the same seam eve's own default uses for its "Thinking..." indicator.
-    await ctx.thread.post(unlinkedPrompt(decision.principalId));
+    // The link challenge is a CREDENTIAL: whoever opens it binds their temper identity to
+    // this Slack principal. So it goes to the mentioning user ONLY — never `thread.post`,
+    // which is public. The user id comes from `attributes.user_id`; NEVER from parsing
+    // principalId, which has 2-4 segments.
+    const userId = decision.auth.attributes.user_id;
+    if (typeof userId !== "string") {
+      // We cannot postEphemeral without a user id, so this drop is forced — but a silent
+      // one leaves the user with nothing and us with no trace. Log the whole principal
+      // (never a parse of it) so the drop is at least diagnosable. No `thread.post`
+      // fallback: the challenge is a credential and must never go to a public channel.
+      console.warn("dropping mention: no user_id on attributes", {
+        principalId: decision.principalId,
+      });
+      return null;
+    }
 
-    // Deliberately DROP rather than dispatch, even though this is a human we
-    // resolved and `auth` is right here.
-    //
-    // T1 has no temper reach, so a dispatched turn would run the model with no
-    // tools and nothing to ground an answer in — and since only `onAppMention`
-    // is overridden, the DEFAULT `message.completed` handler would post that
-    // answer to the thread. The user would get two replies: the prompt above,
-    // then an LLM improvising about a knowledge base it cannot read. Worse than
-    // useless — it is the "plausible answer under no identity" the agent's
-    // instructions forbid.
-    //
-    // T2 lands the account link; the linked branch dispatches `{ auth }` then.
-    // Until there is something a turn can honestly do, the prompt IS the reply.
+    try {
+      // Ask what to SAY, not for a URL. A linked user gets no challenge and mints no intent;
+      // asking for a URL unconditionally is what re-prompted linked users forever.
+      const link = await requestLinkState(decision.principalId);
+      const reply =
+        link.status === "linked"
+          ? linkedPrompt(link.handle)
+          : unlinkedPrompt(link.authorize_url);
+
+      // Ephemeral on BOTH arms. The unlinked one carries a credential; the linked one is
+      // per-mention status noise no channel asked for.
+      await ctx.thread.postEphemeral(userId, reply);
+    } catch (err) {
+      // eve catches and logs a thrown error and drops the mention, so a failed call would
+      // be silent. Tell the user something honest instead of nothing.
+      console.error("link state lookup failed", err);
+      await ctx.thread.postEphemeral(
+        userId,
+        "I couldn't check your temper account just now. Please try again in a moment.",
+      );
+    }
+
+    // Deliberately DROP rather than dispatch, on BOTH arms. Unlinked, a turn would run the
+    // model under no identity — no tools, nothing to ground an answer in. Linked, there is
+    // still nothing to dispatch TO: reads under proven identity are a later task. Until then
+    // the prompt IS the reply, and the default `message.completed` handler would post an
+    // ungrounded turn if we dispatched one.
     return null;
   },
 });

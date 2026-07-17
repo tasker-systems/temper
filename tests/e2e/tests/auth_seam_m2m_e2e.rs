@@ -31,6 +31,7 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
         vercel_connect: None,
+        slack_link: None,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     temper_mcp::service::TemperMcpService::new(state)

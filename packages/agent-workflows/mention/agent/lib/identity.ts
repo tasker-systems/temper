@@ -38,11 +38,16 @@ export type RejectionReason =
 
 /**
  * Outcome of deciding whether an inbound Slack principal may drive a turn.
- * A discriminated union so callers must handle both forks; `principalId` is
- * only reachable on the accepted branch.
+ * A discriminated union so callers must handle both forks; `principalId` and
+ * `auth` are only reachable on the accepted branch.
+ *
+ * Generic over the caller's auth shape (`T`) so the accepted arm can carry
+ * the FULL `SessionAuthContext` (e.g. `attributes.user_id`) through to the
+ * channel, while this module itself only ever reads the `PrincipalLike`
+ * subset it needs — keeping it pure and testable without eve's types.
  */
-export type IdentityDecision =
-  | { readonly kind: "human"; readonly principalId: string }
+export type IdentityDecision<T extends PrincipalLike = PrincipalLike> =
+  | { readonly kind: "human"; readonly principalId: string; readonly auth: T }
   | { readonly kind: "rejected"; readonly reason: RejectionReason };
 
 /**
@@ -74,27 +79,51 @@ export function isHumanPrincipal(auth: PrincipalLike): boolean {
  * message — the caller passes its result straight through.
  *
  * The returned `principalId` is eve's string VERBATIM. See the module comment.
+ *
+ * Returns the caller's own `auth` object back on the accepted arm (typed as
+ * `T`), so a caller passing the real `SessionAuthContext` gets it back
+ * intact — e.g. to read `attributes.user_id` — without this module needing
+ * to know that wider shape.
  */
-export function decideIdentity(auth: PrincipalLike | null): IdentityDecision {
+export function decideIdentity<T extends PrincipalLike>(auth: T | null): IdentityDecision<T> {
   if (auth === null) return { kind: "rejected", reason: "no-auth" };
   if (!isHumanPrincipal(auth)) return { kind: "rejected", reason: "not-human" };
-  return { kind: "human", principalId: auth.principalId };
+  return { kind: "human", principalId: auth.principalId, auth };
 }
 
 /**
  * The prompt shown to a Slack user with no linked temper account.
  *
- * T1 has NO temper reach — no machine token, no temper-ts, no link lookup — so
- * every human currently lands here. The echoed `principalId` is T1's acceptance
- * evidence (it proves the resolved identity made it through the pipe intact)
- * and is the exact key T2's account link will be stored under.
+ * Carries a one-time authorize URL, which is why it MUST be delivered
+ * ephemerally (`postEphemeral`), never via a public `thread.post`: whoever
+ * opens this URL binds their temper identity to the mentioning Slack
+ * principal. See `agent/channels/slack.ts` for the delivery side.
  */
-export function unlinkedPrompt(principalId: string): string {
+export function unlinkedPrompt(authorizeUrl: string): string {
   return [
     "I don't have a temper account linked to your Slack identity yet.",
     "",
-    `Resolved Slack principal: \`${principalId}\``,
+    `Connect your account: ${authorizeUrl}`,
     "",
-    "Account linking isn't wired up yet — this is the mention pipe proving it can hear you.",
+    "This link is single-use and just for you — please don't forward it.",
+  ].join("\n");
+}
+
+/**
+ * The reply shown to a Slack user whose account IS linked.
+ *
+ * It exists so a linked user stops being asked to link again on every mention. There is
+ * still nothing to dispatch to — answering questions is a later task — so this says exactly
+ * that and nothing more. Honest and unfalsifiable: no task numbers, no internal plan, no
+ * date we would have to keep.
+ *
+ * Delivered ephemerally like its unlinked sibling. Nothing here is a credential, but a
+ * per-mention "here's your status" in a public thread is noise the channel didn't ask for.
+ */
+export function linkedPrompt(handle: string): string {
+  return [
+    `You're connected as @${handle}.`,
+    "",
+    "I can't answer questions yet — that part's still being built. Nothing for you to do; I'll be able to help here soon.",
   ].join("\n");
 }

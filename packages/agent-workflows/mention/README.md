@@ -3,8 +3,10 @@
 An Eve agent that answers `@temper` app mentions in Slack. See [CLAUDE.md](./CLAUDE.md) for the
 eve inbound identity contract and the design constraints.
 
-**T1 scope:** the pipe, not the identity. Mention the bot and it replies with a "connect your
-temper account" prompt echoing your resolved Slack principal. There is no temper reach yet.
+**Current scope:** the pipe and the account link, not yet the answers. On each mention the agent
+asks temper-api what to say about your Slack principal: unlinked, you get a one-time "connect your
+temper account" link (ephemeral — it is a credential); already linked, you get told so. Both replies
+drop rather than run a model turn — there is no temper reach yet.
 
 ## Local development
 
@@ -76,9 +78,26 @@ vercel env add SLACK_BOT_TOKEN production
 vercel env add SLACK_SIGNING_SECRET production
 ```
 
+The account-link flow needs two more. `TEMPER_API_URL` is the temper API this agent asks about each
+mentioning user's link state (e.g. `https://temperkb.io`), and `SLACK_LINK_SECRET` is the shared
+HMAC secret gating `POST /internal/slack/link-state`:
+
+```bash
+vercel env add TEMPER_API_URL production
+vercel env add SLACK_LINK_SECRET production
+```
+
+`SLACK_LINK_SECRET` must be **the same value** on this agent and on the temper-api deployment
+(where it is set alongside `SLACK_LINK_CLIENT_ID` and `PUBLIC_BASE_URL` — see
+[enterprise-install.md](../../../docs/guides/enterprise-install.md)). It is a secret with no
+default and no discovery: if the two sides disagree, every mention gets a 401 and the user sees
+the generic "couldn't start the account-connect flow" reply. Generate one with
+`openssl rand -hex 32`.
+
 Then redeploy so the functions pick them up (push to `main`, or redeploy from the dashboard).
 
-eve reads both from the environment because `agent/channels/slack.ts` omits `credentials`. See
+eve reads the Slack pair from the environment because `agent/channels/slack.ts` omits
+`credentials`. See
 [CLAUDE.md](./CLAUDE.md) for why T1 uses the env fallback, why one deployment serves exactly one
 workspace, and what moving to Vercel Connect would and would not buy.
 
@@ -100,8 +119,11 @@ Invite the bot to a channel (`/invite @temper`) and mention it:
 
 > **@temper** hello
 
-It should reply in-thread with the unlinked prompt and your resolved principal
-(`slack:<team>:<user>`). **That reply is T1's acceptance.**
+It should reply with an **ephemeral** message (visible only to you) carrying a one-time connect
+link. Open it, complete the sign-in, then mention `@temper` again: the second reply should say
+you're connected, **not** offer another link. That pair — challenge, then acknowledgement — is the
+acceptance. A second challenge after a successful link means the link-state lookup is not finding
+your row.
 
 ## Troubleshooting
 

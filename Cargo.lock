@@ -5573,6 +5573,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sqlx",
+ "temper-auth",
  "temper-core",
  "temper-services",
  "temper-substrate",
@@ -5585,6 +5586,18 @@ dependencies = [
  "utoipa-axum",
  "utoipa-swagger-ui",
  "uuid",
+]
+
+[[package]]
+name = "temper-auth"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "rand 0.8.5",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]
@@ -5637,13 +5650,13 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "open",
- "rand 0.8.5",
  "reqwest 0.12.28",
  "secrecy",
  "serde",
  "serde_json",
  "sha2",
  "temp-env",
+ "temper-auth",
  "temper-core",
  "temper-workflow",
  "tempfile",
@@ -5732,6 +5745,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -5801,6 +5815,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
+ "temper-auth",
  "temper-core",
  "temper-ingest",
  "temper-substrate",

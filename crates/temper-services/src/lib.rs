@@ -13,6 +13,8 @@ pub mod backend;
 pub mod broker;
 pub mod config;
 pub mod error;
+pub mod link_provider;
+pub mod oauth_client;
 pub mod services;
 pub mod state;
 

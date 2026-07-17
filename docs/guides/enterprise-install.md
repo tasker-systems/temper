@@ -84,6 +84,10 @@ Sources: [self-hosting.md § Environment variable contract](./self-hosting.md#en
 | **Group provisioning / reconcile channel (SAML Phase 2)** | | | | |
 | `INTERNAL_RECONCILE_SECRET` | Yes (SAML path; shared AS+API) | — | — | Same value on both; unset disables reconcile (auth still works) |
 | `INTERNAL_RECONCILE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/saml/reconcile` |
+| **Slack account link (optional; needed only to run the @temper mention agent)** | | | | |
+| `SLACK_LINK_CLIENT_ID` | Yes (Slack path) | — | — | OAuth client the link flow authorizes as. Auth0: a native/PKCE app's client_id. SAML path: a `client_id` present in `AS_CLIENTS` |
+| `SLACK_LINK_SECRET` | Yes (Slack path; shared API+agent) | — | — | Shared secret gating `/internal/slack/link-state`; same value on the mention agent. Unset ⇒ the endpoint is disabled (auth still works) |
+| `PUBLIC_BASE_URL` | Yes (Slack path) | — | — | `https://<instance>` — the origin the link `redirect_uri` is built from³. All three unset together is the supported "no Slack" state |
 | **Storage / build** | | | | |
 | `BLOB_READ_WRITE_TOKEN` | Yes | — | — | Vercel Blob token for the upload/extract/embed pipeline |
 | `SQLX_OFFLINE` | Yes (build) | — | — | Must be `true` |
@@ -123,6 +127,13 @@ Self-hosters on the SAML-primary path should set `OIDC_*` directly.
 ² `OIDC_DISCOVERY_URL` is not part of this document's source A2 variable enumeration but is
 required for the UI on the SAML-AS path (`self-hosting-saml.md` § 6, `.env.example`) — added here
 because omitting it would misconfigure this guide's primary (SAML) path.
+
+³ **The link client's `redirect_uri` must be registered, or the IdP refuses the authorize request
+before temper ever sees it.** The flow derives it as `<PUBLIC_BASE_URL>/api/auth/slack/callback`.
+On this (AS-mode) install, add that exact URL to `SLACK_LINK_CLIENT_ID`'s entry in `AS_CLIENTS`
+— unset `AS_CLIENTS` is fail-closed. On an Auth0-fronted install, add it to the application's
+**Allowed Callback URLs**. It is an exact-match allowlist on both: a trailing slash or an `http://`
+scheme is a different URL.
 
 ### Must-match by construction
 

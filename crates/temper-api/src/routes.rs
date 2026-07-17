@@ -240,6 +240,41 @@ fn internal_routes() -> Router<AppState> {
     )
 }
 
+/// Internal, server-to-server only — gated by `require_slack_link_signature`, NOT
+/// `require_auth`. Called by the Slack mention agent on every mention to ask what to say to
+/// the mentioning user: already linked, or here is a fresh authorize URL.
+///
+/// A router of its own rather than a route on [`internal_routes`] because the two carry
+/// different keys: `internal_routes` is layered with `require_internal_signature`
+/// (`INTERNAL_RECONCILE_SECRET`), and gating this route on the reconcile secret would let
+/// either principal forge the other's calls. One scheme, two secrets, two routers — the
+/// layer is applied at each merge site so the route can never be mounted ungated.
+/// Excluded from the OpenAPI contract entirely.
+fn slack_link_internal_routes() -> Router<AppState> {
+    use axum::routing::post;
+
+    Router::new().route(
+        "/internal/slack/link-state",
+        post(handlers::slack_link::slack_link_state),
+    )
+}
+
+/// The browser-facing Slack link callback — the registered `redirect_uri`.
+///
+/// Ungated by design: it is the IdP's redirect target, so it carries no bearer and no
+/// signature. Its authentication is the PKCE code exchange plus the single-use state nonce
+/// it burns, and it renders HTML rather than JSON because a human is looking at it.
+/// `create_app` only — the internal function never serves a browser. Excluded from the
+/// OpenAPI contract entirely.
+fn slack_link_public_routes() -> Router<AppState> {
+    use axum::routing::get;
+
+    Router::new().route(
+        "/api/auth/slack/callback",
+        get(handlers::slack_link::callback),
+    )
+}
+
 /// Internal cron-invoked embed endpoints — self-gated by EMBED_DISPATCH_SECRET (bearer),
 /// NOT `require_auth`. Called by Vercel crons on a schedule; each handler checks the secret
 /// itself (fail-closed when unset), so no auth-middleware layer is applied. Excluded from the
@@ -295,6 +330,12 @@ pub fn create_app(state: AppState) -> Router {
         crate::middleware::internal_auth::require_internal_signature,
     ));
 
+    let slack_link_internal =
+        slack_link_internal_routes().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_slack_link_signature,
+        ));
+
     let embed_internal = embed_internal_routes();
 
     let mut app = Router::new()
@@ -302,6 +343,8 @@ pub fn create_app(state: AppState) -> Router {
         .merge(auth_only)
         .merge(gated)
         .merge(internal)
+        .merge(slack_link_internal)
+        .merge(slack_link_public_routes())
         .merge(embed_internal);
 
     if state.config.enable_swagger {
@@ -330,9 +373,17 @@ pub fn create_internal_app(state: AppState) -> Router {
         state.clone(),
         crate::middleware::internal_auth::require_internal_signature,
     ));
+    let slack_link_internal =
+        slack_link_internal_routes().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_slack_link_signature,
+        ));
     let embed_internal = embed_internal_routes();
 
-    let app = Router::new().merge(internal).merge(embed_internal);
+    let app = Router::new()
+        .merge(internal)
+        .merge(slack_link_internal)
+        .merge(embed_internal);
 
     apply_transport_layers(app, state)
 }

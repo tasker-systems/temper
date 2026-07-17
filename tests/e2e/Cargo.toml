@@ -65,3 +65,7 @@ tracing-subscriber = { version = "0.3", features = [
   "registry"
 ] }
 uuid = { version = "1", features = ["v4", "v7"] }
+# Stubs the external IdP token endpoint for the Slack account-link flow: the callback
+# exchanges the code server-to-server, so without a stub there is nothing to exchange
+# against. Already a dev-dependency of temper-client, so the version is pinned in step.
+wiremock = "0.6"
