@@ -1,8 +1,8 @@
 import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
-import { decideIdentity, unlinkedPrompt } from "../lib/identity.js";
-import { requestAuthorizeUrl } from "../lib/link.js";
+import { decideIdentity, linkedPrompt, unlinkedPrompt } from "../lib/identity.js";
+import { requestLinkState } from "../lib/link.js";
 
 /**
  * Slack channel for the @temper mention agent.
@@ -49,21 +49,32 @@ export default slackChannel({
     }
 
     try {
-      const authorizeUrl = await requestAuthorizeUrl(decision.principalId);
-      await ctx.thread.postEphemeral(userId, unlinkedPrompt(authorizeUrl));
+      // Ask what to SAY, not for a URL. A linked user gets no challenge and mints no intent;
+      // asking for a URL unconditionally is what re-prompted linked users forever.
+      const link = await requestLinkState(decision.principalId);
+      const reply =
+        link.status === "linked"
+          ? linkedPrompt(link.handle)
+          : unlinkedPrompt(link.authorize_url);
+
+      // Ephemeral on BOTH arms. The unlinked one carries a credential; the linked one is
+      // per-mention status noise no channel asked for.
+      await ctx.thread.postEphemeral(userId, reply);
     } catch (err) {
-      // eve catches and logs a thrown error and drops the mention, so a failed intent
-      // would be silent. Tell the user something honest instead of nothing.
-      console.error("link intent failed", err);
+      // eve catches and logs a thrown error and drops the mention, so a failed call would
+      // be silent. Tell the user something honest instead of nothing.
+      console.error("link state lookup failed", err);
       await ctx.thread.postEphemeral(
         userId,
-        "I couldn't start the account-connect flow just now. Please try again in a moment.",
+        "I couldn't check your temper account just now. Please try again in a moment.",
       );
     }
 
-    // Deliberately DROP rather than dispatch (unchanged from T1). A turn under no identity
-    // would run the model with no tools and nothing to ground an answer in, and the default
-    // `message.completed` handler would post it. Until the link exists, the prompt IS the reply.
+    // Deliberately DROP rather than dispatch, on BOTH arms. Unlinked, a turn would run the
+    // model under no identity — no tools, nothing to ground an answer in. Linked, there is
+    // still nothing to dispatch TO: reads under proven identity are a later task. Until then
+    // the prompt IS the reply, and the default `message.completed` handler would post an
+    // ungrounded turn if we dispatched one.
     return null;
   },
 });

@@ -86,7 +86,7 @@ Sources: [self-hosting.md § Environment variable contract](./self-hosting.md#en
 | `INTERNAL_RECONCILE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/saml/reconcile` |
 | **Slack account link (optional; needed only to run the @temper mention agent)** | | | | |
 | `SLACK_LINK_CLIENT_ID` | Yes (Slack path) | — | — | OAuth client the link flow authorizes as. Auth0: a native/PKCE app's client_id. SAML path: a `client_id` present in `AS_CLIENTS` |
-| `SLACK_LINK_SECRET` | Yes (Slack path; shared API+agent) | — | — | Shared secret gating `/internal/slack/link-intents`; same value on the mention agent. Unset ⇒ the endpoint is disabled (auth still works) |
+| `SLACK_LINK_SECRET` | Yes (Slack path; shared API+agent) | — | — | Shared secret gating `/internal/slack/link-state`; same value on the mention agent. Unset ⇒ the endpoint is disabled (auth still works) |
 | `PUBLIC_BASE_URL` | Yes (Slack path) | — | — | `https://<instance>` — the origin the link `redirect_uri` is built from³. All three unset together is the supported "no Slack" state |
 | **Storage / build** | | | | |
 | `BLOB_READ_WRITE_TOKEN` | Yes | — | — | Vercel Blob token for the upload/extract/embed pipeline |

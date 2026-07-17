@@ -193,12 +193,12 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
-/// POST `/internal/slack/link-intents` as the mention agent would: HMAC over the RAW body.
+/// POST `/internal/slack/link-state` as the mention agent would: HMAC over the RAW body.
 ///
 /// The signature is produced by `temper_core::internal_sig::sign` — the same function the
 /// gate verifies with — rather than re-derived here. A hand-rolled MAC would be testing this
 /// file's idea of the scheme against itself.
-async fn post_link_intent(
+async fn post_link_state(
     app: &SlackLinkApp,
     principal: &str,
     signature: Option<String>,
@@ -210,19 +210,19 @@ async fn post_link_intent(
     });
 
     app.http
-        .post(format!("http://{}/internal/slack/link-intents", app.addr))
+        .post(format!("http://{}/internal/slack/link-state", app.addr))
         .header("Content-Type", "application/json")
         .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
         .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
         .body(body)
         .send()
         .await
-        .expect("post link intent")
+        .expect("post link state")
 }
 
 /// Mint an intent and return the opaque `state` the IdP would echo back to the callback.
 async fn mint_state_nonce(app: &SlackLinkApp) -> String {
-    let res = post_link_intent(app, SLACK_PRINCIPAL, None).await;
+    let res = post_link_state(app, SLACK_PRINCIPAL, None).await;
     assert_eq!(
         res.status(),
         200,
@@ -230,6 +230,10 @@ async fn mint_state_nonce(app: &SlackLinkApp) -> String {
     );
 
     let body: serde_json::Value = res.json().await.expect("intent response is JSON");
+    assert_eq!(
+        body["status"], "unlinked",
+        "an unlinked principal must get the unlinked arm: {body}"
+    );
     let authorize_url = body["authorize_url"]
         .as_str()
         .expect("the response carries an authorize_url");
@@ -399,12 +403,21 @@ async fn a_replayed_state_is_rejected(pool: PgPool) {
     );
 }
 
-/// Re-linking the same Slack user is idempotent — a whole second intent + callback for the
-/// SAME principal and profile leaves exactly one directory row.
+/// Re-linking the same Slack user is idempotent — two whole intents + callbacks for the SAME
+/// principal and profile leave exactly one directory row.
 ///
-/// Distinct from the replay test: both flows here are legitimate and both succeed. The
-/// single row is `UNIQUE(auth_provider, auth_provider_user_id)` doing its job, not the
-/// intent burn refusing the second attempt.
+/// Distinct from the replay test: both flows here are legitimate and both succeed. The single
+/// row is `UNIQUE(auth_provider, auth_provider_user_id)` doing its job (D4), not the intent
+/// burn refusing the second attempt.
+///
+/// **Both intents are minted BEFORE either callback runs**, and that ordering is forced rather
+/// than stylistic: `link-state` answers `linked` once the first callback lands, so a
+/// mint-callback-mint-callback loop could never obtain the second URL. This is the real
+/// scenario the ordering models — a user mentions twice, then clicks both links — and it is
+/// the only route to a second callback now that a linked principal is never issued a
+/// challenge. Consequence worth naming: re-link is no longer reachable by mentioning again.
+/// The upsert stays idempotent for the concurrent case above; a deliberate "connect a
+/// different account" affordance is a separate feature, not a side effect of the old bug.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
@@ -414,11 +427,14 @@ async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
     provision_profile(&app, sub, email).await;
     stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
 
-    for attempt in 1..=2 {
-        let url = app.callback_url(&mint_state_nonce(&app).await);
+    // Two mentions while still unlinked => two live intents, two distinct states.
+    let first_url = app.callback_url(&mint_state_nonce(&app).await);
+    let second_url = app.callback_url(&mint_state_nonce(&app).await);
+
+    for (attempt, url) in [(1, &first_url), (2, &second_url)] {
         let body = app
             .http
-            .get(&url)
+            .get(url)
             .send()
             .await
             .expect("callback")
@@ -438,6 +454,78 @@ async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
     );
 }
 
+/// **The re-prompt regression.** A linked user must be told they are linked — and must cost
+/// nothing to tell.
+///
+/// The endpoint's question is "what do I say to this person?", not "mint me a URL". Before
+/// this branch existed, every mention from an already-linked user minted a fresh intent and
+/// answered with a link challenge, so a user who successfully connected was asked to connect
+/// again on their very next mention, forever.
+///
+/// The intent count is the load-bearing assertion, not the status. Asserting only
+/// `status == "linked"` would pass a regression that answers correctly and *still* mints the
+/// junk row on the way — the waste would be invisible and unbounded, one row per mention per
+/// linked user. So: count before, count after, unchanged.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_linked_principal_gets_its_handle_and_mints_no_intent(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    // Establish the link through the REAL flow — provision, mint, callback — rather than a
+    // fixture INSERT. The row this lookup must find is the row the callback writes.
+    let sub = "idp-sub-already-linked";
+    let email = "linked-91b3ef@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let first = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(first.contains("Linked as"), "setup must link: {first}");
+
+    let intents_after_linking = count_intents(&pool).await;
+
+    // The next mention. This is the call that used to re-prompt.
+    let res = post_link_state(&app, SLACK_PRINCIPAL, None).await;
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.expect("link-state response is JSON");
+
+    assert_eq!(
+        body["status"], "linked",
+        "an already-linked principal must not be asked to link again: {body}"
+    );
+    assert!(
+        body["authorize_url"].is_null(),
+        "the linked arm carries no challenge — the union has no such field: {body}"
+    );
+
+    // The handle is the profile's slug (`kb_profiles.handle`), not the Slack id.
+    let handle = body["handle"]
+        .as_str()
+        .expect("the linked arm names a handle");
+    let expected: String = sqlx::query_scalar(
+        "SELECT p.handle FROM kb_profile_auth_links l \
+         JOIN kb_profiles p ON p.id = l.profile_id \
+         WHERE l.auth_provider = 'slack' AND l.auth_provider_user_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("the link row names a profile");
+    assert_eq!(handle, expected, "the handle must name the linked profile");
+
+    assert_eq!(
+        count_intents(&pool).await,
+        intents_after_linking,
+        "a linked principal must mint NO intent — this is the junk-row regression"
+    );
+}
+
 /// The HMAC gate on the intent route, asserted rather than assumed.
 ///
 /// This gate is the whole reason Slack-side hijack is expensive. Slack user ids are visible
@@ -447,7 +535,7 @@ async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
 /// forged signature must be refused, and it must leave no intent behind for a later guess to
 /// land on.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn link_intents_rejects_a_forged_signature(pool: PgPool) {
+async fn link_state_rejects_a_forged_signature(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
 
     // Well-formed lowercase hex of the right length, signed with the WRONG key — the shape a
@@ -458,7 +546,7 @@ async fn link_intents_rejects_a_forged_signature(pool: PgPool) {
         format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#).as_bytes(),
     );
 
-    let res = post_link_intent(&app, SLACK_PRINCIPAL, Some(forged)).await;
+    let res = post_link_state(&app, SLACK_PRINCIPAL, Some(forged)).await;
     assert_eq!(res.status(), 401, "a forged signature must be refused");
     assert_eq!(
         count_intents(&pool).await,
@@ -472,12 +560,12 @@ async fn link_intents_rejects_a_forged_signature(pool: PgPool) {
     let body = format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#);
     let res = app
         .http
-        .post(format!("http://{}/internal/slack/link-intents", app.addr))
+        .post(format!("http://{}/internal/slack/link-state", app.addr))
         .header("Content-Type", "application/json")
         .body(body)
         .send()
         .await
-        .expect("post unsigned link intent");
+        .expect("post unsigned link state");
     assert_eq!(res.status(), 401, "an unsigned call must be refused");
     assert_eq!(
         count_intents(&pool).await,

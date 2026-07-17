@@ -1,6 +1,6 @@
 //! The Slack account-link flow. Two endpoints, two audiences.
 //!
-//! `create_link_intent` is server-to-server (the mention agent, HMAC-gated). `callback` is
+//! `slack_link_state` is server-to-server (the mention agent, HMAC-gated). `callback` is
 //! browser-facing and renders HTML, never JSON — a human is looking at it.
 
 use std::time::Duration;
@@ -43,26 +43,45 @@ const MAX_SLACK_PRINCIPAL_LEN: usize = 128;
 const SLACK_PRINCIPAL_PREFIX: &str = "slack:";
 
 #[derive(Debug, serde::Deserialize)]
-pub struct CreateLinkIntentRequest {
+pub struct SlackLinkStateRequest {
     /// The WHOLE opaque principal from `attributes` — 2-4 segments, never split.
     pub slack_principal_id: String,
 }
 
+/// What the mention agent should say to this Slack user.
+///
+/// A discriminated union, not an `Option`-riddled struct: the two states carry disjoint data
+/// (a linked user has a handle and NO authorize URL; an unlinked one the reverse), and a
+/// struct with two nullable fields would make "both set" and "neither set" representable —
+/// two states that must not exist. The agent mirrors this union in `agent/lib/link.ts`, so
+/// both ends are forced to handle both arms.
 #[derive(Debug, serde::Serialize)]
-pub struct CreateLinkIntentResponse {
-    pub authorize_url: String,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SlackLinkStateResponse {
+    /// A `kb_profile_auth_links` row already binds this principal. Nothing to mint.
+    Linked {
+        /// The profile's slug. The wire key is `handle` — the word a Slack user understands.
+        handle: String,
+    },
+    /// No link row. This is the only arm that mints an intent.
+    Unlinked { authorize_url: String },
 }
 
-/// `POST /internal/slack/link-intents` — mint a PKCE pair + opaque state, return the IdP URL.
+/// `POST /internal/slack/link-state` — answer "what do I say to this Slack user?"
+///
+/// The agent's real question per mention is not "mint me a URL" — it is what to say. Asking
+/// for a URL unconditionally is what made an already-linked user get re-prompted to link on
+/// every single mention, forever, and minted a junk intent row each time. So the endpoint
+/// answers the question: **the linked arm mints nothing**.
 ///
 /// Gated by `require_slack_link_signature`. The signature covers THIS call, not the URL the
 /// user later clicks: `internal_sig`'s skew window is 30s and a human clicks minutes later,
 /// so signing the user-facing URL would force us to loosen a gate that is tight for good
 /// reason. What the user receives is the IdP's own authorize URL with an opaque state.
-pub async fn create_link_intent(
+pub async fn slack_link_state(
     State(state): State<AppState>,
-    Json(req): Json<CreateLinkIntentRequest>,
-) -> Result<Json<CreateLinkIntentResponse>, ApiError> {
+    Json(req): Json<SlackLinkStateRequest>,
+) -> Result<Json<SlackLinkStateResponse>, ApiError> {
     validate_slack_principal(&req.slack_principal_id)?;
 
     let cfg = state
@@ -70,6 +89,15 @@ pub async fn create_link_intent(
         .slack_link
         .as_ref()
         .ok_or_else(|| ApiError::Unauthorized("slack link disabled".to_string()))?;
+
+    // The read comes FIRST and short-circuits: an already-linked principal never reaches the
+    // mint below. That ordering is the whole fix.
+    if let Some(handle) =
+        slack_link_service::lookup_linked_handle(&state.pool, &req.slack_principal_id).await?
+    {
+        return Ok(Json(SlackLinkStateResponse::Linked { handle }));
+    }
+
     let provider = link_provider::derive(&state.config.auth, cfg);
 
     let (verifier, challenge) = generate_pkce_pair();
@@ -92,7 +120,7 @@ pub async fn create_link_intent(
     })
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    Ok(Json(CreateLinkIntentResponse { authorize_url }))
+    Ok(Json(SlackLinkStateResponse::Unlinked { authorize_url }))
 }
 
 /// Reject a malformed principal HERE, not at the final INSERT.

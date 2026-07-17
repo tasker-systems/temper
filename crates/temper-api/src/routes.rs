@@ -241,7 +241,8 @@ fn internal_routes() -> Router<AppState> {
 }
 
 /// Internal, server-to-server only — gated by `require_slack_link_signature`, NOT
-/// `require_auth`. Called by the Slack mention agent to mint a link intent.
+/// `require_auth`. Called by the Slack mention agent on every mention to ask what to say to
+/// the mentioning user: already linked, or here is a fresh authorize URL.
 ///
 /// A router of its own rather than a route on [`internal_routes`] because the two carry
 /// different keys: `internal_routes` is layered with `require_internal_signature`
@@ -253,8 +254,8 @@ fn slack_link_internal_routes() -> Router<AppState> {
     use axum::routing::post;
 
     Router::new().route(
-        "/internal/slack/link-intents",
-        post(handlers::slack_link::create_link_intent),
+        "/internal/slack/link-state",
+        post(handlers::slack_link::slack_link_state),
     )
 }
 

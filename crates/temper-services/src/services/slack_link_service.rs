@@ -77,6 +77,43 @@ pub async fn consume_intent(pool: &PgPool, state_nonce: &str) -> ApiResult<Optio
     }))
 }
 
+/// Look up the profile slug already bound to this Slack principal, if any.
+///
+/// This is the read that makes the mention agent's question answerable: "what do I say to this
+/// person?" — rather than minting an intent for someone who linked months ago.
+///
+/// **Deliberately NOT filtered on `kb_profiles.is_active`.** The link genuinely exists, and a
+/// deactivated profile is not an unlinked one. Reporting "unlinked" here would send the user
+/// into a link flow whose callback then refuses them (`authenticate_token_existing_only`
+/// rejects a deactivated profile) — an infinite, unexplained loop. Answering "linked" tells the
+/// truth about the directory and lets the deactivation surface where it is actionable.
+///
+/// The principal is matched WHOLE. It has 2-4 segments and is never split on ':'.
+///
+/// Naming: the COLUMN is `kb_profiles.handle`; the Rust `Profile` maps it to `slug`
+/// (`profile_service::get_by_id` selects `handle AS "slug!"`). This function returns that one
+/// string, and the wire key is `handle` because that is the word a Slack user understands.
+pub async fn lookup_linked_handle(
+    pool: &PgPool,
+    slack_principal_id: &str,
+) -> ApiResult<Option<String>> {
+    let row = sqlx::query!(
+        r#"
+        SELECT p.handle
+          FROM kb_profile_auth_links l
+          JOIN kb_profiles p ON p.id = l.profile_id
+         WHERE l.auth_provider = $1
+           AND l.auth_provider_user_id = $2
+        "#,
+        SLACK_AUTH_PROVIDER,
+        slack_principal_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| r.handle))
+}
+
 /// Write the directory row `slack:<team>:<user> -> profile`.
 ///
 /// Idempotent on re-link via `UNIQUE(auth_provider, auth_provider_user_id)`. A conflict that
@@ -165,5 +202,98 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(a, b);
+    }
+
+    /// Insert a bare profile and return its id. Deliberately minimal: this suite tests the
+    /// lookup's join, not provisioning, and `create_new_profile_and_link` would drag the whole
+    /// auth seam in. The e2e tier provisions through the real login path.
+    async fn insert_profile(pool: &PgPool, handle: &str) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $3)",
+            id,
+            handle,
+            handle,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_yields_the_handle_when_a_link_row_exists(pool: PgPool) {
+        let profile_id = insert_profile(&pool, "j-cole-taylor").await;
+        upsert_slack_link(&pool, profile_id, PRINCIPAL)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            lookup_linked_handle(&pool, PRINCIPAL).await.unwrap(),
+            Some("j-cole-taylor".to_string()),
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_yields_none_for_an_unlinked_principal(pool: PgPool) {
+        assert!(lookup_linked_handle(&pool, PRINCIPAL)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// The principal is the key, WHOLE. A different Slack user must not read another's link
+    /// just because a prefix matches.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_does_not_match_a_different_principal(pool: PgPool) {
+        let profile_id = insert_profile(&pool, "someone-else").await;
+        upsert_slack_link(&pool, profile_id, PRINCIPAL)
+            .await
+            .unwrap();
+
+        assert!(lookup_linked_handle(&pool, "slack:T0BHAHEN79C:UOTHER")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// D4's rebind, at the layer that implements it: binding the principal to a DIFFERENT
+    /// profile moves the link rather than duplicating it. Tested here because the mention flow
+    /// no longer offers a linked user a fresh challenge, so the e2e tier cannot reach this.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_rebind_moves_the_link_rather_than_duplicating_it(pool: PgPool) {
+        let first = insert_profile(&pool, "first-owner").await;
+        let second = insert_profile(&pool, "second-owner").await;
+
+        upsert_slack_link(&pool, first, PRINCIPAL).await.unwrap();
+        upsert_slack_link(&pool, second, PRINCIPAL).await.unwrap();
+
+        assert_eq!(
+            lookup_linked_handle(&pool, PRINCIPAL).await.unwrap(),
+            Some("second-owner".to_string()),
+            "the rebind must win — UNIQUE(auth_provider, auth_provider_user_id) keeps one row",
+        );
+    }
+
+    /// A deactivated profile is still LINKED. Reporting `None` here would loop the user into a
+    /// link flow the callback then refuses — see the comment on `lookup_linked_handle`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_still_reports_a_deactivated_profile_as_linked(pool: PgPool) {
+        let profile_id = insert_profile(&pool, "gone-away").await;
+        upsert_slack_link(&pool, profile_id, PRINCIPAL)
+            .await
+            .unwrap();
+        sqlx::query!(
+            "UPDATE kb_profiles SET is_active = false WHERE id = $1",
+            profile_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            lookup_linked_handle(&pool, PRINCIPAL).await.unwrap(),
+            Some("gone-away".to_string()),
+        );
     }
 }

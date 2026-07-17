@@ -108,3 +108,22 @@ export function unlinkedPrompt(authorizeUrl: string): string {
     "This link is single-use and just for you — please don't forward it.",
   ].join("\n");
 }
+
+/**
+ * The reply shown to a Slack user whose account IS linked.
+ *
+ * It exists so a linked user stops being asked to link again on every mention. There is
+ * still nothing to dispatch to — answering questions is a later task — so this says exactly
+ * that and nothing more. Honest and unfalsifiable: no task numbers, no internal plan, no
+ * date we would have to keep.
+ *
+ * Delivered ephemerally like its unlinked sibling. Nothing here is a credential, but a
+ * per-mention "here's your status" in a public thread is noise the channel didn't ask for.
+ */
+export function linkedPrompt(handle: string): string {
+  return [
+    `You're connected as @${handle}.`,
+    "",
+    "I can't answer questions yet — that part's still being built. Nothing for you to do; I'll be able to help here soon.",
+  ].join("\n");
+}

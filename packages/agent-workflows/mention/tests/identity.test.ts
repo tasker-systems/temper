@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideIdentity,
   isHumanPrincipal,
+  linkedPrompt,
   unlinkedPrompt,
   type PrincipalLike,
 } from "../agent/lib/identity.js";
@@ -131,6 +132,26 @@ describe("unlinkedPrompt", () => {
     expect(unlinkedPrompt("https://temperkb.io/authorize/abc123")).toContain(
       "https://temperkb.io/authorize/abc123",
     );
+  });
+});
+
+describe("linkedPrompt", () => {
+  it("names the handle", () => {
+    expect(linkedPrompt("j-cole-taylor")).toContain("@j-cole-taylor");
+  });
+
+  it("never asks a linked user to connect again", () => {
+    // The regression this whole branch exists to kill: a linked user was told to link on
+    // every mention, forever. If the linked reply ever grows a URL or the word "connect",
+    // we are back where we started.
+    const message = linkedPrompt("j-cole-taylor");
+    expect(message.toLowerCase()).not.toContain("connect your account");
+    expect(message).not.toContain("http");
+  });
+
+  it("does not leak task numbers or internal plans", () => {
+    // It is allowed to say "not yet". It is not allowed to say "in T4".
+    expect(linkedPrompt("someone")).not.toMatch(/\bT\d\b/);
   });
 });
 

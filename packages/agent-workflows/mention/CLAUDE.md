@@ -3,10 +3,23 @@
 > (`cd packages/agent-workflows/mention && npm install`). A root `npm install` inherits the root's
 > bun overrides and fails. It is deliberately NOT a member of the root `workspaces` array.
 
-**Scope (T1):** this proves the inbound pipe, not the identity. There is **no temper reach** — no
-`temper-ts` dependency, no machine token, no account lookup. Every human who mentions the bot gets
-the "connect your temper account" prompt with their resolved principal echoed back. That echo is
-T1's acceptance evidence.
+**Scope:** the inbound pipe and the account link — **not** the answers. There is still **no temper
+reach**: no `temper-ts` dependency, no machine token, no model turn. Every mention is one
+`POST /internal/slack/link-state` asking *what to say to this person*, and both answers end in a
+drop.
+
+**The endpoint answers "what do I say?", never "mint me a URL".** Asking for a URL unconditionally —
+which is what the first cut did — re-prompted an already-linked user to link again on **every**
+mention, forever, and minted a junk `kb_slack_link_intents` row each time. `agent/lib/link.ts`
+returns a `LinkState` discriminated union mirroring the Rust `SlackLinkStateResponse`
+(`#[serde(tag = "status")]`); `agent/channels/slack.ts` branches on `status`. Only the `unlinked`
+arm costs a write. If you find yourself adding a nullable field to that union, you are rebuilding
+the bug: the two arms carry disjoint data on purpose.
+
+**Both arms are `postEphemeral`, and both drop.** The unlinked message carries a credential and must
+never reach a public channel; the linked one is per-mention status noise no channel asked for. The
+linked arm has nothing to dispatch *to* yet, so it says so honestly — no task numbers, no dates, no
+internal plans in user-facing copy.
 
 ## eve inbound identity contract (verified against eve@0.18.1)
 
@@ -143,8 +156,8 @@ which is why parsing is never necessary.
 | ---------------------- | ----------------------------------------------------------- |
 | `SLACK_BOT_TOKEN`      | Outbound Slack Web API calls. eve's fallback when `credentials.botToken` is omitted. |
 | `SLACK_SIGNING_SECRET` | HMAC-verifies inbound webhooks. eve's fallback when neither `signingSecret` nor `webhookVerifier` is supplied. |
-| `TEMPER_API_URL`       | Base URL of the temper API this agent mints link intents against, e.g. `https://temperkb.io`. |
-| `SLACK_LINK_SECRET`    | Shared HMAC secret gating `POST /internal/slack/link-intents`. **Must equal temper-api's `SLACK_LINK_SECRET`** — a mismatch is a 401 on every mention, not a warning. |
+| `TEMPER_API_URL`       | Base URL of the temper API this agent asks for each mentioning user's link state, e.g. `https://temperkb.io`. |
+| `SLACK_LINK_SECRET`    | Shared HMAC secret gating `POST /internal/slack/link-state`. **Must equal temper-api's `SLACK_LINK_SECRET`** — a mismatch is a 401 on every mention, not a warning. |
 
 All four are **required** and read at request time by `agent/lib/link.ts` (`requireEnv`), so an
 unset one throws on the first mention rather than at deploy — the account-link prompt is the

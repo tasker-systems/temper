@@ -249,7 +249,7 @@ before temper sees the request.
 | Variable | Where | Purpose |
 | --- | --- | --- |
 | `SLACK_LINK_CLIENT_ID` | API | The `client_id` the link flow authorizes as. Must be present in `AS_CLIENTS`, with `<PUBLIC_BASE_URL>/api/auth/slack/callback` among its redirect URIs. |
-| `SLACK_LINK_SECRET` | API + mention agent (shared) | Shared secret gating the agent's `/internal/slack/link-intents` call. Same value on both. Unset ⇒ link endpoint disabled. |
+| `SLACK_LINK_SECRET` | API + mention agent (shared) | Shared secret gating the agent's `/internal/slack/link-state` call. Same value on both. Unset ⇒ link endpoint disabled. |
 | `PUBLIC_BASE_URL` | API | This instance's public origin (e.g. `https://<instance>`). The callback `redirect_uri` is derived from it. |
 
 ## 5. Configure the CLI

@@ -25,10 +25,14 @@ persist it. Identity (the row) and secret (the vault) stay in separate tables �
 
 ```
 Slack: @temper …                 (principal slack:T0BH…:U0BH… from attributes.user_id)
-  → agent: POST /internal/slack/link-intents      [HMAC, ≤30s skew]
-      → generate_pkce_pair(); INSERT kb_slack_link_intents
-        (state_nonce, code_verifier, slack_principal_id, expires_at)
-      ← { authorize_url }                          (IdP url, state=nonce, S256, offline_access)
+  → agent: POST /internal/slack/link-state        [HMAC, ≤30s skew]
+      → SELECT kb_profile_auth_links ⋈ kb_profiles  WHERE (slack, principal)
+      ├─ row exists ⇒ ← { status: "linked", handle }         NO intent minted
+      │    → agent: ctx.thread.postEphemeral(user_id, linkedPrompt(handle)) → drop
+      └─ no row ⇒
+           → generate_pkce_pair(); INSERT kb_slack_link_intents
+             (state_nonce, code_verifier, slack_principal_id, expires_at)
+           ← { status: "unlinked", authorize_url }  (IdP url, state=nonce, S256, offline_access)
   → agent: ctx.thread.postEphemeral(user_id, authorize_url)   ← slack.ts:36 changes here
   → user: browser → IdP  (Auth0 Universal Login | AS → SAML)
   → IdP → GET /api/auth/slack/callback?code=&state=
@@ -168,7 +172,7 @@ compromised account, and it is the honest justification for the gate.
 **The signature cannot ride in the URL the user clicks.** `internal_sig::MAX_SKEW_SECS` is 30
 (`temper-core/src/internal_sig.rs:35`), and a human clicks a Slack link minutes later. Widening the
 skew to fit human latency would loosen a gate that is tight for good reason. So the HMAC covers the
-**agent→API** call (`POST /internal/slack/link-intents`), which is immediate and well inside 30s;
+**agent→API** call (`POST /internal/slack/link-state`), which is immediate and well inside 30s;
 what the user receives is the IdP's own authorize URL carrying an opaque `state`, with nothing
 forgeable in it.
 
@@ -243,6 +247,56 @@ dependency direction to avoid ~25 lines.
 turns `pub(crate)` into `pub` across a crate boundary and the guarantee evaporates silently.
 `temper-auth` = mechanics; temper-services keeps the seam and its crate-privacy.
 
+### D9 — the endpoint answers "what do I say?", not "mint me a URL"
+
+The first cut of this design had the agent ask for an authorize URL on **every** mention,
+unconditionally, and nothing ever asked whether the user was already linked. Two consequences, both
+real:
+
+1. **The re-prompt regression.** A user who successfully completed the link got told to link again
+   on their very next mention — **forever**. The "linked" branch did not exist and was quietly
+   deferred to a later task, so the success path had no reply of its own. The one thing the flow
+   exists to achieve was also the thing it could never acknowledge.
+2. **A junk intent row per mention.** Every mention from a linked user minted a PKCE pair and a
+   `kb_slack_link_intents` row that nobody would ever click. Unbounded, one per mention per user,
+   for no purpose.
+
+The mistake was in the question. The agent's real question per mention is **"what do I say to this
+person?"** — "mint me a URL" is one possible *answer* to it, and hard-coding the answer into the
+request is what made the other answer unrepresentable. So the endpoint answers the question:
+
+```rust
+#[serde(tag = "status", rename_all = "snake_case")]
+enum SlackLinkStateResponse {
+    Linked { handle: String },        // mints nothing
+    Unlinked { authorize_url: String },
+}
+```
+
+A **discriminated union**, not a struct of `Option`s. The two arms carry disjoint data, and a struct
+with two nullable fields would make "both set" and "neither set" representable — two states that must
+not exist, on a surface where "neither set" reads as a silent failure. The agent mirrors the union in
+`agent/lib/link.ts`, so both ends are forced to handle both arms. The lookup runs **before** the mint
+and short-circuits it; that ordering is the entire fix.
+
+The lookup is deliberately **not** filtered on `kb_profiles.is_active`. A deactivated profile is not
+an unlinked one — the link genuinely exists. Reporting "unlinked" would send the user into a link
+flow whose callback then refuses them (`authenticate_token_existing_only` rejects a deactivated
+profile), which is a loop with no exit and no explanation. Answering "linked" tells the truth about
+the directory and lets the deactivation surface where it is actionable.
+
+**Both arms still `postEphemeral` and still drop** (no model turn). The linked arm has nothing to
+dispatch *to* yet — reads under proven identity are T4 — so it says exactly that, and says it
+ephemerally: the unlinked message is a credential, and the linked one is per-mention status noise no
+public channel asked for.
+
+**Consequence worth naming: re-link is no longer reachable by mentioning again.** A linked user is
+never issued a fresh challenge, so D4's rebind cannot be driven from Slack. The upsert stays
+idempotent and the rebind stays correct where it is still reachable (two mentions before either link
+is clicked — the e2e test models exactly this, and it is the only route to a second callback). A
+deliberate "connect a different account" affordance is a **separate feature**; it was previously
+reachable only as a side effect of the re-prompt bug, which is not a design.
+
 ## Components
 
 ### New: `kb_slack_link_intents`
@@ -264,14 +318,16 @@ Additive migration. Client-side flow state, distinct from the AS's `kb_oauth_flo
 > parse silently mis-keys a user by reading `<user>` from the `<team>` slot. Store and compare it
 > whole — which is exactly what `auth_provider_user_id VARCHAR(128)` wants.
 
-### New: `POST /internal/slack/link-intents` (temper-api)
+### New: `POST /internal/slack/link-state` (temper-api)
 
-HMAC-gated (D5). Body carries the principal. Generates the PKCE pair, inserts the intent, returns
-`{ authorize_url }` built mode-aware from `AuthConfig`.
+HMAC-gated (D5). Body carries the principal. Looks the principal up in `kb_profile_auth_links`
+first: a hit returns `{ status: "linked", handle }` and **mints nothing**; a miss generates the PKCE
+pair, inserts the intent, and returns `{ status: "unlinked", authorize_url }` built mode-aware from
+`AuthConfig`. See D9 for why the endpoint answers this question rather than minting on demand.
 
 **Why `/internal/*` and not `/api/*`:** the namespace is a routing fact, not a naming preference.
 `vercel.json` routes `/internal/(.*)` to the internal function and leaves `/api/*` to the public
-axum function, so an `/api/…/link-intents` path would land on the wrong function entirely. It also
+axum function, so an `/api/…/link-state` path would land on the wrong function entirely. It also
 reads true: this is the same server-to-server, HMAC-gated, non-JWT surface as
 `/internal/saml/reconcile`, and it shares that gate's implementation. The callback is the opposite
 kind of thing — browser-facing — and correctly stays at `/api/auth/slack/callback`, where the
@@ -282,9 +338,11 @@ public function serves it.
 The registered `redirect_uri`. Consumes the intent (D6), exchanges the code, resolves the profile
 lookup-only (D3), upserts the link (D4), hands the RT to T3's seam, renders the success page (D7).
 
-### New: link-write service function (temper-services)
+### New: link service functions (temper-services)
 
-The upsert. SQL lives in the service layer; never inline in a handler.
+The upsert, plus `lookup_linked_handle` — the `kb_profile_auth_links ⋈ kb_profiles` read backing
+D9's linked arm, returning the profile's slug (the `kb_profiles.handle` column; the Rust `Profile`
+maps it to `slug`). SQL lives in the service layer; never inline in a handler.
 
 ### Changed: `packages/agent-workflows/mention/agent/channels/slack.ts`
 
@@ -292,8 +350,10 @@ The upsert. SQL lives in the service layer; never inline in a handler.
 because the prompt carries no link. **The moment it carries an authorize URL it is a credential in a
 public channel.** It becomes `ctx.thread.postEphemeral(user_id, …)`, verified available on
 `ctx.thread` in `onAppMention`. The user id comes from **`attributes.user_id`**, never from parsing
-`principalId`. The agent calls `link-intents` first, then posts the returned URL. `:51`'s deliberate
-drop stays: unlinked → post, then drop; no model turn while there is nothing a turn can honestly do.
+`principalId`. The agent calls `link-state` first and branches on `status`: `linked` → `linkedPrompt(handle)`,
+`unlinked` → `unlinkedPrompt(authorize_url)` (D9). `:51`'s deliberate drop stays, and now covers
+**both** arms: post, then drop; no model turn while there is nothing a turn can honestly do —
+unlinked there is no identity, linked there is nothing yet to dispatch to.
 
 ### Mode-aware provider config
 
@@ -339,12 +399,16 @@ The flow needs the **e2e tier**. `test-db` green is a false signal for access-se
 this is squarely one. Note `cargo make test-e2e` compiles out `test-embed`-gated tests; use
 `cargo make test-e2e-embed` where relevant.
 
-The two load-bearing tests:
+The three load-bearing tests:
 
 1. **Lookup-only refuses an unknown `sub` — and no `kb_profiles` row appears.** This is the D3
    invariant, and asserting the refusal alone would not catch a regression that creates the profile
    and then errors. Assert the absence of the row.
 2. **A second callback with the same `state` is rejected.** The single-use invariant (D6).
+3. **A linked principal gets `status: "linked"` — and the intent count does not move.** The D9
+   invariant. The count is the assertion, not the status: a regression that answers correctly and
+   *still* mints the junk row on the way would pass a status-only check, and the waste would be
+   invisible and unbounded. Count before, count after, unchanged.
 
 ## Ops / deployment
 
