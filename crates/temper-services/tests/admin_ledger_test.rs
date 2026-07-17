@@ -528,3 +528,69 @@ async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
         .expect("an admin audits");
     assert_eq!(audit.len(), 1);
 }
+
+/// §11.1b's **"unless"**: self-gating is conditioned on still having system access, and on nothing
+/// else. Lose a capability, a role, or ownership of a subject and you keep your history; lose the
+/// front door and you keep nothing, because you are no longer a reader at all.
+///
+/// This is the one guard on the widening the self-gate decision made, and without this test it is
+/// **unexercised**: `#[sqlx::test]` databases are born `access_mode = 'open'`, where
+/// `has_system_access` short-circuits `true` for everyone, so `list_by_actor`'s front-door branch
+/// never runs. A test suite that cannot fail on a gate is not testing the gate.
+///
+/// Differential by construction — the SAME call, before and after the mode flip. The `before` half
+/// is what makes the `after` half mean something: it proves the 404 came from losing the front
+/// door, not from the fixture never having worked.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // An act authored BY the owner. Under the self-gate they read it regardless of capability.
+    seed_admin_event(
+        &pool,
+        f.owner_emitter,
+        AnchorTable::Contexts,
+        f.context_id,
+        f.team_id,
+    )
+    .await;
+
+    // BEFORE: access_mode='open' ⇒ has_system_access is true for everyone ⇒ the actor reads.
+    let before =
+        admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
+            .await
+            .expect("with system access, the actor reads their own history");
+    assert_eq!(before.len(), 1, "the self-gate returns the actor's own act");
+
+    // Take the front door away. The fixture already points gating_team_slug at its team, and
+    // owner_profile is not a member of it — so invite_only mode revokes their system access
+    // without touching a single capability, role, or ownership relation.
+    sqlx::query("UPDATE kb_system_settings SET access_mode = 'invite_only' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("flip to invite_only");
+
+    assert!(
+        !access_service::has_system_access(&pool, f.owner_profile)
+            .await
+            .expect("has_system_access"),
+        "the fixture owner must be outside the gating team, or this test proves nothing"
+    );
+
+    // AFTER: same call, same authorship, same everything else.
+    let err = admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
+        .await
+        .expect_err("without system access there is no reader, so there is no history");
+    assert!(
+        matches!(err, ApiError::NotFound),
+        "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
+    );
+
+    // The admin is an owner OF the gating team, so invite_only does not touch them — proving the
+    // flip revoked one profile's access rather than simply breaking the surface for everyone.
+    let admin_still_reads =
+        admin_ledger_service::list_by_actor(&pool, f.admin_profile, f.owner_profile, 50, 0)
+            .await
+            .expect("the gating team's owner keeps system access under invite_only");
+    assert_eq!(admin_still_reads.len(), 1);
+}
