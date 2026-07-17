@@ -148,17 +148,17 @@ async fn claims_from_token(
 /// **The token path, LOOKUP-ONLY.** A verified JWT ⇒ an *existing* profile, or a refusal.
 ///
 /// Same seam as [`authenticate_token`] — it takes raw claims and the bearer, and builds the
-/// `AuthClaims` itself via [`claims_from_token`], so no surface can hand it forged ones. It
+/// `AuthClaims` itself via `claims_from_token`, so no surface can hand it forged ones. It
 /// differs in exactly one way: it never provisions.
 ///
 /// Used by the Slack account-link callback. Connecting Slack is not a registration route: the
 /// profile INSERT that auto-provisioning performs fires `trg_sync_system_membership`, which in
 /// `open` mode joins EVERY auto-join team. See the T2 spec, D3.
 ///
-/// Level 1's post-resolution gate is **not** skipped: this shares
-/// [`gate_resolved_profile`] with [`authenticate`], so an inactive profile is refused here
-/// exactly as it is on the login path. Level 2 ([`require_system_access`]) remains the
-/// caller's to apply, identical to the login path.
+/// Level 1's post-resolution gate is **not** skipped: this shares `gate_resolved_profile`
+/// with `authenticate`, so an inactive profile is refused here exactly as it is on the login
+/// path. Level 2 ([`require_system_access`]) remains the caller's to apply, identical to the
+/// login path.
 pub async fn authenticate_token_existing_only(
     state: &AppState,
     raw: &RawJwtClaims,

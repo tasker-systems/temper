@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_profile_auth_links\n            (id, profile_id, auth_provider, auth_provider_user_id)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (auth_provider, auth_provider_user_id)\n        DO UPDATE SET profile_id = EXCLUDED.profile_id, linked_at = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de8788e19ef2e560931a212c70358e1bbb31c91d0937c923848fbbbb3d80e36b"
+}
