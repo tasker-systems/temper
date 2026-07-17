@@ -143,6 +143,12 @@ which is why parsing is never necessary.
 | ---------------------- | ----------------------------------------------------------- |
 | `SLACK_BOT_TOKEN`      | Outbound Slack Web API calls. eve's fallback when `credentials.botToken` is omitted. |
 | `SLACK_SIGNING_SECRET` | HMAC-verifies inbound webhooks. eve's fallback when neither `signingSecret` nor `webhookVerifier` is supplied. |
+| `TEMPER_API_URL`       | Base URL of the temper API this agent mints link intents against, e.g. `https://temperkb.io`. |
+| `SLACK_LINK_SECRET`    | Shared HMAC secret gating `POST /internal/slack/link-intents`. **Must equal temper-api's `SLACK_LINK_SECRET`** — a mismatch is a 401 on every mention, not a warning. |
+
+All four are **required** and read at request time by `agent/lib/link.ts` (`requireEnv`), so an
+unset one throws on the first mention rather than at deploy — the account-link prompt is the
+agent's only reply, so a missing var means the agent does nothing useful.
 
 **Model:** a plain string on `defineAgent` (`agent/agent.ts`). eve resolves the model at **build**
 time, so a change takes a **redeploy**, not a restart. (The steward's env-driven `model-config.ts`

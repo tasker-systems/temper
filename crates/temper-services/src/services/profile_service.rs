@@ -103,6 +103,42 @@ pub(crate) async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> A
     }
 }
 
+/// The machine-shape guard, shared by BOTH human doors.
+///
+/// One implementation, called from `resolve_human_from_claims` (resolve-or-provision) and
+/// `resolve_existing_human_from_claims` (lookup-only), for the same reason
+/// `auth::gate_resolved_profile` exists: the two paths differ only in whether they may
+/// create, and a guard that lives in one copy per door drifts. It already had — the
+/// lookup-only copy had lost the remediation sentence.
+///
+/// Either signal is disqualifying on its own — the provider tag (claims minted by the
+/// machine seam) or the `@clients` subject shape (the Auth0 M2M convention, which no human
+/// `sub` wears).
+///
+/// `door` names the caller in the log line only; the returned error is identical on both
+/// paths and carries the remediation. The lookup-only caller collapses it into a generic
+/// page, so the fuller text leaks nothing and gives an operator reading logs the actionable
+/// command.
+fn reject_machine_shaped(claims: &AuthClaims, door: &str) -> ApiResult<()> {
+    let machine_provider = claims.provider == crate::auth::MACHINE_PROVIDER_TAG;
+    let machine_shaped_id = claims.external_user_id.ends_with("@clients");
+    if machine_provider || machine_shaped_id {
+        tracing::warn!(
+            external_user_id = %claims.external_user_id,
+            provider = %claims.provider,
+            door,
+            "machine gate: rejected (machine-shaped identity on the {door})"
+        );
+        return Err(ApiError::Unauthorized(format!(
+            "identity '{}' is machine-shaped and cannot resolve to a human profile. \
+             A machine principal must be registered as a machine client: \
+             temper admin machine provision --client-id <client_id> --label <label>",
+            claims.external_user_id
+        )));
+    }
+    Ok(())
+}
+
 /// Human path: link lookup → email reconcile → new profile.
 ///
 /// Opens with a machine-shape guard, which is a *second* line behind
@@ -115,24 +151,8 @@ pub(crate) async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> A
 /// human path has auto-provisioning — so a mislabeled machine is exactly the identity
 /// that must never reach here.
 async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
-    // 0: the machine-shape guard. Either signal is disqualifying on its own — the
-    // provider tag (claims minted by the machine seam) or the `@clients` subject
-    // shape (the Auth0 M2M convention, which no human `sub` wears).
-    let machine_provider = claims.provider == crate::auth::MACHINE_PROVIDER_TAG;
-    let machine_shaped_id = claims.external_user_id.ends_with("@clients");
-    if machine_provider || machine_shaped_id {
-        tracing::warn!(
-            external_user_id = %claims.external_user_id,
-            provider = %claims.provider,
-            "machine gate: rejected (machine-shaped identity on the human path)"
-        );
-        return Err(ApiError::Unauthorized(format!(
-            "identity '{}' is machine-shaped and cannot resolve to a human profile. \
-             A machine principal must be registered as a machine client: \
-             temper admin machine provision --client-id <client_id> --label <label>",
-            claims.external_user_id
-        )));
-    }
+    // 0: the machine-shape guard.
+    reject_machine_shaped(claims, "human path")?;
 
     // 1 & 2: direct lookup by provider + external user id; load linked profile.
     // A verified sign-in refreshes the link's stored email + verification flag
@@ -176,22 +196,10 @@ pub(crate) async fn resolve_existing_human_from_claims(
     pool: &PgPool,
     claims: &AuthClaims,
 ) -> ApiResult<Option<Profile>> {
-    // 0: the machine-shape guard, identical to the create path's. A narrowing must not
-    // become a hole: a caller must not walk a machine identity past the registration gate
-    // by choosing the lookup-only door.
-    let machine_provider = claims.provider == crate::auth::MACHINE_PROVIDER_TAG;
-    let machine_shaped_id = claims.external_user_id.ends_with("@clients");
-    if machine_provider || machine_shaped_id {
-        tracing::warn!(
-            external_user_id = %claims.external_user_id,
-            provider = %claims.provider,
-            "machine gate: rejected (machine-shaped identity on the human lookup-only path)"
-        );
-        return Err(ApiError::Unauthorized(format!(
-            "identity '{}' is machine-shaped and cannot resolve to a human profile.",
-            claims.external_user_id
-        )));
-    }
+    // 0: the machine-shape guard, THE SAME CALL as the create path's — not a copy of it.
+    // A narrowing must not become a hole: a caller must not walk a machine identity past
+    // the registration gate by choosing the lookup-only door.
+    reject_machine_shaped(claims, "human lookup-only path")?;
 
     // 1 & 2: direct lookup by provider + external user id.
     if let Some(link) = lookup_link_by_provider(pool, claims).await? {

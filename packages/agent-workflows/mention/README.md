@@ -76,9 +76,26 @@ vercel env add SLACK_BOT_TOKEN production
 vercel env add SLACK_SIGNING_SECRET production
 ```
 
+The account-link flow needs two more. `TEMPER_API_URL` is the temper API this agent asks for a
+link URL (e.g. `https://temperkb.io`), and `SLACK_LINK_SECRET` is the shared HMAC secret gating
+`POST /internal/slack/link-intents`:
+
+```bash
+vercel env add TEMPER_API_URL production
+vercel env add SLACK_LINK_SECRET production
+```
+
+`SLACK_LINK_SECRET` must be **the same value** on this agent and on the temper-api deployment
+(where it is set alongside `SLACK_LINK_CLIENT_ID` and `PUBLIC_BASE_URL` — see
+[enterprise-install.md](../../../docs/guides/enterprise-install.md)). It is a secret with no
+default and no discovery: if the two sides disagree, every mention gets a 401 and the user sees
+the generic "couldn't start the account-connect flow" reply. Generate one with
+`openssl rand -hex 32`.
+
 Then redeploy so the functions pick them up (push to `main`, or redeploy from the dashboard).
 
-eve reads both from the environment because `agent/channels/slack.ts` omits `credentials`. See
+eve reads the Slack pair from the environment because `agent/channels/slack.ts` omits
+`credentials`. See
 [CLAUDE.md](./CLAUDE.md) for why T1 uses the env fallback, why one deployment serves exactly one
 workspace, and what moving to Vercel Connect would and would not buy.
 

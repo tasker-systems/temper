@@ -25,7 +25,7 @@ persist it. Identity (the row) and secret (the vault) stay in separate tables �
 
 ```
 Slack: @temper …                 (principal slack:T0BH…:U0BH… from attributes.user_id)
-  → agent: POST /api/auth/slack/link-intents      [HMAC, ≤30s skew]
+  → agent: POST /internal/slack/link-intents      [HMAC, ≤30s skew]
       → generate_pkce_pair(); INSERT kb_slack_link_intents
         (state_nonce, code_verifier, slack_principal_id, expires_at)
       ← { authorize_url }                          (IdP url, state=nonce, S256, offline_access)
@@ -168,7 +168,7 @@ compromised account, and it is the honest justification for the gate.
 **The signature cannot ride in the URL the user clicks.** `internal_sig::MAX_SKEW_SECS` is 30
 (`temper-core/src/internal_sig.rs:35`), and a human clicks a Slack link minutes later. Widening the
 skew to fit human latency would loosen a gate that is tight for good reason. So the HMAC covers the
-**agent→API** call (`POST /api/auth/slack/link-intents`), which is immediate and well inside 30s;
+**agent→API** call (`POST /internal/slack/link-intents`), which is immediate and well inside 30s;
 what the user receives is the IdP's own authorize URL carrying an opaque `state`, with nothing
 forgeable in it.
 
@@ -264,10 +264,18 @@ Additive migration. Client-side flow state, distinct from the AS's `kb_oauth_flo
 > parse silently mis-keys a user by reading `<user>` from the `<team>` slot. Store and compare it
 > whole — which is exactly what `auth_provider_user_id VARCHAR(128)` wants.
 
-### New: `POST /api/auth/slack/link-intents` (temper-api)
+### New: `POST /internal/slack/link-intents` (temper-api)
 
 HMAC-gated (D5). Body carries the principal. Generates the PKCE pair, inserts the intent, returns
 `{ authorize_url }` built mode-aware from `AuthConfig`.
+
+**Why `/internal/*` and not `/api/*`:** the namespace is a routing fact, not a naming preference.
+`vercel.json` routes `/internal/(.*)` to the internal function and leaves `/api/*` to the public
+axum function, so an `/api/…/link-intents` path would land on the wrong function entirely. It also
+reads true: this is the same server-to-server, HMAC-gated, non-JWT surface as
+`/internal/saml/reconcile`, and it shares that gate's implementation. The callback is the opposite
+kind of thing — browser-facing — and correctly stays at `/api/auth/slack/callback`, where the
+public function serves it.
 
 ### New: `GET /api/auth/slack/callback` (temper-api)
 
@@ -351,8 +359,13 @@ The `redirect_uri` must be registered — **in both modes, and it is not optiona
 their own PKCE pair and a `redirect_uri` they control, tricks a victim into completing the login,
 and receives the code.
 
-New env: the link client_id, and the HMAC secret shared with the agent (fail-closed if unset, per
-`internal_auth.rs:7-8`'s precedent).
+New env, three vars, all on temper-api: `SLACK_LINK_CLIENT_ID` (the link client_id),
+`SLACK_LINK_SECRET` (the HMAC secret shared with the agent — fail-closed if unset, per
+`internal_auth.rs:7-8`'s precedent), and `PUBLIC_BASE_URL` (this instance's public origin, which
+the callback `redirect_uri` is derived from). They are parsed as a unit: all three present ⇒ the
+flow is enabled, any absent ⇒ disabled. The derived `redirect_uri`
+(`<PUBLIC_BASE_URL>/api/auth/slack/callback`) must be registered with the IdP — Auth0's Allowed
+Callback URLs, or the client's `AS_CLIENTS` entry on an AS instance.
 
 ## Out of scope
 

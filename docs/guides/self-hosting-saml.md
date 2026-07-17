@@ -235,6 +235,23 @@ provisioning occurs (authentication still works).
 | `INTERNAL_RECONCILE_SECRET` | AS + API (shared) | Shared secret gating the internal reconcile call. Same value on both. Unset ⇒ reconcile disabled, no group provisioning. |
 | `INTERNAL_RECONCILE_URL` | AS | Full URL of the `temper-api` `/internal/saml/reconcile` endpoint the AS calls before minting (e.g. `https://<your-api-origin>/internal/saml/reconcile`). |
 
+### Slack account link (optional)
+
+These are needed only if you run the [@temper mention agent](../../packages/agent-workflows/mention/README.md).
+Leave all three unset and the link endpoint is disabled — everything else works unchanged.
+
+The flow makes temper an OAuth **client** of your own AS: it authorizes as
+`SLACK_LINK_CLIENT_ID` and is redirected back to `<PUBLIC_BASE_URL>/api/auth/slack/callback`.
+That redirect URI must therefore appear in that client's `AS_CLIENTS` entry — `AS_CLIENTS` is an
+exact-match allowlist and unset is fail-closed, so an unregistered URI is refused by the AS
+before temper sees the request.
+
+| Variable | Where | Purpose |
+| --- | --- | --- |
+| `SLACK_LINK_CLIENT_ID` | API | The `client_id` the link flow authorizes as. Must be present in `AS_CLIENTS`, with `<PUBLIC_BASE_URL>/api/auth/slack/callback` among its redirect URIs. |
+| `SLACK_LINK_SECRET` | API + mention agent (shared) | Shared secret gating the agent's `/internal/slack/link-intents` call. Same value on both. Unset ⇒ link endpoint disabled. |
+| `PUBLIC_BASE_URL` | API | This instance's public origin (e.g. `https://<instance>`). The callback `redirect_uri` is derived from it. |
+
 ## 5. Configure the CLI
 
 Run the guided setup and pick the **Temper AS (native SAML)** provider:

@@ -22,8 +22,9 @@ use temper_core::internal_sig::{timestamp_is_fresh, verify, SIGNATURE_HEADER, TI
 use temper_services::error::ApiError;
 use temper_services::state::AppState;
 
-/// Cap on the buffered reconcile body. The payload is a small membership list; a real one
-/// is well under a kilobyte, so 64 KiB is generous while bounding the read.
+/// Cap on the buffered body, for BOTH gates. The payloads are small — a membership list for
+/// reconcile, a single opaque principal for a link intent — and a real one of either is well
+/// under a kilobyte, so 64 KiB is generous while bounding the read.
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
 /// The shared gate: fresh timestamp + valid HMAC over the exact bytes received.
@@ -73,7 +74,7 @@ async fn require_signature_with(
     // Buffer the body so we can MAC the exact bytes received, then hand them downstream.
     let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
-        .map_err(|_| ApiError::Unauthorized("internal reconcile body too large".to_string()))?;
+        .map_err(|_| ApiError::Unauthorized(format!("{label} body too large")))?;
 
     if !verify(secret.as_bytes(), timestamp, &bytes, &signature) {
         tracing::warn!("{label}: rejected (signature mismatch)");

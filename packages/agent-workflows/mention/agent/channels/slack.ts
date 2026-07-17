@@ -37,7 +37,16 @@ export default slackChannel({
     // which is public. The user id comes from `attributes.user_id`; NEVER from parsing
     // principalId, which has 2-4 segments.
     const userId = decision.auth.attributes.user_id;
-    if (typeof userId !== "string") return null;
+    if (typeof userId !== "string") {
+      // We cannot postEphemeral without a user id, so this drop is forced — but a silent
+      // one leaves the user with nothing and us with no trace. Log the whole principal
+      // (never a parse of it) so the drop is at least diagnosable. No `thread.post`
+      // fallback: the challenge is a credential and must never go to a public channel.
+      console.warn("dropping mention: no user_id on attributes", {
+        principalId: decision.principalId,
+      });
+      return null;
+    }
 
     try {
       const authorizeUrl = await requestAuthorizeUrl(decision.principalId);
