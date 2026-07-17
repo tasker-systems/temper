@@ -57,21 +57,35 @@ export default slackChannel({
           ? linkedPrompt(link.handle)
           : unlinkedPrompt(link.authorize_url);
 
-      // Ephemeral on BOTH arms. The unlinked one carries a credential; the linked one is
-      // per-mention status noise no channel asked for.
+      // Deliver privately, at the CHANNEL ROOT — not via `ctx.thread.postEphemeral`.
       //
-      // Pass `{ text }`, NOT a bare string. eve normalizes a bare string to `{ markdown }`,
-      // which becomes Slack's `markdown_text` field — supported by chat.postMessage but NOT
-      // chat.postEphemeral, which then returns ok:false and eve throws. That throw is
-      // swallowed by eve's dispatcher, so the symptom is total silence, not an error. eve's
-      // own default authorization.required handler passes `{ blocks, text }` for exactly this
-      // reason. `{ text }` routes to the plain `text` field, which postEphemeral supports.
-      await ctx.thread.postEphemeral(userId, { text: reply });
+      // eve's thread helper inherits the mention's `thread_ts`, so the ephemeral posts INTO a
+      // thread the user isn't viewing, where an ephemeral is invisible and leaves no badge —
+      // the symptom was total silence in the channel. A channel-root `chat.postEphemeral` (no
+      // `thread_ts`) shows inline where the user actually mentioned. Still ephemeral, still
+      // private-to-them: the unlinked arm carries a credential and must never go public.
+      //
+      // `ctx.slack.request` returns the raw Slack response instead of throwing on `ok:false`
+      // (eve's typed `postEphemeral` throws, and eve's dispatcher then swallows the throw). So
+      // on failure we can surface WHY — publicly, but with only the Slack error code, never the
+      // reply. Silence is the one outcome we refuse to ship again.
+      const res = await ctx.slack.request("chat.postEphemeral", {
+        channel: ctx.slack.channelId,
+        user: userId,
+        text: reply,
+      });
+      if (!res.ok) {
+        console.error("postEphemeral failed", { error: res.error });
+        await ctx.thread.post({
+          text: `I couldn't send you a private message (Slack: ${res.error ?? "unknown_error"}). Once that's sorted, mention me again.`,
+        });
+      }
     } catch (err) {
-      // eve catches and logs a thrown error and drops the mention, so a failed call would
-      // be silent. Tell the user something honest instead of nothing.
+      // requestLinkState failed (API/network). eve swallows a thrown handler, so say something.
       console.error("link state lookup failed", err);
-      await ctx.thread.postEphemeral(userId, {
+      await ctx.slack.request("chat.postEphemeral", {
+        channel: ctx.slack.channelId,
+        user: userId,
         text: "I couldn't check your temper account just now. Please try again in a moment.",
       });
     }
