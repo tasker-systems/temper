@@ -394,19 +394,23 @@ default arm, expressed as *absence from the returned set* rather than as a match
 see the decision step below. Its rows span many subjects and many types, so there is no single
 subject to evaluate the table against.
 
-- [ ] **Step 0: Close §11.1b's first sub-question — is the actor axis self-gating? (ADDED 2026-07-16)**
+- [x] **Step 0: Close §11.1b's first sub-question — is the actor axis self-gating? (ADDED 2026-07-16)**
 
-The spec defers §11.1b "to the Task 2 read-surface PR by decision" — but this plan then never
-revisits it, while `list_by_actor` cannot be written without the answer. Close it **before** Step 4,
-and record the decision in spec §11.1b (in place, on this branch) rather than in a commit message.
+**CLOSED 2026-07-16: SELF-GATING.** Decision + the live probe behind it are recorded in **spec
+§11.1b** — read it before Step 4; do not reconstruct the reasoning from this summary.
 
-Not a policy nicety — the two answers have different **shapes** (see `list_by_actor`'s comment):
-self-gating collapses the axis to an O(1) gate; subject-gating makes it an N+1 with broken
-pagination and needs a query shape `fetch` does not offer.
+- `caller == actor` ⇒ **all** the caller's own admin acts, **no per-subject gate**, conditioned only
+  on `access_service::has_system_access(caller)`. Keep your history unless you lose the front door.
+- `caller != actor` ⇒ `is_system_admin` or 404.
 
-The other two consequences (the vanished subject; fail-closed on a producer bug) are **recorded,
-not resolved, by this task** — they need no code here. Note them in §11.1b as carried to Task 5,
-where the writer that could leave `references` empty is actually built.
+Call `has_system_access`, do not assume it. Both surfaces gate it upstream already
+(`temper-api/src/middleware/system_access.rs:38`, `temper-mcp/src/service.rs:85`), so this is
+defense in depth against a route wired without the layer — and it is the same function, not a
+restatement. It is vacuous under `access_mode='open'` (short-circuits true); that is intended.
+
+The other two consequences (the vanished subject; fail-closed on a producer bug) are **recorded, not
+resolved, by this task** — they need no code here, and §11.1b now carries both to Task 5, where the
+first writer is actually built.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -537,13 +541,85 @@ async fn the_grant_writer_can_read_their_own_grant_record(pool: PgPool) {
 
     assert_eq!(got.len(), 1, "the grant writer sees the record of the act they could perform");
 }
+
+/// §11.1b, decided 2026-07-16: the actor axis is SELF-GATING. This is the test that distinguishes
+/// it from a subject-gated axis — the actor authored the act but cannot administer its subject, so
+/// under subject-gating they would lose sight of their own authorship. Which is the exact defect
+/// this whole spec exists to undo.
+#[sqlx::test]
+async fn the_actor_keeps_their_own_history_without_the_capability(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // An act authored BY the owner, ON a subject the owner cannot administer (the admin's
+    // context, not theirs). Authorship and capability deliberately pulled apart.
+    seed_admin_event(&pool, f.owner_emitter, f.context_id, f.team_id).await;
+
+    // The subject axis denies them — they have no can_grant on this subject. This half must hold
+    // or the test is not exercising the distinction.
+    let subject_err = temper_services::services::admin_ledger_service::list_by_subject(
+        &pool,
+        f.owner_profile,
+        RefTarget { kind: AnchorTable::Contexts, id: f.context_id },
+        50,
+        0,
+    )
+    .await
+    .expect_err("no capability on this subject ⇒ the subject axis denies");
+    assert!(matches!(subject_err, temper_services::ApiError::NotFound));
+
+    // The actor axis returns it anyway. That is the decision.
+    let mine = temper_services::services::admin_ledger_service::list_by_actor(
+        &pool,
+        f.owner_profile,
+        f.owner_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("an actor always reads their own acts");
+
+    assert_eq!(mine.len(), 1, "authorship survives the loss of capability over the subject");
+    assert_eq!(mine[0].actor_profile_id, f.owner_profile.uuid());
+}
+
+/// The other half of the decision: reading SOMEONE ELSE's history is an audit, and audits are
+/// admin-only. Self-gating widens the actor's own view; it must not widen anyone else's.
+#[sqlx::test]
+async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    seed_admin_event(&pool, f.admin_emitter, f.context_id, f.team_id).await;
+
+    let err = temper_services::services::admin_ledger_service::list_by_actor(
+        &pool,
+        f.outsider_profile,
+        f.admin_profile,
+        50,
+        0,
+    )
+    .await
+    .expect_err("a non-admin must not audit another profile's acts");
+    assert!(matches!(err, temper_services::ApiError::NotFound));
+
+    // ...and the admin may.
+    let audit = temper_services::services::admin_ledger_service::list_by_actor(
+        &pool,
+        f.admin_profile,
+        f.admin_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("an admin audits");
+    assert_eq!(audit.len(), 1);
+}
 ```
 
-> The fixture therefore also needs `owner_profile` + `owned_resource_id`: a non-admin profile and a
-> resource it owns (homed on its own context, `owner_table='kb_profiles'` — which is exactly the
-> shape that has **no owning team** and refuted the original gate). Add both to `AdminFixture`.
-> Note the seed above anchors the event on the **resource**, so `seed_admin_event`'s hardcoded
-> `'kb_contexts'` subject kind must become a parameter.
+> The fixture therefore also needs `owner_profile`, `owner_emitter` and `owned_resource_id`: a
+> non-admin profile, its emitter (it authors events in the actor-axis tests), and a resource it owns
+> (homed on its own context, `owner_table='kb_profiles'` — which is exactly the shape that has **no
+> owning team** and refuted the original gate). Add all three to `AdminFixture`.
+> Note the seeds above anchor on the **resource** in one test and the **context** in another, so
+> `seed_admin_event`'s hardcoded `'kb_contexts'` subject kind must become a parameter.
 
 - [ ] **Step 2: Build the fixture — inline, in this file**
 
@@ -677,6 +753,17 @@ pub async fn list_by_subject(
     fetch(pool, &types, Some(probe), None, limit, offset).await
 }
 
+/// The actor axis is **self-gating** (spec §11.1b, decided 2026-07-16): you may always read the
+/// record of acts you performed. Losing a capability, a role, or ownership of a subject does not
+/// take your own history from you — only losing system access does, because then you are not a
+/// reader at all.
+///
+/// Deliberately NOT subject-gated. The defect that motivated this whole spec is
+/// `kb_access_grants` destroying `granted_by_profile_id` on upsert; a ledger that restores
+/// authorship and then hides it from its author would be a poor trade. Probed live: §5's
+/// `can_grant` arm carries ZERO of prod's 5 real grants, so a subject-gate here would today mean
+/// "admins only" — and ownership is mutable (`rehome`/`reassign` ship), so the demoted actor is
+/// reachable by ordinary usage, not just by demotion.
 pub async fn list_by_actor(
     pool: &PgPool,
     caller: ProfileId,
@@ -684,15 +771,22 @@ pub async fn list_by_actor(
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
-    // ⚠️ BLOCKED ON THE STEP 0 DECISION (spec §11.1b — "the demoted actor"). Do not write this
-    // body until that step is closed and this comment is replaced by the decision it made.
-    // The two candidates are NOT a style choice — they have different gate shapes:
-    //   (a) self-gating: caller == actor ⇒ all ADMIN_EVENT_TYPES, no per-subject gate at all
-    //       (O(1), pagination sound); caller != actor ⇒ is_system_admin or 404.
-    //   (b) subject-gated: every row's subject re-gated per row ⇒ N+1 and LIMIT/OFFSET breaks
-    //       (see the note in `readable_event_types`). If (b) wins, this axis needs a different
-    //       query shape than `fetch` offers, and that is a scope change, not a body.
-    todo!("decide §11.1b at Step 0 first")
+    // The front door, called rather than assumed. Both surfaces gate this upstream already
+    // (temper-api middleware, temper-mcp service) — this is defense in depth against a future
+    // route wired without the layer, and it is the same predicate, not a second copy of it.
+    // Vacuous under access_mode='open', where has_system_access short-circuits true. Intended.
+    if !access_service::has_system_access(pool, caller).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // Reading someone else's history is an audit, and audits are admin-only.
+    if caller != actor && !access_service::is_system_admin(pool, caller).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // No per-subject gate: that is the decision. The full catalogue is correct here precisely
+    // because the axis is the caller's own authorship (or an admin's audit).
+    fetch(pool, ADMIN_EVENT_TYPES, None, Some(actor.uuid()), limit, offset).await
 }
 
 /// The epoch: admin history begins here. NOT a backfill marker — everything before this is
@@ -770,7 +864,8 @@ pub mod admin_ledger_service;
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cargo nextest run -p temper-services --features test-db --test admin_ledger_test`
-Expected: PASS (4 tests — the fourth added 2026-07-16).
+Expected: PASS (6 tests — three added 2026-07-16: the grant-writer test, and the two actor-axis
+tests carrying §11.1b's decision).
 
 If `the_admin_event_is_invisible_to_cognition` fails, **stop** — the firewall is the design's load-bearing claim. Do not adjust the test to pass; report it.
 
