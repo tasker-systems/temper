@@ -59,7 +59,12 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
 /// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
 /// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
 /// `can_grant` holder) and repair stay operable.
-async fn can_administer_grant(
+///
+/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
+/// (spec 2026-07-16 §5): if you could perform the act, you may read the record of it. Restating the
+/// predicate there would be a second copy of the policy that drifts from the gate it exists to
+/// mirror — tighten this fn and the ledger's read gate tightens with it.
+pub(crate) async fn can_administer_grant(
     pool: &PgPool,
     caller: ProfileId,
     subject_table: &str,
