@@ -12,7 +12,7 @@ use crate::config::SlackLinkConfig;
 pub struct LinkProvider {
     pub authorize_url: String,
     pub token_url: String,
-    /// RFC 7009 token revocation. See [`derive`] for what this means per mode.
+    /// RFC 7009 token revocation. See [`fn@derive`] for what this means per mode.
     pub revoke_url: String,
     pub client_id: String,
     pub redirect_uri: String,
