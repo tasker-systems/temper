@@ -30,7 +30,10 @@ use tokio::net::TcpListener;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use tempfile::TempDir;
+
 use temper_api::create_app;
+use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
 use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::config::{ApiConfig, SlackLinkConfig};
 use temper_services::state::{AppState, JwksKeyStore};
@@ -75,6 +78,9 @@ struct SlackLinkApp {
     http: reqwest::Client,
     /// Kept alive for the test's duration: dropping it stops serving the token endpoint.
     idp: MockServer,
+    /// Backs `cli_config_path()`. Kept alive for the test's duration so the materialized
+    /// config file survives until the spawned CLI has read it; dropping it deletes the dir.
+    cli_config_dir: TempDir,
 }
 
 impl SlackLinkApp {
@@ -87,6 +93,28 @@ impl SlackLinkApp {
             "http://{}/api/auth/slack/callback?code={AUTH_CODE}&state={state_nonce}",
             self.addr
         )
+    }
+
+    /// Materialize a minimal global CLI config pointed at this app's server, mirroring what
+    /// `common::run_temper_cli` writes for `E2eTestApp`. `SlackLinkApp` has no `TemperConfig`
+    /// of its own (it never builds a `temper_client::TemperClient`), so this builds one just
+    /// for the spawned-binary CLI's `TEMPER_GLOBAL_CONFIG` to read. The vault path itself is
+    /// never touched by a `slack disconnect` invocation, but `CloudVaultConfig` validates
+    /// non-empty, so it must point somewhere real.
+    fn cli_config_path(&self) -> std::path::PathBuf {
+        let config = TemperConfig {
+            vault: CloudVaultConfig {
+                path: self.cli_config_dir.path().to_str().unwrap().to_string(),
+            },
+            cloud: CloudSection {
+                api_url: format!("http://{}", self.addr),
+            },
+            ..TemperConfig::default()
+        };
+        let config_toml = toml::to_string(&config).expect("serialize SlackLinkApp CLI config");
+        let config_path = self.cli_config_dir.path().join("test-temper-config.toml");
+        std::fs::write(&config_path, config_toml).expect("write SlackLinkApp CLI config");
+        config_path
     }
 }
 
@@ -143,6 +171,7 @@ async fn setup_slack_app(pool: &PgPool) -> SlackLinkApp {
         addr,
         http: reqwest::Client::new(),
         idp,
+        cli_config_dir: TempDir::new().expect("temp dir for SlackLinkApp CLI config"),
     }
 }
 
@@ -260,12 +289,13 @@ async fn mint_state_nonce(app: &SlackLinkApp) -> String {
 }
 
 /// Provision a profile through the REAL auto-provisioning path — an authenticated
-/// `GET /api/profile`, exactly as a first sign-in does.
+/// `GET /api/profile`, exactly as a first sign-in does. Returns the token used, so a
+/// caller that needs to keep authenticating as this user (e.g. driving the CLI) can.
 ///
 /// Deliberately not a hand-written INSERT: the row this flow must find is the row the login
 /// path writes, and only the login path knows its full shape (profile + auth link under
 /// `PROVIDER` + the surface emitters). A fixture INSERT would let the two drift.
-async fn provision_profile(app: &SlackLinkApp, sub: &str, email: &str) {
+async fn provision_profile(app: &SlackLinkApp, sub: &str, email: &str) -> String {
     let token = sign_idp_access_token(&app.issuer(), sub, email);
     let res = app
         .http
@@ -279,6 +309,7 @@ async fn provision_profile(app: &SlackLinkApp, sub: &str, email: &str) {
         200,
         "the token user must auto-provision on first authenticated request"
     );
+    token
 }
 
 async fn count_profiles(pool: &PgPool) -> i64 {
@@ -783,5 +814,156 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
     assert!(
         expires_in_future,
         "the refresh must re-cache a live access token"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Disconnect — driven through the REAL `temper` CLI binary, not the service fn
+// directly. This is the only tier that exercises the full stack for this
+// command: JWT auth → handler → service → the three-table delete, and — just
+// as load-bearing — the CLI's own JSON-on-stdout / caveats-on-stderr contract.
+// ---------------------------------------------------------------------------
+
+/// **The disconnect happy path, end to end.** Link through the real flow, then unbind through
+/// the real CLI, and prove it by absence of rows — not by the CLI's own say-so.
+///
+/// Two things this test is careful about:
+///
+/// 1. It asserts on `kb_profile_auth_links`, `kb_slack_grant_vault` and
+///    `kb_slack_link_intents` directly. A test that only checked `out.status.success()` or the
+///    JSON payload's claims would pass against a handler that deleted nothing — the CLI would
+///    just be reporting what it wished had happened.
+/// 2. `serde_json::from_slice(&out.stdout)` must succeed. This is the regression gate for the
+///    `output::hint` → stderr fix (163647b8): if any caveat text leaked back onto stdout, the
+///    payload stops parsing as JSON. Do not relax this to a substring check — that would let the
+///    exact bug it exists to catch back in silently.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn disconnect_unbinds_the_principal_and_the_next_mention_prompts_to_link(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    let sub = "idp-sub-disconnect";
+    let email = "disconnect-1a2b3c@example.invalid";
+    let token = provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    // Link.
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(body.contains("Linked as"), "the link must succeed: {body}");
+    assert_eq!(count_slack_links(&pool).await, 1);
+
+    // Disconnect via the real CLI binary, authenticated as the linked user.
+    let out = common::run_temper_cli_with_token(
+        &format!("http://{}", app.addr),
+        &token,
+        &app.cli_config_path(),
+        &["slack", "disconnect", "--format", "json"],
+    )
+    .await
+    .expect("cli disconnect");
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Must parse as JSON on its own — see the module note above.
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON");
+    assert_eq!(parsed["was_linked"], true);
+
+    // Assert absence of the rows, not the success message.
+    assert_eq!(
+        count_slack_links(&pool).await,
+        0,
+        "identity row must be gone"
+    );
+    let grants: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("count grant vault rows");
+    assert_eq!(grants, 0, "the sealed grant must be destroyed");
+    assert_eq!(count_intents(&pool).await, 0, "intents must be swept");
+
+    // The next mention is offered a fresh link — the normal T2 flow, no special path.
+    let res = post_link_state(&app, SLACK_PRINCIPAL, None).await;
+    assert_eq!(res.status(), 200);
+    let state: serde_json::Value = res.json().await.expect("json");
+    assert_eq!(
+        state["status"], "unlinked",
+        "a disconnected principal must be offered a link again"
+    );
+}
+
+/// Disconnect is not deactivation, and running it twice is not an error.
+///
+/// The profile row — and everything hanging off it (teams, resources) — must survive a
+/// disconnect untouched; only the identity binding, grant and intents are in scope. The second
+/// invocation finds nothing left to unbind (`was_linked: false` is the CLI's own no-op arm) but
+/// must still exit success, not fail because the first call already cleaned up.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn disconnect_leaves_the_profile_and_is_idempotent(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    let sub = "idp-sub-idempotent";
+    let email = "idempotent-9f8e7d@example.invalid";
+    let token = provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(body.contains("Linked as"), "the link must succeed: {body}");
+
+    let profiles_before = count_profiles(&pool).await;
+
+    for attempt in 0..2 {
+        let out = common::run_temper_cli_with_token(
+            &format!("http://{}", app.addr),
+            &token,
+            &app.cli_config_path(),
+            &["slack", "disconnect", "--format", "json"],
+        )
+        .await
+        .expect("cli disconnect");
+        assert!(
+            out.status.success(),
+            "attempt {attempt} must succeed; stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON");
+        if attempt == 0 {
+            assert_eq!(
+                parsed["was_linked"], true,
+                "the first call unbinds a real link"
+            );
+        } else {
+            assert_eq!(
+                parsed["was_linked"], false,
+                "the second call finds nothing left to unbind"
+            );
+        }
+    }
+
+    assert_eq!(
+        count_profiles(&pool).await,
+        profiles_before,
+        "disconnect is not deactivation — the profile must survive"
     );
 }
