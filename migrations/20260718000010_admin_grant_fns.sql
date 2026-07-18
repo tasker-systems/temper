@@ -66,6 +66,11 @@ BEGIN
         v_payload := v_payload || jsonb_build_object('previous', v_prev);
     END IF;
 
+    -- Emit UNCONDITIONALLY -- unlike _admin_grant_revoked, which suppresses no-op deletes. A re-grant
+    -- with IDENTICAL capabilities is not a no-op: the upsert above still refreshes granted_by_profile_id
+    -- and granted_at, so it is a real re-affirmation worth recording. The asymmetry is deliberate: a
+    -- consumer reads `previous` to learn WHAT changed (present-and-equal ⇒ a re-affirm, absent ⇒ a
+    -- fresh grant), rather than treating every grant_created as a capability change.
     PERFORM _event_append(
         'grant_created', p_emitter, NULL, NULL, v_payload,
         p_references => jsonb_build_array(

@@ -929,3 +929,94 @@ async fn the_connection_grant_reach_bypass_is_also_on_the_ledger(pool: PgPool) {
     assert_eq!(entries[0].event_type, "grant_created");
     assert_eq!(entries[0].payload["subject_table"], "kb_connections");
 }
+
+/// THE SECURITY-RELEVANT BRANCH the other tests miss: a capability CHANGE on an existing grant is an
+/// `ON CONFLICT` UPDATE (`inserted = false`), and the event MUST still fire — keying emission on the
+/// `inserted` bool alone would silently drop a privilege escalation from the append-only ledger while
+/// it lands in the current-state row (`_admin_grant_created` warns about exactly this). Every other
+/// grant test does a FRESH grant (`inserted = true`), so the drop-on-update regression ships green
+/// without this. Also the only test that asserts the `previous` payload key — the whole reason for
+/// the pre-upsert capability capture.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_capability_change_still_writes_an_event_carrying_previous(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    // Fresh grant: read-only. inserted = true.
+    let first = access_service::grant_capability(
+        &pool,
+        f.admin_profile,
+        &GrantCapabilityRequest {
+            subject_table: "kb_contexts".into(),
+            subject_id: f.context_id,
+            principal_table: "kb_teams".into(),
+            principal_id: f.team_id,
+            can_read: true,
+            can_write: false,
+            can_delete: false,
+            can_grant: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        first.granted,
+        "the fresh grant reports granted=true (inserted)"
+    );
+
+    // Re-grant the SAME (subject, principal) with an escalated capability (add write). This is an
+    // ON CONFLICT UPDATE, so `granted` is false — but the act is a real privilege escalation and
+    // MUST still reach the ledger.
+    let second = access_service::grant_capability(
+        &pool,
+        f.admin_profile,
+        &GrantCapabilityRequest {
+            subject_table: "kb_contexts".into(),
+            subject_id: f.context_id,
+            principal_table: "kb_teams".into(),
+            principal_id: f.team_id,
+            can_read: true,
+            can_write: true,
+            can_delete: false,
+            can_grant: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        !second.granted,
+        "an upsert that only CHANGES capabilities reports granted=false — and this is the branch \
+         that must not drop the event"
+    );
+
+    let entries = admin_ledger_service::list_by_subject(
+        &pool,
+        f.admin_profile,
+        RefTarget {
+            kind: AnchorTable::Contexts,
+            id: f.context_id,
+        },
+        50,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the capability change fires a SECOND grant_created — NOT dropped because inserted=false"
+    );
+    assert_eq!(entries[0].event_type, "grant_created", "newest first");
+    // The newest event carries `previous` = the caps BEFORE the change (read-only), and the new caps.
+    assert_eq!(
+        entries[0].payload["can_write"], true,
+        "the new event carries the escalated capability"
+    );
+    assert_eq!(
+        entries[0].payload["previous"]["can_write"], false,
+        "`previous` holds the pre-change capabilities — how a consumer sees WHAT changed"
+    );
+    assert!(
+        entries[1].payload.get("previous").is_none(),
+        "the fresh grant carries no `previous`"
+    );
+}

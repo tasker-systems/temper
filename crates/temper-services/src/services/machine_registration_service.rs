@@ -218,6 +218,20 @@ pub async fn provision(
     )
     .await?;
 
+    // Resolve the caller's emitter BEFORE the transaction — matching the auth-before-tx pattern above,
+    // and avoiding a nested pool acquire while `tx` is open. Only when there is a grant to author: a
+    // pure team-membership reach fires no grant_created event, so it must not require the minter to
+    // carry a `<handle>@web` entity (a mere gating-team watcher does not).
+    let emitter = if reach.grants().is_empty() {
+        None
+    } else {
+        Some(
+            temper_substrate::writes::resolve_emitter(pool, caller, "web")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?,
+        )
+    };
+
     let mut tx = pool
         .begin()
         .await
@@ -243,18 +257,6 @@ pub async fn provision(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, caller, profile_id).await?;
-    // Resolve the caller's emitter ONLY when there is a grant to author. A reach of pure team
-    // memberships fires no grant_created event, so it must not require the minter to carry a
-    // `<handle>@web` entity — many legitimate minters (e.g. a mere gating-team watcher) do not.
-    let emitter = if reach.grants().is_empty() {
-        None
-    } else {
-        Some(
-            temper_substrate::writes::resolve_emitter(pool, caller, "web")
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?,
-        )
-    };
     apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
@@ -299,6 +301,18 @@ pub async fn issue(
     )
     .await?;
 
+    // Resolve the caller's emitter BEFORE the transaction (see `provision`) — only when a grant is to
+    // be authored, so a pure team-membership reach needs no `<handle>@web` entity on the minter.
+    let emitter = if reach.grants().is_empty() {
+        None
+    } else {
+        Some(
+            temper_substrate::writes::resolve_emitter(pool, caller, "web")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?,
+        )
+    };
+
     let client_id = crate::auth::secret::mint_client_id();
     let secret = crate::auth::secret::mint_secret();
 
@@ -313,18 +327,6 @@ pub async fn issue(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, caller, profile_id).await?;
-    // Resolve the caller's emitter ONLY when there is a grant to author. A reach of pure team
-    // memberships fires no grant_created event, so it must not require the minter to carry a
-    // `<handle>@web` entity — many legitimate minters (e.g. a mere gating-team watcher) do not.
-    let emitter = if reach.grants().is_empty() {
-        None
-    } else {
-        Some(
-            temper_substrate::writes::resolve_emitter(pool, caller, "web")
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?,
-        )
-    };
     apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
