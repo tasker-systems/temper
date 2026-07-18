@@ -118,6 +118,33 @@ fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
         .map_err(|_| ApiError::BadRequest(format!("unknown team role '{role}'")))
 }
 
+/// The containment bar for a **single target team** that is about to receive something — the
+/// non-machine sibling of [`contain_reach`]'s team loop, for callers that confer team reach one
+/// team at a time (`connection_service::grant_reach`).
+///
+/// Two teams are in play and they are different questions. `authorize` asks *may you act on this
+/// connection?* — keyed on the connection's OWNING team. This asks *may you hand read-reach to
+/// THAT team?* — keyed on the target. Without it, an owner of one team could bind their
+/// connection's reach to any team UUID in the instance.
+///
+/// The bar is `can_manage`, called through the shared `require_manage_on_team` so it cannot drift
+/// from [`contain_reach`]. A system admin is exempt (Phase A D5) but still has the target team's
+/// existence checked — the D5 bypass is about authority, not about writing a `principal_id` that
+/// points at nothing.
+pub(crate) async fn contain_target_team(
+    pool: &PgPool,
+    authority: MachineAuthority,
+    caller: ProfileId,
+    team_id: Uuid,
+) -> ApiResult<()> {
+    match authority {
+        MachineAuthority::SystemAdmin => team_service::require_team_exists(pool, team_id).await,
+        MachineAuthority::TeamOwner => {
+            team_service::require_manage_on_team(pool, team_id, caller).await
+        }
+    }
+}
+
 /// The non-admin containment bar. Every check calls an existing human-surface predicate.
 async fn contain_reach(
     pool: &PgPool,
@@ -137,10 +164,7 @@ async fn contain_reach(
         }
 
         // D4 — the membership bar: exactly what `add_member` requires of a human.
-        match team_service::role_on_team(pool, spec.team_id, caller).await? {
-            Some(role) if team_service::can_manage(role) => {}
-            _ => return Err(ApiError::Forbidden),
-        }
+        team_service::require_manage_on_team(pool, spec.team_id, caller).await?;
     }
 
     for grant in grants {

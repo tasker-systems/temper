@@ -68,6 +68,46 @@ pub(crate) fn can_manage(role: TeamRole) -> bool {
     matches!(role, TeamRole::Owner | TeamRole::Maintainer)
 }
 
+/// The one statement of "this caller may confer something ON this team": a manage-capable role,
+/// exactly what `add_member` requires of a human.
+///
+/// It exists so the two *containment* sites — `machine_authz::contain_reach`'s team loop and
+/// `connection_service::grant_reach`'s target team — cannot drift apart. Tighten the bar here and
+/// both tighten with it.
+///
+/// A nonexistent team also lands here: `role_on_team` returns `None` for a `team_id` no row
+/// carries, so a bogus UUID is `Forbidden` and never reaches the write. That matters because
+/// `kb_access_grants.principal_id` has **no foreign key** — without this, a made-up UUID would
+/// silently persist a dangling grant row. No separate existence query is needed on this path.
+pub(crate) async fn require_manage_on_team(
+    pool: &PgPool,
+    team_id: Uuid,
+    caller: ProfileId,
+) -> ApiResult<()> {
+    match role_on_team(pool, team_id, caller).await? {
+        Some(role) if can_manage(role) => Ok(()),
+        _ => Err(ApiError::Forbidden),
+    }
+}
+
+/// Assert a team row exists, for callers whose authority skips [`require_manage_on_team`] (a
+/// system admin) and who would otherwise write an unvalidated `principal_id`. `kb_access_grants`
+/// carries no FK on `principal_id`, so this is the only thing standing between an admin's typo
+/// and a dangling grant nobody can see or revoke by team name.
+pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResult<()> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "e!: bool""#,
+        team_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+
 /// Create a team. The caller becomes its `owner`.
 ///
 /// Auth before writes:

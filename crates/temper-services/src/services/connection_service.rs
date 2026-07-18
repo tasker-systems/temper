@@ -411,11 +411,20 @@ pub async fn set_tool_manifest(
 /// `kb_access_grants` row (`subject_table = 'kb_connections'`) so the named team's members inherit
 /// READ on what the connection receives. Reach is read-only: no write, delete, or grant is conferred.
 ///
-/// Auth before writes, keyed on the connection's own owning team: `machine_authz::authorize` — a
-/// system admin, or the OWNER of the owning team; a teamless connection fails closed. This is the
-/// SAME policy as every other connection mutator, CALLED not restated. It deliberately does NOT
-/// route through `access_service::can_administer_grant`, whose `can_grant` seam has no bootstrap
-/// holder for a connection subject — the whole point is one policy, called once.
+/// Auth before writes, on **both** teams in play — they are different questions:
+///
+/// 1. *May you act on this connection?* — `machine_authz::authorize`, keyed on the connection's
+///    own owning team: a system admin, or the OWNER of that team; a teamless connection fails
+///    closed. The SAME policy as every other connection mutator, CALLED not restated. It
+///    deliberately does NOT route through `access_service::can_administer_grant`, whose
+///    `can_grant` seam has no bootstrap holder for a connection subject.
+/// 2. *May you hand read-reach to THAT team?* — `machine_authz::contain_target_team`: a
+///    manage-capable role on the RECEIVING team, system admins exempt. Without it, the owner of
+///    one team could bind their connection's reach to any team UUID in the instance, including
+///    teams they have no relationship with — and since `kb_access_grants.principal_id` carries no
+///    foreign key, a bogus UUID would persist a dangling grant row. This mirrors the machine
+///    path's `machine_authz::contain_reach`, through the same `require_manage_on_team` seam so the
+///    two cannot drift.
 ///
 /// A connection whose reach is *declared* (`Connection::declares_reach`) carries a coarse remote
 /// reach that may exceed the granted team's temper reach — remote and temper scope are
@@ -439,7 +448,8 @@ pub async fn grant_reach(
     affirm_reach: Option<String>,
 ) -> ApiResult<Connection> {
     let connection = get(pool, connection_id).await?;
-    machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
+    let authority = machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
+    machine_authz::contain_target_team(pool, authority, caller, team_id).await?;
 
     match (connection.declares_reach(), affirm_reach) {
         // Declared reach, unaffirmed: refuse, naming the declared reach and the fix. Write nothing.
@@ -535,8 +545,20 @@ fn reach_grant_params(
     }
 }
 
-/// Revoke a team's read-reach on a connection. Same gate as [`grant_reach`]; deletes the
-/// `kb_access_grants` row by its 4-tuple (absent ⇒ idempotent no-op).
+/// Revoke a team's read-reach on a connection. Deletes the `kb_access_grants` row by its 4-tuple
+/// (absent ⇒ idempotent no-op).
+///
+/// **Deliberately asymmetric with [`grant_reach`]: this checks the connection's owning team ONLY,
+/// never the target team.** That is not an oversight, and it must not be "fixed" into symmetry.
+/// De-escalation may never be harder than escalation. A grant is legitimately made while the
+/// caller holds a manage role on the target team; roles change. If revoke demanded that same role,
+/// the grant would become permanently unrevokable the moment the caller lost it — stranding
+/// access on a connection whose own owner can see the grant and cannot withdraw it. Handing reach
+/// out is gated; taking it back stays open to whoever controls the connection.
+///
+/// The target-team existence check is likewise absent by design: a `DELETE` on a 4-tuple that
+/// matches nothing writes nothing, so there is no dangling row to prevent — and if a dangling row
+/// already exists (granted before this gate shipped), this is precisely the path that cleans it up.
 pub async fn revoke_reach(
     pool: &PgPool,
     caller: ProfileId,
@@ -1351,6 +1373,27 @@ mod tests {
         .expect("seed team")
     }
 
+    /// A team the caller MANAGES, so a reach grant clears the target-team bar.
+    ///
+    /// Most reach tests want this rather than [`seed_team`]: since `grant_reach` requires a
+    /// manage-capable role on the RECEIVING team, a bare team is the *denial* fixture and this is
+    /// the *permission* fixture. `maintainer` deliberately — the bar is `can_manage`, not `owner`,
+    /// and seeding the weakest role that should pass is what proves that.
+    async fn seed_managed_team(pool: &PgPool, slug: &str, caller: ProfileId) -> Uuid {
+        let team = seed_team(pool, slug).await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'maintainer'::team_role) \
+             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+            team,
+            *caller,
+        )
+        .execute(pool)
+        .await
+        .expect("seed manage role on the target team");
+        team
+    }
+
     /// Does a read-reach grant row exist for `team_id` on `connection_id`?
     async fn reach_grant_exists(pool: &PgPool, connection_id: Uuid, team_id: Uuid) -> bool {
         sqlx::query_scalar!(
@@ -1368,14 +1411,15 @@ mod tests {
         .expect("grant existence check")
     }
 
-    /// The owner of the connection's owning team may grant a team read-reach; the grant lands.
+    /// The owner of the connection's owning team may grant a team read-reach — provided they also
+    /// manage the RECEIVING team. The grant lands.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_team_owner_may_grant_reach(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
             .await
             .expect("provision");
-        let beta = seed_team(&pool, "beta").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
 
         svc::grant_reach(
             &pool,
@@ -1393,7 +1437,9 @@ mod tests {
         );
     }
 
-    /// A system admin may grant reach — even on a teamless connection (the admin bypass).
+    /// A system admin may grant reach — even on a teamless connection (the admin bypass), and to
+    /// a team they hold NO role on. `beta` is deliberately a bare `seed_team`: the target-team
+    /// manage bar is exempted for admins, so this is the D5 bypass proving it survives.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_system_admin_may_grant_reach(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -1401,6 +1447,13 @@ mod tests {
             .await
             .expect("provision");
         let beta = seed_team(&pool, "beta").await;
+        assert!(
+            crate::services::team_service::role_on_team(&pool, beta, admin)
+                .await
+                .expect("role lookup")
+                .is_none(),
+            "precondition: the admin manages `beta` not at all"
+        );
 
         svc::grant_reach(
             &pool,
@@ -1435,6 +1488,94 @@ mod tests {
         );
     }
 
+    /// The target-team bar. Owning the connection is NOT enough — the caller must also hold a
+    /// manage-capable role on the team RECEIVING the reach. Without this, the owner of one team
+    /// could bind their connection's reach to any team in the instance.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn granting_reach_to_an_unmanaged_team_is_denied(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        // A real team the owner has no relationship with whatsoever.
+        let stranger_team = seed_team(&pool, "stranger").await;
+
+        let err = svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            stranger_team,
+            Some("reaching somewhere I do not manage".into()),
+        )
+        .await
+        .expect_err("owning the connection does not license binding it to an arbitrary team");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+
+        assert!(
+            !reach_grant_exists(&pool, c.id, stranger_team).await,
+            "a denied grant must write nothing"
+        );
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(
+            reloaded.reach_affirmed_at.is_none(),
+            "a denied grant must stamp no affirmation either"
+        );
+    }
+
+    /// Mere membership is not management — the bar is `can_manage`, so `member` is refused where
+    /// `maintainer` (see `seed_managed_team`) passes.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn granting_reach_to_a_team_you_merely_belong_to_is_denied(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        let beta = seed_team(&pool, "beta").await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'member'::team_role)",
+            beta,
+            *owner,
+        )
+        .execute(&pool)
+        .await
+        .expect("seed mere membership");
+
+        let err = svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            beta,
+            Some("I am merely a member".into()),
+        )
+        .await
+        .expect_err("member != can_manage");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(!reach_grant_exists(&pool, c.id, beta).await);
+    }
+
+    /// `kb_access_grants.principal_id` carries NO foreign key, so an unvalidated `team_id` would
+    /// persist a dangling grant row pointing at nothing. A system admin skips the manage bar, so
+    /// the existence check is the only thing standing between an admin's typo and that row.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn granting_reach_to_a_nonexistent_team_writes_no_dangling_row(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+        let ghost = Uuid::now_v7(); // no kb_teams row will ever carry this
+
+        let err = svc::grant_reach(&pool, admin, c.id, ghost, Some("typo".into()))
+            .await
+            .expect_err("a team that does not exist cannot receive reach");
+        assert!(matches!(err, ApiError::NotFound), "got {err:?}");
+
+        assert!(
+            !reach_grant_exists(&pool, c.id, ghost).await,
+            "no dangling grant row may be written"
+        );
+    }
+
     /// A teamless connection fails closed for a non-admin: "no team to check" ≠ "nothing to deny".
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_teamless_connection_grant_reach_fails_closed(pool: PgPool) {
@@ -1459,7 +1600,7 @@ mod tests {
         let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
             .await
             .expect("provision");
-        let beta = seed_team(&pool, "beta").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
 
         svc::grant_reach(
             &pool,
@@ -1481,6 +1622,57 @@ mod tests {
         );
     }
 
+    /// **The grant/revoke asymmetry, asserted so nobody "fixes" it into symmetry.**
+    ///
+    /// The caller grants while managing `beta`, then LOSES that role. Revoke must still work: they
+    /// still control the connection. Were revoke gated on the target team the way grant is, this
+    /// grant would now be permanently unrevokable — access stranded on a connection whose own
+    /// owner can see the grant and cannot withdraw it. De-escalation is never harder than
+    /// escalation.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn revoke_reach_survives_losing_the_target_team_role(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+
+        svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            beta,
+            Some("beta reviews acme CI".into()),
+        )
+        .await
+        .expect("granted while managing beta");
+        assert!(reach_grant_exists(&pool, c.id, beta).await, "granted");
+
+        // The role goes away — a reorg, a handover, a mistake. The grant remains.
+        sqlx::query!(
+            "DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+            beta,
+            *owner,
+        )
+        .execute(&pool)
+        .await
+        .expect("drop the target-team role");
+        assert!(
+            svc::grant_reach(&pool, owner, c.id, beta, Some("again".into()))
+                .await
+                .is_err(),
+            "precondition: re-GRANTING is now denied — the role really is gone"
+        );
+
+        svc::revoke_reach(&pool, owner, c.id, beta)
+            .await
+            .expect("revoke must not require the target-team role grant demands");
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "the stranded grant must be withdrawable by the connection's owner"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Excess-reach affirmation (B3 beat 2). Granting a team reach on a
     // connection that DECLARES reach must be affirmed as intentional or it
@@ -1498,7 +1690,7 @@ mod tests {
             .await
             .expect("provision");
         assert!(c.declares_reach(), "req declares reach");
-        let beta = seed_team(&pool, "beta").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
 
         let err = svc::grant_reach(&pool, owner, c.id, beta, None)
             .await
@@ -1526,7 +1718,7 @@ mod tests {
         let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
             .await
             .expect("provision");
-        let beta = seed_team(&pool, "beta").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
 
         let out = svc::grant_reach(
             &pool,
@@ -1569,7 +1761,7 @@ mod tests {
             .await
             .expect("provision");
         assert!(!c.declares_reach(), "req_no_reach declares no reach");
-        let beta = seed_team(&pool, "beta").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
 
         svc::grant_reach(&pool, owner, c.id, beta, None)
             .await
@@ -1594,7 +1786,7 @@ mod tests {
         let c = svc::provision(&pool, owner, &req_no_reach("Bare GitHub", Some(team)))
             .await
             .expect("provision");
-        let beta = seed_team(&pool, "beta").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
 
         let err = svc::grant_reach(&pool, owner, c.id, beta, Some("but I insist".into()))
             .await
@@ -1643,8 +1835,8 @@ mod tests {
         let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
             .await
             .expect("provision");
-        let beta = seed_team(&pool, "beta").await;
-        let gamma = seed_team(&pool, "gamma").await;
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+        let gamma = seed_managed_team(&pool, "gamma", owner).await;
 
         svc::grant_reach(&pool, owner, c.id, beta, Some("first reason".into()))
             .await
