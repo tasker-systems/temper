@@ -119,9 +119,12 @@ verdict on the grant surface against `audit-grant-sinks.sh` and the two-axis rul
 | script | status | what it pins |
 |---|---|---|
 | `.github/scripts/audit-grant-sinks.sh` | shipped | every `kb_access_grants` write-site vs a reviewed baseline — a new sink fails CI until acknowledged (attenuation review) |
-| `.github/scripts/audit-route-auth.sh` | planned | every axum route vs its auth layer / self-gate — flags an ungated route |
-| `.github/scripts/audit-handler-authz-drift.sh` | planned | `is_system_admin`/authz predicates invoked from `handlers/` rather than a shared service (the F-3 `promote_admin` drift shape) |
+| `.github/scripts/audit-route-auth.sh` | shipped | every route in an unauthenticated / self-gated / signature sub-router vs a reviewed baseline, plus a presence check on the `require_auth` / `require_system_access` / signature layer wiring — a new ungated route or a deleted auth layer fails CI (auth-covered routes grow freely) |
+| `.github/scripts/audit-handler-authz-drift.sh` | shipped | authz predicates (`is_system_admin`, `grant_authority`, …) invoked from `handlers/` or mcp tools rather than a shared service — the F-3 `promote_admin` drift shape |
 
-These are deliberately *enumerators and tripwires*, not provers: they make the reviewable set
-explicit and fail when it grows silently. The judgment stays human/agent; the script guarantees
-the judgment is asked.
+All three run as steps in the **Code Quality** CI job (`.github/workflows/code-quality.yml`). They
+are deliberately *enumerators and tripwires*, not provers: they make the reviewable set explicit
+and fail when it grows silently. The judgment stays human/agent; the script guarantees the
+judgment is asked. Each is mutation-tested by hand (inject a sink / route / handler-authz call → it
+trips; remove → green); run any with `--list` to see its current set or `UPDATE_BASELINE=1` to
+re-baseline after review.
