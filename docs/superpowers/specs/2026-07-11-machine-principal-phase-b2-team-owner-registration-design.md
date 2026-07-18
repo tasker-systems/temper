@@ -278,9 +278,34 @@ back to deriving safety from topology.
 
 - **D4 — The containment bar is the human bar, by call and not by copy.** Teams require `can_manage`
   (`add_member`'s membership bar) **and** a non-`Owner` role (`add_member`'s role bar, per D7); grants
-  require `profile_can_grant` (`grant_capability`'s non-admin bar). Calling the existing predicates —
-  rather than restating their rules — means the machine surface tightens automatically whenever the
-  human surface does.
+  require ~~`profile_can_grant`~~ **`access_service::authorize_capability_grant`** (see the amendment
+  below). Calling the existing predicates — rather than restating their rules — means the machine
+  surface tightens automatically whenever the human surface does.
+
+  > **AMENDED 2026-07-18 — the intent held; the named predicate rotted.**
+  >
+  > D4 originally cited `profile_can_grant`, correctly: at the time it *was* `grant_capability`'s
+  > non-admin bar. The admin-event-sink arc's Task 5b then widened the human bar — 5b.3 added
+  > **attenuation** (a delegated administrator may confer only capabilities it itself holds) and 5b.4
+  > added the **L0/gating-map admin guard** — and `profile_can_grant` silently stopped being the
+  > human bar. The machine surface did not tighten with it, which is the exact failure D4 exists to
+  > prevent.
+  >
+  > The gap was real and exploitable in the same class the sink arc exists to close: a
+  > `read+grant`-without-write holder could provision a machine carrying `can_write` and thereby
+  > command a principal holding write they can never hold themselves (laundering by proxy), and a
+  > non-admin `can_grant` holder on the L0 kernel could confer kernel write to a machine, walking
+  > around 5b.4's admin-only guard. Found by a second review on PR #482; closed there.
+  >
+  > Both sinks now call one decision — `access_service::authorize_capability_grant` — which carries
+  > the authority arm *and* attenuation together. `grant_capability` and `machine_authz::contain_reach`
+  > share it, so there is no second copy to drift.
+  >
+  > **The lesson for future decisions of this shape:** "call the human bar, don't copy it" is only as
+  > durable as the *name* it points at. A predicate named in a spec is a snapshot; when a policy grows
+  > past its original predicate, every doc that cites the old name becomes wrong without anything
+  > failing. Prefer citing the **decision function** (the one thing a sink is supposed to call) over a
+  > leaf predicate that may later become one input among several.
 
 - **D4a — The role bar is not optional, because `can_manage` admits maintainers.** A gating-team
   *maintainer* is not a system admin, but clears `can_manage` on the gating team. Without a role bar

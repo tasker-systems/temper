@@ -56,19 +56,10 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
 // surfaces, like `cogmap_service::bind_team`, NOT via the DbBackend trait.
 // ---------------------------------------------------------------------------
 
-/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
-/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
-/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
-/// `can_grant` holder) and repair stay operable.
-///
-/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
-/// (spec 2026-07-16 §5): if you could perform the act, you may read the record of it. Restating the
-/// predicate there would be a second copy of the policy that drifts from the gate it exists to
-/// mirror — tighten this fn and the ledger's read gate tightens with it.
-/// Why a caller may administer grants on a subject — not merely *whether*. `grant_capability` needs
-/// the distinction: attenuation (5b.3) binds a **delegated** administrator to the capabilities they
+/// Why a caller may administer grants on a subject — not merely *whether*. Callers need the
+/// distinction: attenuation (5b.3) binds a **delegated** administrator to the capabilities they
 /// themselves hold, while a system admin stays unrestricted so bootstrap and repair remain operable.
-/// Returning the reason keeps that a single authorization pass instead of re-asking `is_system_admin`
+/// Carrying the reason keeps that a single authorization pass instead of re-asking `is_system_admin`
 /// after the fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GrantAuthority {
@@ -91,6 +82,19 @@ pub(crate) async fn can_administer_grant(
     Ok(grant_authority(pool, caller, subject_table, subject_id).await? != GrantAuthority::None)
 }
 
+/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
+/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
+/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
+/// `can_grant` holder) and repair stay operable.
+///
+/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
+/// through [`can_administer_grant`] (spec 2026-07-16 §5): if you could perform the act, you may read
+/// the record of it. Restating the predicate there would be a second copy of the policy that drifts
+/// from the gate it exists to mirror — tighten this fn and the ledger's read gate tightens with it.
+///
+/// Note this answers *may you administer grants here at all*. It does NOT bound WHICH capabilities
+/// may be conferred — that is attenuation, and both belong to one decision:
+/// [`authorize_capability_grant`]. Every grant sink should call that, not this.
 pub(crate) async fn grant_authority(
     pool: &PgPool,
     caller: ProfileId,
@@ -103,7 +107,7 @@ pub(crate) async fn grant_authority(
     // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` exists to keep the
     // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never consulted
     // it — so a non-admin `can_grant` holder could mint `can_write` on the kernel, reaching by the
-    // grant axis exactly what the write axis forbids. `machine_authz.rs:386-392` seeds such a row,
+    // grant axis exactly what the write axis forbids. `machine_authz`'s own tests seed such a row,
     // so the state is reachable, not hypothetical. Admins already returned above, so a map in the
     // admin-only regime denies here regardless of any `can_grant` the caller holds.
     if subject_table == "kb_cogmaps"
@@ -164,32 +168,70 @@ pub(crate) async fn profile_can(
     Ok(ok)
 }
 
-/// Attenuation (plan 5b.3): may `caller` confer exactly this capability set, or would it amplify
-/// beyond what they themselves hold on this subject?
-///
-/// Applies to **delegated** administrators only; system admins are exempt by design (bootstrap and
-/// repair would otherwise deadlock — there would be no way to mint the first holder of anything).
-/// Without this, a `can_grant` holder with no write could mint `can_write` — including to themselves,
-/// which was reachable and unguarded: a `read+grant` principal escalated itself to
-/// `write+delete+grant` through the chokepoint in a live probe.
-async fn attenuates_to_caller(
-    pool: &PgPool,
-    caller: ProfileId,
-    req: &GrantCapabilityRequest,
-) -> ApiResult<bool> {
-    for (requested, action) in [
-        (req.can_read, AccessAction::Read),
-        (req.can_write, AccessAction::Write),
-        (req.can_delete, AccessAction::Delete),
-        (req.can_grant, AccessAction::Grant),
-    ] {
-        if requested
-            && !profile_can(pool, caller, action, &req.subject_table, req.subject_id).await?
-        {
-            return Ok(false);
+/// The capability set a grant would confer. A struct rather than four positional bools so the two
+/// call sites cannot silently transpose them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RequestedCapabilities {
+    pub read: bool,
+    pub write: bool,
+    pub delete: bool,
+    pub grant: bool,
+}
+
+impl From<&GrantCapabilityRequest> for RequestedCapabilities {
+    fn from(r: &GrantCapabilityRequest) -> Self {
+        Self {
+            read: r.can_read,
+            write: r.can_write,
+            delete: r.can_delete,
+            grant: r.can_grant,
         }
     }
-    Ok(true)
+}
+
+/// **The** authorization decision for "may `caller` confer this capability set on this subject?" —
+/// authority arm plus attenuation, in one pass.
+///
+/// This is the single policy for EVERY grant sink, called and never restated. Two sinks exist and
+/// they must not drift: the human path (`grant_capability`) and the machine path
+/// (`machine_authz::contain_reach` → `apply_reach`). They already drifted once — 5b.3/5b.4 hardened
+/// the human path while the machine path kept gating on `can_grant` alone, which let a
+/// `read+grant`-without-write holder provision a machine carrying `can_write` and thereby command a
+/// principal holding write they could never hold themselves. Laundering by proxy. Hence one helper.
+///
+/// Semantics:
+/// - **SystemAdmin** — unrestricted. Bootstrap and repair would otherwise deadlock: there would be
+///   no way to mint the first holder of any capability.
+/// - **Delegated** — attenuating: every capability conferred must be one the caller already holds
+///   on this subject (`conferred ⊆ held`). Self-grant is neutralized by the same rule, since the
+///   check never consults who the principal is.
+/// - **None** — denied, which is also where the L0/gating-map guard lands.
+pub(crate) async fn authorize_capability_grant(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+    caps: RequestedCapabilities,
+) -> ApiResult<()> {
+    match grant_authority(pool, caller, subject_table, subject_id).await? {
+        GrantAuthority::None => Err(ApiError::Forbidden),
+        GrantAuthority::SystemAdmin => Ok(()),
+        GrantAuthority::Delegated => {
+            for (requested, action) in [
+                (caps.read, AccessAction::Read),
+                (caps.write, AccessAction::Write),
+                (caps.delete, AccessAction::Delete),
+                (caps.grant, AccessAction::Grant),
+            ] {
+                if requested
+                    && !profile_can(pool, caller, action, subject_table, subject_id).await?
+                {
+                    return Err(ApiError::Forbidden);
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Raw `can_grant` capability probe (NO `is_system_admin` OR) — the reusable primitive. Callers that
@@ -305,19 +347,12 @@ pub async fn grant_capability(
     caller: ProfileId,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<GrantOutcome> {
-    // Auth before writes, in one pass: the authority arm decides whether attenuation applies.
-    match grant_authority(pool, caller, &req.subject_table, req.subject_id).await? {
-        GrantAuthority::None => return Err(ApiError::Forbidden),
-        // A delegated administrator may not amplify: every capability they confer must be one they
-        // themselves hold on this subject (plan 5b.3). Revocation is deliberately NOT attenuated —
-        // de-escalation must never be harder than escalation, or a grant becomes unwithdrawable.
-        GrantAuthority::Delegated => {
-            if !attenuates_to_caller(pool, caller, req).await? {
-                return Err(ApiError::Forbidden);
-            }
-        }
-        GrantAuthority::SystemAdmin => {}
-    }
+    // Auth before writes. The one shared decision — authority arm + attenuation — also called by
+    // the machine path (`machine_authz::contain_reach`), so the two sinks cannot drift. Revocation
+    // is deliberately NOT attenuated: de-escalation must never be harder than escalation, or a
+    // grant becomes unwithdrawable.
+    authorize_capability_grant(pool, caller, &req.subject_table, req.subject_id, req.into())
+        .await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

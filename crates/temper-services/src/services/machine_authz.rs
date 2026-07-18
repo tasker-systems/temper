@@ -168,12 +168,31 @@ async fn contain_reach(
     }
 
     for grant in grants {
-        // D4 — exactly what `grant_capability` requires of a non-admin: `can_grant` on the
-        // subject. (`can_administer_grant` is this OR `is_system_admin`; the admin case has
-        // already returned above.)
-        if !access_service::profile_can_grant(pool, caller, "kb_cogmaps", grant.cogmap_id).await? {
-            return Err(ApiError::Forbidden);
-        }
+        // D4 — exactly what `grant_capability` requires of a non-admin, by CALLING that decision
+        // rather than restating it. This previously checked `profile_can_grant` alone, which WAS
+        // parity until 5b.3/5b.4 hardened the human path and left this one behind. The divergence
+        // was exploitable in the same class this arc exists to close: a `read+grant`-without-write
+        // holder could provision a machine carrying `can_write` and then command a principal
+        // holding write they can never hold themselves (laundering by proxy), and a non-admin
+        // `can_grant` holder on the L0 kernel could do the same there, walking around 5b.4's
+        // admin-only guard. Sharing the decision is what stops it recurring.
+        //
+        // `apply_reach` confers exactly `read + (write iff spec)`, never delete or grant — so that
+        // is what is attenuated here. The admin arm already returned above, so this resolves to
+        // Delegated or None in practice.
+        access_service::authorize_capability_grant(
+            pool,
+            caller,
+            "kb_cogmaps",
+            grant.cogmap_id,
+            access_service::RequestedCapabilities {
+                read: true,
+                write: grant.can_write,
+                delete: false,
+                grant: false,
+            },
+        )
+        .await?;
     }
 
     Ok(())
@@ -400,35 +419,136 @@ mod tests {
         assert!(matches!(err, ApiError::Forbidden));
     }
 
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn grant_with_can_grant_is_allowed(pool: PgPool) {
-        let alice = mk_profile(&pool, "grant-alice2").await;
-        let owned = mk_team(&pool, "grant-owned2").await;
-        join(&pool, owned, alice, "owner").await;
-
-        let l0: Uuid = "00000000-0000-0000-0005-000000000001".parse().unwrap();
-        sqlx::query(
-            "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id,
-                                           can_read, can_write, can_grant, granted_by_profile_id)
-             VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, true, $2)
-             ON CONFLICT (subject_table, subject_id, principal_table, principal_id)
-             DO UPDATE SET can_grant = true",
+    /// A bare cogmap row — enough for the authorization predicates, which is all these tests
+    /// exercise. (Genesis machinery would drag in an emitter and a telos body for no gain here.)
+    async fn mk_cogmap(pool: &PgPool, name: &str) -> Uuid {
+        let telos: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $1) RETURNING id",
         )
-        .bind(l0)
-        .bind(alice)
-        .execute(&pool)
+        .bind(format!("{name}-telos"))
+        .fetch_one(pool)
         .await
         .unwrap();
+        sqlx::query_scalar(
+            "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(name)
+        .bind(telos)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn grant_on_cogmap(
+        pool: &PgPool,
+        cogmap: Uuid,
+        profile: Uuid,
+        can_write: bool,
+        can_grant: bool,
+    ) {
+        sqlx::query(
+            "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id,
+                                           can_read, can_write, can_delete, can_grant,
+                                           granted_by_profile_id)
+             VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, $3, false, $4, $2)
+             ON CONFLICT (subject_table, subject_id, principal_table, principal_id)
+             DO UPDATE SET can_write = EXCLUDED.can_write, can_grant = EXCLUDED.can_grant",
+        )
+        .bind(cogmap)
+        .bind(profile)
+        .bind(can_write)
+        .bind(can_grant)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Attenuation parity with the human path (5b.3). The machine path must not **launder** a
+    /// capability the caller does not hold: a `read+grant`-without-write holder who could provision
+    /// a machine with `can_write` would end up commanding a principal holding write they can never
+    /// hold themselves — and the ledger would record the machine, not them, as the grantee.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn cannot_launder_cogmap_write_to_a_machine_without_holding_write(pool: PgPool) {
+        let alice = mk_profile(&pool, "launder-alice").await;
+        let owned = mk_team(&pool, "launder-owned").await;
+        join(&pool, owned, alice, "owner").await;
+        let cogmap = mk_cogmap(&pool, "launder-map").await;
+        grant_on_cogmap(&pool, cogmap, alice, false, true).await; // read + grant, NOT write
+
+        // Non-vacuity: Alice really can administer grants on this map, and really lacks write —
+        // so a denial below is attenuation, not her failing the grant bar for an unrelated reason.
+        assert!(
+            access_service::profile_can_grant(&pool, ProfileId::from(alice), "kb_cogmaps", cogmap)
+                .await
+                .unwrap(),
+            "fixture must confer can_grant"
+        );
 
         let grants = vec![GrantSpec {
-            cogmap_id: l0,
+            cogmap_id: cogmap,
+            can_write: true,
+        }];
+        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
+            .await
+            .expect_err("a caller without write must not confer write to a machine");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+    }
+
+    /// Attenuation BOUNDS delegation, it does not forbid it — the companion to the test above, so a
+    /// fix cannot pass by simply refusing every machine grant.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_write_holder_may_still_delegate_write_to_a_machine(pool: PgPool) {
+        let alice = mk_profile(&pool, "delegator-alice").await;
+        let owned = mk_team(&pool, "delegator-owned").await;
+        join(&pool, owned, alice, "owner").await;
+        let cogmap = mk_cogmap(&pool, "delegator-map").await;
+        grant_on_cogmap(&pool, cogmap, alice, true, true).await; // read + write + grant
+
+        let grants = vec![GrantSpec {
+            cogmap_id: cogmap,
             can_write: true,
         }];
         let reach =
             authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
                 .await
-                .expect("a can_grant holder may delegate to a machine");
+                .expect("a holder of write may delegate write to a machine");
         assert_eq!(reach.grants().len(), 1);
+    }
+
+    /// L0/gating parity with the human path (5b.4). `grant_authority` denies a non-admin `can_grant`
+    /// holder on the kernel outright; the machine path must too, or the same person confers kernel
+    /// write to a proxy they control.
+    ///
+    /// This test previously asserted the OPPOSITE, as `grant_with_can_grant_is_allowed` — that a
+    /// non-admin `can_grant` holder MAY delegate kernel write to a machine. It encoded the pre-5b
+    /// policy, exactly as `can_grant_holder_can_delegate` did on the human path. The assertion
+    /// inverts deliberately.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn cannot_confer_kernel_write_to_a_machine_without_being_admin(pool: PgPool) {
+        let alice = mk_profile(&pool, "grant-alice2").await;
+        let owned = mk_team(&pool, "grant-owned2").await;
+        join(&pool, owned, alice, "owner").await;
+
+        let l0: Uuid = "00000000-0000-0000-0005-000000000001".parse().unwrap();
+        grant_on_cogmap(&pool, l0, alice, true, true).await;
+
+        // Non-vacuity: she holds BOTH can_grant and can_write on L0, so attenuation alone would
+        // pass her. Only the L0/gating admin guard can produce the denial below.
+        assert!(
+            access_service::profile_can_grant(&pool, ProfileId::from(alice), "kb_cogmaps", l0)
+                .await
+                .unwrap(),
+            "fixture must confer can_grant on the kernel"
+        );
+
+        let grants = vec![GrantSpec {
+            cogmap_id: l0,
+            can_write: true,
+        }];
+        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
+            .await
+            .expect_err("the L0 kernel stays admin-only on the grant axis, machines included");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
     /// Spec D5 — the admin bypass survives, unchecked (Phase A D5).

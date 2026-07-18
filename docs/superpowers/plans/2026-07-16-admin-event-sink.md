@@ -1886,6 +1886,51 @@ reviewer can actually see, since nullity alone is invisible at the call site.
 > `019f7509-7511-7d90-9bdb-2e08631208e7`). Adding a column is additive and safe on `main`, but
 > sequence the *stamping* against that task rather than assuming a fresh-migrate shape.
 
+**5b.7 — the machine path was not brought to parity (CONFORM to B2 D4, found by a second review).**
+Added 2026-07-18 after a sibling session's review of PR #482 (security-audit goal `019f764f`).
+
+5b.3 and 5b.4 hardened the human grant sink (`grant_capability`) and left its sibling machine sink
+untouched: `machine_authz::contain_reach` still gated on `profile_can_grant` **alone** — no
+attenuation, no L0/gating guard — while `apply_reach` confers caller-controlled `can_write`. Two
+exploits in the same class this arc exists to close:
+
+- a `read+grant`-without-write holder provisions a machine with `can_write:true`, then commands a
+  principal holding write they can never hold themselves — **laundering by proxy**, with the ledger
+  recording the machine as grantee;
+- a non-admin `can_grant` holder on the **L0 kernel** confers kernel write to a machine, walking
+  around 5b.4's admin-only guard entirely.
+
+**This PR created the divergence.** Before 5b.3/5b.4 both sinks required exactly `can_grant`, parity
+held, and `contain_reach`'s "exactly what `grant_capability` requires" comment was TRUE. Hardening
+one sink converted a consistent policy into a divergent one — which is why it blocks rather than
+defers.
+
+Grounding that settled the fix's shape (quoted, not paraphrased) — B2's own Global Constraints:
+
+> **Reuse predicates, never restate them.** … Calling them (not reimplementing their rules) is what
+> keeps the machine surface tightening automatically **whenever the human surface does** (spec D4).
+
+So the fix is not new policy — it **restores B2 D4**, whose *intent* held while its *named predicate*
+rotted (`profile_can_grant` stopped being the human bar the moment 5b.3 landed). Both sinks now call
+one decision, `access_service::authorize_capability_grant` (authority arm + attenuation together).
+B2's D4 amended in place with the reasoning and the generalizable lesson: cite the **decision
+function** a sink must call, never a leaf predicate that may later become one input among several.
+
+TDD, red first: both denial tests failed on the pre-fix code (`cannot_launder_cogmap_write_…`,
+`cannot_confer_kernel_write_…`), the positive control
+(`a_write_holder_may_still_delegate_write_to_a_machine`) stayed green so no fix could pass by
+refusing everything. `grant_with_can_grant_is_allowed` asserted the pre-5b policy on the L0 kernel
+and was **rewritten, not deleted** — the second such test this arc has inverted, after
+`can_grant_holder_can_delegate`. When a hardening changes policy, the tests asserting the old
+behavior are the map of exactly what is changing.
+
+**Deliberately NOT bundled — the admin arm.** `authorize_registration`'s SystemAdmin branch still
+skips containment wholesale, so an admin can mint a machine as gating-team `owner` — an
+`is_system_admin` principal that can provision further machines. B2 **D3** decided admins get
+unchecked *reach*; **D4a** decided the maintainer case; **nobody decided** whether a machine may
+become an admin principal. That is an inference from an absence, not a decision, and it gets its own
+task: `019f76d2-c1df-7ef2-883d-3e65de2bce07`.
+
 **Not merge-blocking — carried to a follow-on task:** two stale comments that actively mislead an
 auditor. `routes.rs:171-173` claims machine-client routes are gated by `is_system_admin` in the
 *handler*; the real gate is `admin OR team owner`, in the *service* (only `rebind` matches the
