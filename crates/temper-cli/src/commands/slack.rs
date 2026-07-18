@@ -35,7 +35,7 @@ pub async fn disconnect_remote(
         .map(|d| d.slack_principal_id.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    crate::output::warning(&format!("Disconnected: {names}."));
+    crate::output::warning(format!("Disconnected: {names}."));
 
     // Gated on `Failed` ONLY. `NotAttempted` means there was no stored grant to revoke — a
     // pre-T3 link — and warning about an unconfirmed revocation there tells the user their

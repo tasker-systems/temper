@@ -32,7 +32,7 @@ pub async fn disconnect_remote(
             .map(|d| d.slack_principal_id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        crate::output::warning(&format!("Disconnected: {names}."));
+        crate::output::warning(format!("Disconnected: {names}."));
     }
 
     // `Failed` ONLY — a principal with no stored grant reports `NotAttempted`, and warning
