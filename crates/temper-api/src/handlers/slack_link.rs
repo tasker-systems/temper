@@ -14,7 +14,7 @@ use temper_auth::{build_authorize_url, generate_pkce_pair, AuthorizeParams};
 use temper_core::types::AuthenticatedProfile;
 use temper_services::auth::{AuthzError, RawJwtClaims};
 use temper_services::error::ApiError;
-use temper_services::services::slack_link_service;
+use temper_services::services::{slack_grant_vault_service, slack_link_service};
 use temper_services::state::AppState;
 use temper_services::{link_provider, oauth_client};
 
@@ -163,14 +163,8 @@ pub struct CallbackQuery {
 /// credential and knows no channel.
 pub async fn callback(State(state): State<AppState>, Query(q): Query<CallbackQuery>) -> Response {
     match run_callback(&state, q).await {
-        Ok(slug) => page(
-            "✅ Connected",
-            &format!(
-                "Linked as <strong>@{}</strong>. You can close this tab and go back to Slack.",
-                html_escape(&slug)
-            ),
-        ),
-        Err(message) => page("Not connected", &html_escape(&message)),
+        Ok(slug) => connected_page(&slug),
+        Err(message) => not_connected_page(&message),
     }
 }
 
@@ -261,14 +255,43 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
 
     // T3 SEAM. The exchange requested `offline_access`, so `tokens.refresh_token` is the
     // per-user grant -- its own independent family, never an export of the user's CLI grant.
-    // T3 encrypts and stores it here, keyed by slack_principal_id, and adds refresh.
-    // T2 deliberately does not persist it: identity (the row above) and secret (T3's vault)
-    // stay in separate tables, and kb_profile_auth_links must never grow a secret column.
-    tracing::info!(
-        profile_id = %profile.profile.id,
-        grant_received = tokens.refresh_token.is_some(),
-        "slack link: established",
-    );
+    // Encrypt and store it here, keyed by the whole opaque principal. Identity (the row above)
+    // and secret (this vault) stay in separate tables; kb_profile_auth_links has no secret column.
+    //
+    // Auth-before-write: the profile is resolved and gated well above this line, and the vault
+    // write comes after. If it fails, the directory row still stands and the user is shown a
+    // retry page — re-linking is idempotent and re-stores the grant.
+    match tokens.refresh_token.as_deref() {
+        Some(refresh_token) => {
+            slack_grant_vault_service::store_grant(
+                &state.pool,
+                &cfg.vault_key,
+                slack_grant_vault_service::NewGrant {
+                    profile_id: profile.profile.id,
+                    slack_principal_id: &intent.slack_principal_id,
+                    refresh_token,
+                    access_token: &tokens.access_token,
+                    access_ttl_secs: tokens.expires_in,
+                },
+            )
+            .await
+            .map_err(|_| {
+                "Something went wrong saving your connection. Mention @temper again.".to_string()
+            })?;
+            tracing::info!(profile_id = %profile.profile.id, "slack link: established and grant vaulted");
+        }
+        None => {
+            // `offline_access` was requested but the IdP returned no refresh token — a client
+            // misconfiguration (offline_access or refresh-token rotation not enabled on the
+            // link client). The directory link stands, but acting as the human needs a grant,
+            // so surface it loudly for the operator rather than silently linking an inert row.
+            tracing::warn!(
+                profile_id = %profile.profile.id,
+                "slack link: established but NO refresh token returned -- grant not vaulted; \
+                 check the link client's offline_access / refresh-token-rotation settings",
+            );
+        }
+    }
 
     Ok(profile.profile.slug.clone())
 }
@@ -323,15 +346,128 @@ async fn resolve_existing(
         })
 }
 
-fn page(title: &str, body: &str) -> Response {
-    Html(format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>{title} · temper</title></head>\
-         <body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5\">\
-         <h1>{title}</h1><p>{body}</p></body></html>"
-    ))
-    .into_response()
+// ── Branded callback pages ──────────────────────────────────────────────────────
+//
+// The human is looking straight at this page, so it IS the confirmation — it must feel like
+// temper, not a bare `<h1>`. The look is ported from the CLI-auth callback pages
+// (`temper-client/src/login_page.rs`): obsidian ground, parchment serif, one steel-blue accent,
+// the inline threaded-t wordmark. It is NOT imported: temper-api must not depend on
+// temper-client (that inverts the server→client direction), and this is a few dozen lines of
+// static HTML that rarely change — duplication is the right call over a manufactured dependency.
+//
+// DELIBERATELY self-contained with NO external asset requests — no font `<link>`, no images. The
+// browser hitting this callback may have no route to temper's assets, and the connected/failed
+// message must render regardless; the `font-family` fallbacks carry the look offline. (The CLI
+// page keeps a Google Fonts `<link>`; here it is dropped on purpose.)
+
+/// The threaded-t brand mark + wordmark, inlined. Geometry lifted from `login_page.rs`.
+const BRAND_MARK: &str = r##"<svg width="118" height="24" viewBox="0 0 200 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M 12 6 L 12 34" stroke="#7eb8da" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path d="M 4 16 L 20 16 Q 27 16 30 21 Q 33 26 31 32" stroke="#7eb8da" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+  <text x="46" y="27" font-family="'JetBrains Mono','Fira Code',monospace" font-size="18" fill="#7eb8da" letter-spacing="0.12em">temper</text>
+</svg>"##;
+
+/// Page skeleton. `{{MARK}}`/`{{EYEBROW}}`/`{{HEADING}}`/`{{BODY}}` are filled by [`render`];
+/// placeholders (not `format!`) keep the CSS braces intact.
+const TEMPLATE: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>temper · Slack</title>
+<style>
+  :root {
+    --obsidian: #0a0a0f;
+    --parchment: #e8e4df;
+    --chalk: rgba(255, 255, 255, 0.65);
+    --temper-blue: #7eb8da;
+    --serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--obsidian);
+    color: var(--parchment);
+    font-family: var(--serif);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .card {
+    width: 100%;
+    max-width: 30rem;
+    border-left: 2px solid rgba(126, 184, 218, 0.25);
+    padding-left: 1.9rem;
+  }
+  .mark { margin-bottom: 1.7rem; line-height: 0; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--temper-blue);
+    margin-bottom: 0.9rem;
+  }
+  .heading {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: clamp(1.7rem, 5vw, 2rem);
+    line-height: 1.25;
+    margin: 0 0 1.05rem 0;
+    color: var(--parchment);
+  }
+  .heading em { font-style: italic; color: var(--temper-blue); }
+  .body {
+    font-family: var(--serif);
+    font-size: 1rem;
+    line-height: 1.75;
+    color: var(--chalk);
+    margin: 0;
+  }
+  .body strong { color: var(--parchment); font-weight: 400; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">{{MARK}}</div>
+    <div class="eyebrow">{{EYEBROW}}</div>
+    <h1 class="heading">{{HEADING}}</h1>
+    {{BODY}}
+  </main>
+</body>
+</html>"##;
+
+/// Assemble a callback page. `heading_html` carries its own static `<em>` accent and is trusted
+/// markup; `body_html` is assembled by the callers below, which escape any dynamic text first.
+fn render(eyebrow: &str, heading_html: &str, body_html: &str) -> Response {
+    let html = TEMPLATE
+        .replace("{{MARK}}", BRAND_MARK)
+        .replace("{{EYEBROW}}", eyebrow)
+        .replace("{{HEADING}}", heading_html)
+        .replace("{{BODY}}", body_html);
+    Html(html).into_response()
+}
+
+/// Shown when the account is now linked. `slug` is the resolved profile handle, escaped.
+fn connected_page(slug: &str) -> Response {
+    let body = format!(
+        "<p class=\"body\">Linked as <strong>@{}</strong>. You can close this tab and return to \
+         Slack.</p>",
+        html_escape(slug)
+    );
+    render("temper · Slack", "Account <em>connected</em>.", &body)
+}
+
+/// Shown for every non-success outcome. `message` is one of `run_callback`'s user-actionable
+/// sentences (already free of any secret) and is escaped before display.
+fn not_connected_page(message: &str) -> Response {
+    let body = format!("<p class=\"body\">{}</p>", html_escape(message));
+    render("temper · Slack", "Not <em>connected</em>.", &body)
 }
 
 fn html_escape(s: &str) -> String {
@@ -380,5 +516,56 @@ mod tests {
     fn rejects_a_foreign_prefix() {
         assert!(validate_slack_principal("discord:T123:U456").is_err());
         assert!(validate_slack_principal("U456").is_err());
+    }
+
+    /// Extract a rendered page's HTML body.
+    async fn body_html(resp: Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// The rendered page carries the temper look: obsidian ground, the steel-blue accent, and the
+    /// inline threaded-t wordmark — matching `login_page.rs`.
+    #[tokio::test]
+    async fn connected_page_carries_the_brand_and_the_handle() {
+        let html = body_html(connected_page("j-cole-taylor")).await;
+        assert!(html.contains("Account <em>connected</em>."));
+        assert!(html.contains("@j-cole-taylor"));
+        assert!(html.contains("#0a0a0f"), "obsidian ground present");
+        assert!(html.contains("temper"), "wordmark present");
+    }
+
+    /// The fold-in's load-bearing constraint: the page fetches NOTHING to render. No font link,
+    /// no remote stylesheet, no image — the callback browser may have no route to temper's assets.
+    ///
+    /// Checks the actual fetch vectors, not any `http` substring: the inline SVG legitimately
+    /// carries the `xmlns="http://www.w3.org/2000/svg"` NAMESPACE, which is declarative and never
+    /// fetched. What must be absent is anything that triggers a network load.
+    #[tokio::test]
+    async fn pages_request_no_external_assets() {
+        for html in [
+            body_html(connected_page("someone")).await,
+            body_html(not_connected_page("That link has expired.")).await,
+        ] {
+            assert!(
+                !html.contains("<link"),
+                "no external <link> stylesheet/font"
+            );
+            assert!(!html.contains("googleapis"), "no web-font fetch");
+            assert!(!html.contains("@import"), "no CSS @import");
+            assert!(!html.contains("src="), "no <img>/<script> src");
+            assert!(!html.contains("href=\"http"), "no external href");
+            assert!(!html.contains("url(http"), "no CSS url() fetch");
+        }
+    }
+
+    /// A dynamic message is HTML-escaped — a refusal sentence can never break out of the page.
+    #[tokio::test]
+    async fn not_connected_page_escapes_the_message() {
+        let html = body_html(not_connected_page("<script>alert(1)</script>")).await;
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("&lt;script&gt;"));
     }
 }

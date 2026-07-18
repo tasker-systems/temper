@@ -87,7 +87,8 @@ Sources: [self-hosting.md § Environment variable contract](./self-hosting.md#en
 | **Slack account link (optional; needed only to run the @temper mention agent)** | | | | |
 | `SLACK_LINK_CLIENT_ID` | Yes (Slack path) | — | — | OAuth client the link flow authorizes as. Auth0: a native/PKCE app's client_id. SAML path: a `client_id` present in `AS_CLIENTS` |
 | `SLACK_LINK_SECRET` | Yes (Slack path; shared API+agent) | — | — | Shared secret gating `/internal/slack/link-state`; same value on the mention agent. Unset ⇒ the endpoint is disabled (auth still works) |
-| `PUBLIC_BASE_URL` | Yes (Slack path) | — | — | `https://<instance>` — the origin the link `redirect_uri` is built from³. All three unset together is the supported "no Slack" state |
+| `PUBLIC_BASE_URL` | Yes (Slack path) | — | — | `https://<instance>` — the origin the link `redirect_uri` is built from³. All four unset together is the supported "no Slack" state |
+| `SLACK_VAULT_ENC_KEY` | Yes (Slack path) | — | — | 32-byte base64 AEAD key (`openssl rand -base64 32`) encrypting each stored per-user refresh token. Malformed ⇒ the whole Slack flow disables. Rotation is flag-day today (users re-link). See [slack-setup.md](slack-setup.md) |
 | **Storage / build** | | | | |
 | `BLOB_READ_WRITE_TOKEN` | Yes | — | — | Vercel Blob token for the upload/extract/embed pipeline |
 | `SQLX_OFFLINE` | Yes (build) | — | — | Must be `true` |

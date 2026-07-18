@@ -1,5 +1,6 @@
 use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
 use crate::broker::VercelConnectConfig;
+use crate::services::grant_crypto::VaultKey;
 use std::env;
 
 #[derive(Debug, Clone)]
@@ -33,7 +34,11 @@ pub struct ApiConfig {
 /// Slack account-link configuration. `None` when the three values are not all present —
 /// a partial set is treated as unconfigured, so the endpoints are disabled rather than
 /// half-configured (the `parse_vercel_connect` precedent).
-#[derive(Debug, Clone)]
+///
+/// `Debug` is hand-written to REDACT `hmac_secret` (a plain `String` shared secret) — a derived
+/// `Debug` would print it verbatim wherever this or the enclosing `ApiConfig` is formatted.
+/// `vault_key` is already redacted by its own `Debug`.
+#[derive(Clone)]
 pub struct SlackLinkConfig {
     /// The OAuth client the link flow authorizes as. Its redirect_uri must be registered:
     /// Auth0's Allowed Callback URLs, or `AS_CLIENTS` on an AS instance.
@@ -43,6 +48,23 @@ pub struct SlackLinkConfig {
     pub hmac_secret: String,
     /// This instance's public origin, used to build the callback redirect_uri.
     pub public_base_url: String,
+    /// The AEAD key the grant vault (T3) seals each per-user refresh token under. REQUIRED: an
+    /// instance that can link accounts but cannot vault the grant is one whose links are inert
+    /// (nothing can act as the human at mention time), so the flow is on only when the vault is
+    /// too. Parsed once from `SLACK_VAULT_ENC_KEY` (32 bytes, base64) — a malformed key disables
+    /// the whole link flow rather than half-configuring it.
+    pub vault_key: VaultKey,
+}
+
+impl std::fmt::Debug for SlackLinkConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackLinkConfig")
+            .field("client_id", &self.client_id)
+            .field("hmac_secret", &"redacted")
+            .field("public_base_url", &self.public_base_url)
+            .field("vault_key", &self.vault_key)
+            .finish()
+    }
 }
 
 impl ApiConfig {
@@ -115,13 +137,29 @@ fn parse_vercel_connect(lookup: impl Fn(&str) -> Option<String>) -> Option<Verce
     })
 }
 
-/// Build the Slack link config from env — `Some` only when all three values are
-/// present and non-empty (the `parse_vercel_connect` all-or-nothing precedent).
+/// Build the Slack link config from env — `Some` only when all FOUR values are present, non-empty,
+/// AND the vault key parses (the `parse_vercel_connect` all-or-nothing precedent, extended to
+/// T3's required key). A malformed `SLACK_VAULT_ENC_KEY` disables the flow with a loud error
+/// rather than booting a link flow whose vault writes would fail at the callback seam.
 fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLinkConfig> {
     let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
+
+    let raw_key = get("SLACK_VAULT_ENC_KEY")?;
+    let vault_key = match VaultKey::from_base64(&raw_key) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!(
+                "SLACK_VAULT_ENC_KEY is set but invalid ({e}); the Slack link flow is disabled. \
+                 Expected 32 bytes, base64 (generate with `openssl rand -base64 32`)."
+            );
+            return None;
+        }
+    };
+
     Some(SlackLinkConfig {
         client_id: get("SLACK_LINK_CLIENT_ID")?,
         hmac_secret: get("SLACK_LINK_SECRET")?,
         public_base_url: get("PUBLIC_BASE_URL")?,
+        vault_key,
     })
 }
