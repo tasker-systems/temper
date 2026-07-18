@@ -14,27 +14,15 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The result of a disconnect, as returned to CLI callers.  Every field is an observation of what actually happened, so the CLI can tell the user the truth rather than echoing a canned success message. In particular `idp_revoked = false` is a normal, non-error outcome: the local unbind is complete either way.
+  # The result of a disconnect, as returned to CLI callers.  Both surfaces return this same shape: the admin arm carries 0 or 1 entries, the self-serve arm 0..n (a human legitimately holds one Slack principal per workspace, and `kb_profile_auth_links` carries no `UNIQUE(profile_id, auth_provider)` that would stop them). Uniform, so an SDK consumer writes one code path for both.
   class SlackDisconnectResponse < ApiModelBase
-    # A stored grant existed and was destroyed.
-    attr_accessor :grant_deleted
-
-    # The IdP acknowledged the revocation. `false` means the grant may remain live at the IdP until it expires; the local copy is destroyed regardless.
-    attr_accessor :idp_revoked
-
-    # How many pending link intents were swept.
-    attr_accessor :intents_deleted
-
-    # An identity row existed and was removed.
-    attr_accessor :was_linked
+    # One entry per principal actually unbound. Empty when nothing was linked — which is a success, not an error: disconnect is idempotent.
+    attr_accessor :disconnected
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'grant_deleted' => :'grant_deleted',
-        :'idp_revoked' => :'idp_revoked',
-        :'intents_deleted' => :'intents_deleted',
-        :'was_linked' => :'was_linked'
+        :'disconnected' => :'disconnected'
       }
     end
 
@@ -51,10 +39,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'grant_deleted' => :'Boolean',
-        :'idp_revoked' => :'Boolean',
-        :'intents_deleted' => :'Integer',
-        :'was_linked' => :'Boolean'
+        :'disconnected' => :'Array<SlackDisconnectedPrincipal>'
       }
     end
 
@@ -80,28 +65,12 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'grant_deleted')
-        self.grant_deleted = attributes[:'grant_deleted']
+      if attributes.key?(:'disconnected')
+        if (value = attributes[:'disconnected']).is_a?(Array)
+          self.disconnected = value
+        end
       else
-        self.grant_deleted = nil
-      end
-
-      if attributes.key?(:'idp_revoked')
-        self.idp_revoked = attributes[:'idp_revoked']
-      else
-        self.idp_revoked = nil
-      end
-
-      if attributes.key?(:'intents_deleted')
-        self.intents_deleted = attributes[:'intents_deleted']
-      else
-        self.intents_deleted = nil
-      end
-
-      if attributes.key?(:'was_linked')
-        self.was_linked = attributes[:'was_linked']
-      else
-        self.was_linked = nil
+        self.disconnected = nil
       end
     end
 
@@ -110,20 +79,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @grant_deleted.nil?
-        invalid_properties.push('invalid value for "grant_deleted", grant_deleted cannot be nil.')
-      end
-
-      if @idp_revoked.nil?
-        invalid_properties.push('invalid value for "idp_revoked", idp_revoked cannot be nil.')
-      end
-
-      if @intents_deleted.nil?
-        invalid_properties.push('invalid value for "intents_deleted", intents_deleted cannot be nil.')
-      end
-
-      if @was_linked.nil?
-        invalid_properties.push('invalid value for "was_linked", was_linked cannot be nil.')
+      if @disconnected.nil?
+        invalid_properties.push('invalid value for "disconnected", disconnected cannot be nil.')
       end
 
       invalid_properties
@@ -133,51 +90,18 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @grant_deleted.nil?
-      return false if @idp_revoked.nil?
-      return false if @intents_deleted.nil?
-      return false if @was_linked.nil?
+      return false if @disconnected.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] grant_deleted Value to be assigned
-    def grant_deleted=(grant_deleted)
-      if grant_deleted.nil?
-        fail ArgumentError, 'grant_deleted cannot be nil'
+    # @param [Object] disconnected Value to be assigned
+    def disconnected=(disconnected)
+      if disconnected.nil?
+        fail ArgumentError, 'disconnected cannot be nil'
       end
 
-      @grant_deleted = grant_deleted
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] idp_revoked Value to be assigned
-    def idp_revoked=(idp_revoked)
-      if idp_revoked.nil?
-        fail ArgumentError, 'idp_revoked cannot be nil'
-      end
-
-      @idp_revoked = idp_revoked
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] intents_deleted Value to be assigned
-    def intents_deleted=(intents_deleted)
-      if intents_deleted.nil?
-        fail ArgumentError, 'intents_deleted cannot be nil'
-      end
-
-      @intents_deleted = intents_deleted
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] was_linked Value to be assigned
-    def was_linked=(was_linked)
-      if was_linked.nil?
-        fail ArgumentError, 'was_linked cannot be nil'
-      end
-
-      @was_linked = was_linked
+      @disconnected = disconnected
     end
 
     # Checks equality by comparing each attribute.
@@ -185,10 +109,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          grant_deleted == o.grant_deleted &&
-          idp_revoked == o.idp_revoked &&
-          intents_deleted == o.intents_deleted &&
-          was_linked == o.was_linked
+          disconnected == o.disconnected
     end
 
     # @see the `==` method
@@ -200,7 +121,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [grant_deleted, idp_revoked, intents_deleted, was_linked].hash
+      [disconnected].hash
     end
 
     # Builds the object from hash

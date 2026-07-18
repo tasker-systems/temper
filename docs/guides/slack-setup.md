@@ -267,11 +267,53 @@ sentence was promising.
 - **It does not uninstall the Slack app.** That is workspace-level and admin-only, which is precisely
   why a per-user disconnect has to exist.
 
+### The response shape
+
+Both surfaces return the same thing:
+
+```json
+{
+  "disconnected": [
+    {
+      "slack_principal_id": "slack:T0BHAHEN79C:U0BH6A3L6JF",
+      "grant_deleted": true,
+      "intents_deleted": 1,
+      "idp_revocation": "revoked"
+    }
+  ]
+}
+```
+
+`disconnected` lists one entry per principal actually unbound. **Empty is a success**, not an error —
+it means nothing was linked. The admin surface returns zero or one entry; the self-serve surface
+returns zero or more, because a human in two Slack workspaces holds a distinct principal in each and
+`temper slack disconnect` unbinds **all** of them.
+
+`idp_revocation` is one of three values, and the distinction matters:
+
+| Value | Meaning |
+|---|---|
+| `not_attempted` | There was no stored grant, so nothing was revoked. Common for links made before the grant vault shipped. Not a problem. |
+| `revoked` | The IdP (or, self-hosted, the local token store) confirmed the revocation. |
+| `failed` | A revocation was attempted and did not succeed. See below. |
+
 ### If the IdP revocation fails
 
-The response reports `idp_revoked: false` and the CLI warns on stderr. **The disconnect still
+The response reports `"idp_revocation": "failed"` and the CLI warns on stderr. **The disconnect still
 succeeded** — the local grant is destroyed either way, so temper can no longer use it. The grant may
 remain live at the IdP until it expires; revoke it from the Auth0 dashboard if that matters to you.
+
+The CLI warns on `failed` only. `not_attempted` gets no warning: there was no grant, so there is
+nothing that could still be live.
+
+### If the vault key has been rotated
+
+Rotating `SLACK_VAULT_ENC_KEY` makes every pre-rotation ciphertext unopenable — that is the point of
+the rotation. Disconnect handles this deliberately: it **still destroys** the identity row, the grant
+row and the intents, and reports `"idp_revocation": "not_attempted"` (it could not open the token, so
+it could not present it to the IdP). Revoke those grants at the IdP out-of-band. Failing the
+disconnect here would be strictly worse: the situation that motivates a key rotation is a compromise,
+which is exactly when the unbind lever has to work.
 
 temper deliberately does not keep the token around to retry the revocation later: doing so would
 preserve the exact secret the user just asked it to destroy. The failure is logged with the principal

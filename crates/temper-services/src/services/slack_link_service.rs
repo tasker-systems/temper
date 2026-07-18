@@ -114,6 +114,44 @@ pub async fn lookup_linked_handle(
     Ok(row.map(|r| r.handle))
 }
 
+/// Every Slack principal bound to `profile_id`. The mirror image of
+/// [`lookup_linked_handle`], which goes principal → profile.
+///
+/// **Returns ALL of them, and that plurality is load-bearing.**
+/// `kb_profile_auth_links` carries `UNIQUE(auth_provider, auth_provider_user_id)`
+/// and nothing else, so one profile legitimately holds several Slack principals:
+/// a human in two Slack workspaces has two distinct `slack:<team>:<user>` ids,
+/// and the already-linked refusal is keyed on the *principal*, so the second
+/// workspace links normally. A self-serve disconnect that took only the first
+/// row would cut an arbitrary one, report success, and leave the other grant
+/// live and minting act-as-the-human tokens.
+///
+/// `ORDER BY linked_at` (then `id`, which is the tiebreak that makes it a total
+/// order — two links written in the same transaction share a `now()`) so the
+/// result is deterministic rather than whatever the planner streams first.
+///
+/// Principals are returned WHOLE, never split on ':'.
+pub async fn lookup_slack_principals_for_profile(
+    pool: &PgPool,
+    profile_id: Uuid,
+) -> ApiResult<Vec<String>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT auth_provider_user_id
+          FROM kb_profile_auth_links
+         WHERE profile_id = $1
+           AND auth_provider = $2
+         ORDER BY linked_at, id
+        "#,
+        profile_id,
+        SLACK_AUTH_PROVIDER,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| r.auth_provider_user_id).collect())
+}
+
 /// What a link attempt did. A typed outcome rather than a bool: the refusal is not an error
 /// (nothing went wrong) and not a success (nothing was written), and the handler needs to say
 /// something specific about it.
@@ -352,6 +390,72 @@ mod tests {
         .unwrap()
         .unwrap_or_default();
         assert_eq!(rows, 1, "re-linking the same profile must not duplicate");
+    }
+
+    /// **One profile, two workspaces.** The reverse lookup must return BOTH principals.
+    ///
+    /// There is no `UNIQUE(profile_id, auth_provider)`, so this is a legitimate state, not a
+    /// corruption: the already-linked refusal is keyed on the principal, so a human's second
+    /// Slack workspace links normally. A reverse lookup that answered with one row would let a
+    /// self-serve disconnect sever an arbitrary binding and report success while the other
+    /// grant stayed live — which is exactly the bug this function replaced.
+    ///
+    /// The assertion is on the whole vector, not on `len() >= 1`: a `fetch_optional`-shaped
+    /// regression returns a one-element vector, and only comparing the full ordered set
+    /// falsifies it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_by_profile_returns_every_slack_principal(pool: PgPool) {
+        let profile_id = insert_profile(&pool, "two-workspaces").await;
+        let first = "slack:T0BHAHEN79C:U0BH6A3L6JF";
+        let second = "slack:T99OTHERWS:U0BH6A3L6JF";
+
+        link_slack_principal(&pool, profile_id, first)
+            .await
+            .unwrap();
+        link_slack_principal(&pool, profile_id, second)
+            .await
+            .unwrap();
+
+        let mut got = lookup_slack_principals_for_profile(&pool, profile_id)
+            .await
+            .unwrap();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![first.to_string(), second.to_string()],
+            "both workspaces' principals must come back — one row is the severed-the-wrong-one bug",
+        );
+    }
+
+    /// The reverse lookup is scoped to the profile AND to the slack provider — a link under a
+    /// different provider (the ordinary SSO row every profile has) must not be reported as a
+    /// Slack principal, or disconnect would try to unbind the user's login.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lookup_by_profile_ignores_other_providers_and_other_profiles(pool: PgPool) {
+        let mine = insert_profile(&pool, "mine").await;
+        let theirs = insert_profile(&pool, "theirs").await;
+
+        link_slack_principal(&pool, mine, PRINCIPAL).await.unwrap();
+        link_slack_principal(&pool, theirs, "slack:T0BHAHEN79C:UOTHER")
+            .await
+            .unwrap();
+        sqlx::query!(
+            "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id)
+             VALUES ($1, $2, 'auth0', $3)",
+            Uuid::now_v7(),
+            mine,
+            "auth0|abc123",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            lookup_slack_principals_for_profile(&pool, mine)
+                .await
+                .unwrap(),
+            vec![PRINCIPAL.to_string()],
+        );
     }
 
     /// A deactivated profile is still LINKED. Reporting `None` here would loop the user into a

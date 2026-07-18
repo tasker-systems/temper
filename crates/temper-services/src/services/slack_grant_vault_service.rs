@@ -288,6 +288,19 @@ pub async fn mint_access_token(
 ///
 /// Deliberately ignores `revoked_at`: a soft-revoked row still holds live
 /// ciphertext, and disconnect's job is to destroy it.
+///
+/// **A decrypt failure also yields `Ok(None)`, and that is deliberate.** Every
+/// other reader of the vault treats an unopenable ciphertext as an error,
+/// because it is about to *use* the token. Disconnect is the one caller that is
+/// about to DESTROY it, and an unopenable ciphertext has no value to revoke —
+/// so failing here would abort the transaction and delete nothing. That is
+/// exactly backwards for the scenario that produces the failure: rotating
+/// `SLACK_VAULT_ENC_KEY` is a documented flag-day that makes every pre-rotation
+/// ciphertext unopenable, and the reason to rotate it is key compromise, i.e.
+/// precisely when the unbind lever must still work. Bricking disconnect would
+/// leave an unremovable stale identity row (re-link cannot rebind to another
+/// profile). A genuine sqlx error still propagates — only the AEAD open is
+/// downgraded.
 pub async fn take_refresh_token_for_disconnect(
     tx: &mut sqlx::PgConnection,
     key: &VaultKey,
@@ -309,13 +322,27 @@ pub async fn take_refresh_token_for_disconnect(
         return Ok(None);
     };
 
-    let rt = decrypt_to_string(
+    match decrypt_to_string(
         key,
         &row.rt_nonce,
         &row.rt_ciphertext,
         &aad(slack_principal_id, FIELD_RT),
-    )?;
-    Ok(Some(rt))
+    ) {
+        Ok(rt) => Ok(Some(rt)),
+        Err(_) => {
+            // Principal only. NEVER the ciphertext, the nonce or the key — and
+            // never the underlying error text either: `ApiError::Internal` is
+            // echoed verbatim to clients, and this branch's inputs are secret
+            // material.
+            tracing::warn!(
+                principal = %slack_principal_id,
+                "slack disconnect: the stored grant could not be opened (key rotated, or the row \
+                 was tampered with). Destroying it anyway — an unopenable ciphertext has no value \
+                 to revoke. Revoke at the IdP out-of-band if that matters."
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Open a stored `(nonce, ciphertext)` pair to a UTF-8 token string, under the `aad` it was sealed

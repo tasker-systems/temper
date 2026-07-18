@@ -90,7 +90,9 @@ pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
 pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest};
-pub use slack::{SlackDisconnectRequest, SlackDisconnectResponse};
+pub use slack::{
+    IdpRevocation, SlackDisconnectRequest, SlackDisconnectResponse, SlackDisconnectedPrincipal,
+};
 pub use steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta, StewardAdvanceWatermarkInput,
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,

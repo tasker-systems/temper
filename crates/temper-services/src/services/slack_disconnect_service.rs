@@ -12,6 +12,7 @@
 //! that would preserve the exact secret the user asked us to destroy.
 
 use sqlx::PgPool;
+use temper_core::types::slack::IdpRevocation;
 
 use super::grant_crypto::VaultKey;
 use super::slack_grant_vault_service;
@@ -29,9 +30,12 @@ pub struct DisconnectOutcome {
     pub grant_deleted: bool,
     /// How many link intents were swept for this principal.
     pub intents_deleted: i64,
-    /// Whether the IdP acknowledged the revocation. `false` is not a failure of
-    /// the disconnect — see the module docs.
-    pub idp_revoked: bool,
+    /// What happened to the grant at the IdP. [`IdpRevocation::Failed`] is not a
+    /// failure of the *disconnect* — see the module docs — but it is distinct
+    /// from [`IdpRevocation::NotAttempted`], which means there was no grant to
+    /// revoke in the first place. Collapsing the two into a `bool` is what made
+    /// the CLI warn about an unconfirmed revocation at users who had no grant.
+    pub idp_revocation: IdpRevocation,
 }
 
 /// Inputs for a disconnect. A params struct because this crosses five
@@ -48,8 +52,8 @@ pub struct DisconnectRequest<'a> {
 /// Unbind a Slack principal: revoke the grant, then delete identity, secret and
 /// intents in one transaction.
 ///
-/// Idempotent — disconnecting an unlinked principal succeeds quietly with every
-/// outcome flag false.
+/// Idempotent — disconnecting an unlinked principal succeeds quietly, with both
+/// booleans false, no intents swept, and [`IdpRevocation::NotAttempted`].
 pub async fn disconnect_slack_principal(
     pool: &PgPool,
     req: DisconnectRequest<'_>,
@@ -65,16 +69,33 @@ pub async fn disconnect_slack_principal(
     .await?;
 
     // 2. Revoke. Best-effort in ExternalIdp mode; real and atomic in AS mode.
-    let idp_revoked = match (&refresh_token, req.mode) {
-        (None, _) => false,
+    let idp_revocation = match (&refresh_token, req.mode) {
+        // No grant on file (or one we could not open — see
+        // `take_refresh_token_for_disconnect`), so nothing was attempted.
+        (None, _) => IdpRevocation::NotAttempted,
         (Some(rt), AuthMode::TemperAs) => {
             // The AS issued this token and stores it locally, so revocation is a
             // row update in THIS transaction — no network, no failure mode.
-            revoke_as_refresh_token(&mut tx, rt).await?
+            //
+            // Zero rows matched maps to `Failed`, NOT `NotAttempted`: we had a
+            // grant and we DID attempt to revoke it, and the attempt found no
+            // AS row. That is the silent-failure case the pinned-hash test below
+            // exists to guard (a digest drift between Rust and the TypeScript
+            // writer matches nothing and would otherwise report success).
+            if revoke_as_refresh_token(&mut tx, rt).await? {
+                IdpRevocation::Revoked
+            } else {
+                tracing::warn!(
+                    principal = %req.slack_principal_id,
+                    "slack disconnect: AS-mode revocation matched no refresh-token row. The local \
+                     grant was destroyed; the AS row (if any) is still live."
+                );
+                IdpRevocation::Failed
+            }
         }
         (Some(rt), AuthMode::ExternalIdp) => {
             match oauth_client::revoke_grant(&req.revoke_url, req.client_id, rt).await {
-                Ok(()) => true,
+                Ok(()) => IdpRevocation::Revoked,
                 Err(e) => {
                     // Principal + error only. Never the token.
                     tracing::warn!(
@@ -84,7 +105,7 @@ pub async fn disconnect_slack_principal(
                          anyway. The grant may remain live at the IdP until it expires — \
                          revoke it out-of-band if that matters."
                     );
-                    false
+                    IdpRevocation::Failed
                 }
             }
         }
@@ -138,7 +159,7 @@ pub async fn disconnect_slack_principal(
         was_linked,
         grant_deleted,
         intents_deleted,
-        idp_revoked,
+        ?idp_revocation,
         "slack disconnect completed"
     );
 
@@ -146,7 +167,7 @@ pub async fn disconnect_slack_principal(
         was_linked,
         grant_deleted,
         intents_deleted,
-        idp_revoked,
+        idp_revocation,
     })
 }
 
@@ -259,7 +280,12 @@ mod tests {
         assert!(!out.was_linked);
         assert!(!out.grant_deleted);
         assert_eq!(out.intents_deleted, 0);
-        assert!(!out.idp_revoked);
+        assert_eq!(
+            out.idp_revocation,
+            IdpRevocation::NotAttempted,
+            "no grant existed, so no revocation was ATTEMPTED — reporting a failed revocation \
+             here is what made the CLI warn at users who had nothing vaulted",
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -310,9 +336,11 @@ mod tests {
         assert!(out.was_linked);
         assert!(out.grant_deleted);
         assert_eq!(out.intents_deleted, 1);
-        assert!(
-            !out.idp_revoked,
-            "the unreachable IdP must report not-revoked"
+        assert_eq!(
+            out.idp_revocation,
+            IdpRevocation::Failed,
+            "the unreachable IdP must report an ATTEMPTED-and-failed revocation, distinct from \
+             the no-grant case",
         );
 
         let links: i64 = sqlx::query_scalar(
@@ -460,9 +488,10 @@ mod tests {
         .await
         .expect("disconnect");
 
-        assert!(
-            out.idp_revoked,
-            "AS mode must revoke locally without touching the network"
+        assert_eq!(
+            out.idp_revocation,
+            IdpRevocation::Revoked,
+            "AS mode must revoke locally without touching the network",
         );
 
         let revoked_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
@@ -476,6 +505,163 @@ mod tests {
             revoked_at.is_some(),
             "the AS row must be marked revoked, asserted on the row not the return value"
         );
+    }
+
+    /// **The key-rotation flag-day.** A grant sealed under one key must still be
+    /// destroyable after `SLACK_VAULT_ENC_KEY` is rotated.
+    ///
+    /// Rotating the key makes every pre-rotation ciphertext unopenable by
+    /// design. Before this fix the AEAD failure propagated out of
+    /// `take_refresh_token_for_disconnect` via `?`, so the whole transaction
+    /// aborted before COMMIT and **nothing was deleted** — both disconnect
+    /// surfaces 500'd and unbound nothing, on a fleet where every grant is in
+    /// that state, in the exact situation (key compromise) that motivates the
+    /// rotation. The user is told to re-link, and re-link refuses to rebind to
+    /// a different profile, so the stale identity row becomes unremovable.
+    ///
+    /// **Why this bites:** it seals under `key()` and disconnects under a
+    /// DIFFERENT `VaultKey`, so the decrypt genuinely fails. Against the old `?`
+    /// the call returns `Err` and every row assertion below finds its row still
+    /// present. The assertions are on the three tables directly, not on the
+    /// return value: a version that swallowed the error but skipped the deletes
+    /// would pass a return-value-only check.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_grant_sealed_under_a_rotated_key_is_still_destroyed(pool: PgPool) {
+        let principal = "slack:T4:UROTATED";
+        let old_key = key();
+        // The rotated key: same length, different bytes, so the AEAD open fails.
+        let new_key = VaultKey::from_base64(&STANDARD.encode([9u8; 32])).unwrap();
+        let profile_id = insert_profile(&pool).await;
+
+        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
+            .await
+            .expect("link");
+        crate::services::slack_grant_vault_service::store_grant(
+            &pool,
+            &old_key,
+            crate::services::slack_grant_vault_service::NewGrant {
+                profile_id,
+                slack_principal_id: principal,
+                refresh_token: "rt-sealed-under-the-old-key",
+                access_token: "at",
+                access_ttl_secs: Some(3600),
+            },
+        )
+        .await
+        .expect("store");
+        crate::services::slack_link_service::create_intent(
+            &pool,
+            principal,
+            "verifier",
+            std::time::Duration::from_secs(900),
+        )
+        .await
+        .expect("intent");
+
+        let out = disconnect_slack_principal(
+            &pool,
+            DisconnectRequest {
+                slack_principal_id: principal,
+                key: &new_key,
+                mode: AuthMode::ExternalIdp,
+                revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
+                client_id: "c",
+            },
+        )
+        .await
+        .expect("an unopenable ciphertext must not brick the unbind lever");
+
+        assert!(out.was_linked, "the identity row must have been removed");
+        assert!(out.grant_deleted, "the sealed grant must be destroyed");
+        assert_eq!(out.intents_deleted, 1);
+        assert_eq!(
+            out.idp_revocation,
+            IdpRevocation::NotAttempted,
+            "we never opened the token, so no revocation could be attempted",
+        );
+
+        for (table, sql) in [
+            (
+                "identity",
+                "SELECT count(*) FROM kb_profile_auth_links \
+                 WHERE auth_provider = 'slack' AND auth_provider_user_id = $1",
+            ),
+            (
+                "grant",
+                "SELECT count(*) FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+            ),
+            (
+                "intents",
+                "SELECT count(*) FROM kb_slack_link_intents WHERE slack_principal_id = $1",
+            ),
+        ] {
+            let n: i64 = sqlx::query_scalar(sql)
+                .bind(principal)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                n, 0,
+                "the {table} row must be gone even though the grant could not be opened",
+            );
+        }
+    }
+
+    /// AS mode with NO matching refresh-token row reports `Failed`, not
+    /// `NotAttempted`.
+    ///
+    /// This is the silent-failure case: we held a grant, we tried to revoke it,
+    /// and the UPDATE matched nothing (a digest drift from the TypeScript
+    /// writer, or a token the AS never minted). Reporting `NotAttempted` would
+    /// tell the operator "there was nothing to revoke", which is the opposite of
+    /// the truth and suppresses the CLI warning that exists for exactly this.
+    ///
+    /// **Why this bites:** it seeds a grant but deliberately seeds NO
+    /// `kb_oauth_refresh_tokens` row, so `revoke_as_refresh_token` returns
+    /// `false`. A mapping that folded zero-rows into `NotAttempted` fails here.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn as_mode_matching_no_row_is_a_failure_not_a_no_op(pool: PgPool) {
+        let principal = "slack:T5:UNOROW";
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
+
+        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
+            .await
+            .expect("link");
+        crate::services::slack_grant_vault_service::store_grant(
+            &pool,
+            &key,
+            crate::services::slack_grant_vault_service::NewGrant {
+                profile_id,
+                slack_principal_id: principal,
+                refresh_token: "a-token-the-as-never-minted",
+                access_token: "at",
+                access_ttl_secs: Some(3600),
+            },
+        )
+        .await
+        .expect("store");
+
+        let out = disconnect_slack_principal(
+            &pool,
+            DisconnectRequest {
+                slack_principal_id: principal,
+                key: &key,
+                mode: AuthMode::TemperAs,
+                revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
+                client_id: "slack-link-client",
+            },
+        )
+        .await
+        .expect("disconnect");
+
+        assert_eq!(
+            out.idp_revocation,
+            IdpRevocation::Failed,
+            "an attempted revocation that matched zero rows is a FAILURE — folding it into \
+             NotAttempted is the silent-failure the pinned-hash test exists to guard",
+        );
+        assert!(out.grant_deleted, "the local grant is destroyed regardless");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -91,6 +91,7 @@ lib/temper/generated/models/group_key_meta.rb
 lib/temper/generated/models/health_response.rb
 lib/temper/generated/models/home_cogmap.rb
 lib/temper/generated/models/home_context.rb
+lib/temper/generated/models/idp_revocation.rb
 lib/temper/generated/models/ingest_create_response.rb
 lib/temper/generated/models/ingest_delta.rb
 lib/temper/generated/models/ingest_payload.rb
@@ -173,6 +174,7 @@ lib/temper/generated/models/share_context_outcome.rb
 lib/temper/generated/models/share_context_request.rb
 lib/temper/generated/models/slack_disconnect_request.rb
 lib/temper/generated/models/slack_disconnect_response.rb
+lib/temper/generated/models/slack_disconnected_principal.rb
 lib/temper/generated/models/slice_request.rb
 lib/temper/generated/models/sort_order.rb
 lib/temper/generated/models/subscription.rb

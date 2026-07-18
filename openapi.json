@@ -261,11 +261,31 @@
         },
         "responses": {
           "200": {
-            "description": "Disconnect completed (idempotent)",
+            "description": "Disconnect completed (idempotent); `disconnected` is empty when the principal was not linked",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SlackDisconnectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed Slack principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required, or Slack account linking is not configured on this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -308,11 +328,12 @@
         "tags": [
           "Slack Link"
         ],
-        "summary": "Disconnect the caller's own Slack link.",
+        "summary": "Disconnect EVERY Slack principal bound to the caller's own profile.",
+        "description": "Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)`\nand nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds\ntwo rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting\nonly one and answering \"disconnected\" would leave the other grant live and still minting\nact-as-the-human tokens, which is the opposite of what the user asked for.\n\nThe 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and\ndocumenting one the code cannot return is worse than documenting nothing — it is baked into\n`openapi.json`, the Ruby gem and `schema.ts`.",
         "operationId": "disconnect_me",
         "responses": {
           "200": {
-            "description": "Disconnect completed (idempotent)",
+            "description": "Disconnect completed (idempotent); `disconnected` lists every principal unbound",
             "content": {
               "application/json": {
                 "schema": {
@@ -322,17 +343,7 @@
             }
           },
           "401": {
-            "description": "Authentication required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Slack account linking is not configured",
+            "description": "Authentication required, or Slack account linking is not configured on this instance",
             "content": {
               "application/json": {
                 "schema": {
@@ -7817,6 +7828,15 @@
           }
         }
       },
+      "IdpRevocation": {
+        "type": "string",
+        "description": "What happened to the stored grant at the identity provider.\n\nA three-state enum rather than a `bool`, because `false` used to collapse\nthree genuinely different facts — \"there was no grant, so nothing was\nattempted\", \"a revoke was attempted and failed\", and (in AS mode) \"the\nUPDATE matched zero rows\" — and consumers could not tell them apart. The CLI\nconsequently warned \"the identity provider did not confirm revocation\" at a\nuser who had no grant at all.",
+        "enum": [
+          "not_attempted",
+          "revoked",
+          "failed"
+        ]
+      },
       "IngestCreateResponse": {
         "oneOf": [
           {
@@ -10392,30 +10412,46 @@
       },
       "SlackDisconnectResponse": {
         "type": "object",
-        "description": "The result of a disconnect, as returned to CLI callers.\n\nEvery field is an observation of what actually happened, so the CLI can tell\nthe user the truth rather than echoing a canned success message. In\nparticular `idp_revoked = false` is a normal, non-error outcome: the local\nunbind is complete either way.",
+        "description": "The result of a disconnect, as returned to CLI callers.\n\nBoth surfaces return this same shape: the admin arm carries 0 or 1 entries,\nthe self-serve arm 0..n (a human legitimately holds one Slack principal per\nworkspace, and `kb_profile_auth_links` carries no `UNIQUE(profile_id,\nauth_provider)` that would stop them). Uniform, so an SDK consumer writes one\ncode path for both.",
         "required": [
-          "was_linked",
+          "disconnected"
+        ],
+        "properties": {
+          "disconnected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlackDisconnectedPrincipal"
+            },
+            "description": "One entry per principal actually unbound. Empty when nothing was linked —\nwhich is a success, not an error: disconnect is idempotent."
+          }
+        }
+      },
+      "SlackDisconnectedPrincipal": {
+        "type": "object",
+        "description": "One principal that a disconnect actually unbound.\n\nEvery field is an observation of what happened to THAT principal, so the CLI\ncan tell the user the truth rather than echoing a canned success message.",
+        "required": [
+          "slack_principal_id",
           "grant_deleted",
           "intents_deleted",
-          "idp_revoked"
+          "idp_revocation"
         ],
         "properties": {
           "grant_deleted": {
             "type": "boolean",
             "description": "A stored grant existed and was destroyed."
           },
-          "idp_revoked": {
-            "type": "boolean",
-            "description": "The IdP acknowledged the revocation. `false` means the grant may remain\nlive at the IdP until it expires; the local copy is destroyed regardless."
+          "idp_revocation": {
+            "$ref": "#/components/schemas/IdpRevocation",
+            "description": "What happened to the grant at the identity provider."
           },
           "intents_deleted": {
             "type": "integer",
             "format": "int64",
-            "description": "How many pending link intents were swept."
+            "description": "How many pending link intents were swept for this principal."
           },
-          "was_linked": {
-            "type": "boolean",
-            "description": "An identity row existed and was removed."
+          "slack_principal_id": {
+            "type": "string",
+            "description": "The WHOLE opaque Slack principal that was unbound. Never split."
           }
         }
       },

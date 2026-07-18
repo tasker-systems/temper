@@ -138,6 +138,10 @@ use temper_workflow::types::resource::{
         crate::handlers::access::CreateRequestBody,
         temper_core::types::slack::SlackDisconnectRequest,
         temper_core::types::slack::SlackDisconnectResponse,
+        // Registered explicitly: `.routes()` collects schemas from request/response BODIES, and
+        // these are only ever reached transitively through `SlackDisconnectResponse`.
+        temper_core::types::slack::SlackDisconnectedPrincipal,
+        temper_core::types::slack::IdpRevocation,
     )),
     modifiers(&SecurityAddon),
     tags(

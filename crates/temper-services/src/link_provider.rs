@@ -12,6 +12,8 @@ use crate::config::SlackLinkConfig;
 pub struct LinkProvider {
     pub authorize_url: String,
     pub token_url: String,
+    /// RFC 7009 token revocation. See [`derive`] for what this means per mode.
+    pub revoke_url: String,
     pub client_id: String,
     pub redirect_uri: String,
 }
@@ -29,17 +31,31 @@ pub const CALLBACK_PATH: &str = "/api/auth/slack/callback";
 pub fn derive(auth: &AuthConfig, cfg: &SlackLinkConfig) -> LinkProvider {
     let base = auth.issuer.trim_end_matches('/');
 
-    let (authorize_url, token_url) = match auth.mode {
-        AuthMode::ExternalIdp => (format!("{base}/authorize"), format!("{base}/oauth/token")),
+    let (authorize_url, token_url, revoke_url) = match auth.mode {
+        AuthMode::ExternalIdp => (
+            format!("{base}/authorize"),
+            format!("{base}/oauth/token"),
+            // Auth0's RFC 7009 endpoint.
+            format!("{base}/oauth/revoke"),
+        ),
         AuthMode::TemperAs => (
             format!("{base}/oauth/authorize"),
             format!("{base}/oauth/token"),
+            // The AS has NO revocation endpoint today. This value is never
+            // dialled: `slack_disconnect_service` revokes AS grants locally, as
+            // a row update in its own transaction. We still produce a
+            // well-formed URL on the same path shape rather than an `Option` the
+            // caller would have to unwrap for a case that cannot arise. If the
+            // AS ever grows a real `/oauth/revoke`, this is already pointing at
+            // it — but until then, do NOT route an AS disconnect through HTTP.
+            format!("{base}/oauth/revoke"),
         ),
     };
 
     LinkProvider {
         authorize_url,
         token_url,
+        revoke_url,
         client_id: cfg.client_id.clone(),
         redirect_uri: format!(
             "{}{CALLBACK_PATH}",
@@ -83,6 +99,7 @@ mod tests {
         );
         assert_eq!(p.authorize_url, "https://temperkb.us.auth0.com/authorize");
         assert_eq!(p.token_url, "https://temperkb.us.auth0.com/oauth/token");
+        assert_eq!(p.revoke_url, "https://temperkb.us.auth0.com/oauth/revoke");
     }
 
     /// A trailing slash on the issuer must not produce a doubled one.
@@ -104,6 +121,8 @@ mod tests {
         );
         assert_eq!(p.authorize_url, "https://temper.acme.com/oauth/authorize");
         assert_eq!(p.token_url, "https://temper.acme.com/oauth/token");
+        // Derived, but never dialled — AS mode revokes locally. See `derive`.
+        assert_eq!(p.revoke_url, "https://temper.acme.com/oauth/revoke");
     }
 
     #[test]
