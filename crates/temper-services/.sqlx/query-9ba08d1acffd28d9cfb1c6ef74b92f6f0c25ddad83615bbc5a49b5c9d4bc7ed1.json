@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM kb_profile_auth_links\n         WHERE auth_provider = $1\n           AND auth_provider_user_id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9ba08d1acffd28d9cfb1c6ef74b92f6f0c25ddad83615bbc5a49b5c9d4bc7ed1"
+}

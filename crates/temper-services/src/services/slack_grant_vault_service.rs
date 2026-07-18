@@ -1,6 +1,6 @@
 //! The Slack grant vault's persistence: seal a per-user grant, mint access tokens from it,
-//! revoke it. All SQL for T3 lives here; the callback handler dispatches and never touches the
-//! database or the cipher.
+//! and read it back for disconnect to destroy. All SQL for T3 lives here; the callback handler
+//! dispatches and never touches the database or the cipher.
 //!
 //! The vault holds each linked Slack user's OWN refresh token — the independent grant family
 //! T2's `offline_access` consent minted, never an export of that user's local CLI grant. The RT
@@ -276,26 +276,73 @@ pub async fn mint_access_token(
     Ok(MintOutcome::Token(tokens.access_token))
 }
 
-/// Revoke the grant for a principal. Returns `true` if a live row was revoked, `false` if there
-/// was nothing to revoke (no row, or already revoked).
+/// Read and decrypt the stored refresh token, for the disconnect path only.
 ///
-/// HONEST SEMANTICS: this stops FUTURE mints. An access token already minted survives to its own
-/// `exp` — JWKS validation consults no revocation list. Callers must describe it that way and not
-/// imply an instant cutoff.
-pub async fn revoke(pool: &PgPool, slack_principal_id: &str) -> ApiResult<bool> {
-    let result = sqlx::query!(
+/// Takes a `&mut PgConnection` so the caller can run this inside the same
+/// transaction as the deletes. Locks the row (`FOR UPDATE`) so a concurrent
+/// `mint_access_token` cannot rotate the RT out from under the revoke.
+///
+/// Returns `Ok(None)` when the principal has no vault row — a pre-T3 link, or
+/// an already-disconnected principal. That is not an error: disconnect is
+/// idempotent, and a missing grant simply means there is nothing to revoke.
+///
+/// Deliberately ignores `revoked_at`: a soft-revoked row still holds live
+/// ciphertext, and disconnect's job is to destroy it.
+///
+/// **A decrypt failure also yields `Ok(None)`, and that is deliberate.** Every
+/// other reader of the vault treats an unopenable ciphertext as an error,
+/// because it is about to *use* the token. Disconnect is the one caller that is
+/// about to DESTROY it, and an unopenable ciphertext has no value to revoke —
+/// so failing here would abort the transaction and delete nothing. That is
+/// exactly backwards for the scenario that produces the failure: rotating
+/// `SLACK_VAULT_ENC_KEY` is a documented flag-day that makes every pre-rotation
+/// ciphertext unopenable, and the reason to rotate it is key compromise, i.e.
+/// precisely when the unbind lever must still work. Bricking disconnect would
+/// leave an unremovable stale identity row (re-link cannot rebind to another
+/// profile). A genuine sqlx error still propagates — only the AEAD open is
+/// downgraded.
+pub async fn take_refresh_token_for_disconnect(
+    tx: &mut sqlx::PgConnection,
+    key: &VaultKey,
+    slack_principal_id: &str,
+) -> ApiResult<Option<String>> {
+    let row = sqlx::query!(
         r#"
-        UPDATE kb_slack_grant_vault
-           SET revoked_at = now(), updated_at = now()
+        SELECT rt_nonce, rt_ciphertext
+          FROM kb_slack_grant_vault
          WHERE slack_principal_id = $1
-           AND revoked_at IS NULL
+         FOR UPDATE
         "#,
-        slack_principal_id,
+        slack_principal_id
     )
-    .execute(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    Ok(result.rows_affected() > 0)
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    match decrypt_to_string(
+        key,
+        &row.rt_nonce,
+        &row.rt_ciphertext,
+        &aad(slack_principal_id, FIELD_RT),
+    ) {
+        Ok(rt) => Ok(Some(rt)),
+        Err(_) => {
+            // Principal only. NEVER the ciphertext, the nonce or the key — and
+            // never the underlying error text either: `ApiError::Internal` is
+            // echoed verbatim to clients, and this branch's inputs are secret
+            // material.
+            tracing::warn!(
+                principal = %slack_principal_id,
+                "slack disconnect: the stored grant could not be opened (key rotated, or the row \
+                 was tampered with). Destroying it anyway — an unopenable ciphertext has no value \
+                 to revoke. Revoke at the IdP out-of-band if that matters."
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Open a stored `(nonce, ciphertext)` pair to a UTF-8 token string, under the `aad` it was sealed
@@ -441,7 +488,15 @@ mod tests {
         let profile = insert_profile(&pool).await;
         // Store with an already-expired cached AT so, absent the revocation, mint WOULD refresh.
         store(&pool, profile, PRINCIPAL, "rt", "at", Some(0)).await;
-        assert!(revoke(&pool, PRINCIPAL).await.unwrap());
+        // Flip the flag directly — the write-side `revoke` fn is gone (disconnect now deletes
+        // the row instead), but mint must still honour a row flagged before that change.
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1",
+            PRINCIPAL,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
             .await
@@ -532,34 +587,21 @@ mod tests {
         );
     }
 
-    /// Revoke is idempotent-ish: it reports the transition once, then reports nothing to do.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn revoke_reports_the_transition_once(pool: PgPool) {
-        let profile = insert_profile(&pool).await;
-        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
-
-        assert!(
-            revoke(&pool, PRINCIPAL).await.unwrap(),
-            "first revoke transitions"
-        );
-        assert!(
-            !revoke(&pool, PRINCIPAL).await.unwrap(),
-            "second revoke is a no-op"
-        );
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn revoke_of_an_unknown_principal_is_a_no_op(pool: PgPool) {
-        assert!(!revoke(&pool, PRINCIPAL).await.unwrap());
-    }
-
     /// Re-storing the same principal upserts to ONE row and clears a prior revocation — a fresh
     /// consent is a fresh, working grant.
     #[sqlx::test(migrations = "../../migrations")]
     async fn re_store_upserts_one_row_and_clears_revocation(pool: PgPool) {
         let profile = insert_profile(&pool).await;
         store(&pool, profile, PRINCIPAL, "rt1", "at1", Some(3600)).await;
-        assert!(revoke(&pool, PRINCIPAL).await.unwrap());
+        // Flip the flag directly — the write-side `revoke` fn is gone (disconnect now deletes
+        // the row instead), but a re-store must still clear a row flagged before that change.
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1",
+            PRINCIPAL,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // Re-link: new grant, longer-lived cached AT.
         store(&pool, profile, PRINCIPAL, "rt2", "at2-fresh", Some(3600)).await;
@@ -597,5 +639,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(out, MintOutcome::NotVaulted);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn take_refresh_token_returns_the_sealed_token_in_plaintext(pool: PgPool) {
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile_id,
+            "slack:T1:U1",
+            "rt-plaintext",
+            "at-plaintext",
+            Some(3600),
+        )
+        .await;
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T1:U1")
+            .await
+            .expect("take");
+        assert_eq!(got.as_deref(), Some("rt-plaintext"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn take_refresh_token_returns_none_for_an_unknown_principal(pool: PgPool) {
+        let key = key();
+        let mut conn = pool.acquire().await.expect("acquire");
+        let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T9:U9")
+            .await
+            .expect("take");
+        assert!(
+            got.is_none(),
+            "an unvaulted principal must yield None, not an error"
+        );
     }
 }

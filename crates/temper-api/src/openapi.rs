@@ -136,6 +136,12 @@ use temper_workflow::types::resource::{
         temper_core::types::access_gate::JoinRequestStatus,
         temper_core::types::access_gate::PublicSystemSettings,
         crate::handlers::access::CreateRequestBody,
+        temper_core::types::slack::SlackDisconnectRequest,
+        temper_core::types::slack::SlackDisconnectResponse,
+        // Registered explicitly: `.routes()` collects schemas from request/response BODIES, and
+        // these are only ever reached transitively through `SlackDisconnectResponse`.
+        temper_core::types::slack::SlackDisconnectedPrincipal,
+        temper_core::types::slack::IdpRevocation,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -154,6 +160,7 @@ use temper_workflow::types::resource::{
         (name = "Reassign", description = "Resource ownership reassignment (single + bulk team-scoped)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
         (name = "Access", description = "System access gate — self-service join requests and public settings"),
+        (name = "Slack Link", description = "Slack account-link disconnect — self-serve and admin"),
     ),
     info(
         title = "Temper Cloud API",

@@ -240,6 +240,12 @@ pub enum Commands {
         action: AuthAction,
     },
 
+    /// Manage the Slack account link
+    Slack {
+        #[command(subcommand)]
+        action: SlackAction,
+    },
+
     /// Manage team membership and access
     Team {
         #[command(subcommand)]
@@ -891,6 +897,12 @@ pub enum AuthAction {
     WithdrawRequest,
 }
 
+#[derive(Debug, clap::Subcommand)]
+pub enum SlackAction {
+    /// Disconnect your Slack account from this temper profile.
+    Disconnect,
+}
+
 #[derive(Subcommand)]
 pub enum TeamAction {
     /// Accept a team invitation by its token.
@@ -1051,6 +1063,11 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminMachineAction,
     },
+    /// Administer Slack account links
+    Slack {
+        #[command(subcommand)]
+        action: AdminSlackAction,
+    },
     /// Provision connections — temper's authed link to a remote system (GitHub, Linear)
     Connection {
         #[command(subcommand)]
@@ -1150,6 +1167,12 @@ pub enum AdminMachineAction {
     Show { id: String },
     /// Revoke a machine client. Denies authentication; grants and memberships survive.
     Revoke { id: String },
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum AdminSlackAction {
+    /// Disconnect a Slack principal from its temper profile. Idempotent.
+    Disconnect { principal: String },
 }
 
 #[derive(Debug, clap::Subcommand)]

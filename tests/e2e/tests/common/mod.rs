@@ -91,17 +91,35 @@ pub async fn run_temper_cli(
     app: &E2eTestApp,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
-    let bin = temper_bin_path();
-    let url = app.base_url();
-    let token = app.token.clone();
-    let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
-
     // Materialize the test TemperConfig to a TOML file inside the test's
     // vault temp directory so the spawned CLI can read it. The path lives
     // alongside the vault projection so it shares the test's cleanup.
     let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
     let config_path = app.vault_dir.path().join("test-temper-config.toml");
     std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+
+    run_temper_cli_with_token(&app.base_url(), &app.token, &config_path, args).await
+}
+
+/// Run the real `temper` binary against an arbitrary API URL and token.
+///
+/// `run_temper_cli` is the convenience wrapper for `E2eTestApp` (it materializes
+/// the config file and delegates here); this is the form harnesses with their
+/// own app struct (e.g. `SlackLinkApp`, which has no `token`/`config`/`vault_dir`)
+/// can use directly. The caller is responsible for the config file at
+/// `config_path` existing and pointing `TEMPER_GLOBAL_CONFIG` at something the
+/// CLI's `load_global_config` can read.
+pub async fn run_temper_cli_with_token(
+    api_url: &str,
+    token: &str,
+    config_path: &std::path::Path,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let bin = temper_bin_path();
+    let url = api_url.to_string();
+    let token = token.to_string();
+    let config_path = config_path.to_path_buf();
+    let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
 
     tokio::task::spawn_blocking(move || {
         std::process::Command::new(&bin)

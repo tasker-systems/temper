@@ -1,8 +1,8 @@
 use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
-    AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction, InvocationCmd,
-    ResourceAction, SkillAction, StewardCmd, TeamAction,
+    AdminSlackAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
+    InvocationCmd, ResourceAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -868,6 +868,20 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 }
             },
+            AdminAction::Slack { action } => match action {
+                AdminSlackAction::Disconnect { principal } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_slack::disconnect_remote(
+                                client,
+                                &principal,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+            },
             AdminAction::Connection { action } => match action {
                 AdminConnectionAction::Provision {
                     provider,
@@ -1012,6 +1026,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::commands::auth::request_access(message.as_deref())
             }
             AuthAction::WithdrawRequest => temper_cli::commands::auth::withdraw_request(),
+        },
+        Commands::Slack { action } => match action {
+            SlackAction::Disconnect => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::slack::disconnect_remote(client, output_format).await
+                })
+            }),
         },
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;

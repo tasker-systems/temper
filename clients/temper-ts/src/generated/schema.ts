@@ -65,6 +65,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/slack/links/disconnect": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect any principal. Operator path — offboarding and stuck users. */
+        post: operations["admin_disconnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/slack/link/me": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Disconnect EVERY Slack principal bound to the caller's own profile.
+         * @description Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)`
+         *     and nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds
+         *     two rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting
+         *     only one and answering "disconnected" would leave the other grant live and still minting
+         *     act-as-the-human tokens, which is the opposite of what the user asked for.
+         *
+         *     The 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and
+         *     documenting one the code cannot return is worse than documenting nothing — it is baked into
+         *     `openapi.json`, the Ruby gem and `schema.ts`.
+         */
+        delete: operations["disconnect_me"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cogmaps/{id}/graph/slice": {
         parameters: {
             query?: never;
@@ -2285,6 +2336,18 @@ export interface components {
             slug: string;
         };
         /**
+         * @description What happened to the stored grant at the identity provider.
+         *
+         *     A three-state enum rather than a `bool`, because `false` used to collapse
+         *     three genuinely different facts — "there was no grant, so nothing was
+         *     attempted", "a revoke was attempted and failed", and (in AS mode) "the
+         *     UPDATE matched zero rows" — and consumers could not tell them apart. The CLI
+         *     consequently warned "the identity provider did not confirm revocation" at a
+         *     user who had no grant at all.
+         * @enum {string}
+         */
+        IdpRevocation: "not_attempted" | "revoked" | "failed";
+        /**
          * @description `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
          *     the one-shot `ResourceRow` (unchanged small-body path), or a [`SegmentedBeginResponse`]
          *     when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
@@ -3694,6 +3757,49 @@ export interface components {
              */
             team_id: string;
         };
+        /** @description Request body for the admin disconnect endpoint. */
+        SlackDisconnectRequest: {
+            /**
+             * @description The whole opaque Slack principal (`slack:<team>:<user>`, 2–4 segments).
+             *     Never split this value.
+             */
+            slack_principal_id: string;
+        };
+        /**
+         * @description The result of a disconnect, as returned to CLI callers.
+         *
+         *     Both surfaces return this same shape: the admin arm carries 0 or 1 entries,
+         *     the self-serve arm 0..n (a human legitimately holds one Slack principal per
+         *     workspace, and `kb_profile_auth_links` carries no `UNIQUE(profile_id,
+         *     auth_provider)` that would stop them). Uniform, so an SDK consumer writes one
+         *     code path for both.
+         */
+        SlackDisconnectResponse: {
+            /**
+             * @description One entry per principal actually unbound. Empty when nothing was linked —
+             *     which is a success, not an error: disconnect is idempotent.
+             */
+            disconnected: components["schemas"]["SlackDisconnectedPrincipal"][];
+        };
+        /**
+         * @description One principal that a disconnect actually unbound.
+         *
+         *     Every field is an observation of what happened to THAT principal, so the CLI
+         *     can tell the user the truth rather than echoing a canned success message.
+         */
+        SlackDisconnectedPrincipal: {
+            /** @description A stored grant existed and was destroyed. */
+            grant_deleted: boolean;
+            /** @description What happened to the grant at the identity provider. */
+            idp_revocation: components["schemas"]["IdpRevocation"];
+            /**
+             * Format: int64
+             * @description How many pending link intents were swept for this principal.
+             */
+            intents_deleted: number;
+            /** @description The WHOLE opaque Slack principal that was unbound. Never split. */
+            slack_principal_id: string;
+        };
         /**
          * @description R4 request: focus seeds (required, non-empty), BFS depth, and an optional
          *     edge-kind filter that constrains the *traversal* (induced subgraph).
@@ -4117,6 +4223,92 @@ export interface operations {
                 };
             };
             /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_disconnect: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackDisconnectRequest"];
+            };
+        };
+        responses: {
+            /** @description Disconnect completed (idempotent); `disconnected` is empty when the principal was not linked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackDisconnectResponse"];
+                };
+            };
+            /** @description Malformed Slack principal */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required, or Slack account linking is not configured on this instance */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    disconnect_me: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnect completed (idempotent); `disconnected` lists every principal unbound */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackDisconnectResponse"];
+                };
+            };
+            /** @description Authentication required, or Slack account linking is not configured on this instance */
             401: {
                 headers: {
                     [name: string]: unknown;

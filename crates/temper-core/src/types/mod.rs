@@ -46,6 +46,7 @@ pub mod relationship_events;
 pub mod relationship_requests;
 pub mod resource_grant;
 pub mod search;
+pub mod slack;
 pub mod steward;
 pub mod team;
 pub mod upload;
@@ -89,6 +90,9 @@ pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
 pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest};
+pub use slack::{
+    IdpRevocation, SlackDisconnectRequest, SlackDisconnectResponse, SlackDisconnectedPrincipal,
+};
 pub use steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta, StewardAdvanceWatermarkInput,
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,

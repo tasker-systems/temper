@@ -50,12 +50,21 @@ fn secret_matches(presented: &str, expected: &str) -> bool {
     diff == 0
 }
 
-/// Shared fail-closed bearer-secret gate for the cron-invoked embed endpoints (`/api/embed/dispatch`,
-/// `/api/embed/warm`). No secret configured ⇒ the endpoint is *disabled* (401), never open: both run
-/// server-side work (a drain pass, an ONNX warmup) fed by trust, not user auth, so an unconfigured
-/// deploy must refuse rather than expose them. `label` names the endpoint in the rejection log and the
-/// error so a misconfigured cron is diagnosable.
-fn require_dispatch_secret(state: &AppState, headers: &HeaderMap, label: &str) -> ApiResult<()> {
+/// Shared fail-closed bearer-secret gate for cron/ops endpoints (`/api/embed/dispatch`,
+/// `/api/embed/warm`, `/api/slack/intents/reap`). No secret configured ⇒ the endpoint is *disabled*
+/// (401), never open: these run server-side work (a drain pass, an ONNX warmup, a retention sweep) fed
+/// by trust, not user auth, so an unconfigured deploy must refuse rather than expose them. `label` names
+/// the endpoint in the rejection log and the error so a misconfigured cron is diagnosable.
+///
+/// `pub(crate)`, not private: the Slack link-intents reaper (`handlers::slack_disconnect::reap_intents`)
+/// reuses this exact gate rather than introducing a second `EMBED_DISPATCH_SECRET`-shaped env var — a
+/// new fail-closed variable would become a deploy-time prerequisite, the same hazard that took the T3
+/// deploy dark.
+pub(crate) fn require_dispatch_secret(
+    state: &AppState,
+    headers: &HeaderMap,
+    label: &str,
+) -> ApiResult<()> {
     let expected = match state.config.embed_dispatch_secret.as_deref() {
         Some(s) if !s.is_empty() => s,
         _ => {

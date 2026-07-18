@@ -35,6 +35,7 @@ fn auth_only_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::invitations::list_mine))
         .routes(routes!(handlers::invitations::accept))
         .routes(routes!(handlers::invitations::decline))
+        .routes(routes!(handlers::slack_disconnect::disconnect_me))
 }
 
 /// Authenticated AND system-access-gated — default-deny for all data routes.
@@ -141,6 +142,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::events::cursor))
         .routes(routes!(handlers::events::element_trail))
         .routes(routes!(handlers::search::search))
+        .routes(routes!(handlers::slack_disconnect::admin_disconnect))
         // Operator-only re-embed trigger: enqueue embed jobs for chunks whose vector was produced by
         // a model that is no longer the one we embed with. The per-minute drain does the work; this is
         // only the trigger. Admin-gated on the caller's own identity, so an operator uses their normal
@@ -275,17 +277,19 @@ fn slack_link_public_routes() -> Router<AppState> {
     )
 }
 
-/// Internal cron-invoked embed endpoints — self-gated by EMBED_DISPATCH_SECRET (bearer),
-/// NOT `require_auth`. Called by Vercel crons on a schedule; each handler checks the secret
-/// itself (fail-closed when unset), so no auth-middleware layer is applied. Excluded from the
-/// OpenAPI contract entirely.
+/// Internal cron-invoked embed (and Slack intents reaper) endpoints — self-gated by
+/// EMBED_DISPATCH_SECRET (bearer), NOT `require_auth`. Called by Vercel crons on a schedule; each
+/// handler checks the secret itself (fail-closed when unset), so no auth-middleware layer is
+/// applied. Excluded from the OpenAPI contract entirely.
 ///
 /// - `/api/embed/dispatch` — the async-embed drain (issue #299).
 /// - `/api/embed/warm` — cold-start warmup for server-side query embedding (issue #427).
+/// - `/api/slack/intents/reap` — hourly retention sweep for expired/consumed link intents (T4).
 ///
 /// NOTE: `embed::dispatch`'s `#[utoipa::path]` declares `get` only, but the route
 /// mounts BOTH GET and POST on the same handler. This plain `.route()` (rather than
 /// `routes!()`) is precisely why it can keep both methods AND stay out of the spec.
+/// `slack_disconnect::reap_intents` carries no `#[utoipa::path]` at all, for the same reason.
 fn embed_internal_routes() -> Router<AppState> {
     use axum::routing::get;
 
@@ -298,6 +302,14 @@ fn embed_internal_routes() -> Router<AppState> {
         // server-side query embed on this instance is a cheap cached inference rather than a cold
         // model load that blows the query-embed budget. Same self-gated posture as `dispatch`.
         .route("/api/embed/warm", get(handlers::embed::warm))
+        // Hourly retention sweep for Slack link intents (T4/Task 8). Same self-gated posture as
+        // `dispatch`/`warm` (`require_dispatch_secret`, reusing EMBED_DISPATCH_SECRET) and the same
+        // GET+POST-on-one-handler shape.
+        .route(
+            "/api/slack/intents/reap",
+            get(handlers::slack_disconnect::reap_intents)
+                .post(handlers::slack_disconnect::reap_intents),
+        )
 }
 
 pub fn create_app(state: AppState) -> Router {
