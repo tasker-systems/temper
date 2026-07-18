@@ -73,6 +73,18 @@ pub enum EventKind {
     CharterSet,
     DelegatedLaunch,
     InvocationClosed,
+    // ── Admin-ledger events (spec 2026-07-16) ──
+    // NULL-anchored (the cognition firewall): they ride kb_events but carry no cognition projection,
+    // so replay walks them as no-ops (see replay.rs). `admin_ledger_opened` is born by migration
+    // 20260717000020; `grant_created`/`grant_revoked` were seeded 2026-06-24 and start firing in
+    // Task 5. Their EventKind variants land here now because the epoch event's mere existence would
+    // otherwise make `replay::from_canonical_name` return None and hard-fail on the unknown type.
+    /// The ledger's epoch marker — "administration begins here" (spec §8). Projection-less forever.
+    AdminLedgerOpened,
+    /// A capability grant recorded on the admin ledger (spec §5). Fires from Task 5's grant chokepoint.
+    GrantCreated,
+    /// A capability revocation recorded on the admin ledger (spec §5). Fires from Task 5's chokepoint.
+    GrantRevoked,
 }
 
 impl EventKind {
@@ -102,6 +114,9 @@ impl EventKind {
             EventKind::CharterSet => "charter_set",
             EventKind::DelegatedLaunch => "delegated_launch",
             EventKind::InvocationClosed => "invocation_closed",
+            EventKind::AdminLedgerOpened => "admin_ledger_opened",
+            EventKind::GrantCreated => "grant_created",
+            EventKind::GrantRevoked => "grant_revoked",
         }
     }
 
@@ -136,6 +151,9 @@ impl EventKind {
             "charter_set" => EventKind::CharterSet,
             "delegated_launch" => EventKind::DelegatedLaunch,
             "invocation_closed" => EventKind::InvocationClosed,
+            "admin_ledger_opened" => EventKind::AdminLedgerOpened,
+            "grant_created" => EventKind::GrantCreated,
+            "grant_revoked" => EventKind::GrantRevoked,
             _ => return None,
         })
     }

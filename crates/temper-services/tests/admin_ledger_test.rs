@@ -728,3 +728,29 @@ async fn an_admin_event_never_appears_in_an_element_trail(pool: PgPool) {
         "no admin event may surface in a cognition element trail"
     );
 }
+
+/// Task 4 (spec 2026-07-16 §8): the epoch marker exists after migration and is NULL-anchored (the
+/// cognition firewall). `ledger_epoch` reads the `admin_ledger_opened` event's `opened_at`; a
+/// producing anchor on it would mean the epoch had a cognition home, which it must not.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_epoch_is_readable_and_null_anchored(pool: PgPool) {
+    let epoch = admin_ledger_service::ledger_epoch(&pool)
+        .await
+        .expect("ledger_epoch");
+    assert!(
+        epoch.is_some(),
+        "the epoch marker must exist after migration"
+    );
+
+    let anchored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id=e.event_type_id \
+          WHERE t.name='admin_ledger_opened' AND e.producing_anchor_table IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        anchored, 0,
+        "the epoch must be NULL-anchored — it has no cognition home"
+    );
+}
