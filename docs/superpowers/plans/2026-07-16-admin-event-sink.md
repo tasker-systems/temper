@@ -1773,6 +1773,100 @@ authority change."
 
 ---
 
+### Task 5b: Authorization hardening — the gaps the Task 5 access trace surfaced
+
+> **ADDED 2026-07-18, before merging Task 5's PR (#482, moved to DRAFT).** Pete asked for a full
+> identity → authorization → level-of-access trace across every surface this arc touches, on fresh
+> context. Three parallel read-only traces (access-grant surface; machine + connection families;
+> ledger read gate) plus an empirical probe against the live DB. **None of these is a Task 5
+> regression** — all five pre-exist on `main`, verified by `git show main:…`. But four of them are
+> merge-blocking by Pete's call: the arc asserts a *chokepoint*, and a chokepoint with known holes is
+> a claim, not an invariant.
+
+**Grounding established by the trace (cite these, don't re-derive):**
+
+- The SQL chokepoints are **`SECURITY INVOKER` and perform zero authorization** — verified live
+  (`prosecdef = f` for `_admin_grant_created` / `_admin_grant_revoked`). All authz is Rust-side. The
+  `insert_grant` doc comment ("**Performs no authorization** — every caller must gate first") is an
+  accurate contract, not aspiration.
+- **Two authorization regimes write `kb_access_grants`**: `can_administer_grant` (admin OR explicit
+  `can_grant` OR resource-home owner) for the resource/cogmap surfaces, and
+  `machine_authz::authorize` (admin OR owner of the relevant team) for machine + connection reach.
+- `is_system_admin` requires `tm.role = 'owner'` on the gating team — a gating-team *member* is not
+  an admin. `has_system_access` is **vacuous under `access_mode = 'open'`**, which is prod's setting,
+  so the router's `require_system_access` layer contributes nothing; the service gate is the only
+  real one.
+- Auth is strictly before write on all five `insert_grant`/`delete_grant` callers — confirmed by
+  reading each, not by trusting the comments.
+
+**5b.1 — Genesis bypasses the chokepoint (CONFORM to Task 5's own premise).**
+`db_backend.rs:2157` writes a `can_grant`-bearing bootstrap row with a raw `INSERT INTO
+kb_access_grants`, so a grant conferring grant-authority lands with **no `grant_created` event**.
+Scope-limited (self-grant, same txn, `ON CONFLICT DO NOTHING`) so it is not an escalation — it is an
+audit-completeness hole against "the event now lives INSIDE insert_grant". Route it through
+`insert_grant`; `tx` and `emitter` are both already in scope at that call site.
+
+**5b.2 — `grant_reach` never validates the GRANTEE team (AMEND).**
+`connection_service.rs:442` keys authorization solely on `connection.owner_team_id`; the caller-
+supplied `team_id` flows unchecked into `reach_grant_params` (`:472`, `:495`) and into the grant.
+`principal_id` carries **no FK**, so a bogus UUID writes a dangling row. The machine path already
+bounds its target teams (`machine_authz.rs:140-143`); this one does not.
+**DECISION (Pete, 2026-07-18): mirror `contain_reach`** — the caller needs a manage-capable role on
+the target team, admins exempt. Same treatment on `revoke_reach` (`:547` → `:553`).
+
+**5b.3 — No capability attenuation (AMEND — this is a deliberate policy change).**
+Proven empirically, not inferred: a principal holding `read+grant` and nothing else called the
+chokepoint and minted itself `write+delete+grant` (before: `b_grant=t, b_write=f`; after:
+`b_write=t, b_delete=t`). `grant_capability` copies the request verbatim (`access_service.rs:214-217`)
+after a gate that only asks `'grant'`.
+**DECISION (Pete, 2026-07-18): strict attenuation with admin-only amplification** — a non-admin may
+confer only capabilities they themselves hold on that subject; gating-team owners stay unrestricted
+so bootstrap and repair remain operable.
+⚠️ **This rewrites an existing intentional test.** `access_grants_test.rs:236-262` currently asserts
+delegate-mints-write-for-a-third-party as *desired* behavior. Under strict attenuation that case
+becomes `Forbidden`. Rewrite the test to assert the new policy and keep a case proving admins still
+amplify — do not delete the coverage.
+
+**5b.4 — `require_cogmap_write_admin` is never consulted by the grant path (CONFORM).**
+It exists to force `is_system_admin` for the reserved L0 kernel and gating-team-joined maps, and is
+documented fail-CLOSED (`access_service.rs:266-270`). `grant_capability`/`revoke_capability` call
+only `can_administer_grant`, so a non-admin `can_grant` holder on L0 can mint `can_write` on the
+kernel. That this state is reachable is shown by `machine_authz.rs:386-392`, which seeds exactly such
+a row. Consult it on both grant and revoke when the subject is a cogmap.
+
+**5b.5 — The element-trail firewall is convention + tests, not a runtime filter (EXTEND).**
+`element_trail_node`/`_edge` match on payload key shape with **no** event-type filter and are gated
+only by `resources_visible_to`. Today the invariant holds solely because admin payloads don't spell
+`resource_id`/`owner`/`block_id`/`edge_id` — a naming convention guarded by two (good, non-vacuous)
+tests that cannot see a writer added outside the test corpus.
+**DECISION (Pete, 2026-07-18): do BOTH, with anchor nullity as the primary signal** — it was the
+original design signal, and it is semantically exact: both-NULL anchor means "has no cognition home",
+which is the trail's inclusion criterion inverted. Registry classification is the belt-and-braces a
+reviewer can actually see, since nullity alone is invisible at the call site.
+- Exclude both-NULL-anchor events from `element_trail_node`/`_edge`.
+- Add a category/`is_admin` classification to `kb_event_types`, stamp the three admin types, exclude
+  by join.
+
+> **Precondition for the nullity filter — DISCHARGED empirically against the full prod corpus
+> (read-only, 2026-07-18):** only two event types are both-NULL anchored in prod — `lens_created` (3)
+> and `admin_ledger_opened` (1) — and **neither spells a trail-matched key**, so the filter drops
+> zero legitimate trail entries. This is an existence proof over *current* data, not over all future
+> events; that limit is precisely why the paired registry classification is not redundant.
+
+> **NOTE — the `kb_event_types` change intersects open work.** Prod's registry is already mid-
+> reconciliation (13 of 18 typed names have a NULL `payload_schema`; task
+> `019f7509-7511-7d90-9bdb-2e08631208e7`). Adding a column is additive and safe on `main`, but
+> sequence the *stamping* against that task rather than assuming a fresh-migrate shape.
+
+**Not merge-blocking — carried to a follow-on task:** two stale comments that actively mislead an
+auditor. `routes.rs:171-173` claims machine-client routes are gated by `is_system_admin` in the
+*handler*; the real gate is `admin OR team owner`, in the *service* (only `rebind` matches the
+comment). `admin_ledger_service.rs:135-137` claims upstream temper-api/temper-mcp gates that do not
+exist for that service — its `has_system_access` check is the only gate, and it is vacuous under
+`access_mode = 'open'`.
+
+---
+
 ### Task 6: API + CLI + MCP parity
 
 Full surface parity is always intended. The read surface is useless if only Rust can reach it.
