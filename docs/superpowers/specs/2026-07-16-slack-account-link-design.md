@@ -508,7 +508,7 @@ Callback URLs, or the client's `AS_CLIENTS` entry on an AS instance.
 
 ### Shipped in T3 — the grant vault
 
-The seam T2 left is now filled. `kb_slack_grant_vault` (migration `20260717000020`) stores each
+The seam T2 left is now filled. `kb_slack_grant_vault` (migration `20260717000030`) stores each
 linked user's own refresh token (and a cached access token) as **XChaCha20-Poly1305** ciphertext
 with a per-row 24-byte random nonce, keyed by the whole opaque `slack_principal_id`. Identity
 stays in `kb_profile_auth_links` (no secret column); the secret lives only here.
