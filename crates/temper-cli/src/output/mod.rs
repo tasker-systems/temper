@@ -49,8 +49,12 @@ pub fn dim(msg: impl std::fmt::Display) {
 }
 
 /// Print a hint/suggestion (dimmed, for guidance text).
+///
+/// Goes to **stderr**, not stdout: temper defaults to JSON output on a non-TTY
+/// stdout (how agents invoke it), and a hint written there corrupts the payload.
+/// Guidance is for humans; the payload is for parsers.
 pub fn hint(msg: impl std::fmt::Display) {
-    let mut out = anstream::stdout().lock();
+    let mut out = anstream::stderr().lock();
     writeln!(out, "{HINT}{msg}{HINT:#}").ok();
 }
 
