@@ -199,10 +199,10 @@ The disconnect service must decrypt the stored refresh token before deleting the
 Add inside the existing `#[cfg(all(test, feature = "test-db"))] mod tests` block in `slack_grant_vault_service.rs`. Match the surrounding tests' setup style (they use `#[sqlx::test]` and a local profile-seeding helper — reuse whatever helper the neighbouring `mint_*` tests use; do **not** invent a new one).
 
 ```rust
-#[sqlx::test]
+#[sqlx::test(migrations = "../../migrations")]
 async fn take_refresh_token_returns_the_sealed_token_in_plaintext(pool: PgPool) {
-    let key = test_key();
-    let profile_id = seed_profile(&pool).await;
+    let key = key();
+    let profile_id = insert_profile(&pool).await;
     store_grant(
         &pool,
         &key,
@@ -224,9 +224,9 @@ async fn take_refresh_token_returns_the_sealed_token_in_plaintext(pool: PgPool) 
     assert_eq!(got.as_deref(), Some("rt-plaintext"));
 }
 
-#[sqlx::test]
+#[sqlx::test(migrations = "../../migrations")]
 async fn take_refresh_token_returns_none_for_an_unknown_principal(pool: PgPool) {
-    let key = test_key();
+    let key = key();
     let mut conn = pool.acquire().await.expect("acquire");
     let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T9:U9")
         .await
@@ -235,11 +235,14 @@ async fn take_refresh_token_returns_none_for_an_unknown_principal(pool: PgPool) 
 }
 ```
 
-Before writing, read the existing tests in this module and reuse their exact helper names for key construction and profile seeding. `test_key()` and `seed_profile()` above are placeholders for whatever they are actually called — grep for them:
+These helpers already exist in that test module (verified at `slack_grant_vault_service.rs:318-370`) — use them, do not redefine them:
 
-```bash
-grep -n "fn test_key\|fn seed_profile\|VaultKey::from_base64" crates/temper-services/src/services/slack_grant_vault_service.rs
-```
+- `fn key() -> VaultKey` (`:327`) — the test key, `[3u8; 32]` base64-encoded.
+- `async fn insert_profile(pool: &PgPool) -> Uuid` (`:334`) — minimal profile insert. Its handle is the **full** UUID deliberately: two UUIDv7s minted in the same millisecond share leading bytes, so a truncated handle collides on `kb_profiles_handle_key`.
+- `async fn store(pool, profile, principal, rt, at, ttl)` (`:349`) — wraps `NewGrant` construction.
+- `const PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF"` (`:325`).
+
+**The `#[sqlx::test(migrations = "../../migrations")]` attribute is mandatory.** A bare `#[sqlx::test]` resolves `./migrations` relative to the crate, which does not exist — every test then runs against an empty database and fails. This exact bug cost a full task cycle on the T2 plan.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -338,10 +341,35 @@ Create `crates/temper-services/src/services/slack_disconnect_service.rs` with on
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
     use sqlx::PgPool;
+    use uuid::Uuid;
 
-    // Reuse the vault module's fixtures rather than inventing parallel ones.
-    // Read slack_grant_vault_service.rs's test module and mirror its helpers.
+    // `key()` and `insert_profile()` exist in slack_grant_vault_service's test
+    // module, but a `#[cfg(test)] mod tests` is private to its own module — they
+    // are NOT reachable from here. Redefined locally, matching that module's
+    // shape exactly (same key bytes, same full-UUID handle rationale).
+
+    fn key() -> VaultKey {
+        VaultKey::from_base64(&STANDARD.encode([3u8; 32])).unwrap()
+    }
+
+    /// Minimal profile insert. The handle is the FULL id: two UUIDv7s minted in
+    /// the same millisecond share leading bytes, so a truncated handle collides
+    /// on `kb_profiles_handle_key`.
+    async fn insert_profile(pool: &PgPool) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
+            id,
+            format!("user-{id}"),
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
 
     #[sqlx::test]
     async fn disconnecting_an_unlinked_principal_is_a_quiet_no_op(pool: PgPool) {
@@ -349,7 +377,7 @@ mod tests {
             &pool,
             DisconnectRequest {
                 slack_principal_id: "slack:T0:UNEVER",
-                key: &test_key(),
+                key: &key(),
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/unused".to_string(),
                 client_id: "c",
@@ -367,8 +395,8 @@ mod tests {
     #[sqlx::test]
     async fn disconnect_deletes_link_grant_and_intents_together(pool: PgPool) {
         let principal = "slack:T1:U1";
-        let key = test_key();
-        let profile_id = seed_profile(&pool).await;
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
 
         crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
             .await
@@ -454,8 +482,8 @@ mod tests {
     #[sqlx::test]
     async fn disconnecting_twice_is_not_an_error(pool: PgPool) {
         let principal = "slack:T2:U2";
-        let key = test_key();
-        let profile_id = seed_profile(&pool).await;
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
         crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
             .await
             .expect("link");
@@ -770,7 +798,7 @@ The partial index `idx_slack_link_intents_unconsumed` was created for a reaper t
 Add to the test module in `slack_disconnect_service.rs`:
 
 ```rust
-#[sqlx::test]
+#[sqlx::test(migrations = "../../migrations")]
 async fn the_reaper_sweeps_expired_and_consumed_intents_but_spares_live_ones(pool: PgPool) {
     use crate::services::slack_link_service::create_intent;
 
@@ -1632,37 +1660,27 @@ wc -l /tmp/hint-callers.txt
 ```
 Record the count — you will re-check it after the change.
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 2: Establish the failing behaviour at the CLI boundary**
 
-Add to `crates/temper-cli/src/output/mod.rs`:
+There is no honest in-process unit test here: `hint` writes to the process's real stdout, which the test harness owns, and asserting on the function's own source text would test the implementation rather than the behaviour.
 
-```rust
-#[cfg(test)]
-mod tests {
-    /// `hint` must not write to stdout: temper defaults to JSON on a non-TTY
-    /// stdout, and a hint interleaved there makes the payload unparseable.
-    /// Verified by reading the source of `hint` rather than capturing the
-    /// process's real stdout, which the test harness owns.
-    #[test]
-    fn hint_writes_to_stderr() {
-        let src = include_str!("mod.rs");
-        let hint_fn = src
-            .split("pub fn hint(")
-            .nth(1)
-            .expect("hint must exist");
-        let body = &hint_fn[..hint_fn.find('}').expect("hint body")];
-        assert!(
-            body.contains("stderr"),
-            "hint must write to stderr, got: {body}"
-        );
-    }
-}
+The behavioural assertion belongs where the behaviour is observable — running the binary and parsing its stdout. Task 12's e2e tests already do exactly this (`serde_json::from_slice(&out.stdout)` on a command that also emits caveats), so **Task 12 is this task's regression test**.
+
+Demonstrate the current breakage directly, against a command that renders JSON and then hints:
+
+```bash
+cargo build -p temper-cli --all-features
+./target/debug/temper admin machine revoke 00000000-0000-0000-0000-000000000000 --format json 2>/dev/null | python3 -c "import json,sys; json.load(sys.stdin); print('stdout parsed as JSON')"
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+Expected **before** the fix: either a JSON parse error, or (if the command errors before rendering) no output. If the command cannot reach its hint without a live server, note that and rely on Task 12's e2e assertion as the gate — do **not** fabricate a source-inspecting unit test to manufacture a red phase.
 
-Run: `cargo nextest run -p temper-cli hint_writes_to_stderr`
-Expected: FAIL — the body contains `stdout`
+- [ ] **Step 3: Confirm which callers are affected**
+
+```bash
+rg -n "output::hint\(" crates/temper-cli/src/
+```
+Every one of these currently writes guidance into a stdout that may be a JSON payload.
 
 - [ ] **Step 4: Change `hint` to stderr**
 
@@ -1680,13 +1698,16 @@ pub fn hint(msg: impl std::fmt::Display) {
 }
 ```
 
-- [ ] **Step 5: Run the test and the full CLI suite**
+- [ ] **Step 5: Run the CLI suite and re-check the boundary**
 
 ```bash
-cargo nextest run -p temper-cli hint_writes_to_stderr
 cargo nextest run -p temper-cli
+cargo build -p temper-cli --all-features
 ```
-Expected: PASS. If any e2e test asserted a hint on stdout it will now fail — fix the assertion to read stderr, and note it in the commit body.
+
+Then re-run the Step 2 probe: stdout must now parse as JSON, with the hint text appearing on stderr instead.
+
+If any existing test asserted a hint on stdout it will now fail — fix the assertion to read stderr, and name the test in the commit body.
 
 - [ ] **Step 6: Commit**
 
