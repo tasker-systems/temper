@@ -350,4 +350,104 @@ mod tests {
             .expect("second");
         assert!(!second.was_linked, "the second disconnect is a quiet no-op");
     }
+
+    /// The cross-language contract, pinned.
+    ///
+    /// `kb_oauth_refresh_tokens` rows are written by TypeScript
+    /// (`packages/temper-cloud/src/oauth/mint.ts:85` — `createHash("sha256")
+    /// .update(t).digest("hex")`), and revoked here by Rust. Nothing in the type
+    /// system connects the two: if these digests ever disagree, the AS-mode
+    /// revoke silently updates ZERO rows and reports success, leaving a live
+    /// grant behind with no error anywhere.
+    ///
+    /// The expected value below was produced by the actual writer:
+    ///   node -e 'const{createHash}=require("crypto");
+    ///            console.log(createHash("sha256").update("as-refresh-token-sample")
+    ///                        .digest("hex"))'
+    /// Regenerate it the same way if this ever needs to change.
+    #[test]
+    fn the_as_token_hash_matches_what_typescript_writes() {
+        use sha2::{Digest, Sha256};
+
+        let digest = Sha256::digest(b"as-refresh-token-sample");
+        assert_eq!(
+            format!("{digest:x}"),
+            "9d16e5d809978fbc29ae240d1b95273fc1ff0de968d8e4f98cadfa0b5802e199",
+            "Rust's digest must equal Node's sha256 hex, or AS-mode revocation \
+             matches no row and fails silently"
+        );
+    }
+
+    /// AS mode revokes locally, in the same transaction — no network, no
+    /// best-effort. This is why self-hosted gets strictly stronger semantics
+    /// than the Auth0 path, so it must actually be exercised.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn as_mode_revokes_the_refresh_token_row_in_transaction(pool: PgPool) {
+        let principal = "slack:T3:U3";
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
+        let refresh_token = "as-refresh-token-sample";
+
+        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
+            .await
+            .expect("link");
+        crate::services::slack_grant_vault_service::store_grant(
+            &pool,
+            &key,
+            crate::services::slack_grant_vault_service::NewGrant {
+                profile_id,
+                slack_principal_id: principal,
+                refresh_token,
+                access_token: "at",
+                access_ttl_secs: Some(3600),
+            },
+        )
+        .await
+        .expect("store");
+
+        // The AS's own row for that token, as the TypeScript writer would leave it.
+        sqlx::query(
+            r#"
+            INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at)
+            VALUES ($1, $2, '{}'::jsonb, now() + interval '30 days')
+            "#,
+        )
+        .bind("9d16e5d809978fbc29ae240d1b95273fc1ff0de968d8e4f98cadfa0b5802e199")
+        .bind("slack-link-client")
+        .execute(&pool)
+        .await
+        .expect("seed AS refresh token");
+
+        // An unreachable revoke_url: if AS mode wrongly took the HTTP path, the
+        // call would fail and idp_revoked would be false.
+        let out = disconnect_slack_principal(
+            &pool,
+            DisconnectRequest {
+                slack_principal_id: principal,
+                key: &key,
+                mode: AuthMode::TemperAs,
+                revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
+                client_id: "slack-link-client",
+            },
+        )
+        .await
+        .expect("disconnect");
+
+        assert!(
+            out.idp_revoked,
+            "AS mode must revoke locally without touching the network"
+        );
+
+        let revoked_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            "SELECT revoked_at FROM kb_oauth_refresh_tokens WHERE token_hash = $1",
+        )
+        .bind("9d16e5d809978fbc29ae240d1b95273fc1ff0de968d8e4f98cadfa0b5802e199")
+        .fetch_one(&pool)
+        .await
+        .expect("read back");
+        assert!(
+            revoked_at.is_some(),
+            "the AS row must be marked revoked, asserted on the row not the return value"
+        );
+    }
 }
