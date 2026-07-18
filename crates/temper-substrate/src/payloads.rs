@@ -908,8 +908,67 @@ pub struct InvocationClosed {
     pub outcome: serde_json::Value,
 }
 
-/// The 15 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 15] = [
+// ── admin-ledger payloads (spec 2026-07-16) ─────────────────────────────────
+//
+// NULL-anchored authority acts (the cognition firewall): they ride kb_events but no cognition
+// reader consults them. Subjects are spelled `subject_table`/`subject_id` — NEVER `resource_id`/
+// `owner`/`block_id`/`edge_id`, which `element_trail_*` match on by key shape (spec §5, tested).
+// The SQL chokepoint that writes these lives in migration 20260717000030 (Task 5); these structs are
+// the typed wire contract the SQL-built payloads are validated against by `verify_ledger_roundtrip`.
+
+/// The four capability bits of a grant. Reused for `GrantCreated::previous`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct GrantCapabilities {
+    pub can_read: bool,
+    pub can_write: bool,
+    pub can_delete: bool,
+    pub can_grant: bool,
+}
+
+/// `grant_created` — a capability grant recorded on the admin ledger. Carries `previous` only when
+/// the upsert replaced an existing grant (an upsert that changes capabilities returns inserted=false,
+/// so the before/after is what makes a real authority change legible).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct GrantCreated {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    pub principal_table: AnchorTable,
+    pub principal_id: Uuid,
+    pub can_read: bool,
+    pub can_write: bool,
+    pub can_delete: bool,
+    pub can_grant: bool,
+    pub granted_by: ProfileId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<GrantCapabilities>,
+}
+
+/// `grant_revoked` — a capability revocation recorded on the admin ledger. The grant row is DELETEd
+/// (it is the current-state projection); this event is the temporal record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct GrantRevoked {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    pub principal_table: AnchorTable,
+    pub principal_id: Uuid,
+    pub revoked_by: ProfileId,
+}
+
+/// `admin_ledger_opened` — the ledger's epoch marker. The time is the event's own `occurred_at`
+/// (`ledger_epoch` reads it there); the payload carries only the human note that says why nothing
+/// precedes it. No `opened_at` field — a timestamp in a payload duplicates `occurred_at` and this
+/// module's rule is that derived/carried state (timestamps included) never lives in the payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct AdminLedgerOpened {
+    pub note: String,
+}
+
+/// The 18 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 18] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -925,6 +984,9 @@ pub const TYPED_EVENT_NAMES: [&str; 15] = [
     "block_mutated",
     "block_folded",
     "block_provenance_corrected",
+    "admin_ledger_opened",
+    "grant_created",
+    "grant_revoked",
 ];
 
 /// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must

@@ -941,6 +941,27 @@ by anchor nullity — lens_created already lives in the NULL bucket."
 
 ### Task 3: The `element_trail` payload-key invariant
 
+> **SHIPPED 2026-07-17.** Two tests appended to `crates/temper-services/tests/admin_ledger_test.rs`:
+> `no_admin_payload_spells_a_trail_matched_key` and `an_admin_event_never_appears_in_an_element_trail`.
+> Pre-dispatch against `main` (which had moved since 2026-07-16 — Task 2 shipped as PR #475) found
+> two API-drift corrections to the sketch below, plus one design correction. The sketch below is
+> left as the original design; **read the shipped file for the exact tests** — they differ per the
+> three corrections here:
+>
+> - **Seed arity.** Task 2's shipped `seed_admin_event` is **5-arg** —
+>   `(pool, emitter, subject_kind: AnchorTable, subject, principal)` — not the 4-arg form sketched
+>   here. Every call passes an `AnchorTable`.
+> - **Test attribute.** Every test in the file uses `#[sqlx::test(migrator = "temper_services::MIGRATOR")]`,
+>   not bare `#[sqlx::test]` (the workspace migrations are not on `./migrations` relative to the crate).
+> - **Non-vacuity (the design correction).** The original sketch seeded a **context**-subject event
+>   and asserted it stays out of a **node** trail. But `element_trail_node` matches only
+>   `resource_id`/`owner`/`block_id` — a context-subject payload can *never* match it, so that test
+>   passes whether or not the ban exists: it **cannot fail**. That is the precise defect §5 itself was
+>   born from ("the specced tests could not fail on it"). Both tests are now seeded through the
+>   canonical writer with **positive controls** so they genuinely can go red — proven by injecting
+>   `resource_id` into the writer and watching both fail (corpus scan reports the offender; trail scan
+>   reports `leaked > 0`).
+
 `element_trail_node`/`element_trail_edge` (`migrations/20260706000002_element_trail_payload_actor.sql:7-52`) have **no event-type filter**. They match purely on payload key shape and are gated only by `resources_visible_to(p_profile)` (`:47-49`). An admin payload spelling `resource_id` — natural, since a grant with `subject_table='kb_resources'` *is about* a resource — would surface **who was granted access to it** to any reader of that resource.
 
 This lands **before any admin payload exists**, so the invariant is never retrofitted.
@@ -1035,9 +1056,44 @@ Lands before any admin payload exists so the invariant is never retrofitted."
 
 ### Task 4: Event types + payload schemas + the epoch marker
 
+> **SHIPPED 2026-07-17, reshaped by grounding. Two decisions with Pete changed the approach below;
+> read this before the original steps.**
+>
+> **1. The admin payloads are now TYPED, not hand-written migration JSON.** Pre-dispatch found the
+> gate the plan didn't know about: `bootseed_publishes_payload_schemas` (`bootseed.rs:84`) asserts
+> the stamped registry set **equals** `TYPED_EVENT_NAMES` (`payloads.rs`). Stamping 3 non-typed admin
+> schemas broke it (16 ≠ 15). So `GrantCreated`/`GrantRevoked`/`AdminLedgerOpened` are now real
+> structs in `payloads.rs` (reusing `AnchorTable`/`ProfileId`), added to `TYPED_EVENT_NAMES` (15→18),
+> with committed fixtures (`UPDATE_SCHEMA=1 cargo make test-schema`). Migration `…010` stamps the
+> three **verbatim from those fixtures** (canonical-seed pattern), so repo==registry==Rust-types, and
+> `verify_ledger_roundtrip` now validates every admin payload — including the SQL-built grant payloads
+> Task 5 writes — against its struct. The grant struct shapes match Task 5's `_admin_grant_*` SQL
+> exactly (subject/principal table+id, four caps, `granted_by`, optional `previous`).
+>
+> **2. The 019f6b48 fold (NULL region_materialized/lens_created) is DROPPED and re-filed.** Same gate:
+> NULLing a *typed* name breaks stamped==typed. Their staleness is real, but the invariant-consistent
+> fix is a **re-stamp from current fixtures**, not a NULL — which is the deliberate registration pass
+> the plan itself said was out of scope. Re-filed as its own task. (Verified against prod: it has
+> exactly 2 non-NULL schemas, `region_materialized` 235 events + `lens_created` 3 — the plan's premise
+> held; the July-12 migrations that re-stamp them are themselves stale, so no chain state is current.)
+>
+> **3. The epoch payload is `{ note }` only** — `ledger_epoch` reads the event's `occurred_at`, and
+> the module's rule keeps timestamps out of payloads, so there is no `opened_at`.
+>
+> **4. The EventKind variants + replay no-op arms (Task 5 Step 4) are folded in here** — the epoch
+> event's mere existence would otherwise make `replay::from_canonical_name` hard-fail on the unknown
+> type. Task 5 Step 4 is therefore already done; see its note.
+>
+> The migration/step bodies below are the original design; the shipped migrations differ per the
+> above — read `migrations/20260717000010_admin_event_types.sql`, `…020`, `payloads.rs`, and
+> `crates/temper-substrate/src/{events,replay}.rs` for the exact form.
+
 **Files:**
 - Create: `migrations/20260717000010_admin_event_types.sql`
 - Create: `migrations/20260717000020_admin_ledger_epoch.sql`
+- Modify: `crates/temper-substrate/src/payloads.rs` (the 3 typed structs + `TYPED_EVENT_NAMES`)
+- Modify: `crates/temper-substrate/src/{events,replay}.rs` (EventKind variants + replay arms — Task 5 Step 4, folded)
+- Create: `crates/temper-substrate/tests/fixtures/payloads/{admin_ledger_opened,grant_created,grant_revoked}.v1.schema.json`
 
 **Interfaces:**
 - Produces: `kb_event_types` rows `admin_ledger_opened`, and payload schemas on the pre-existing `grant_created`/`grant_revoked` rows. One `admin_ledger_opened` event. **Also NULLs the two stale registry rows** — see below.
@@ -1533,7 +1589,9 @@ COMMENT ON FUNCTION _admin_grant_revoked IS
   'Grant DELETE + grant_revoked event, one txn. The DELETE stays: the row is the current-state projection, the ledger is the temporal record (access spec §3.7). Emits only when a row was actually deleted -- kb_events is append-only and a spurious event is immortal.';
 ```
 
-- [ ] **Step 4: Add the EventKind variants and projectors**
+- [x] **Step 4: Add the EventKind variants and projectors** — **DONE IN TASK 4** (folded forward so
+  Task 4's epoch event has a known type; the variants + replay no-op arms shipped in that PR). The
+  original instructions are retained below for the record.
 
 In `crates/temper-substrate/src/events.rs`, add to `EventKind`, `as_canonical_name`, and `from_canonical_name` (all three — `from_canonical_name` is documented as the exact inverse):
 

@@ -188,7 +188,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::ResourceReassigned
             | EventKind::ContextReassigned
             | EventKind::DelegatedLaunch
-            | EventKind::InvocationClosed => None,
+            | EventKind::InvocationClosed
+            // Admin-ledger events (NULL-anchored, spec 2026-07-16): no content, no sidecar.
+            | EventKind::AdminLedgerOpened
+            | EventKind::GrantCreated
+            | EventKind::GrantRevoked => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -521,6 +525,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
+            // Admin-ledger events are NULL-anchored (the cognition firewall, spec 2026-07-16): they
+            // ride kb_events but touch no _project_* cognition half, so the walk is a no-op. The
+            // event rows themselves survive replay via the kb_events input table; grant STATE is
+            // replayed from the kb_access_grants input table (Task 5), not rebuilt from these events.
+            EventKind::AdminLedgerOpened | EventKind::GrantCreated | EventKind::GrantRevoked => {}
         }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;
