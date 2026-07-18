@@ -65,14 +65,40 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
 /// (spec 2026-07-16 §5): if you could perform the act, you may read the record of it. Restating the
 /// predicate there would be a second copy of the policy that drifts from the gate it exists to
 /// mirror — tighten this fn and the ledger's read gate tightens with it.
+/// Why a caller may administer grants on a subject — not merely *whether*. `grant_capability` needs
+/// the distinction: attenuation (5b.3) binds a **delegated** administrator to the capabilities they
+/// themselves hold, while a system admin stays unrestricted so bootstrap and repair remain operable.
+/// Returning the reason keeps that a single authorization pass instead of re-asking `is_system_admin`
+/// after the fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GrantAuthority {
+    /// Gating-team owner. Unrestricted: may confer capabilities they do not personally hold.
+    SystemAdmin,
+    /// Holds `can_grant` on the subject (or owns it). Bound by attenuation.
+    Delegated,
+    /// May not administer grants on this subject at all.
+    None,
+}
+
+/// Bool projection of [`grant_authority`], kept as the seam `admin_ledger_service`'s read gate calls
+/// (spec 2026-07-16 §5) — it only needs "could you perform the act", not which arm allowed it.
 pub(crate) async fn can_administer_grant(
     pool: &PgPool,
     caller: ProfileId,
     subject_table: &str,
     subject_id: Uuid,
 ) -> ApiResult<bool> {
+    Ok(grant_authority(pool, caller, subject_table, subject_id).await? != GrantAuthority::None)
+}
+
+pub(crate) async fn grant_authority(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<GrantAuthority> {
     if is_system_admin(pool, caller).await? {
-        return Ok(true);
+        return Ok(GrantAuthority::SystemAdmin);
     }
     // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` exists to keep the
     // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never consulted
@@ -83,9 +109,87 @@ pub(crate) async fn can_administer_grant(
     if subject_table == "kb_cogmaps"
         && cogmap_write_requires_admin(pool, CogmapId(subject_id)).await?
     {
-        return Ok(false);
+        return Ok(GrantAuthority::None);
     }
-    profile_can_grant(pool, caller, subject_table, subject_id).await
+    Ok(
+        if profile_can_grant(pool, caller, subject_table, subject_id).await? {
+            GrantAuthority::Delegated
+        } else {
+            GrantAuthority::None
+        },
+    )
+}
+
+/// The four capabilities a grant can carry. A closed set with a fixed SQL spelling — an enum rather
+/// than bare `&str` literals so a typo is a compile error and the set cannot silently grow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccessAction {
+    Read,
+    Write,
+    Delete,
+    Grant,
+}
+
+impl AccessAction {
+    /// The `p_action` spelling `can(...)` dispatches on (`profile_explicit_grant`'s CASE arms).
+    const fn as_sql(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Delete => "delete",
+            Self::Grant => "grant",
+        }
+    }
+}
+
+/// Does the caller hold `action` on the subject? The general `can(...)` probe — `profile_can_grant`
+/// is the `Grant` specialization, kept because it reads better at its call sites.
+pub(crate) async fn profile_can(
+    pool: &PgPool,
+    caller: ProfileId,
+    action: AccessAction,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT can('kb_profiles', $1, $2, $3, $4)",
+        *caller,
+        action.as_sql(),
+        subject_table,
+        subject_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
+/// Attenuation (plan 5b.3): may `caller` confer exactly this capability set, or would it amplify
+/// beyond what they themselves hold on this subject?
+///
+/// Applies to **delegated** administrators only; system admins are exempt by design (bootstrap and
+/// repair would otherwise deadlock — there would be no way to mint the first holder of anything).
+/// Without this, a `can_grant` holder with no write could mint `can_write` — including to themselves,
+/// which was reachable and unguarded: a `read+grant` principal escalated itself to
+/// `write+delete+grant` through the chokepoint in a live probe.
+async fn attenuates_to_caller(
+    pool: &PgPool,
+    caller: ProfileId,
+    req: &GrantCapabilityRequest,
+) -> ApiResult<bool> {
+    for (requested, action) in [
+        (req.can_read, AccessAction::Read),
+        (req.can_write, AccessAction::Write),
+        (req.can_delete, AccessAction::Delete),
+        (req.can_grant, AccessAction::Grant),
+    ] {
+        if requested
+            && !profile_can(pool, caller, action, &req.subject_table, req.subject_id).await?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Raw `can_grant` capability probe (NO `is_system_admin` OR) — the reusable primitive. Callers that
@@ -97,16 +201,7 @@ pub(crate) async fn profile_can_grant(
     subject_table: &str,
     subject_id: Uuid,
 ) -> ApiResult<bool> {
-    let ok = sqlx::query_scalar!(
-        "SELECT can('kb_profiles', $1, 'grant', $2, $3)",
-        *caller,
-        subject_table,
-        subject_id,
-    )
-    .fetch_one(pool)
-    .await?
-    .unwrap_or(false);
-    Ok(ok)
+    profile_can(pool, caller, AccessAction::Grant, subject_table, subject_id).await
 }
 
 /// Is `team_id` the configured gating/root team? An unconfigured system (`gating_team_slug` NULL)
@@ -210,8 +305,18 @@ pub async fn grant_capability(
     caller: ProfileId,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<GrantOutcome> {
-    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
-        return Err(ApiError::Forbidden);
+    // Auth before writes, in one pass: the authority arm decides whether attenuation applies.
+    match grant_authority(pool, caller, &req.subject_table, req.subject_id).await? {
+        GrantAuthority::None => return Err(ApiError::Forbidden),
+        // A delegated administrator may not amplify: every capability they confer must be one they
+        // themselves hold on this subject (plan 5b.3). Revocation is deliberately NOT attenuated —
+        // de-escalation must never be harder than escalation, or a grant becomes unwithdrawable.
+        GrantAuthority::Delegated => {
+            if !attenuates_to_caller(pool, caller, req).await? {
+                return Err(ApiError::Forbidden);
+            }
+        }
+        GrantAuthority::SystemAdmin => {}
     }
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await

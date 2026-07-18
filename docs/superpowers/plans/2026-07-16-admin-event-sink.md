@@ -1827,6 +1827,34 @@ delegate-mints-write-for-a-third-party as *desired* behavior. Under strict atten
 becomes `Forbidden`. Rewrite the test to assert the new policy and keep a case proving admins still
 amplify — do not delete the coverage.
 
+> **Consequence discovered while grounding, and the decision it forced.** "Held" resolves through
+> `can(...)`, and `derived_access_profile` has **no `'delete'` arm for any subject type** — not
+> resources, cogmaps, or contexts. So `can(…, 'delete', …)` is true only via an explicit grant row,
+> and prod carries **zero** grants with `can_delete` (verified: 5 grants total, 4 cogmap + 1 resource,
+> all write-only). Strict attenuation would therefore make `can_delete` a **bootstrap deadlock** —
+> nobody holds it, so no non-admin could ever confer it, so nobody ever comes to hold it. Delete
+> would become permanently admin-only by accident rather than by design.
+>
+> **DECISION (Pete, 2026-07-18): add a derived `'delete'` arm for resource-home owners**, rather than
+> accept the deadlock or carve `can_delete` out of the attenuation rule. Pete's call, and it is the
+> principled one: an owner who may delete their own resource should be able to confer that, and the
+> alternative (a capability nobody can ever grant) is an artifact, not a policy. This deliberately
+> expands the access model's scope mid-arc — flag it as such in review.
+>
+> Shape it to match the existing `'grant'` arm, which is the closest precedent (live definition):
+> ```sql
+> WHEN p_subject_table = 'kb_resources' AND p_action = 'grant' THEN
+>     EXISTS (SELECT 1 FROM kb_resource_homes h
+>             WHERE h.resource_id = p_subject_id AND h.owner_profile_id = p_profile)
+> ```
+> Scope it to `kb_resources` only — do NOT add delete arms for cogmaps or contexts in this pass;
+> neither has an ownership floor and both would need their own design conversation.
+
+**5b.3 note — surfaces cannot request delete today.** Both the MCP tool (`resources.rs:1216`) and the
+CLI hardcode `can_delete: false`, so only the raw HTTP API can request it. The derived arm is
+therefore latent capability, not an immediately reachable behavior change — but the attenuation rule
+must still be correct for the day a surface exposes it.
+
 **5b.4 — `require_cogmap_write_admin` is never consulted by the grant path (CONFORM).**
 It exists to force `is_system_admin` for the reserved L0 kernel and gating-team-joined maps, and is
 documented fail-CLOSED (`access_service.rs:266-270`). `grant_capability`/`revoke_capability` call
