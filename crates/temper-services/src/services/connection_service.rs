@@ -453,6 +453,9 @@ pub async fn grant_reach(
         // Declared reach, affirmed: stamp the affirmation and insert the grant atomically —
         // never affirmation-without-grant or grant-without-affirmation.
         (true, Some(rationale)) => {
+            let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
             let mut tx = pool.begin().await?;
             sqlx::query!(
                 r#"UPDATE kb_connections
@@ -467,6 +470,7 @@ pub async fn grant_reach(
             access_service::insert_grant(
                 &mut tx,
                 &reach_grant_params(connection_id, team_id, caller),
+                emitter,
             )
             .await?;
             // (`&mut tx` coerces to `&mut PgConnection` via Transaction's DerefMut.)
@@ -482,10 +486,14 @@ pub async fn grant_reach(
         )),
         // No declared reach, no affirmation: the plain grant.
         (false, None) => {
+            let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
             let mut conn = pool.acquire().await?;
             access_service::insert_grant(
                 &mut conn,
                 &reach_grant_params(connection_id, team_id, caller),
+                emitter,
             )
             .await?;
             Ok(connection)
@@ -538,6 +546,9 @@ pub async fn revoke_reach(
     let connection = get(pool, connection_id).await?;
     machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
 
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     access_service::delete_grant(
         &mut conn,
@@ -545,6 +556,8 @@ pub async fn revoke_reach(
         connection_id,
         "kb_teams",
         team_id,
+        caller,
+        emitter,
     )
     .await?;
 
@@ -645,6 +658,15 @@ mod tests {
         .await
         .expect("seed admin profile");
 
+        // The caller must carry its `<handle>@web` emitter — grant_reach now resolves one to author
+        // the grant_created event, exactly as production does (a fixture that skips this passes while
+        // production 500s). Provision via the same production path.
+        let mut conn = pool.acquire().await.expect("acquire");
+        crate::services::profile_service::provision_profile_entities(&mut conn, id, "conn-admin")
+            .await
+            .expect("provision caller emitters");
+        drop(conn);
+
         let team: Uuid = sqlx::query_scalar!(
             "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') \
              ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name \
@@ -702,6 +724,13 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed profile");
+
+        // Emitters, so this profile can author a grant event if it ends up calling grant_reach.
+        let mut conn = pool.acquire().await.expect("acquire");
+        crate::services::profile_service::provision_profile_entities(&mut conn, id, handle)
+            .await
+            .expect("provision caller emitters");
+        drop(conn);
 
         let team: Uuid = sqlx::query_scalar!(
             "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) \

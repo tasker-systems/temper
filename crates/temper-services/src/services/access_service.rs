@@ -9,6 +9,7 @@
 //! admin-event sink is a future deliverable.
 
 use sqlx::PgPool;
+use temper_substrate::ids::EntityId;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
@@ -130,19 +131,20 @@ pub struct InsertGrantParams {
 /// Raw upsert of one access grant, on a connection so it can join a transaction.
 /// **Performs no authorization** — every caller must gate first (auth before writes).
 /// Returns whether the row was freshly inserted (`xmax = 0`) rather than updated.
-pub async fn insert_grant(conn: &mut sqlx::PgConnection, p: &InsertGrantParams) -> ApiResult<bool> {
-    // `xmax = 0` distinguishes a fresh INSERT from an ON CONFLICT UPDATE (xmax is the deleting/locking
-    // txid — zero only on a row this txn just inserted).
-    let inserted = sqlx::query_scalar!(
-        r#"INSERT INTO kb_access_grants
-               (subject_table, subject_id, principal_table, principal_id,
-                can_read, can_write, can_delete, can_grant, granted_by_profile_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (subject_table, subject_id, principal_table, principal_id)
-           DO UPDATE SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write,
-                         can_delete = EXCLUDED.can_delete, can_grant = EXCLUDED.can_grant,
-                         granted_by_profile_id = EXCLUDED.granted_by_profile_id, granted_at = now()
-           RETURNING (xmax = 0) AS "inserted!""#,
+pub async fn insert_grant(
+    conn: &mut sqlx::PgConnection,
+    p: &InsertGrantParams,
+    emitter: EntityId,
+) -> ApiResult<bool> {
+    // The upsert + `grant_created` event, one txn, via the SQL chokepoint `_admin_grant_created`
+    // (migrations/20260718000010). `emitter` is the acting entity, resolved from the gated caller.
+    // Correlation self-roots — there is no sibling event to fuse with in any grant path, and the
+    // SQL fn's `p_correlation` defaults NULL. Returns whether the row was freshly inserted (`xmax = 0`
+    // inside the fn); an upsert that only CHANGED capabilities returns false yet still fires the
+    // event, carrying `previous`, so a real authority change is never silently dropped.
+    Ok(sqlx::query_scalar!(
+        r#"SELECT _admin_grant_created($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS "inserted!""#,
+        emitter.uuid(),
         p.subject_table,
         p.subject_id,
         p.principal_table,
@@ -154,8 +156,7 @@ pub async fn insert_grant(conn: &mut sqlx::PgConnection, p: &InsertGrantParams) 
         p.granted_by_profile_id,
     )
     .fetch_one(&mut *conn)
-    .await?;
-    Ok(inserted)
+    .await?)
 }
 
 /// Raw delete of one access grant by its `(subject, principal)` 4-tuple, on a connection so it can
@@ -167,20 +168,25 @@ pub async fn delete_grant(
     subject_id: Uuid,
     principal_table: &str,
     principal_id: Uuid,
+    revoker: ProfileId,
+    emitter: EntityId,
 ) -> ApiResult<bool> {
-    let deleted = sqlx::query!(
-        r#"DELETE FROM kb_access_grants
-            WHERE subject_table = $1 AND subject_id = $2
-              AND principal_table = $3 AND principal_id = $4"#,
+    // The DELETE + `grant_revoked` event, one txn, via the SQL chokepoint `_admin_grant_revoked`.
+    // Emits ONLY when a row was actually removed — a no-op revoke is not an admin act, and the ledger
+    // is append-only so a spurious event is immortal. `revoker` is the acting profile; `emitter` its
+    // entity. Correlation self-roots (SQL `p_correlation` defaults NULL). Returns whether a row was
+    // removed (absent ⇒ false, idempotent no-op).
+    Ok(sqlx::query_scalar!(
+        r#"SELECT _admin_grant_revoked($1,$2,$3,$4,$5,$6) AS "deleted!""#,
+        emitter.uuid(),
         subject_table,
         subject_id,
         principal_table,
         principal_id,
+        revoker.uuid(),
     )
-    .execute(&mut *conn)
-    .await?
-    .rows_affected();
-    Ok(deleted > 0)
+    .fetch_one(&mut *conn)
+    .await?)
 }
 
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
@@ -194,6 +200,9 @@ pub async fn grant_capability(
     if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
         return Err(ApiError::Forbidden);
     }
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let granted = insert_grant(
         &mut conn,
@@ -208,6 +217,7 @@ pub async fn grant_capability(
             can_grant: req.can_grant,
             granted_by_profile_id: *caller,
         },
+        emitter,
     )
     .await?;
     Ok(GrantOutcome { granted })
@@ -223,6 +233,9 @@ pub async fn revoke_capability(
     if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
         return Err(ApiError::Forbidden);
     }
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
         &mut conn,
@@ -230,6 +243,8 @@ pub async fn revoke_capability(
         req.subject_id,
         &req.principal_table,
         req.principal_id,
+        caller,
+        emitter,
     )
     .await?;
     Ok(RevokeOutcome { revoked })

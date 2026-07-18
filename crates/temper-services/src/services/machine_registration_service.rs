@@ -11,6 +11,7 @@
 //! transplants an existing profile's reach, which team ownership cannot bound — see its doc).
 
 use sqlx::PgPool;
+use temper_substrate::ids::EntityId;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
@@ -119,6 +120,10 @@ async fn apply_reach(
     caller: ProfileId,
     profile_id: Uuid,
     reach: AuthorizedReach<'_>,
+    // `Some` iff `reach` carries at least one grant — a pure team-membership reach fires no
+    // grant_created event and so needs no emitter (the caller resolves one only when there is a
+    // grant to author).
+    emitter: Option<EntityId>,
 ) -> ApiResult<()> {
     for team in reach.teams() {
         sqlx::query!(
@@ -148,6 +153,8 @@ async fn apply_reach(
                 can_grant: false,
                 granted_by_profile_id: *caller,
             },
+            emitter
+                .expect("a grant implies a resolved emitter (Some iff reach.grants() non-empty)"),
         )
         .await?;
     }
@@ -236,7 +243,19 @@ pub async fn provision(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, caller, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, reach).await?;
+    // Resolve the caller's emitter ONLY when there is a grant to author. A reach of pure team
+    // memberships fires no grant_created event, so it must not require the minter to carry a
+    // `<handle>@web` entity — many legitimate minters (e.g. a mere gating-team watcher) do not.
+    let emitter = if reach.grants().is_empty() {
+        None
+    } else {
+        Some(
+            temper_substrate::writes::resolve_emitter(pool, caller, "web")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?,
+        )
+    };
+    apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -294,7 +313,19 @@ pub async fn issue(
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
     enroll_in_gating_team(&mut tx, caller, profile_id).await?;
-    apply_reach(&mut tx, caller, profile_id, reach).await?;
+    // Resolve the caller's emitter ONLY when there is a grant to author. A reach of pure team
+    // memberships fires no grant_created event, so it must not require the minter to carry a
+    // `<handle>@web` entity — many legitimate minters (e.g. a mere gating-team watcher) do not.
+    let emitter = if reach.grants().is_empty() {
+        None
+    } else {
+        Some(
+            temper_substrate::writes::resolve_emitter(pool, caller, "web")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?,
+        )
+    };
+    apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -444,6 +475,14 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed admin");
+
+        // The provisioning caller authors the grant_created events for any cogmap reach, so it must
+        // carry its `<handle>@web` emitter — as a real admin does. Provision via the production path.
+        let mut conn = pool.acquire().await.expect("acquire");
+        crate::services::profile_service::provision_profile_entities(&mut conn, id, "admin")
+            .await
+            .expect("provision caller emitters");
+        drop(conn);
 
         let team: Uuid = sqlx::query_scalar!(
             "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') \

@@ -20,10 +20,12 @@
 //! there declares its own (see `context_read_predicate_test.rs`, `act_correlation_test.rs`).
 
 use sqlx::PgPool;
+use temper_core::types::cognitive_maps::{GrantCapabilityRequest, RevokeCapabilityRequest};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiError;
 use temper_services::services::access_service;
 use temper_services::services::admin_ledger_service;
+use temper_services::services::connection_service;
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
@@ -753,4 +755,177 @@ async fn the_epoch_is_readable_and_null_anchored(pool: PgPool) {
         anchored, 0,
         "the epoch must be NULL-anchored — it has no cognition home"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 5 (spec 2026-07-16 §7): the grant chokepoint. insert_grant/delete_grant now fire the
+// grant_created/grant_revoked event AND write the row in ONE txn, via the SQL fns _admin_grant_*.
+// Proven for BOTH the generic grant_capability path and connection_service::grant_reach's direct
+// insert_grant bypass — a service-layer sink would have missed the bypass; the SQL chokepoint cannot.
+// ---------------------------------------------------------------------------------------------
+
+fn grant_req(subject_id: Uuid, principal_id: Uuid) -> GrantCapabilityRequest {
+    GrantCapabilityRequest {
+        subject_table: "kb_contexts".into(),
+        subject_id,
+        principal_table: "kb_teams".into(),
+        principal_id,
+        can_read: true,
+        can_write: false,
+        can_delete: false,
+        can_grant: false,
+    }
+}
+
+fn revoke_req(subject_id: Uuid, principal_id: Uuid) -> RevokeCapabilityRequest {
+    RevokeCapabilityRequest {
+        subject_table: "kb_contexts".into(),
+        subject_id,
+        principal_table: "kb_teams".into(),
+        principal_id,
+    }
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn granting_writes_an_event_and_the_row(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+
+    let outcome = access_service::grant_capability(
+        &pool,
+        f.admin_profile,
+        &grant_req(f.context_id, f.team_id),
+    )
+    .await
+    .expect("grant_capability");
+    assert!(outcome.granted, "a fresh grant reports granted");
+
+    // The row is written...
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_access_grants WHERE subject_id=$1 AND principal_id=$2",
+    )
+    .bind(f.context_id)
+    .bind(f.team_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, 1, "the grant row is written");
+
+    // ...and the same txn put the act on the ledger, subject-addressable, banned-key-free.
+    let entries = admin_ledger_service::list_by_subject(
+        &pool,
+        f.admin_profile,
+        RefTarget {
+            kind: AnchorTable::Contexts,
+            id: f.context_id,
+        },
+        50,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(entries.len(), 1, "the grant must be on the ledger");
+    assert_eq!(entries[0].event_type, "grant_created");
+    assert_eq!(entries[0].actor_profile_id, f.admin_profile.uuid());
+    assert_eq!(entries[0].payload["subject_table"], "kb_contexts");
+    assert!(
+        entries[0].payload.get("resource_id").is_none(),
+        "the banned element_trail key never appears (spec §5)"
+    );
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revoking_writes_an_event_even_though_the_row_is_deleted(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    access_service::grant_capability(&pool, f.admin_profile, &grant_req(f.context_id, f.team_id))
+        .await
+        .unwrap();
+    let out = access_service::revoke_capability(
+        &pool,
+        f.admin_profile,
+        &revoke_req(f.context_id, f.team_id),
+    )
+    .await
+    .unwrap();
+    assert!(out.revoked, "the row existed, so revoke reports revoked");
+
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_access_grants WHERE subject_id=$1")
+        .bind(f.context_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, 0,
+        "revoke still hard-DELETEs the row — the row is the current-state projection"
+    );
+
+    // The ledger keeps BOTH acts even though the row is gone — the temporal record outlives the
+    // projection. That asymmetry is the whole point of the sink.
+    let entries = admin_ledger_service::list_by_subject(
+        &pool,
+        f.admin_profile,
+        RefTarget {
+            kind: AnchorTable::Contexts,
+            id: f.context_id,
+        },
+        50,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the ledger keeps both the grant and the revoke"
+    );
+    assert_eq!(entries[0].event_type, "grant_revoked", "newest first");
+    assert_eq!(entries[1].event_type, "grant_created");
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_connection_grant_reach_bypass_is_also_on_the_ledger(pool: PgPool) {
+    // connection_service::grant_reach calls access_service::insert_grant DIRECTLY, bypassing
+    // grant_capability. Because the event now lives INSIDE insert_grant (the SQL chokepoint), the
+    // bypass cannot escape the ledger — this is exactly why the sink is SQL-resident, not service-layer.
+    let f = admin_fixture(&pool).await;
+    let nonce = &Uuid::now_v7().simple().to_string()[..8];
+    let (conn_profile, conn_emitter) = profile_with_emitters(&pool, &format!("conn-{nonce}")).await;
+    let connection_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_connections \
+             (provider, slug, name, registered_by_profile_id, profile_id, emitter_entity_id, \
+              home_context_id, owner_team_id) \
+         VALUES ('test', $1, $1, $2, $3, $4, $5, $6) RETURNING id",
+    )
+    .bind(format!("conn-{nonce}"))
+    .bind(f.admin_profile.uuid())
+    .bind(conn_profile.uuid())
+    .bind(conn_emitter)
+    .bind(f.context_id)
+    .bind(f.team_id)
+    .fetch_one(&pool)
+    .await
+    .expect("seed connection");
+
+    connection_service::grant_reach(&pool, f.admin_profile, connection_id, f.team_id, None)
+        .await
+        .expect("grant_reach");
+
+    let entries = admin_ledger_service::list_by_subject(
+        &pool,
+        f.admin_profile,
+        RefTarget {
+            kind: AnchorTable::Connections,
+            id: connection_id,
+        },
+        50,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "grant_reach's direct-insert_grant bypass must still reach the ledger"
+    );
+    assert_eq!(entries[0].event_type, "grant_created");
+    assert_eq!(entries[0].payload["subject_table"], "kb_connections");
 }
