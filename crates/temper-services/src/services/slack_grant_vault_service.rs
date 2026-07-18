@@ -1,6 +1,6 @@
 //! The Slack grant vault's persistence: seal a per-user grant, mint access tokens from it,
-//! revoke it. All SQL for T3 lives here; the callback handler dispatches and never touches the
-//! database or the cipher.
+//! and read it back for disconnect to destroy. All SQL for T3 lives here; the callback handler
+//! dispatches and never touches the database or the cipher.
 //!
 //! The vault holds each linked Slack user's OWN refresh token — the independent grant family
 //! T2's `offline_access` consent minted, never an export of that user's local CLI grant. The RT
@@ -318,28 +318,6 @@ pub async fn take_refresh_token_for_disconnect(
     Ok(Some(rt))
 }
 
-/// Revoke the grant for a principal. Returns `true` if a live row was revoked, `false` if there
-/// was nothing to revoke (no row, or already revoked).
-///
-/// HONEST SEMANTICS: this stops FUTURE mints. An access token already minted survives to its own
-/// `exp` — JWKS validation consults no revocation list. Callers must describe it that way and not
-/// imply an instant cutoff.
-pub async fn revoke(pool: &PgPool, slack_principal_id: &str) -> ApiResult<bool> {
-    let result = sqlx::query!(
-        r#"
-        UPDATE kb_slack_grant_vault
-           SET revoked_at = now(), updated_at = now()
-         WHERE slack_principal_id = $1
-           AND revoked_at IS NULL
-        "#,
-        slack_principal_id,
-    )
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
 /// Open a stored `(nonce, ciphertext)` pair to a UTF-8 token string, under the `aad` it was sealed
 /// with. A decrypt failure means the key changed, the row was tampered, or the ciphertext was
 /// transplanted from another principal/field (AAD mismatch); a non-UTF-8 payload means the same
@@ -483,7 +461,15 @@ mod tests {
         let profile = insert_profile(&pool).await;
         // Store with an already-expired cached AT so, absent the revocation, mint WOULD refresh.
         store(&pool, profile, PRINCIPAL, "rt", "at", Some(0)).await;
-        assert!(revoke(&pool, PRINCIPAL).await.unwrap());
+        // Flip the flag directly — the write-side `revoke` fn is gone (disconnect now deletes
+        // the row instead), but mint must still honour a row flagged before that change.
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1",
+            PRINCIPAL,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
             .await
@@ -574,34 +560,21 @@ mod tests {
         );
     }
 
-    /// Revoke is idempotent-ish: it reports the transition once, then reports nothing to do.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn revoke_reports_the_transition_once(pool: PgPool) {
-        let profile = insert_profile(&pool).await;
-        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
-
-        assert!(
-            revoke(&pool, PRINCIPAL).await.unwrap(),
-            "first revoke transitions"
-        );
-        assert!(
-            !revoke(&pool, PRINCIPAL).await.unwrap(),
-            "second revoke is a no-op"
-        );
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn revoke_of_an_unknown_principal_is_a_no_op(pool: PgPool) {
-        assert!(!revoke(&pool, PRINCIPAL).await.unwrap());
-    }
-
     /// Re-storing the same principal upserts to ONE row and clears a prior revocation — a fresh
     /// consent is a fresh, working grant.
     #[sqlx::test(migrations = "../../migrations")]
     async fn re_store_upserts_one_row_and_clears_revocation(pool: PgPool) {
         let profile = insert_profile(&pool).await;
         store(&pool, profile, PRINCIPAL, "rt1", "at1", Some(3600)).await;
-        assert!(revoke(&pool, PRINCIPAL).await.unwrap());
+        // Flip the flag directly — the write-side `revoke` fn is gone (disconnect now deletes
+        // the row instead), but a re-store must still clear a row flagged before that change.
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1",
+            PRINCIPAL,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // Re-link: new grant, longer-lived cached AT.
         store(&pool, profile, PRINCIPAL, "rt2", "at2-fresh", Some(3600)).await;
