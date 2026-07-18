@@ -276,6 +276,48 @@ pub async fn mint_access_token(
     Ok(MintOutcome::Token(tokens.access_token))
 }
 
+/// Read and decrypt the stored refresh token, for the disconnect path only.
+///
+/// Takes a `&mut PgConnection` so the caller can run this inside the same
+/// transaction as the deletes. Locks the row (`FOR UPDATE`) so a concurrent
+/// `mint_access_token` cannot rotate the RT out from under the revoke.
+///
+/// Returns `Ok(None)` when the principal has no vault row — a pre-T3 link, or
+/// an already-disconnected principal. That is not an error: disconnect is
+/// idempotent, and a missing grant simply means there is nothing to revoke.
+///
+/// Deliberately ignores `revoked_at`: a soft-revoked row still holds live
+/// ciphertext, and disconnect's job is to destroy it.
+pub async fn take_refresh_token_for_disconnect(
+    tx: &mut sqlx::PgConnection,
+    key: &VaultKey,
+    slack_principal_id: &str,
+) -> ApiResult<Option<String>> {
+    let row = sqlx::query!(
+        r#"
+        SELECT rt_nonce, rt_ciphertext
+          FROM kb_slack_grant_vault
+         WHERE slack_principal_id = $1
+         FOR UPDATE
+        "#,
+        slack_principal_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let rt = decrypt_to_string(
+        key,
+        &row.rt_nonce,
+        &row.rt_ciphertext,
+        &aad(slack_principal_id, FIELD_RT),
+    )?;
+    Ok(Some(rt))
+}
+
 /// Revoke the grant for a principal. Returns `true` if a live row was revoked, `false` if there
 /// was nothing to revoke (no row, or already revoked).
 ///
@@ -597,5 +639,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(out, MintOutcome::NotVaulted);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn take_refresh_token_returns_the_sealed_token_in_plaintext(pool: PgPool) {
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile_id,
+            "slack:T1:U1",
+            "rt-plaintext",
+            "at-plaintext",
+            Some(3600),
+        )
+        .await;
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T1:U1")
+            .await
+            .expect("take");
+        assert_eq!(got.as_deref(), Some("rt-plaintext"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn take_refresh_token_returns_none_for_an_unknown_principal(pool: PgPool) {
+        let key = key();
+        let mut conn = pool.acquire().await.expect("acquire");
+        let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T9:U9")
+            .await
+            .expect("take");
+        assert!(
+            got.is_none(),
+            "an unvaulted principal must yield None, not an error"
+        );
     }
 }
