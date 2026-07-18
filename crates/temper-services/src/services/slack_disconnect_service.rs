@@ -14,12 +14,14 @@
 use sqlx::PgPool;
 use temper_core::types::slack::IdpRevocation;
 
+use super::access_service;
 use super::grant_crypto::VaultKey;
 use super::slack_grant_vault_service;
 use super::slack_link_service::SLACK_AUTH_PROVIDER;
 use crate::auth_config::AuthMode;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::oauth_client;
+use temper_core::types::ids::ProfileId;
 
 /// What a disconnect actually did. Every field is an observation, not a promise.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +171,39 @@ pub async fn disconnect_slack_principal(
         intents_deleted,
         idp_revocation,
     })
+}
+
+/// Admin disconnect: unbind ANY principal, on behalf of an operator.
+///
+/// The authorization gate lives HERE, in the service, not in the HTTP handler.
+/// That is the repo's `audit-handler-authz-drift` rule, and it is load-bearing
+/// for this feature specifically: a `@temper disconnect` Slack surface is
+/// already planned, and a gate that lives in the axum handler is one that the
+/// next surface must remember to re-add. Enforcing it at the shared layer means
+/// every surface inherits it by construction.
+///
+/// Mirrors `machine_registration_service::provision`, which gates the same way.
+///
+/// Note the router is NOT the gate: under `access_mode='open'` the gated router
+/// admits everyone, so this check is the only thing standing between a
+/// non-admin and unbinding someone else's account.
+pub async fn admin_disconnect_slack_principal(
+    pool: &PgPool,
+    actor: ProfileId,
+    req: DisconnectRequest<'_>,
+) -> ApiResult<DisconnectOutcome> {
+    // Auth before writes — before the decrypt, before any DELETE.
+    if !access_service::is_system_admin(pool, actor).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    tracing::info!(
+        principal = %req.slack_principal_id,
+        %actor,
+        "admin slack disconnect authorized"
+    );
+
+    disconnect_slack_principal(pool, req).await
 }
 
 /// Revoke a temper-AS refresh token locally, in the caller's transaction.

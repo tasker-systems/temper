@@ -16,9 +16,10 @@ use temper_core::types::slack::{
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::link_provider;
 use temper_services::services::slack_disconnect_service::{
-    disconnect_slack_principal, DisconnectOutcome, DisconnectRequest,
+    admin_disconnect_slack_principal, disconnect_slack_principal, DisconnectOutcome,
+    DisconnectRequest,
 };
-use temper_services::services::{access_service, slack_link_service};
+use temper_services::services::slack_link_service;
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
@@ -126,12 +127,6 @@ pub async fn admin_disconnect(
     auth: AuthUser,
     Json(body): Json<SlackDisconnectRequest>,
 ) -> ApiResult<Json<SlackDisconnectResponse>> {
-    // Auth before any mutation. Load-bearing: the gated router admits everyone
-    // under access_mode='open' (routes.rs:168-169), so this is the real gate.
-    if !access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await? {
-        return Err(ApiError::Forbidden);
-    }
-
     let cfg = state
         .config
         .slack_link
@@ -140,15 +135,13 @@ pub async fn admin_disconnect(
 
     crate::handlers::slack_link::validate_slack_principal(&body.slack_principal_id)?;
 
-    tracing::info!(
-        principal = %body.slack_principal_id,
-        actor = %auth.0.profile.id,
-        "admin slack disconnect requested"
-    );
-
     let provider = link_provider::derive(&state.config.auth, cfg);
-    let outcome = disconnect_slack_principal(
+    // The admin gate lives in the SERVICE, not here — see
+    // `admin_disconnect_slack_principal`. A gate in this handler would be one the
+    // planned `@temper disconnect` Slack surface has to remember to re-add.
+    let outcome = admin_disconnect_slack_principal(
         &state.pool,
+        ProfileId::from(auth.0.profile.id),
         DisconnectRequest {
             slack_principal_id: &body.slack_principal_id,
             key: &cfg.vault_key,
