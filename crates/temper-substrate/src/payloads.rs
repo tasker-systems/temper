@@ -989,6 +989,13 @@ pub const TYPED_EVENT_NAMES: [&str; 18] = [
     "grant_revoked",
 ];
 
+/// The event names classified `kb_event_types.category = 'admin'` — the ledger's own vocabulary,
+/// firewalled out of every cognition read (`element_trail_node`/`_edge`, migration
+/// `20260718000020`). The migration stamps these on an existing registry; this const is what
+/// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
+/// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
+pub const ADMIN_EVENT_NAMES: [&str; 3] = ["admin_ledger_opened", "grant_created", "grant_revoked"];
+
 /// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must
 /// deserialize into its struct. Catches drift from ANY write path — Rust, hand-SQL, foreign.
 pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> {

@@ -62,12 +62,25 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
                 .ok()
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?;
+        // `category` rides the same insert. Migration 20260718000020 stamps it by name, but
+        // `reset_schema` TRUNCATEs the registry and lets this loop rebuild it — so without carrying
+        // the classification here, `grant_created`/`grant_revoked` would come back as 'cognition'
+        // and the trail's belt-and-braces filter would silently classify them wrong on that
+        // baseline. Single source: `payloads::ADMIN_EVENT_NAMES`.
+        let category = if crate::payloads::ADMIN_EVENT_NAMES.contains(&et.as_str()) {
+            "admin"
+        } else {
+            "cognition"
+        };
         sqlx::query!(
-            "INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES ($1, $2, 1) \
+            "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+             VALUES ($1, $2, 1, $3) \
              ON CONFLICT (name) DO UPDATE SET payload_schema = EXCLUDED.payload_schema, \
-                                              schema_version = EXCLUDED.schema_version",
+                                              schema_version = EXCLUDED.schema_version, \
+                                              category = EXCLUDED.category",
             et,
             schema as Option<serde_json::Value>,
+            category,
         )
         .execute(pool)
         .await?;

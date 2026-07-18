@@ -71,8 +71,21 @@ pub(crate) async fn can_administer_grant(
     subject_table: &str,
     subject_id: Uuid,
 ) -> ApiResult<bool> {
-    Ok(is_system_admin(pool, caller).await?
-        || profile_can_grant(pool, caller, subject_table, subject_id).await?)
+    if is_system_admin(pool, caller).await? {
+        return Ok(true);
+    }
+    // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` exists to keep the
+    // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never consulted
+    // it — so a non-admin `can_grant` holder could mint `can_write` on the kernel, reaching by the
+    // grant axis exactly what the write axis forbids. `machine_authz.rs:386-392` seeds such a row,
+    // so the state is reachable, not hypothetical. Admins already returned above, so a map in the
+    // admin-only regime denies here regardless of any `can_grant` the caller holds.
+    if subject_table == "kb_cogmaps"
+        && cogmap_write_requires_admin(pool, CogmapId(subject_id)).await?
+    {
+        return Ok(false);
+    }
+    profile_can_grant(pool, caller, subject_table, subject_id).await
 }
 
 /// Raw `can_grant` capability probe (NO `is_system_admin` OR) — the reusable primitive. Callers that
@@ -273,9 +286,31 @@ pub async fn require_cogmap_write_admin(
     profile_id: ProfileId,
     cogmap_id: CogmapId,
 ) -> ApiResult<()> {
-    let is_reserved = cogmap_id == L0_KERNEL_COGMAP;
+    if !cogmap_write_requires_admin(pool, cogmap_id).await? {
+        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
+    }
+    if is_system_admin(pool, profile_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
 
-    let is_root_joined: bool = sqlx::query_scalar!(
+/// The **structural** half of [`require_cogmap_write_admin`], caller-independent: does this cogmap
+/// sit in the admin-only regime at all (reserved L0 kernel, or joined to the gating team)?
+///
+/// Extracted so `can_administer_grant` can consult the SAME condition without either restating the
+/// query — a second copy of the policy is a copy that drifts from the gate it exists to mirror — or
+/// swallowing a genuine DB error as a denial (which is what reusing the `Result`-returning form via
+/// `.is_err()` would do).
+pub(crate) async fn cogmap_write_requires_admin(
+    pool: &PgPool,
+    cogmap_id: CogmapId,
+) -> ApiResult<bool> {
+    if cogmap_id == L0_KERNEL_COGMAP {
+        return Ok(true); // unconditional, independent of `gating_team_slug` (fail-CLOSED)
+    }
+    Ok(sqlx::query_scalar!(
         "SELECT EXISTS( \
            SELECT 1 FROM kb_team_cogmaps tc \
              JOIN kb_teams t ON t.id = tc.team_id \
@@ -285,16 +320,7 @@ pub async fn require_cogmap_write_admin(
     )
     .fetch_one(pool)
     .await?
-    .unwrap_or(false);
-
-    if !is_reserved && !is_root_joined {
-        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
-    }
-    if is_system_admin(pool, profile_id).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
+    .unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------

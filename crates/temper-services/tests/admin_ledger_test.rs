@@ -731,6 +731,195 @@ async fn an_admin_event_never_appears_in_an_element_trail(pool: PgPool) {
     );
 }
 
+/// Insert a **deliberately poisoned** admin event: one that spells the trail-matched keys the
+/// convention bans (`resource_id`, `owner`, `edge_id`). Nothing in production writes this — it is
+/// the counterfactual the runtime filter has to survive.
+///
+/// It is NULL-anchored and typed `grant_created`, exactly like a real one, so it is excluded by
+/// anchor nullity (Half A) and by `kb_event_types.category = 'admin'` (Half B) — never by its
+/// payload. That is the whole point: `an_admin_event_never_appears_in_an_element_trail` proves the
+/// *convention* holds; this proves the trail is safe **even when the convention is violated**.
+async fn seed_poisoned_admin_event(
+    pool: &PgPool,
+    emitter: Uuid,
+    resource: Uuid,
+    edge: Option<Uuid>,
+) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"INSERT INTO kb_events (event_type_id, emitter_entity_id, payload)
+           SELECT et.id, $1,
+                  jsonb_strip_nulls(jsonb_build_object(
+                    'resource_id', $2::text,
+                    'owner', jsonb_build_object('table', 'kb_resources', 'id', $2::text),
+                    'edge_id', $3::text
+                  ))
+             FROM kb_event_types et WHERE et.name = 'grant_created'
+           RETURNING id"#,
+    )
+    .bind(emitter)
+    .bind(resource)
+    .bind(edge)
+    .fetch_one(pool)
+    .await
+    .expect("seed poisoned admin event")
+}
+
+/// **The runtime filter, independent of the naming convention** (plan item 5b.5).
+///
+/// The sibling test above proves admin events stay out of element trails *because their payloads
+/// avoid the matched keys*. That is a convention with a test behind it — not a filter. This test
+/// removes the convention from the equation: it writes an admin event that DOES spell
+/// `resource_id`, `owner.{table,id}` and `edge_id`, and asserts both trail functions still refuse
+/// it. Only migration `20260718000020`'s two filters can make this pass.
+///
+/// Non-vacuity is asserted, not assumed, on three axes:
+///   1. the scanning profile really can read the subject resource and the edge;
+///   2. a genuine *cognition* event spelling the very same keys DOES come back from both trails —
+///      so the key-shape matching is live and the poisoned payload is genuinely trail-shaped;
+///   3. the poisoned admin event exists and really does spell the banned keys.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_event_stays_out_of_the_trail_even_when_its_payload_spells_a_banned_key(
+    pool: PgPool,
+) {
+    let f = admin_fixture(&pool).await;
+
+    // The owner's own context, which homes `owned_resource_id` — the edge's home anchor below.
+    let owner_context: Uuid = sqlx::query_scalar(
+        "SELECT anchor_id FROM kb_resource_homes WHERE resource_id = $1 AND anchor_table='kb_contexts'",
+    )
+    .bind(f.owned_resource_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the owned resource must be homed on a context");
+    let other_resource =
+        resource_owned_by(&pool, owner_context, f.owner_profile, "owned-doc-2").await;
+
+    // --- a real cognition event + the edge it asserts (the positive control) ---------------------
+    // Anchored on the owner's context, so it is a legitimate trail entry; its payload spells
+    // `resource_id` and `edge_id` — the same keys the poisoned admin payload will spell.
+    let edge_id = Uuid::now_v7();
+    let cognition_event: Uuid = sqlx::query_scalar(
+        r#"INSERT INTO kb_events
+               (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, payload)
+           SELECT et.id, $1, 'kb_contexts', $2,
+                  jsonb_build_object('resource_id', $3::text, 'edge_id', $4::text)
+             FROM kb_event_types et WHERE et.name = 'relationship_asserted'
+           RETURNING id"#,
+    )
+    .bind(f.owner_emitter)
+    .bind(owner_context)
+    .bind(f.owned_resource_id)
+    .bind(edge_id)
+    .fetch_one(&pool)
+    .await
+    .expect("seed cognition event");
+
+    sqlx::query(
+        "INSERT INTO kb_edges (id, source_table, source_id, target_table, target_id, edge_kind, \
+                               label, home_anchor_table, home_anchor_id, \
+                               asserted_by_event_id, last_event_id) \
+         VALUES ($1, 'kb_resources', $2, 'kb_resources', $3, 'express'::edge_kind, \
+                 'derived_from', 'kb_contexts', $4, $5, $5)",
+    )
+    .bind(edge_id)
+    .bind(f.owned_resource_id)
+    .bind(other_resource)
+    .bind(owner_context)
+    .bind(cognition_event)
+    .execute(&pool)
+    .await
+    .expect("seed edge");
+
+    // --- the poisoned admin event ----------------------------------------------------------------
+    let poisoned =
+        seed_poisoned_admin_event(&pool, f.admin_emitter, f.owned_resource_id, Some(edge_id)).await;
+
+    // Non-vacuity 3: it really does spell the banned keys (a jsonb_strip_nulls slip would silently
+    // defang this whole test).
+    let spelled: Vec<String> = sqlx::query_scalar(
+        "SELECT k.key FROM kb_events e CROSS JOIN LATERAL jsonb_object_keys(e.payload) AS k(key) \
+          WHERE e.id = $1 AND k.key = ANY($2) ORDER BY k.key",
+    )
+    .bind(poisoned)
+    .bind(BANNED_ADMIN_PAYLOAD_KEYS)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        spelled,
+        vec!["edge_id", "owner", "resource_id"],
+        "the poisoned event must genuinely spell the banned keys, or this test proves nothing"
+    );
+
+    // --- node trail -------------------------------------------------------------------------------
+    let node_trail: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT tr.event_id, tr.kind FROM element_trail_node($1, $2) AS tr")
+            .bind(f.owner_profile.uuid())
+            .bind(f.owned_resource_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    // Non-vacuity 1+2: the trail is live and the key-shape match really fires on this payload.
+    assert!(
+        node_trail.iter().any(|(id, _)| *id == cognition_event),
+        "the cognition event spelling `resource_id` MUST appear, or the node trail is not \
+         matching key shape here and the exclusion below is vacuous. Got: {node_trail:?}"
+    );
+    assert!(
+        !node_trail.iter().any(|(id, _)| *id == poisoned),
+        "the admin event must stay out of the node trail even though it spells `resource_id` and \
+         `owner` — the runtime filter, not the naming convention, is what keeps it out. \
+         Got: {node_trail:?}"
+    );
+
+    // --- edge trail --------------------------------------------------------------------------------
+    let edge_trail: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT tr.event_id, tr.kind FROM element_trail_edge($1, $2) AS tr")
+            .bind(f.owner_profile.uuid())
+            .bind(edge_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    assert!(
+        edge_trail.iter().any(|(id, _)| *id == cognition_event),
+        "the cognition event spelling `edge_id` MUST appear, or the edge trail is not reachable \
+         for this profile and the exclusion below is vacuous. Got: {edge_trail:?}"
+    );
+    assert!(
+        !edge_trail.iter().any(|(id, _)| *id == poisoned),
+        "the admin event must stay out of the edge trail even though it spells `edge_id`. \
+         Got: {edge_trail:?}"
+    );
+}
+
+/// The registry classification (migration `20260718000020` Half B) is stamped, and stamped on
+/// exactly the admin vocabulary. Half A (anchor nullity) is invisible at the call site; this is the
+/// half a reviewer can read — so it gets its own assertion rather than riding the behaviour test.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn exactly_the_admin_event_types_are_categorised_admin(pool: PgPool) {
+    let admin_typed: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM kb_event_types WHERE category = 'admin' ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let mut expected: Vec<String> = ADMIN_EVENT_TYPES_FOR_TEST
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    expected.sort();
+
+    assert_eq!(
+        admin_typed, expected,
+        "kb_event_types.category='admin' must name exactly the admin ledger's vocabulary — no \
+         more (a cognition type stamped admin vanishes from every element trail) and no less (an \
+         admin type left 'cognition' loses the visible half of the trail firewall)"
+    );
+}
+
 /// Task 4 (spec 2026-07-16 §8): the epoch marker exists after migration and is NULL-anchored (the
 /// cognition firewall). `ledger_epoch` reads the `admin_ledger_opened` event's `opened_at`; a
 /// producing anchor on it would mean the epoch had a cognition home, which it must not.
