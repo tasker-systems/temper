@@ -181,6 +181,33 @@ async fn revoke_as_refresh_token(
     Ok(affected > 0)
 }
 
+/// Sweep link intents that can no longer serve a purpose.
+///
+/// An intent is dead once it has expired or been consumed — a consumed row's
+/// nonce is single-use and already burnt. Until this existed nothing ever
+/// deleted from `kb_slack_link_intents`, so every principal that ever linked
+/// left its PKCE verifier on disk indefinitely.
+///
+/// Live rows (unconsumed and unexpired) are spared: they are challenges a user
+/// may still be about to click.
+pub async fn reap_expired_intents(pool: &PgPool) -> ApiResult<i64> {
+    let swept = sqlx::query!(
+        r#"
+        DELETE FROM kb_slack_link_intents
+         WHERE consumed_at IS NOT NULL
+            OR expires_at <= now()
+        "#
+    )
+    .execute(pool)
+    .await?
+    .rows_affected() as i64;
+
+    if swept > 0 {
+        tracing::info!(swept, "slack link intents reaped");
+    }
+    Ok(swept)
+}
+
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
@@ -449,5 +476,62 @@ mod tests {
             revoked_at.is_some(),
             "the AS row must be marked revoked, asserted on the row not the return value"
         );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_reaper_sweeps_expired_and_consumed_intents_but_spares_live_ones(pool: PgPool) {
+        use crate::services::slack_link_service::create_intent;
+
+        // Live — must survive.
+        create_intent(
+            &pool,
+            "slack:T1:ULIVE",
+            "v-live",
+            std::time::Duration::from_secs(900),
+        )
+        .await
+        .expect("live intent");
+
+        // Expired — must be swept.
+        create_intent(
+            &pool,
+            "slack:T1:UEXP",
+            "v-exp",
+            std::time::Duration::from_secs(900),
+        )
+        .await
+        .expect("expiring intent");
+        sqlx::query("UPDATE kb_slack_link_intents SET expires_at = now() - interval '1 hour' WHERE slack_principal_id = $1")
+            .bind("slack:T1:UEXP")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Consumed but not yet expired — must be swept (its purpose is spent).
+        create_intent(
+            &pool,
+            "slack:T1:UUSED",
+            "v-used",
+            std::time::Duration::from_secs(900),
+        )
+        .await
+        .expect("consumed intent");
+        sqlx::query(
+            "UPDATE kb_slack_link_intents SET consumed_at = now() WHERE slack_principal_id = $1",
+        )
+        .bind("slack:T1:UUSED")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let swept = reap_expired_intents(&pool).await.expect("reap");
+        assert_eq!(swept, 2, "expired and consumed rows are swept");
+
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT slack_principal_id FROM kb_slack_link_intents")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, vec!["slack:T1:ULIVE".to_string()]);
     }
 }
