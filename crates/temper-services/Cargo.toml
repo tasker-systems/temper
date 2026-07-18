@@ -33,6 +33,10 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
+# The Slack grant vault seals each stored refresh/access token with XChaCha20-Poly1305 (24-byte
+# random nonce per row, so nonce reuse is a non-issue). Pure Rust, no OpenSSL — matches the
+# rustls-only posture. `getrandom` backs the nonce/key RNG (`OsRng`).
+chacha20poly1305 = "0.10"
 # Path-segment encoding for the Connect mint URL — a connector uid is one
 # url-encoded path segment (`github/acme` → `github%2Facme`).
 percent-encoding = "2"

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE kb_slack_grant_vault dst\n               SET rt_nonce = src.rt_nonce, rt_ciphertext = src.rt_ciphertext\n              FROM kb_slack_grant_vault src\n             WHERE dst.slack_principal_id = $1 AND src.slack_principal_id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38456963c9b34854757ca9ed02036f2922c9aa6d0d2a0d7ed5e428f505c9a365"
+}
