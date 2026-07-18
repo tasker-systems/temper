@@ -1360,6 +1360,34 @@ finally get the payload schemas they never had."
 
 ### Task 5: The grant chokepoint — SQL fns, projectors, replay ownership
 
+> **SHIPPED 2026-07-18. Grounding against `main` changed five things below; read this first.**
+>
+> 1. **Migration is `20260718000010_admin_grant_fns.sql`, not `…0717000030`.** A sibling session was
+>    landing a `…0717000030`, and the day had rolled over — a new-day stamp both avoids the collision
+>    and is correct (the migration-collision-reads-as-a-flake trap).
+> 2. **A FIFTH caller the plan's "4 callers" missed:** `machine_registration_service::apply_reach`
+>    (`:137`) also calls `insert_grant`. Found by grepping every call site (the signature change breaks
+>    any missed one). Wired through `apply_reach`.
+> 3. **Correlation is DROPPED from the Rust signatures.** Step 6's rationale — "grant_reach mints one
+>    CorrelationId and threads it to the affirmation AND the grant" — rests on a false premise:
+>    `connection_service` fires **no events at all** (the reach affirmation is a column `UPDATE`), so
+>    the grant is the lone event and self-roots correctly. `insert_grant(conn, p, emitter)` /
+>    `delete_grant(conn, …, revoker, emitter)` — no `correlation`, no `ctx: EventContext`. The SQL fns
+>    keep `p_correlation DEFAULT NULL`, so the capability survives at the SQL layer for any future
+>    correlated caller **without** a deploy-skew signature change.
+> 4. **Emitter resolution is LAZY where grants are conditional.** `apply_reach` takes
+>    `emitter: Option<EntityId>`, resolved `Some` iff `reach.grants()` is non-empty — a pure
+>    team-membership provision fires no grant event and must not require the minter to carry a
+>    `<handle>@web` entity (a mere gating-team watcher does not). The always-grants paths
+>    (`grant_capability`, `revoke_capability`, `grant_reach`) resolve unconditionally.
+> 5. **Step 4 (EventKind variants) + Step 5's mechanics already shipped in Task 4** (the replay no-op
+>    arms). Task 5 adds only `"kb_access_grants"` to `INPUT_TABLES`.
+>
+> Fixture fixes: `seed_admin`/`seed_team_member` in the connection/machine tests now provision emitters
+> via the production `provision_profile_entities` — a caller that authors a grant event must carry its
+> emitter, exactly as production does (the "fixture without emitters passes while production 500s"
+> pattern). Verified: services suite 392/392, artifact/replay 281/281, `cargo make check` green.
+
 The proving pair. It catches the generic grant path **and** `connection_service::grant_reach`'s bypass (`connection_service.rs:467`, `:486`), which calls `insert_grant` directly — a service-layer sink would miss it. It also exercises replay ownership end-to-end.
 
 **Files:**
