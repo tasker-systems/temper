@@ -44,6 +44,19 @@ const SLACK_SECRET: &str = "slack-link-e2e-secret";
 
 const CLIENT_ID: &str = "slack-link-client";
 
+/// A fixed 32-byte vault key (base64), so the grant vault can seal the RT the stub hands back.
+/// `AQEB…` decodes to 32 bytes of `0x01` — enough for XChaCha20-Poly1305; the value is
+/// irrelevant, only that it parses.
+const VAULT_KEY_B64: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
+/// The refresh token the stub IdP returns on every exchange (see [`stub_token_endpoint`]).
+const STUB_REFRESH_TOKEN: &str = "stub-refresh-token";
+
+fn vault_key() -> temper_services::services::grant_crypto::VaultKey {
+    temper_services::services::grant_crypto::VaultKey::from_base64(VAULT_KEY_B64)
+        .expect("the fixed test vault key parses")
+}
+
 /// Matches `ApiConfig.auth_provider_name` below. The lookup-only resolve keys on
 /// `(auth_provider, external_user_id)` using the SERVER's configured provider name, so an
 /// "existing profile" means a `kb_profile_auth_links` row under exactly this string.
@@ -111,6 +124,7 @@ async fn setup_slack_app(pool: &PgPool) -> SlackLinkApp {
             client_id: CLIENT_ID.to_string(),
             hmac_secret: SLACK_SECRET.to_string(),
             public_base_url: "https://temper.test".to_string(),
+            vault_key: vault_key(),
         }),
     };
 
@@ -179,7 +193,7 @@ async fn stub_token_endpoint(app: &SlackLinkApp, access_token: String) {
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(StubTokenResponse {
             access_token,
-            refresh_token: "stub-refresh-token".to_string(),
+            refresh_token: STUB_REFRESH_TOKEN.to_string(),
             expires_in: 86400,
         }))
         .mount(&app.idp)
@@ -684,5 +698,90 @@ async fn link_state_rejects_a_forged_signature(pool: PgPool) {
         count_intents(&pool).await,
         0,
         "an unsigned call must mint no intent"
+    );
+}
+
+/// **T3, end to end.** A successful link vaults the refresh token the exchange returned —
+/// encrypted at rest — and a subsequent mint yields an access token, refreshing against the IdP
+/// when the cached one has expired.
+///
+/// This is the closest a local tier gets to the acceptance criterion "a linked user has an
+/// independent encrypted grant; refresh yields a fresh AT": the callback runs the real seam
+/// against a real Postgres, `store_grant` seals the stub's `refresh_token`, and `mint_access_token`
+/// exercises the FOR UPDATE + decrypt-cached path and then the decrypt-RT → refresh → rotate path.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: PgPool) {
+    use temper_services::services::slack_grant_vault_service::{mint_access_token, MintOutcome};
+
+    let app = setup_slack_app(&pool).await;
+    let sub = "idp-sub-vaulted";
+    let email = "vaulted-5b12aa@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(body.contains("Linked as"), "the link must succeed: {body}");
+
+    // The RT is stored ENCRYPTED — the raw column must not equal the stub's plaintext token.
+    let rt_ciphertext: Vec<u8> = sqlx::query_scalar(
+        "SELECT rt_ciphertext FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("a vault row exists after linking");
+    assert_ne!(
+        rt_ciphertext,
+        STUB_REFRESH_TOKEN.as_bytes(),
+        "the refresh token must be sealed at rest, never stored as plaintext",
+    );
+
+    let token_url = format!("{}/oauth/token", app.issuer());
+
+    // First mint: the cached AT from the exchange is still valid, so this returns it with no
+    // refresh — proving the store → decrypt-cached round-trip through the real DB and crypto.
+    match mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
+        .await
+        .expect("mint")
+    {
+        MintOutcome::Token(t) => assert!(!t.is_empty(), "the cached mint must yield a token"),
+        other => panic!("expected a cached token, got {other:?}"),
+    }
+
+    // Expire the cached AT, then mint again: this drives the decrypt-RT → refresh → rotate path
+    // against the stub's `/oauth/token`, and rotates the stored RT to the stub's new one.
+    sqlx::query("UPDATE kb_slack_grant_vault SET access_expires_at = now() - interval '1 hour' WHERE slack_principal_id = $1")
+        .bind(SLACK_PRINCIPAL)
+        .execute(&pool)
+        .await
+        .expect("expire the cached access token");
+
+    match mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
+        .await
+        .expect("refreshing mint")
+    {
+        MintOutcome::Token(t) => assert!(!t.is_empty(), "the refreshing mint must yield a token"),
+        other => panic!("expected a refreshed token, got {other:?}"),
+    }
+
+    // After a refresh the cached AT is fresh again — the rotation wrote a new expiry.
+    let expires_in_future: bool = sqlx::query_scalar(
+        "SELECT access_expires_at > now() FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("read the refreshed expiry");
+    assert!(
+        expires_in_future,
+        "the refresh must re-cache a live access token"
     );
 }

@@ -477,13 +477,20 @@ The `redirect_uri` must be registered — **in both modes, and it is not optiona
 their own PKCE pair and a `redirect_uri` they control, tricks a victim into completing the login,
 and receives the code.
 
-New env, three vars, all on temper-api: `SLACK_LINK_CLIENT_ID` (the link client_id),
+New env, **four** vars, all on temper-api: `SLACK_LINK_CLIENT_ID` (the link client_id),
 `SLACK_LINK_SECRET` (the HMAC secret shared with the agent — fail-closed if unset, per
-`internal_auth.rs:7-8`'s precedent), and `PUBLIC_BASE_URL` (this instance's public origin, which
-the callback `redirect_uri` is derived from). They are parsed as a unit: all three present ⇒ the
-flow is enabled, any absent ⇒ disabled. The derived `redirect_uri`
+`internal_auth.rs:7-8`'s precedent), `PUBLIC_BASE_URL` (this instance's public origin, which
+the callback `redirect_uri` is derived from), and — added by T3 — `SLACK_VAULT_ENC_KEY` (the
+grant-vault AEAD key; see below). They are parsed as a unit: all four present and valid ⇒ the
+flow is enabled, any absent or a malformed key ⇒ disabled. The derived `redirect_uri`
 (`<PUBLIC_BASE_URL>/api/auth/slack/callback`) must be registered with the IdP — Auth0's Allowed
 Callback URLs, or the client's `AS_CLIENTS` entry on an AS instance.
+
+> **T3 rollout note (fail-closed).** T3 folds `SLACK_VAULT_ENC_KEY` into the required set, so
+> deploying T3 to an instance already running T2 **disables the link flow until the key is set**.
+> Provision `SLACK_VAULT_ENC_KEY` (e.g. in Vercel env) as part of the T3 deploy, not after it, or
+> `@temper` mentions go dark. This is deliberate: an instance that can link accounts but cannot
+> vault the grant produces inert links (nothing can act as the human), so link-on ⇒ vault-on.
 
 ## Out of scope
 
@@ -499,10 +506,57 @@ Callback URLs, or the client's `AS_CLIENTS` entry on an AS instance.
 - **Management-API mint** (D1), **in-process AS minting** (D2), **extending `kb_oauth_flow`** (D6),
   **Slack posts from temper-api** (D7).
 
+### Shipped in T3 — the grant vault
+
+The seam T2 left is now filled. `kb_slack_grant_vault` (migration `20260717000020`) stores each
+linked user's own refresh token (and a cached access token) as **XChaCha20-Poly1305** ciphertext
+with a per-row 24-byte random nonce, keyed by the whole opaque `slack_principal_id`. Identity
+stays in `kb_profile_auth_links` (no secret column); the secret lives only here.
+
+*(An adversarial security pass over this code — five lenses: secret exposure, the rotation race,
+revocation honesty, crypto soundness, authz/isolation — produced the AAD binding, the `is_active`
+gate, the redacting `Debug`s, and the honest limitations called out below.)*
+
+- **Key management.** The AEAD key is `SLACK_VAULT_ENC_KEY` — 32 bytes, base64
+  (`openssl rand -base64 32`) — parsed once at config load into a redacting `VaultKey` newtype
+  (`grant_crypto.rs`), so nothing downstream handles an unvalidated or loggable key. The database
+  never sees the key or plaintext. `MintOutcome`, `NewGrant`, and `SlackLinkConfig` all hand-write
+  `Debug` to redact the token/secret fields they carry.
+- **Context binding (AAD).** Each ciphertext is bound to its `slack_principal_id` + field tag
+  (`rt`/`at`) as AEAD associated data. A DB-write attacker who transplants a valid `(nonce,
+  ciphertext)` into another row or the other column gets an authentication-tag failure, not another
+  user's token — the key alone no longer relocates a sealed secret.
+- **Rotation — FLAG-DAY today, keyring later.** One key is wired; `key_version` is stamped `1` and
+  not yet read. Rotating `SLACK_VAULT_ENC_KEY` **today invalidates every stored grant** (old
+  ciphertext no longer opens; affected users re-link). `key_version` reserves the seam for a future
+  keyring (current + previous keys, decrypt-by-version, re-encrypt-to-current lazily on refresh) so
+  that upgrade is additive, not a schema change. The docs no longer claim lazy rotation is built.
+- **Refresh, the race it closes, and the one it does NOT.** `mint_access_token` returns the cached
+  AT when valid; otherwise it spends the stored RT, stores the rotated RT, caches the new AT — all
+  under a `SELECT … FOR UPDATE OF v` row lock. The lock closes the **concurrent-double-spend** axis
+  (two mentions at once cannot both spend the same RT). It does **not** close the **dual-write**
+  axis: the RT rotation is an IdP side effect outside the transaction, so a crash or COMMIT failure
+  *after* Auth0 returns the rotated RT but *before* the row update commits leaves a dead RT stored,
+  and the next mint trips reuse-detection. No row lock can make an external HTTP effect atomic with
+  a local commit. **Ops mitigation (required): enable Auth0 refresh-token rotation _leeway_** (a
+  grace window tolerating a brief RT reuse); recovery is a re-link. A follow-up hardening (outbox /
+  write-ahead of "RT_v1 spent") is noted but out of this task's scope.
+- **Deactivation reaches the vault.** `mint` joins `kb_profiles` and refuses a deactivated profile
+  (`is_active = false`) — the kill-switch is not escaped by the vault. Reported as `Revoked`.
+- **Revocation, honest.** `revoke` sets `revoked_at`; a revoked/deactivated row mints nothing. A
+  live AT already handed out survives to its own `exp` — JWKS validation consults no revocation
+  list — so this is a stop on **future** mints, not an instant cutoff. (`revoke` itself is not yet
+  wired to a surface; the disconnect task wires it. Deactivation, above, is wired now.)
+- **T4's load-bearing invariant (carry-forward).** `mint_access_token` enforces **no** authorization
+  — it mints for whatever principal it is handed. T4's mention path MUST derive the principal from
+  an HMAC-verified server-to-server request whose principal comes from Slack's own verified event,
+  never a client-supplied field. Naming a principal must not be sufficient to mint its token. No
+  surface reaches `mint` today, so this is a design gate on T4, not a live hole.
+
 ### Deferred
 
-- **The vault + refresh** → T3. T2 hands the RT to a seam.
 - **Presenting the token to temper-mcp** → T4. **Writes + HITL** → T5.
+- **Disconnect** (delete the link row + vault row) → its own task.
 - **`login.rs` never validates the returned `state`** — the CLI has no CSRF check on its callback.
   Pre-existing, low severity behind a loopback, real. Not T2's narrative; file separately rather
   than bundle.

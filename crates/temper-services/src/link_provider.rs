@@ -54,10 +54,15 @@ mod tests {
     use crate::auth_config::{AuthConfig, AuthMode};
 
     fn slack_cfg() -> crate::config::SlackLinkConfig {
+        use base64::Engine as _;
         crate::config::SlackLinkConfig {
             client_id: "slack-link-client".to_string(),
             hmac_secret: "s3cret".to_string(),
             public_base_url: "https://temperkb.io".to_string(),
+            vault_key: crate::services::grant_crypto::VaultKey::from_base64(
+                &base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+            )
+            .unwrap(),
         }
     }
 
