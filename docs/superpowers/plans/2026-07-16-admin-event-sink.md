@@ -1360,6 +1360,34 @@ finally get the payload schemas they never had."
 
 ### Task 5: The grant chokepoint — SQL fns, projectors, replay ownership
 
+> **SHIPPED 2026-07-18. Grounding against `main` changed five things below; read this first.**
+>
+> 1. **Migration is `20260718000010_admin_grant_fns.sql`, not `…0717000030`.** A sibling session was
+>    landing a `…0717000030`, and the day had rolled over — a new-day stamp both avoids the collision
+>    and is correct (the migration-collision-reads-as-a-flake trap).
+> 2. **A FIFTH caller the plan's "4 callers" missed:** `machine_registration_service::apply_reach`
+>    (`:137`) also calls `insert_grant`. Found by grepping every call site (the signature change breaks
+>    any missed one). Wired through `apply_reach`.
+> 3. **Correlation is DROPPED from the Rust signatures.** Step 6's rationale — "grant_reach mints one
+>    CorrelationId and threads it to the affirmation AND the grant" — rests on a false premise:
+>    `connection_service` fires **no events at all** (the reach affirmation is a column `UPDATE`), so
+>    the grant is the lone event and self-roots correctly. `insert_grant(conn, p, emitter)` /
+>    `delete_grant(conn, …, revoker, emitter)` — no `correlation`, no `ctx: EventContext`. The SQL fns
+>    keep `p_correlation DEFAULT NULL`, so the capability survives at the SQL layer for any future
+>    correlated caller **without** a deploy-skew signature change.
+> 4. **Emitter resolution is LAZY where grants are conditional.** `apply_reach` takes
+>    `emitter: Option<EntityId>`, resolved `Some` iff `reach.grants()` is non-empty — a pure
+>    team-membership provision fires no grant event and must not require the minter to carry a
+>    `<handle>@web` entity (a mere gating-team watcher does not). The always-grants paths
+>    (`grant_capability`, `revoke_capability`, `grant_reach`) resolve unconditionally.
+> 5. **Step 4 (EventKind variants) + Step 5's mechanics already shipped in Task 4** (the replay no-op
+>    arms). Task 5 adds only `"kb_access_grants"` to `INPUT_TABLES`.
+>
+> Fixture fixes: `seed_admin`/`seed_team_member` in the connection/machine tests now provision emitters
+> via the production `provision_profile_entities` — a caller that authors a grant event must carry its
+> emitter, exactly as production does (the "fixture without emitters passes while production 500s"
+> pattern). Verified: services suite 392/392, artifact/replay 281/281, `cargo make check` green.
+
 The proving pair. It catches the generic grant path **and** `connection_service::grant_reach`'s bypass (`connection_service.rs:467`, `:486`), which calls `insert_grant` directly — a service-layer sink would miss it. It also exercises replay ownership end-to-end.
 
 **Files:**
@@ -1742,6 +1770,173 @@ grant_created carries `previous` capabilities: an upsert that CHANGES
 capabilities returns inserted=false, so the bool alone would drop a real
 authority change."
 ```
+
+---
+
+### Task 5b: Authorization hardening — the gaps the Task 5 access trace surfaced
+
+> **ADDED 2026-07-18, before merging Task 5's PR (#482, moved to DRAFT).** Pete asked for a full
+> identity → authorization → level-of-access trace across every surface this arc touches, on fresh
+> context. Three parallel read-only traces (access-grant surface; machine + connection families;
+> ledger read gate) plus an empirical probe against the live DB. **None of these is a Task 5
+> regression** — all five pre-exist on `main`, verified by `git show main:…`. But four of them are
+> merge-blocking by Pete's call: the arc asserts a *chokepoint*, and a chokepoint with known holes is
+> a claim, not an invariant.
+
+**Grounding established by the trace (cite these, don't re-derive):**
+
+- The SQL chokepoints are **`SECURITY INVOKER` and perform zero authorization** — verified live
+  (`prosecdef = f` for `_admin_grant_created` / `_admin_grant_revoked`). All authz is Rust-side. The
+  `insert_grant` doc comment ("**Performs no authorization** — every caller must gate first") is an
+  accurate contract, not aspiration.
+- **Two authorization regimes write `kb_access_grants`**: `can_administer_grant` (admin OR explicit
+  `can_grant` OR resource-home owner) for the resource/cogmap surfaces, and
+  `machine_authz::authorize` (admin OR owner of the relevant team) for machine + connection reach.
+- `is_system_admin` requires `tm.role = 'owner'` on the gating team — a gating-team *member* is not
+  an admin. `has_system_access` is **vacuous under `access_mode = 'open'`**, which is prod's setting,
+  so the router's `require_system_access` layer contributes nothing; the service gate is the only
+  real one.
+- Auth is strictly before write on all five `insert_grant`/`delete_grant` callers — confirmed by
+  reading each, not by trusting the comments.
+
+**5b.1 — Genesis bypasses the chokepoint (CONFORM to Task 5's own premise).**
+`db_backend.rs:2157` writes a `can_grant`-bearing bootstrap row with a raw `INSERT INTO
+kb_access_grants`, so a grant conferring grant-authority lands with **no `grant_created` event**.
+Scope-limited (self-grant, same txn, `ON CONFLICT DO NOTHING`) so it is not an escalation — it is an
+audit-completeness hole against "the event now lives INSIDE insert_grant". Route it through
+`insert_grant`; `tx` and `emitter` are both already in scope at that call site.
+
+**5b.2 — `grant_reach` never validates the GRANTEE team (AMEND).**
+`connection_service.rs:442` keys authorization solely on `connection.owner_team_id`; the caller-
+supplied `team_id` flows unchecked into `reach_grant_params` (`:472`, `:495`) and into the grant.
+`principal_id` carries **no FK**, so a bogus UUID writes a dangling row. The machine path already
+bounds its target teams (`machine_authz.rs:140-143`); this one does not.
+**DECISION (Pete, 2026-07-18): mirror `contain_reach`** — the caller needs a manage-capable role on
+the target team, admins exempt. Same treatment on `revoke_reach` (`:547` → `:553`).
+
+**5b.3 — No capability attenuation (AMEND — this is a deliberate policy change).**
+Proven empirically, not inferred: a principal holding `read+grant` and nothing else called the
+chokepoint and minted itself `write+delete+grant` (before: `b_grant=t, b_write=f`; after:
+`b_write=t, b_delete=t`). `grant_capability` copies the request verbatim (`access_service.rs:214-217`)
+after a gate that only asks `'grant'`.
+**DECISION (Pete, 2026-07-18): strict attenuation with admin-only amplification** — a non-admin may
+confer only capabilities they themselves hold on that subject; gating-team owners stay unrestricted
+so bootstrap and repair remain operable.
+⚠️ **This rewrites an existing intentional test.** `access_grants_test.rs:236-262` currently asserts
+delegate-mints-write-for-a-third-party as *desired* behavior. Under strict attenuation that case
+becomes `Forbidden`. Rewrite the test to assert the new policy and keep a case proving admins still
+amplify — do not delete the coverage.
+
+> **Consequence discovered while grounding, and the decision it forced.** "Held" resolves through
+> `can(...)`, and `derived_access_profile` has **no `'delete'` arm for any subject type** — not
+> resources, cogmaps, or contexts. So `can(…, 'delete', …)` is true only via an explicit grant row,
+> and prod carries **zero** grants with `can_delete` (verified: 5 grants total, 4 cogmap + 1 resource,
+> all write-only). Strict attenuation would therefore make `can_delete` a **bootstrap deadlock** —
+> nobody holds it, so no non-admin could ever confer it, so nobody ever comes to hold it. Delete
+> would become permanently admin-only by accident rather than by design.
+>
+> **DECISION (Pete, 2026-07-18): add a derived `'delete'` arm for resource-home owners**, rather than
+> accept the deadlock or carve `can_delete` out of the attenuation rule. Pete's call, and it is the
+> principled one: an owner who may delete their own resource should be able to confer that, and the
+> alternative (a capability nobody can ever grant) is an artifact, not a policy. This deliberately
+> expands the access model's scope mid-arc — flag it as such in review.
+>
+> Shape it to match the existing `'grant'` arm, which is the closest precedent (live definition):
+> ```sql
+> WHEN p_subject_table = 'kb_resources' AND p_action = 'grant' THEN
+>     EXISTS (SELECT 1 FROM kb_resource_homes h
+>             WHERE h.resource_id = p_subject_id AND h.owner_profile_id = p_profile)
+> ```
+> Scope it to `kb_resources` only — do NOT add delete arms for cogmaps or contexts in this pass;
+> neither has an ownership floor and both would need their own design conversation.
+
+**5b.3 note — surfaces cannot request delete today.** Both the MCP tool (`resources.rs:1216`) and the
+CLI hardcode `can_delete: false`, so only the raw HTTP API can request it. The derived arm is
+therefore latent capability, not an immediately reachable behavior change — but the attenuation rule
+must still be correct for the day a surface exposes it.
+
+**5b.4 — `require_cogmap_write_admin` is never consulted by the grant path (CONFORM).**
+It exists to force `is_system_admin` for the reserved L0 kernel and gating-team-joined maps, and is
+documented fail-CLOSED (`access_service.rs:266-270`). `grant_capability`/`revoke_capability` call
+only `can_administer_grant`, so a non-admin `can_grant` holder on L0 can mint `can_write` on the
+kernel. That this state is reachable is shown by `machine_authz.rs:386-392`, which seeds exactly such
+a row. Consult it on both grant and revoke when the subject is a cogmap.
+
+**5b.5 — The element-trail firewall is convention + tests, not a runtime filter (EXTEND).**
+`element_trail_node`/`_edge` match on payload key shape with **no** event-type filter and are gated
+only by `resources_visible_to`. Today the invariant holds solely because admin payloads don't spell
+`resource_id`/`owner`/`block_id`/`edge_id` — a naming convention guarded by two (good, non-vacuous)
+tests that cannot see a writer added outside the test corpus.
+**DECISION (Pete, 2026-07-18): do BOTH, with anchor nullity as the primary signal** — it was the
+original design signal, and it is semantically exact: both-NULL anchor means "has no cognition home",
+which is the trail's inclusion criterion inverted. Registry classification is the belt-and-braces a
+reviewer can actually see, since nullity alone is invisible at the call site.
+- Exclude both-NULL-anchor events from `element_trail_node`/`_edge`.
+- Add a category/`is_admin` classification to `kb_event_types`, stamp the three admin types, exclude
+  by join.
+
+> **Precondition for the nullity filter — DISCHARGED empirically against the full prod corpus
+> (read-only, 2026-07-18):** only two event types are both-NULL anchored in prod — `lens_created` (3)
+> and `admin_ledger_opened` (1) — and **neither spells a trail-matched key**, so the filter drops
+> zero legitimate trail entries. This is an existence proof over *current* data, not over all future
+> events; that limit is precisely why the paired registry classification is not redundant.
+
+> **NOTE — the `kb_event_types` change intersects open work.** Prod's registry is already mid-
+> reconciliation (13 of 18 typed names have a NULL `payload_schema`; task
+> `019f7509-7511-7d90-9bdb-2e08631208e7`). Adding a column is additive and safe on `main`, but
+> sequence the *stamping* against that task rather than assuming a fresh-migrate shape.
+
+**5b.7 — the machine path was not brought to parity (CONFORM to B2 D4, found by a second review).**
+Added 2026-07-18 after a sibling session's review of PR #482 (security-audit goal `019f764f`).
+
+5b.3 and 5b.4 hardened the human grant sink (`grant_capability`) and left its sibling machine sink
+untouched: `machine_authz::contain_reach` still gated on `profile_can_grant` **alone** — no
+attenuation, no L0/gating guard — while `apply_reach` confers caller-controlled `can_write`. Two
+exploits in the same class this arc exists to close:
+
+- a `read+grant`-without-write holder provisions a machine with `can_write:true`, then commands a
+  principal holding write they can never hold themselves — **laundering by proxy**, with the ledger
+  recording the machine as grantee;
+- a non-admin `can_grant` holder on the **L0 kernel** confers kernel write to a machine, walking
+  around 5b.4's admin-only guard entirely.
+
+**This PR created the divergence.** Before 5b.3/5b.4 both sinks required exactly `can_grant`, parity
+held, and `contain_reach`'s "exactly what `grant_capability` requires" comment was TRUE. Hardening
+one sink converted a consistent policy into a divergent one — which is why it blocks rather than
+defers.
+
+Grounding that settled the fix's shape (quoted, not paraphrased) — B2's own Global Constraints:
+
+> **Reuse predicates, never restate them.** … Calling them (not reimplementing their rules) is what
+> keeps the machine surface tightening automatically **whenever the human surface does** (spec D4).
+
+So the fix is not new policy — it **restores B2 D4**, whose *intent* held while its *named predicate*
+rotted (`profile_can_grant` stopped being the human bar the moment 5b.3 landed). Both sinks now call
+one decision, `access_service::authorize_capability_grant` (authority arm + attenuation together).
+B2's D4 amended in place with the reasoning and the generalizable lesson: cite the **decision
+function** a sink must call, never a leaf predicate that may later become one input among several.
+
+TDD, red first: both denial tests failed on the pre-fix code (`cannot_launder_cogmap_write_…`,
+`cannot_confer_kernel_write_…`), the positive control
+(`a_write_holder_may_still_delegate_write_to_a_machine`) stayed green so no fix could pass by
+refusing everything. `grant_with_can_grant_is_allowed` asserted the pre-5b policy on the L0 kernel
+and was **rewritten, not deleted** — the second such test this arc has inverted, after
+`can_grant_holder_can_delegate`. When a hardening changes policy, the tests asserting the old
+behavior are the map of exactly what is changing.
+
+**Deliberately NOT bundled — the admin arm.** `authorize_registration`'s SystemAdmin branch still
+skips containment wholesale, so an admin can mint a machine as gating-team `owner` — an
+`is_system_admin` principal that can provision further machines. B2 **D3** decided admins get
+unchecked *reach*; **D4a** decided the maintainer case; **nobody decided** whether a machine may
+become an admin principal. That is an inference from an absence, not a decision, and it gets its own
+task: `019f76d2-c1df-7ef2-883d-3e65de2bce07`.
+
+**Not merge-blocking — carried to a follow-on task:** two stale comments that actively mislead an
+auditor. `routes.rs:171-173` claims machine-client routes are gated by `is_system_admin` in the
+*handler*; the real gate is `admin OR team owner`, in the *service* (only `rebind` matches the
+comment). `admin_ledger_service.rs:135-137` claims upstream temper-api/temper-mcp gates that do not
+exist for that service — its `has_system_access` check is the only gate, and it is vacuous under
+`access_mode = 'open'`.
 
 ---
 

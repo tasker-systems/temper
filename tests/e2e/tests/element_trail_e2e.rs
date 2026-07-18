@@ -46,8 +46,22 @@ async fn mk_owned_context(pool: &sqlx::PgPool, profile: Uuid, slug: &str) -> Uui
     .expect("insert context")
 }
 
-async fn insert_event(pool: &sqlx::PgPool, type_name: &str, emitter: Uuid, payload: Value) -> Uuid {
-    insert_event_with_metadata(pool, type_name, emitter, payload, serde_json::json!({})).await
+async fn insert_event(
+    pool: &sqlx::PgPool,
+    type_name: &str,
+    emitter: Uuid,
+    anchor_context: Uuid,
+    payload: Value,
+) -> Uuid {
+    insert_event_with_metadata(
+        pool,
+        type_name,
+        emitter,
+        anchor_context,
+        payload,
+        serde_json::json!({}),
+    )
+    .await
 }
 
 /// Same as [`insert_event`], but with caller-supplied `kb_events.metadata` — used
@@ -56,16 +70,24 @@ async fn insert_event_with_metadata(
     pool: &sqlx::PgPool,
     type_name: &str,
     emitter: Uuid,
+    anchor_context: Uuid,
     payload: Value,
     metadata: Value,
 ) -> Uuid {
+    // `producing_anchor` is REQUIRED, not optional: migration 20260718000020 makes anchor nullity
+    // the element trail's exclusion signal ("no cognition home" ⇒ not a trail entry), and no
+    // production cognition writer leaves it NULL. An unanchored fixture event asserts on a shape
+    // nothing writes.
     sqlx::query_scalar(
-        "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, metadata) \
-         VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, $3, $4) \
+        "INSERT INTO kb_events \
+             (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, \
+              payload, metadata) \
+         VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, 'kb_contexts', $3, $4, $5) \
          RETURNING id",
     )
     .bind(type_name)
     .bind(emitter)
+    .bind(anchor_context)
     .bind(payload)
     .bind(metadata)
     .fetch_one(pool)
@@ -158,6 +180,7 @@ async fn edge_trail_returns_ordered_events_and_rejects_bad_kind(pool: sqlx::PgPo
         &pool,
         "relationship_asserted",
         entity,
+        context,
         serde_json::json!({"edge_id": edge_id, "weight": 1.0}),
     )
     .await;
@@ -169,6 +192,7 @@ async fn edge_trail_returns_ordered_events_and_rejects_bad_kind(pool: sqlx::PgPo
         &pool,
         "relationship_reweighted",
         entity,
+        context,
         serde_json::json!({"edge_id": edge_id, "weight": 2.0}),
         serde_json::json!({"confidence": "probable"}),
     )

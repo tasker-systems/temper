@@ -81,19 +81,33 @@ async fn home_resource(pool: &sqlx::PgPool, resource: Uuid, anchor_context: Uuid
 /// the caller puts in `payload`. Bypasses the `_event_append`/projector SQL
 /// entry points on purpose — this test proves what `element_trail_*` reads out
 /// of the ledger, independent of which write path produced it.
+///
+/// `anchor_context` is the event's `producing_anchor` — its cognition home — and is REQUIRED,
+/// not optional. This fixture used to leave it NULL, which no production cognition writer does
+/// (verified against the full prod corpus 2026-07-18: the only both-NULL-anchored types are
+/// `lens_created` and `admin_ledger_opened`, neither a trail entry). Migration `20260718000020`
+/// made anchor nullity the trail's exclusion signal — "no cognition home" means "not a trail
+/// entry" — so an unanchored fixture event is now correctly invisible, and these tests were
+/// asserting on a shape nothing writes. Bypassing the projectors is deliberate; bypassing the
+/// anchor was not.
 async fn insert_event(
     pool: &sqlx::PgPool,
     type_name: &str,
     emitter: Uuid,
+    anchor_context: Uuid,
     payload: Value,
     metadata: Value,
 ) -> Uuid {
     sqlx::query_scalar(
-        "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, metadata) \
-         VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, $3, $4) RETURNING id",
+        "INSERT INTO kb_events \
+             (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, \
+              payload, metadata) \
+         VALUES ((SELECT id FROM kb_event_types WHERE name = $1), $2, 'kb_contexts', $3, $4, $5) \
+         RETURNING id",
     )
     .bind(type_name)
     .bind(emitter)
+    .bind(anchor_context)
     .bind(payload)
     .bind(metadata)
     .fetch_one(pool)
@@ -198,6 +212,7 @@ async fn edge_trail_keys_on_edge_id_and_survives_fold(pool: sqlx::PgPool) {
         &pool,
         "relationship_asserted",
         entity,
+        context,
         json!({"edge_id": edge_id, "weight": 1.0}),
         json!({}),
     )
@@ -218,6 +233,7 @@ async fn edge_trail_keys_on_edge_id_and_survives_fold(pool: sqlx::PgPool) {
         &pool,
         "relationship_reweighted",
         entity,
+        context,
         json!({"edge_id": edge_id, "weight": 2.0}),
         json!({}),
     )
@@ -273,6 +289,7 @@ async fn node_trail_unions_three_key_shapes_and_gates_by_visibility(pool: sqlx::
         &pool,
         "resource_created",
         entity,
+        context,
         json!({"resource_id": visible}),
         json!({}),
     )
@@ -282,6 +299,7 @@ async fn node_trail_unions_three_key_shapes_and_gates_by_visibility(pool: sqlx::
         &pool,
         "property_set",
         entity,
+        context,
         json!({"owner": {"table": "kb_resources", "id": visible}, "property_key": "doc_type"}),
         json!({}),
     )
@@ -292,6 +310,7 @@ async fn node_trail_unions_three_key_shapes_and_gates_by_visibility(pool: sqlx::
         &pool,
         "block_mutated",
         entity,
+        context,
         json!({"block_id": block}),
         json!({}),
     )
@@ -326,6 +345,7 @@ async fn node_trail_unions_three_key_shapes_and_gates_by_visibility(pool: sqlx::
         &pool,
         "resource_created",
         entity,
+        context,
         json!({"resource_id": not_visible}),
         json!({}),
     )
@@ -360,6 +380,7 @@ async fn edge_trail_denied_when_an_endpoint_is_private(pool: sqlx::PgPool) {
         &pool,
         "relationship_asserted",
         entity,
+        context,
         json!({"edge_id": edge_id, "weight": 1.0}),
         json!({}),
     )
@@ -402,6 +423,7 @@ async fn node_trail_carries_payload_and_actor(pool: sqlx::PgPool) {
         &pool,
         "resource_created",
         entity,
+        context,
         json!({
             "resource_id": resource,
             "doc_type": "note",
@@ -415,6 +437,7 @@ async fn node_trail_carries_payload_and_actor(pool: sqlx::PgPool) {
         &pool,
         "property_set",
         entity,
+        context,
         json!({
             "owner": {"table": "kb_resources", "id": resource},
             "property_key": "temper-stage",

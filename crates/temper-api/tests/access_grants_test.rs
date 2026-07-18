@@ -16,13 +16,25 @@ use temper_services::services::access_service;
 // ── fixtures ──────────────────────────────────────────────────────────────────────
 
 async fn mint_profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar(
+    let id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
     )
     .bind(handle)
     .fetch_one(pool)
     .await
-    .expect("mint profile")
+    .expect("mint profile");
+    // A profile that ACTS must carry its `<handle>@web` emitter — grant_capability/revoke_capability
+    // now resolve one to author the grant_created/grant_revoked event, exactly as production does
+    // (a fixture that skips it passes while production 500s at resolve_emitter).
+    sqlx::query(
+        "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(format!("{handle}@web"))
+    .execute(pool)
+    .await
+    .expect("mint web emitter");
+    id
 }
 
 /// Mint an admin that passes `is_system_admin`. The canonical seed leaves `gating_team_slug` NULL
@@ -214,14 +226,76 @@ async fn non_granter_is_forbidden(pool: PgPool) {
 
 // ── (c) a can_grant holder (delegated admin) can grant ──────────────────────────────
 
+/// Delegated administration ATTENUATES (plan 5b.3): a `can_grant` holder may confer what it holds
+/// and no more.
+///
+/// This test previously asserted the OPPOSITE — that a delegate without write could confer write —
+/// as intended behavior. The Task 5b access trace showed the same ungated seam let a `read+grant`
+/// principal escalate ITSELF to `write+delete+grant` through the chokepoint (proven against a live
+/// database, not inferred). Amplification was the defect; the third-party case was simply its
+/// better-behaved half. Policy changed deliberately, so the assertion inverts.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn can_grant_holder_can_delegate(pool: PgPool) {
+async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
     let admin = mint_admin(&pool, "root-admin").await;
     let delegate = mint_profile(&pool, "delegate").await;
     let grantee = mint_profile(&pool, "grantee3").await;
     let cogmap = mint_unbound_cogmap(&pool, admin, "delegate-target").await;
 
+    let read_and_grant = |principal: Uuid| GrantCapabilityRequest {
+        subject_table: "kb_cogmaps".into(),
+        subject_id: cogmap,
+        principal_table: "kb_profiles".into(),
+        principal_id: principal,
+        can_read: true,
+        can_write: false,
+        can_delete: false,
+        can_grant: true,
+    };
+
     // Admin gives `delegate` read+grant (delegated administration) but NOT write.
+    access_service::grant_capability(&pool, ProfileId::from(admin), &read_and_grant(delegate))
+        .await
+        .expect("admin delegates grant authority");
+
+    // It may NOT confer write, which it does not hold.
+    let err = access_service::grant_capability(
+        &pool,
+        ProfileId::from(delegate),
+        &write_grant(cogmap, grantee),
+    )
+    .await
+    .expect_err("a delegate without write must not confer write");
+    assert!(
+        matches!(err, ApiError::Forbidden),
+        "expected Forbidden, got {err:?}"
+    );
+    assert!(
+        !can_write_cogmap(&pool, grantee, cogmap).await,
+        "the refused grant must have written nothing"
+    );
+
+    // Delegation still WORKS — it just cannot amplify. The same delegate confers read+grant, both
+    // of which it holds. (Guards against "fixing" attenuation by breaking delegation outright.)
+    access_service::grant_capability(&pool, ProfileId::from(delegate), &read_and_grant(grantee))
+        .await
+        .expect("a delegate confers the capabilities it does hold");
+
+    // The admin arm stays unrestricted, so bootstrap and repair remain operable.
+    access_service::grant_capability(&pool, ProfileId::from(admin), &write_grant(cogmap, grantee))
+        .await
+        .expect("a system admin may still amplify");
+    assert!(can_write_cogmap(&pool, grantee, cogmap).await);
+}
+
+/// The escalation the trace proved reachable: a `can_grant` holder re-granting to ITSELF. The
+/// third-party path and the self path go through the same call, so a fix that only considered
+/// "granting to someone else" would leave this open — which is the more dangerous direction.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_delegate_cannot_escalate_itself(pool: PgPool) {
+    let admin = mint_admin(&pool, "root-admin").await;
+    let delegate = mint_profile(&pool, "self-escalator").await;
+    let cogmap = mint_unbound_cogmap(&pool, admin, "self-escalation-target").await;
+
     access_service::grant_capability(
         &pool,
         ProfileId::from(admin),
@@ -239,15 +313,69 @@ async fn can_grant_holder_can_delegate(pool: PgPool) {
     .await
     .expect("admin delegates grant authority");
 
-    // `delegate` (can_grant, not admin) can now grant write to a third party.
-    access_service::grant_capability(
+    let err = access_service::grant_capability(
         &pool,
         ProfileId::from(delegate),
-        &write_grant(cogmap, grantee),
+        &write_grant(cogmap, delegate),
     )
     .await
-    .expect("delegate grants write via can_grant");
-    assert!(can_write_cogmap(&pool, grantee, cogmap).await);
+    .expect_err("a delegate must not raise its own capabilities");
+    assert!(
+        matches!(err, ApiError::Forbidden),
+        "expected Forbidden, got {err:?}"
+    );
+    assert!(
+        !can_write_cogmap(&pool, delegate, cogmap).await,
+        "the delegate must still lack write after the refused self-grant"
+    );
+}
+
+/// 5b.4: `require_cogmap_write_admin` now binds the GRANT axis, not just the write axis.
+///
+/// It always kept the reserved L0 kernel admin-only for writes, but `grant_capability` never
+/// consulted it — so a `can_grant` holder could mint `can_write` on the kernel, reaching by the
+/// grant axis exactly what the write axis forbids. The seeded row below is not hypothetical:
+/// `machine_authz.rs` seeds precisely this shape in its own fixtures.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_can_grant_holder_cannot_administer_the_l0_kernel(pool: PgPool) {
+    let l0 = uuid::uuid!("00000000-0000-0000-0005-000000000001");
+    let holder = mint_profile(&pool, "l0-grant-holder").await;
+    let grantee = mint_profile(&pool, "l0-grantee").await;
+
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, \
+            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, false, true, $2)",
+    )
+    .bind(l0)
+    .bind(holder)
+    .execute(&pool)
+    .await
+    .expect("seed an explicit can_grant on the kernel");
+
+    // Non-vacuity: the seeded row really does carry grant authority by the general `can()` seam —
+    // so the denial below comes from the L0 gate, not from the holder simply lacking can_grant.
+    let holds_grant = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT can('kb_profiles', $1, 'grant', 'kb_cogmaps', $2)",
+    )
+    .bind(holder)
+    .bind(l0)
+    .fetch_one(&pool)
+    .await
+    .expect("probe can_grant")
+    .unwrap_or(false);
+    assert!(holds_grant, "fixture must actually confer can_grant on L0");
+
+    let err =
+        access_service::grant_capability(&pool, ProfileId::from(holder), &write_grant(l0, grantee))
+            .await
+            .expect_err("the L0 kernel must stay admin-only on the grant axis");
+    assert!(
+        matches!(err, ApiError::Forbidden),
+        "expected Forbidden, got {err:?}"
+    );
+    assert!(!can_write_cogmap(&pool, grantee, l0).await);
 }
 
 // ── (d) backfill snapshots real-team members, not auto-join members ──────────────────

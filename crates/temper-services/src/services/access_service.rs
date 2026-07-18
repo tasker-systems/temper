@@ -9,6 +9,7 @@
 //! admin-event sink is a future deliverable.
 
 use sqlx::PgPool;
+use temper_substrate::ids::EntityId;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
@@ -55,23 +56,182 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
 // surfaces, like `cogmap_service::bind_team`, NOT via the DbBackend trait.
 // ---------------------------------------------------------------------------
 
-/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
-/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
-/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
-/// `can_grant` holder) and repair stay operable.
-///
-/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
-/// (spec 2026-07-16 §5): if you could perform the act, you may read the record of it. Restating the
-/// predicate there would be a second copy of the policy that drifts from the gate it exists to
-/// mirror — tighten this fn and the ledger's read gate tightens with it.
+/// Why a caller may administer grants on a subject — not merely *whether*. Callers need the
+/// distinction: attenuation (5b.3) binds a **delegated** administrator to the capabilities they
+/// themselves hold, while a system admin stays unrestricted so bootstrap and repair remain operable.
+/// Carrying the reason keeps that a single authorization pass instead of re-asking `is_system_admin`
+/// after the fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GrantAuthority {
+    /// Gating-team owner. Unrestricted: may confer capabilities they do not personally hold.
+    SystemAdmin,
+    /// Holds `can_grant` on the subject (or owns it). Bound by attenuation.
+    Delegated,
+    /// May not administer grants on this subject at all.
+    None,
+}
+
+/// Bool projection of [`grant_authority`], kept as the seam `admin_ledger_service`'s read gate calls
+/// (spec 2026-07-16 §5) — it only needs "could you perform the act", not which arm allowed it.
 pub(crate) async fn can_administer_grant(
     pool: &PgPool,
     caller: ProfileId,
     subject_table: &str,
     subject_id: Uuid,
 ) -> ApiResult<bool> {
-    Ok(is_system_admin(pool, caller).await?
-        || profile_can_grant(pool, caller, subject_table, subject_id).await?)
+    Ok(grant_authority(pool, caller, subject_table, subject_id).await? != GrantAuthority::None)
+}
+
+/// Grant-administration gate: a system admin OR a holder of `can_grant` on the subject (the general
+/// `can(...,'grant',...)` seam). This is a DIFFERENT axis from authoring — authoring stays wholly
+/// explicit (D3b §3.E), while grant-administration admits admins so pre-existing maps (no seeded
+/// `can_grant` holder) and repair stay operable.
+///
+/// `pub(crate)` for `admin_ledger_service`, whose READ gate mirrors this WRITE gate by CALLING it
+/// through [`can_administer_grant`] (spec 2026-07-16 §5): if you could perform the act, you may read
+/// the record of it. Restating the predicate there would be a second copy of the policy that drifts
+/// from the gate it exists to mirror — tighten this fn and the ledger's read gate tightens with it.
+///
+/// Note this answers *may you administer grants here at all*. It does NOT bound WHICH capabilities
+/// may be conferred — that is attenuation, and both belong to one decision:
+/// [`authorize_capability_grant`]. Every grant sink should call that, not this.
+pub(crate) async fn grant_authority(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<GrantAuthority> {
+    if is_system_admin(pool, caller).await? {
+        return Ok(GrantAuthority::SystemAdmin);
+    }
+    // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` exists to keep the
+    // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never consulted
+    // it — so a non-admin `can_grant` holder could mint `can_write` on the kernel, reaching by the
+    // grant axis exactly what the write axis forbids. `machine_authz`'s own tests seed such a row,
+    // so the state is reachable, not hypothetical. Admins already returned above, so a map in the
+    // admin-only regime denies here regardless of any `can_grant` the caller holds.
+    if subject_table == "kb_cogmaps"
+        && cogmap_write_requires_admin(pool, CogmapId(subject_id)).await?
+    {
+        return Ok(GrantAuthority::None);
+    }
+    Ok(
+        if profile_can_grant(pool, caller, subject_table, subject_id).await? {
+            GrantAuthority::Delegated
+        } else {
+            GrantAuthority::None
+        },
+    )
+}
+
+/// The four capabilities a grant can carry. A closed set with a fixed SQL spelling — an enum rather
+/// than bare `&str` literals so a typo is a compile error and the set cannot silently grow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccessAction {
+    Read,
+    Write,
+    Delete,
+    Grant,
+}
+
+impl AccessAction {
+    /// The `p_action` spelling `can(...)` dispatches on (`profile_explicit_grant`'s CASE arms).
+    const fn as_sql(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Delete => "delete",
+            Self::Grant => "grant",
+        }
+    }
+}
+
+/// Does the caller hold `action` on the subject? The general `can(...)` probe — `profile_can_grant`
+/// is the `Grant` specialization, kept because it reads better at its call sites.
+pub(crate) async fn profile_can(
+    pool: &PgPool,
+    caller: ProfileId,
+    action: AccessAction,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT can('kb_profiles', $1, $2, $3, $4)",
+        *caller,
+        action.as_sql(),
+        subject_table,
+        subject_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
+/// The capability set a grant would confer. A struct rather than four positional bools so the two
+/// call sites cannot silently transpose them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RequestedCapabilities {
+    pub read: bool,
+    pub write: bool,
+    pub delete: bool,
+    pub grant: bool,
+}
+
+impl From<&GrantCapabilityRequest> for RequestedCapabilities {
+    fn from(r: &GrantCapabilityRequest) -> Self {
+        Self {
+            read: r.can_read,
+            write: r.can_write,
+            delete: r.can_delete,
+            grant: r.can_grant,
+        }
+    }
+}
+
+/// **The** authorization decision for "may `caller` confer this capability set on this subject?" —
+/// authority arm plus attenuation, in one pass.
+///
+/// This is the single policy for EVERY grant sink, called and never restated. Two sinks exist and
+/// they must not drift: the human path (`grant_capability`) and the machine path
+/// (`machine_authz::contain_reach` → `apply_reach`). They already drifted once — 5b.3/5b.4 hardened
+/// the human path while the machine path kept gating on `can_grant` alone, which let a
+/// `read+grant`-without-write holder provision a machine carrying `can_write` and thereby command a
+/// principal holding write they could never hold themselves. Laundering by proxy. Hence one helper.
+///
+/// Semantics:
+/// - **SystemAdmin** — unrestricted. Bootstrap and repair would otherwise deadlock: there would be
+///   no way to mint the first holder of any capability.
+/// - **Delegated** — attenuating: every capability conferred must be one the caller already holds
+///   on this subject (`conferred ⊆ held`). Self-grant is neutralized by the same rule, since the
+///   check never consults who the principal is.
+/// - **None** — denied, which is also where the L0/gating-map guard lands.
+pub(crate) async fn authorize_capability_grant(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+    caps: RequestedCapabilities,
+) -> ApiResult<()> {
+    match grant_authority(pool, caller, subject_table, subject_id).await? {
+        GrantAuthority::None => Err(ApiError::Forbidden),
+        GrantAuthority::SystemAdmin => Ok(()),
+        GrantAuthority::Delegated => {
+            for (requested, action) in [
+                (caps.read, AccessAction::Read),
+                (caps.write, AccessAction::Write),
+                (caps.delete, AccessAction::Delete),
+                (caps.grant, AccessAction::Grant),
+            ] {
+                if requested
+                    && !profile_can(pool, caller, action, subject_table, subject_id).await?
+                {
+                    return Err(ApiError::Forbidden);
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Raw `can_grant` capability probe (NO `is_system_admin` OR) — the reusable primitive. Callers that
@@ -83,16 +243,7 @@ pub(crate) async fn profile_can_grant(
     subject_table: &str,
     subject_id: Uuid,
 ) -> ApiResult<bool> {
-    let ok = sqlx::query_scalar!(
-        "SELECT can('kb_profiles', $1, 'grant', $2, $3)",
-        *caller,
-        subject_table,
-        subject_id,
-    )
-    .fetch_one(pool)
-    .await?
-    .unwrap_or(false);
-    Ok(ok)
+    profile_can(pool, caller, AccessAction::Grant, subject_table, subject_id).await
 }
 
 /// Is `team_id` the configured gating/root team? An unconfigured system (`gating_team_slug` NULL)
@@ -130,19 +281,20 @@ pub struct InsertGrantParams {
 /// Raw upsert of one access grant, on a connection so it can join a transaction.
 /// **Performs no authorization** — every caller must gate first (auth before writes).
 /// Returns whether the row was freshly inserted (`xmax = 0`) rather than updated.
-pub async fn insert_grant(conn: &mut sqlx::PgConnection, p: &InsertGrantParams) -> ApiResult<bool> {
-    // `xmax = 0` distinguishes a fresh INSERT from an ON CONFLICT UPDATE (xmax is the deleting/locking
-    // txid — zero only on a row this txn just inserted).
-    let inserted = sqlx::query_scalar!(
-        r#"INSERT INTO kb_access_grants
-               (subject_table, subject_id, principal_table, principal_id,
-                can_read, can_write, can_delete, can_grant, granted_by_profile_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (subject_table, subject_id, principal_table, principal_id)
-           DO UPDATE SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write,
-                         can_delete = EXCLUDED.can_delete, can_grant = EXCLUDED.can_grant,
-                         granted_by_profile_id = EXCLUDED.granted_by_profile_id, granted_at = now()
-           RETURNING (xmax = 0) AS "inserted!""#,
+pub async fn insert_grant(
+    conn: &mut sqlx::PgConnection,
+    p: &InsertGrantParams,
+    emitter: EntityId,
+) -> ApiResult<bool> {
+    // The upsert + `grant_created` event, one txn, via the SQL chokepoint `_admin_grant_created`
+    // (migrations/20260718000010). `emitter` is the acting entity, resolved from the gated caller.
+    // Correlation self-roots — there is no sibling event to fuse with in any grant path, and the
+    // SQL fn's `p_correlation` defaults NULL. Returns whether the row was freshly inserted (`xmax = 0`
+    // inside the fn); an upsert that only CHANGED capabilities returns false yet still fires the
+    // event, carrying `previous`, so a real authority change is never silently dropped.
+    Ok(sqlx::query_scalar!(
+        r#"SELECT _admin_grant_created($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS "inserted!""#,
+        emitter.uuid(),
         p.subject_table,
         p.subject_id,
         p.principal_table,
@@ -154,8 +306,7 @@ pub async fn insert_grant(conn: &mut sqlx::PgConnection, p: &InsertGrantParams) 
         p.granted_by_profile_id,
     )
     .fetch_one(&mut *conn)
-    .await?;
-    Ok(inserted)
+    .await?)
 }
 
 /// Raw delete of one access grant by its `(subject, principal)` 4-tuple, on a connection so it can
@@ -167,20 +318,25 @@ pub async fn delete_grant(
     subject_id: Uuid,
     principal_table: &str,
     principal_id: Uuid,
+    revoker: ProfileId,
+    emitter: EntityId,
 ) -> ApiResult<bool> {
-    let deleted = sqlx::query!(
-        r#"DELETE FROM kb_access_grants
-            WHERE subject_table = $1 AND subject_id = $2
-              AND principal_table = $3 AND principal_id = $4"#,
+    // The DELETE + `grant_revoked` event, one txn, via the SQL chokepoint `_admin_grant_revoked`.
+    // Emits ONLY when a row was actually removed — a no-op revoke is not an admin act, and the ledger
+    // is append-only so a spurious event is immortal. `revoker` is the acting profile; `emitter` its
+    // entity. Correlation self-roots (SQL `p_correlation` defaults NULL). Returns whether a row was
+    // removed (absent ⇒ false, idempotent no-op).
+    Ok(sqlx::query_scalar!(
+        r#"SELECT _admin_grant_revoked($1,$2,$3,$4,$5,$6) AS "deleted!""#,
+        emitter.uuid(),
         subject_table,
         subject_id,
         principal_table,
         principal_id,
+        revoker.uuid(),
     )
-    .execute(&mut *conn)
-    .await?
-    .rows_affected();
-    Ok(deleted > 0)
+    .fetch_one(&mut *conn)
+    .await?)
 }
 
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
@@ -191,9 +347,15 @@ pub async fn grant_capability(
     caller: ProfileId,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<GrantOutcome> {
-    if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Auth before writes. The one shared decision — authority arm + attenuation — also called by
+    // the machine path (`machine_authz::contain_reach`), so the two sinks cannot drift. Revocation
+    // is deliberately NOT attenuated: de-escalation must never be harder than escalation, or a
+    // grant becomes unwithdrawable.
+    authorize_capability_grant(pool, caller, &req.subject_table, req.subject_id, req.into())
+        .await?;
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let granted = insert_grant(
         &mut conn,
@@ -208,6 +370,7 @@ pub async fn grant_capability(
             can_grant: req.can_grant,
             granted_by_profile_id: *caller,
         },
+        emitter,
     )
     .await?;
     Ok(GrantOutcome { granted })
@@ -223,6 +386,9 @@ pub async fn revoke_capability(
     if !can_administer_grant(pool, caller, &req.subject_table, req.subject_id).await? {
         return Err(ApiError::Forbidden);
     }
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
         &mut conn,
@@ -230,6 +396,8 @@ pub async fn revoke_capability(
         req.subject_id,
         &req.principal_table,
         req.principal_id,
+        caller,
+        emitter,
     )
     .await?;
     Ok(RevokeOutcome { revoked })
@@ -258,9 +426,31 @@ pub async fn require_cogmap_write_admin(
     profile_id: ProfileId,
     cogmap_id: CogmapId,
 ) -> ApiResult<()> {
-    let is_reserved = cogmap_id == L0_KERNEL_COGMAP;
+    if !cogmap_write_requires_admin(pool, cogmap_id).await? {
+        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
+    }
+    if is_system_admin(pool, profile_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
 
-    let is_root_joined: bool = sqlx::query_scalar!(
+/// The **structural** half of [`require_cogmap_write_admin`], caller-independent: does this cogmap
+/// sit in the admin-only regime at all (reserved L0 kernel, or joined to the gating team)?
+///
+/// Extracted so `can_administer_grant` can consult the SAME condition without either restating the
+/// query — a second copy of the policy is a copy that drifts from the gate it exists to mirror — or
+/// swallowing a genuine DB error as a denial (which is what reusing the `Result`-returning form via
+/// `.is_err()` would do).
+pub(crate) async fn cogmap_write_requires_admin(
+    pool: &PgPool,
+    cogmap_id: CogmapId,
+) -> ApiResult<bool> {
+    if cogmap_id == L0_KERNEL_COGMAP {
+        return Ok(true); // unconditional, independent of `gating_team_slug` (fail-CLOSED)
+    }
+    Ok(sqlx::query_scalar!(
         "SELECT EXISTS( \
            SELECT 1 FROM kb_team_cogmaps tc \
              JOIN kb_teams t ON t.id = tc.team_id \
@@ -270,16 +460,7 @@ pub async fn require_cogmap_write_admin(
     )
     .fetch_one(pool)
     .await?
-    .unwrap_or(false);
-
-    if !is_reserved && !is_root_joined {
-        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
-    }
-    if is_system_admin(pool, profile_id).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
+    .unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------

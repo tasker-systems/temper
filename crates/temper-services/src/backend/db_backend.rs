@@ -2147,24 +2147,47 @@ impl Backend for DbBackend {
         .map_err(api_err)?;
 
         // Creator bootstrap grant (access-capability arc, D3b §3.B): the INVOKING admin
-        // (`self.profile_id`) — NOT the system actor genesis fires under — gets read+write+grant on
-        // the map they just created, a self-grant admin event. Cogmaps have no ownership floor, so
-        // without this the creator could never author or add a co-author to their own (still-unbound)
-        // map once the Q-A tightening lands. Only the create path reaches here (the re-genesis no-op
-        // returned earlier); `ON CONFLICT DO NOTHING` guards a retried create.
+        // (`self.profile_id`) — NOT the system actor genesis fires under — is the GRANTEE and the
+        // `granted_by` of read+write+grant on the map they just created. Cogmaps have no ownership
+        // floor, so without this the creator could never author or add a co-author to their own
+        // (still-unbound) map once the Q-A tightening lands.
+        //
+        // Routed through the Task 5 grant chokepoint (`access_service::insert_grant` →
+        // `_admin_grant_created`) rather than a raw INSERT: this grant confers `can_grant`, and every
+        // write that moves grant authority must land a `grant_created` event. It joins THIS
+        // transaction (the fn takes a `PgConnection`), so grant + event + genesis commit or roll back
+        // together.
+        //
+        // EMITTER = the SYSTEM entity, deliberately. Everything else in this transaction
+        // (`cogmap_seeded`, the `admin_genesis` envelope open/close) fires under the system actor
+        // because genesis IS a system act; the creator's authorship is carried where it belongs, in
+        // the payload's `granted_by`. `can_delete` is false — matching the capabilities the raw
+        // INSERT set, and satisfying the DB coherence CHECK (`write|delete|grant ⇒ read`).
+        //
+        // The chokepoint upserts (`ON CONFLICT DO UPDATE`) and emits UNCONDITIONALLY, where the raw
+        // INSERT it replaces did `ON CONFLICT DO NOTHING`. That is not a behavior change here: only
+        // the create path reaches this line (re-genesis at a live id returned the no-op earlier, and a
+        // genesis that raced past that pre-check duplicate-keys on `kb_cogmaps`), so `born_cogmap` is
+        // always a freshly-minted id that cannot already carry a grant. The conflict arm is
+        // unreachable, and the event is always a fresh `grant_created` with no `previous`.
         let creator = uuid::Uuid::from(self.profile_id);
-        sqlx::query!(
-            r#"INSERT INTO kb_access_grants
-                   (subject_table, subject_id, principal_table, principal_id,
-                    can_read, can_write, can_grant, granted_by_profile_id)
-               VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, true, $2)
-               ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING"#,
-            uuid::Uuid::from(born_cogmap),
-            creator,
+        crate::services::access_service::insert_grant(
+            &mut tx,
+            &crate::services::access_service::InsertGrantParams {
+                subject_table: "kb_cogmaps".to_string(),
+                subject_id: uuid::Uuid::from(born_cogmap),
+                principal_table: "kb_profiles".to_string(),
+                principal_id: creator,
+                can_read: true,
+                can_write: true,
+                can_delete: false,
+                can_grant: true,
+                granted_by_profile_id: creator,
+            },
+            emitter,
         )
-        .execute(&mut *tx)
         .await
-        .map_err(api_err)?;
+        .map_err(|e| TemperError::Api(e.to_string()))?;
 
         // COMMIT — serialization failure (40001) → `Conflict` (a genesis race), any other DB error → 500.
         match tx.commit().await {
