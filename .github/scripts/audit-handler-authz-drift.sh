@@ -40,13 +40,16 @@ read -r -d '' BASELINE <<'EOF' || true
 EOF
 
 current() {
-  rg -n --glob 'crates/temper-api/src/handlers/**/*.rs' --glob 'crates/temper-mcp/src/**/*.rs' \
-     -e "$PREDICATES" 2>/dev/null \
-  | grep -v -E '^[^:]*:[0-9]+:\s*//' \
+  # Portable grep (no ripgrep dependency — not guaranteed on CI runners) over the two surface
+  # trees. Trailing `|| true` keeps an empty result from tripping `set -e` before the diff reports.
+  grep -rnE --include='*.rs' -e "$PREDICATES" \
+     crates/temper-api/src/handlers crates/temper-mcp/src 2>/dev/null \
+  | grep -v -E '^[^:]*:[0-9]+:[[:space:]]*//' \
   | awk -F: '{print $1}' \
   | sort | uniq -c \
   | awk '{printf "%s %s\n", $1, $2}' \
-  | sort -k2
+  | sort -k2 \
+  || true
 }
 
 CURRENT="$(current)"

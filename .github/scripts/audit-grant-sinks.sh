@@ -51,15 +51,20 @@ EOF
 # Patterns: a call to insert_grant(...) OR a raw INSERT INTO kb_access_grants.
 # Excluded: the insert_grant definition, `use` imports, and comment lines.
 current() {
-  rg -n --glob 'crates/**/src/**/*.rs' \
-     -e 'insert_grant\s*\(' \
+  # Portable grep (no ripgrep dependency — it is not guaranteed on CI runners). The `/src/`
+  # path filter restores the "src trees only" scope; the trailing `|| true` keeps a legitimately
+  # empty result from tripping `set -e` before the diff can report it.
+  grep -rnE --include='*.rs' \
+     -e 'insert_grant[[:space:]]*\(' \
      -e 'INSERT INTO kb_access_grants' \
-     2>/dev/null \
-  | grep -v -E 'pub async fn insert_grant|use .*insert_grant|^[^:]*:[0-9]+:\s*//' \
+     crates 2>/dev/null \
+  | grep -E '^[^:]*/src/[^:]*\.rs:' \
+  | grep -vE 'pub async fn insert_grant|use .*insert_grant|^[^:]*:[0-9]+:[[:space:]]*//' \
   | awk -F: '{print $1}' \
   | sort | uniq -c \
   | awk '{printf "%s %s\n", $1, $2}' \
-  | sort -k2
+  | sort -k2 \
+  || true
 }
 
 CURRENT="$(current)"
