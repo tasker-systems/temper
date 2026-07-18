@@ -16,13 +16,25 @@ use temper_services::services::access_service;
 // ── fixtures ──────────────────────────────────────────────────────────────────────
 
 async fn mint_profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar(
+    let id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
     )
     .bind(handle)
     .fetch_one(pool)
     .await
-    .expect("mint profile")
+    .expect("mint profile");
+    // A profile that ACTS must carry its `<handle>@web` emitter — grant_capability/revoke_capability
+    // now resolve one to author the grant_created/grant_revoked event, exactly as production does
+    // (a fixture that skips it passes while production 500s at resolve_emitter).
+    sqlx::query(
+        "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(format!("{handle}@web"))
+    .execute(pool)
+    .await
+    .expect("mint web emitter");
+    id
 }
 
 /// Mint an admin that passes `is_system_admin`. The canonical seed leaves `gating_team_slug` NULL
