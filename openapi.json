@@ -227,6 +227,128 @@
         ]
       }
     },
+    "/api/admin/slack/links/disconnect": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Slack Link"
+        ],
+        "summary": "Disconnect any principal. Operator path — offboarding and stuck users.",
+        "operationId": "admin_disconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackDisconnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Disconnect completed (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackDisconnectResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/auth/slack/link/me": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Slack Link"
+        ],
+        "summary": "Disconnect the caller's own Slack link.",
+        "operationId": "disconnect_me",
+        "responses": {
+          "200": {
+            "description": "Disconnect completed (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackDisconnectResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Slack account linking is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/cogmaps/{id}/graph/slice": {
       "parameters": [
         {
@@ -10255,6 +10377,48 @@
           }
         }
       },
+      "SlackDisconnectRequest": {
+        "type": "object",
+        "description": "Request body for the admin disconnect endpoint.",
+        "required": [
+          "slack_principal_id"
+        ],
+        "properties": {
+          "slack_principal_id": {
+            "type": "string",
+            "description": "The whole opaque Slack principal (`slack:<team>:<user>`, 2–4 segments).\nNever split this value."
+          }
+        }
+      },
+      "SlackDisconnectResponse": {
+        "type": "object",
+        "description": "The result of a disconnect, as returned to CLI callers.\n\nEvery field is an observation of what actually happened, so the CLI can tell\nthe user the truth rather than echoing a canned success message. In\nparticular `idp_revoked = false` is a normal, non-error outcome: the local\nunbind is complete either way.",
+        "required": [
+          "was_linked",
+          "grant_deleted",
+          "intents_deleted",
+          "idp_revoked"
+        ],
+        "properties": {
+          "grant_deleted": {
+            "type": "boolean",
+            "description": "A stored grant existed and was destroyed."
+          },
+          "idp_revoked": {
+            "type": "boolean",
+            "description": "The IdP acknowledged the revocation. `false` means the grant may remain\nlive at the IdP until it expires; the local copy is destroyed regardless."
+          },
+          "intents_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many pending link intents were swept."
+          },
+          "was_linked": {
+            "type": "boolean",
+            "description": "An identity row existed and was removed."
+          }
+        }
+      },
       "SliceRequest": {
         "type": "object",
         "description": "R4 request: focus seeds (required, non-empty), BFS depth, and an optional\nedge-kind filter that constrains the *traversal* (induced subgraph).",
@@ -10959,6 +11123,10 @@
     {
       "name": "Access",
       "description": "System access gate — self-service join requests and public settings"
+    },
+    {
+      "name": "Slack Link",
+      "description": "Slack account-link disconnect — self-serve and admin"
     }
   ]
 }

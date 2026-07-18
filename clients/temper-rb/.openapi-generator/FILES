@@ -15,6 +15,7 @@ lib/temper/generated/api/reassign_api.rb
 lib/temper/generated/api/relationships_api.rb
 lib/temper/generated/api/resources_api.rb
 lib/temper/generated/api/search_api.rb
+lib/temper/generated/api/slack_link_api.rb
 lib/temper/generated/api/steward_api.rb
 lib/temper/generated/api/teams_api.rb
 lib/temper/generated/api_client.rb
@@ -170,6 +171,8 @@ lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb
 lib/temper/generated/models/share_context_outcome.rb
 lib/temper/generated/models/share_context_request.rb
+lib/temper/generated/models/slack_disconnect_request.rb
+lib/temper/generated/models/slack_disconnect_response.rb
 lib/temper/generated/models/slice_request.rb
 lib/temper/generated/models/sort_order.rb
 lib/temper/generated/models/subscription.rb

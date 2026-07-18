@@ -65,6 +65,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/slack/links/disconnect": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect any principal. Operator path — offboarding and stuck users. */
+        post: operations["admin_disconnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/slack/link/me": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Disconnect the caller's own Slack link. */
+        delete: operations["disconnect_me"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cogmaps/{id}/graph/slice": {
         parameters: {
             query?: never;
@@ -3694,6 +3734,38 @@ export interface components {
              */
             team_id: string;
         };
+        /** @description Request body for the admin disconnect endpoint. */
+        SlackDisconnectRequest: {
+            /**
+             * @description The whole opaque Slack principal (`slack:<team>:<user>`, 2–4 segments).
+             *     Never split this value.
+             */
+            slack_principal_id: string;
+        };
+        /**
+         * @description The result of a disconnect, as returned to CLI callers.
+         *
+         *     Every field is an observation of what actually happened, so the CLI can tell
+         *     the user the truth rather than echoing a canned success message. In
+         *     particular `idp_revoked = false` is a normal, non-error outcome: the local
+         *     unbind is complete either way.
+         */
+        SlackDisconnectResponse: {
+            /** @description A stored grant existed and was destroyed. */
+            grant_deleted: boolean;
+            /**
+             * @description The IdP acknowledged the revocation. `false` means the grant may remain
+             *     live at the IdP until it expires; the local copy is destroyed regardless.
+             */
+            idp_revoked: boolean;
+            /**
+             * Format: int64
+             * @description How many pending link intents were swept.
+             */
+            intents_deleted: number;
+            /** @description An identity row existed and was removed. */
+            was_linked: boolean;
+        };
         /**
          * @description R4 request: focus seeds (required, non-empty), BFS depth, and an optional
          *     edge-kind filter that constrains the *traversal* (induced subgraph).
@@ -4118,6 +4190,83 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_disconnect: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackDisconnectRequest"];
+            };
+        };
+        responses: {
+            /** @description Disconnect completed (idempotent) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackDisconnectResponse"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    disconnect_me: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnect completed (idempotent) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackDisconnectResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Slack account linking is not configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT auth_provider_user_id\n          FROM kb_profile_auth_links\n         WHERE profile_id = $1\n           AND auth_provider = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "auth_provider_user_id",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "76bd2349e4a4ac826b8136de11ba7c7853f6352d490cc96d0dc828274cfd7a41"
+}

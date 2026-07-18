@@ -19,6 +19,7 @@ pub mod reassign;
 pub mod resources;
 pub mod search;
 pub mod segments;
+pub mod slack_disconnect;
 pub mod slack_link;
 pub mod steward;
 pub mod teams;
