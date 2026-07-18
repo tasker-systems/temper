@@ -67,6 +67,19 @@ jobs:
       - name: Check every route is documented (OpenAPI route allowlist)
         run: bash .github/scripts/check-openapi-routes.sh
 
+      # Security tripwires (docs/development/security-audit-playbook.md). Pure static enumerators:
+      # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
+      # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
+      # on their own — they force a reviewer to answer the attenuation / auth-posture question.
+      - name: Security tripwire — grant write-sites (capability attenuation review)
+        run: bash .github/scripts/audit-grant-sinks.sh
+
+      - name: Security tripwire — route auth posture
+        run: bash .github/scripts/audit-route-auth.sh
+
+      - name: Security tripwire — handler-side authz drift
+        run: bash .github/scripts/audit-handler-authz-drift.sh
+
       - name: Check documentation builds
         run: cargo doc --workspace --no-deps --document-private-items
         env:
