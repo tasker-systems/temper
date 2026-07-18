@@ -36,9 +36,30 @@ cd "$(git rev-parse --show-toplevel)"
 # is to freeze the SET, not to classify each line. When this list changes, a reviewer confirms the
 # new/changed site answers the AUTHORITY + ATTENUATION questions above, then reruns with
 # UPDATE_BASELINE=1.
+#
+# REVIEWED 2026-07-18 (PR #482, admin-event-sink Task 5 + 5b) — access_service.rs 2 → 1.
+#   The vanished site is the raw `INSERT INTO kb_access_grants` that used to live INSIDE
+#   `insert_grant`'s own body. Task 5 replaced it with a call to the SQL chokepoint
+#   `_admin_grant_created` (migrations/20260718000010), which performs the upsert AND appends the
+#   `grant_created` ledger event in one transaction. So this is a REDUCTION in Rust-side write
+#   sites, not a new sink — the write moved down a layer, on purpose.
+#   AUTHORITY: unchanged and tightened — every sink gates before writing, and both the human sink
+#     (`grant_capability`) and the machine sink (`machine_authz::contain_reach`) now call ONE
+#     decision, `access_service::authorize_capability_grant`.
+#   ATTENUATION: newly ENFORCED, which is what F-0 asked for — a delegated administrator may confer
+#     only capabilities it already holds (`conferred ⊆ held`), self-grant included, since the check
+#     never consults who the principal is. System admins stay exempt so bootstrap/repair work.
+#   db_backend.rs stays at 1: its raw INSERT became an `insert_grant(...)` call (5b.1), so the
+#     cogmap creator-bootstrap grant is now ledgered rather than landing silently.
+#
+# ⚠️ KNOWN BLIND SPOT, worth closing separately: this script scans `crates/**/src/*.rs` only. After
+#   Task 5 the AUTHORITATIVE write to kb_access_grants is in SQL (`_admin_grant_created` /
+#   `_admin_grant_revoked`), which this tripwire never looks at. A new SQL function writing that
+#   table would be invisible here. Consider extending `current()` to scan `migrations/*.sql` for
+#   `INSERT INTO kb_access_grants` / `DELETE FROM kb_access_grants` too.
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/src/backend/db_backend.rs
-2 crates/temper-services/src/services/access_service.rs
+1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/connection_service.rs
 1 crates/temper-services/src/services/machine_authz.rs
 1 crates/temper-services/src/services/machine_registration_service.rs
