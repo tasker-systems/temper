@@ -19,6 +19,7 @@ pub mod profile_service;
 pub mod reassign_service;
 pub mod resource_service;
 pub mod saml_provisioning_service;
+pub mod slack_disconnect_service;
 pub mod slack_grant_vault_service;
 pub mod slack_link_service;
 pub mod steward_service;
