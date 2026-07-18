@@ -5879,6 +5879,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

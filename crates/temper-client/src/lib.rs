@@ -24,6 +24,7 @@ pub mod profile;
 pub mod relationships;
 pub mod resources;
 pub mod search;
+pub mod slack;
 pub mod steward;
 pub mod teams;
 pub mod upload;
@@ -203,6 +204,11 @@ impl TemperClient {
     /// Steward ingest-trigger sub-client (delta / advance-watermark).
     pub fn steward(&self) -> steward::StewardClient<'_> {
         steward::StewardClient::new(&self.http)
+    }
+
+    /// Slack account-link sub-client (disconnect).
+    pub fn slack(&self) -> slack::SlackClient<'_> {
+        slack::SlackClient::new(&self.http)
     }
 
     // ----- Auth lifecycle -----

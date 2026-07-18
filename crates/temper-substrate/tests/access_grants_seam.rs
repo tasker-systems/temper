@@ -196,3 +196,100 @@ async fn can_seam_cogmap_arm_ignores_explicit_grants(pool: sqlx::PgPool) {
         .get(0);
     assert_eq!(n, 1);
 }
+
+/// Home the resource in a fresh context owned by `owner`, and return the context id.
+async fn home_resource(pool: &sqlx::PgPool, resource: Uuid, owner: Uuid, slug: &str) -> Uuid {
+    let context: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+    )
+    .bind(owner)
+    .bind(slug)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+           (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(resource)
+    .bind(context)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+    context
+}
+
+/// The `delete` arm of `derived_access_profile` (migration `20260718000030`).
+///
+/// It exists so that attenuating grant-administration does not deadlock `can_delete`: with no
+/// derivable holder anywhere and zero grant rows carrying it, no delegated administrator could ever
+/// confer delete, so nobody would ever come to hold it. This pins BOTH halves of the decision — that
+/// the resource-home owner derives it, and that the scoping to `kb_resources` is deliberate rather
+/// than an oversight a later reader should "complete".
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn resource_home_owner_derives_delete_and_nobody_else_does(pool: sqlx::PgPool) {
+    let owner = insert_profile(&pool, "delete-owner").await;
+    let stranger = insert_profile(&pool, "delete-stranger").await;
+    let resource = insert_resource(&pool, "owned", "test://owned").await;
+    let context = home_resource(&pool, resource, owner, "delete-ctx").await;
+
+    assert!(
+        can(
+            &pool,
+            "kb_profiles",
+            owner,
+            "delete",
+            "kb_resources",
+            resource
+        )
+        .await,
+        "the owner of the resource's home must derive delete on it"
+    );
+    assert!(
+        !can(
+            &pool,
+            "kb_profiles",
+            stranger,
+            "delete",
+            "kb_resources",
+            resource
+        )
+        .await,
+        "a profile with no home ownership must not derive delete"
+    );
+
+    // Non-vacuity: the stranger is not simply invisible to every arm — it is the DELETE arm that
+    // refuses. Were the fixture broken (no home, wrong ids), the owner's `grant` probe would fail
+    // too and the assertion above would pass for the wrong reason.
+    assert!(
+        can(
+            &pool,
+            "kb_profiles",
+            owner,
+            "grant",
+            "kb_resources",
+            resource
+        )
+        .await,
+        "fixture check: the same ownership must already satisfy the pre-existing grant arm"
+    );
+
+    // The scoping is deliberate (see the migration's COMMENT ON FUNCTION): contexts and cogmaps get
+    // NO derived delete arm, so even the context's OWN owner does not derive delete on it. Adding
+    // one is a design question about those subject types, not a consequence of attenuation.
+    assert!(
+        !can(
+            &pool,
+            "kb_profiles",
+            owner,
+            "delete",
+            "kb_contexts",
+            context
+        )
+        .await,
+        "kb_contexts must stay fail-closed on delete even for its owner"
+    );
+}

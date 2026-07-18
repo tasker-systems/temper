@@ -227,6 +227,139 @@
         ]
       }
     },
+    "/api/admin/slack/links/disconnect": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Slack Link"
+        ],
+        "summary": "Disconnect any principal. Operator path — offboarding and stuck users.",
+        "operationId": "admin_disconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackDisconnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Disconnect completed (idempotent); `disconnected` is empty when the principal was not linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackDisconnectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed Slack principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required, or Slack account linking is not configured on this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/auth/slack/link/me": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Slack Link"
+        ],
+        "summary": "Disconnect EVERY Slack principal bound to the caller's own profile.",
+        "description": "Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)`\nand nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds\ntwo rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting\nonly one and answering \"disconnected\" would leave the other grant live and still minting\nact-as-the-human tokens, which is the opposite of what the user asked for.\n\nThe 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and\ndocumenting one the code cannot return is worse than documenting nothing — it is baked into\n`openapi.json`, the Ruby gem and `schema.ts`.",
+        "operationId": "disconnect_me",
+        "responses": {
+          "200": {
+            "description": "Disconnect completed (idempotent); `disconnected` lists every principal unbound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackDisconnectResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required, or Slack account linking is not configured on this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/cogmaps/{id}/graph/slice": {
       "parameters": [
         {
@@ -7695,6 +7828,15 @@
           }
         }
       },
+      "IdpRevocation": {
+        "type": "string",
+        "description": "What happened to the stored grant at the identity provider.\n\nA three-state enum rather than a `bool`, because `false` used to collapse\nthree genuinely different facts — \"there was no grant, so nothing was\nattempted\", \"a revoke was attempted and failed\", and (in AS mode) \"the\nUPDATE matched zero rows\" — and consumers could not tell them apart. The CLI\nconsequently warned \"the identity provider did not confirm revocation\" at a\nuser who had no grant at all.",
+        "enum": [
+          "not_attempted",
+          "revoked",
+          "failed"
+        ]
+      },
       "IngestCreateResponse": {
         "oneOf": [
           {
@@ -10255,6 +10397,64 @@
           }
         }
       },
+      "SlackDisconnectRequest": {
+        "type": "object",
+        "description": "Request body for the admin disconnect endpoint.",
+        "required": [
+          "slack_principal_id"
+        ],
+        "properties": {
+          "slack_principal_id": {
+            "type": "string",
+            "description": "The whole opaque Slack principal (`slack:<team>:<user>`, 2–4 segments).\nNever split this value."
+          }
+        }
+      },
+      "SlackDisconnectResponse": {
+        "type": "object",
+        "description": "The result of a disconnect, as returned to CLI callers.\n\nBoth surfaces return this same shape: the admin arm carries 0 or 1 entries,\nthe self-serve arm 0..n (a human legitimately holds one Slack principal per\nworkspace, and `kb_profile_auth_links` carries no `UNIQUE(profile_id,\nauth_provider)` that would stop them). Uniform, so an SDK consumer writes one\ncode path for both.",
+        "required": [
+          "disconnected"
+        ],
+        "properties": {
+          "disconnected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlackDisconnectedPrincipal"
+            },
+            "description": "One entry per principal actually unbound. Empty when nothing was linked —\nwhich is a success, not an error: disconnect is idempotent."
+          }
+        }
+      },
+      "SlackDisconnectedPrincipal": {
+        "type": "object",
+        "description": "One principal that a disconnect actually unbound.\n\nEvery field is an observation of what happened to THAT principal, so the CLI\ncan tell the user the truth rather than echoing a canned success message.",
+        "required": [
+          "slack_principal_id",
+          "grant_deleted",
+          "intents_deleted",
+          "idp_revocation"
+        ],
+        "properties": {
+          "grant_deleted": {
+            "type": "boolean",
+            "description": "A stored grant existed and was destroyed."
+          },
+          "idp_revocation": {
+            "$ref": "#/components/schemas/IdpRevocation",
+            "description": "What happened to the grant at the identity provider."
+          },
+          "intents_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many pending link intents were swept for this principal."
+          },
+          "slack_principal_id": {
+            "type": "string",
+            "description": "The WHOLE opaque Slack principal that was unbound. Never split."
+          }
+        }
+      },
       "SliceRequest": {
         "type": "object",
         "description": "R4 request: focus seeds (required, non-empty), BFS depth, and an optional\nedge-kind filter that constrains the *traversal* (induced subgraph).",
@@ -10959,6 +11159,10 @@
     {
       "name": "Access",
       "description": "System access gate — self-service join requests and public settings"
+    },
+    {
+      "name": "Slack Link",
+      "description": "Slack account-link disconnect — self-serve and admin"
     }
   ]
 }

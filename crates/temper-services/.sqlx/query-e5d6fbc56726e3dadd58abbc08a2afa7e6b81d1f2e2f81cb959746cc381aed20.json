@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5d6fbc56726e3dadd58abbc08a2afa7e6b81d1f2e2f81cb959746cc381aed20"
+}

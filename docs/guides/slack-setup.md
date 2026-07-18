@@ -225,6 +225,116 @@ encrypted row in `kb_slack_grant_vault`.
 
 ---
 
+## Disconnecting an account
+
+A user unbinds their own link:
+
+```bash
+temper slack disconnect
+```
+
+An operator unbinds any principal — offboarding, or a user who linked the wrong profile:
+
+```bash
+temper admin slack disconnect 'slack:T0BHAHEN79C:U0BH6A3L6JF'
+```
+
+The principal is opaque and has two to four segments. Pass it whole, quoted — never split it.
+
+Both are **idempotent**: disconnecting an already-disconnected principal succeeds quietly, and says
+so. Until this existed there was no self-service recovery at all: a user who linked the wrong profile
+needed an operator with direct SQL access. The "already connected to a different temper account"
+refusal page has always told people to "disconnect it there first" — this is the affordance that
+sentence was promising.
+
+### What it does
+
+- Deletes the identity row (`kb_profile_auth_links`).
+- **Destroys** the encrypted grant (`kb_slack_grant_vault`) — the row is deleted, not flagged, so the
+  sealed refresh token stops existing rather than merely being ignored.
+- Sweeps that principal's pending link intents. This is a security step, not hygiene: the link flow
+  is safe partly because an already-linked user is never issued an authorize URL and partly because
+  rebinding is refused. A disconnect removes **both** guarantees at once, so an intent minted just
+  before it would otherwise survive as a live first-link URL for a now-unlinked principal.
+- Attempts to revoke the grant at the identity provider.
+
+### What it does NOT do
+
+- **It is not deactivation.** The profile, its team memberships, and its resources are untouched.
+- **It is not an instant cutoff.** Revocation stops *future* mints; an access token already issued
+  stays valid until its own expiry (up to an hour), because validation consults no revocation list.
+  This is the same honesty the rest of this guide keeps about revocation — see *Security properties*.
+- **It does not uninstall the Slack app.** That is workspace-level and admin-only, which is precisely
+  why a per-user disconnect has to exist.
+
+### The response shape
+
+Both surfaces return the same thing:
+
+```json
+{
+  "disconnected": [
+    {
+      "slack_principal_id": "slack:T0BHAHEN79C:U0BH6A3L6JF",
+      "grant_deleted": true,
+      "intents_deleted": 1,
+      "idp_revocation": "revoked"
+    }
+  ]
+}
+```
+
+`disconnected` lists one entry per principal actually unbound. **Empty is a success**, not an error —
+it means nothing was linked. The admin surface returns zero or one entry; the self-serve surface
+returns zero or more, because a human in two Slack workspaces holds a distinct principal in each and
+`temper slack disconnect` unbinds **all** of them.
+
+`idp_revocation` is one of three values, and the distinction matters:
+
+| Value | Meaning |
+|---|---|
+| `not_attempted` | There was no stored grant, so nothing was revoked. Common for links made before the grant vault shipped. Not a problem. |
+| `revoked` | The IdP (or, self-hosted, the local token store) confirmed the revocation. |
+| `failed` | A revocation was attempted and did not succeed. See below. |
+
+### If the IdP revocation fails
+
+The response reports `"idp_revocation": "failed"` and the CLI warns on stderr. **The disconnect still
+succeeded** — the local grant is destroyed either way, so temper can no longer use it. The grant may
+remain live at the IdP until it expires; revoke it from the Auth0 dashboard if that matters to you.
+
+The CLI warns on `failed` only. `not_attempted` gets no warning: there was no grant, so there is
+nothing that could still be live.
+
+### If the vault key has been rotated
+
+Rotating `SLACK_VAULT_ENC_KEY` makes every pre-rotation ciphertext unopenable — that is the point of
+the rotation. Disconnect handles this deliberately: it **still destroys** the identity row, the grant
+row and the intents, and reports `"idp_revocation": "not_attempted"` (it could not open the token, so
+it could not present it to the IdP). Revoke those grants at the IdP out-of-band. Failing the
+disconnect here would be strictly worse: the situation that motivates a key rotation is a compromise,
+which is exactly when the unbind lever has to work.
+
+temper deliberately does not keep the token around to retry the revocation later: doing so would
+preserve the exact secret the user just asked it to destroy. The failure is logged with the principal
+and the status, never the token.
+
+On self-hosted installs (temper-AS mode) revocation is local and happens in the same transaction as
+the deletes, so it cannot fail this way at all.
+
+### Reconnecting
+
+Just mention `@temper` again. The principal is unlinked, so the normal flow offers a fresh authorize
+URL — there is no special reconnect path.
+
+### Intent retention
+
+Expired and consumed link intents are swept hourly by the `/api/slack/intents/reap` cron, gated on
+the same bearer secret as the embed crons (`EMBED_DISPATCH_SECRET`). Consumed rows are removed
+because their nonce is single-use and already spent; live unconsumed ones are spared.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause |

@@ -130,7 +130,7 @@ pub async fn slack_link_state(
 /// whether a team id is present and whether the author is a bot — so it is deliberately
 /// NEVER split on ':'. A prefix check plus a length check is the whole of what is knowable
 /// without parsing something we have no business parsing.
-fn validate_slack_principal(principal: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_slack_principal(principal: &str) -> Result<(), ApiError> {
     if principal.is_empty() {
         return Err(ApiError::BadRequest(
             "slack_principal_id must not be empty".to_string(),

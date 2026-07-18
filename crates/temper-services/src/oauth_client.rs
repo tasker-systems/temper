@@ -90,3 +90,76 @@ pub async fn refresh_grant(
         ApiError::Internal(format!("refresh response was not the expected shape: {e}"))
     })
 }
+
+/// Best-effort revocation of a refresh-token grant at an external IdP.
+///
+/// Callers MUST treat a failure as non-fatal — see the disconnect service. The
+/// token is a body parameter, which is why revocation has to happen *before*
+/// the stored ciphertext is deleted.
+///
+/// Auth0's revocation endpoint returns 200 with an empty body; there is nothing
+/// to decode. A public client (no secret) sends only `client_id`.
+pub async fn revoke_grant(revoke_url: &str, client_id: &str, refresh_token: &str) -> ApiResult<()> {
+    let res = HTTP
+        .post(revoke_url)
+        .timeout(Duration::from_secs(5))
+        .form(&[("client_id", client_id), ("token", refresh_token)])
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("token revoke transport failure: {e}")))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        // Status only — the body may echo request parameters.
+        tracing::warn!(%status, "token revoke returned a non-success status");
+        return Err(ApiError::Unauthorized("revoke grant failed".to_string()));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The body matchers are the point of this test, not the 200. Auth0's
+    /// revocation endpoint identifies the grant *from the token in the body* —
+    /// a request that reaches the right URL without carrying `token` revokes
+    /// nothing and still returns success. Without these matchers, deleting the
+    /// `.form(...)` call entirely would leave this test green.
+    #[tokio::test]
+    async fn revoke_posts_the_token_and_client_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .and(body_string_contains("token=rt-value"))
+            .and(body_string_contains("client_id=test-client"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let url = format!("{}/oauth/revoke", server.uri());
+        revoke_grant(&url, "test-client", "rt-value")
+            .await
+            .expect("revoke should succeed on 200");
+    }
+
+    #[tokio::test]
+    async fn revoke_surfaces_a_non_2xx_as_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+
+        let url = format!("{}/oauth/revoke", server.uri());
+        let err = revoke_grant(&url, "test-client", "rt-value")
+            .await
+            .expect_err("a 400 must be an error");
+        assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
+    }
+}

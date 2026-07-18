@@ -94,6 +94,11 @@ const INPUT_TABLES: &[&str] = &[
     "kb_team_members",
     "kb_contexts",
     "kb_team_contexts",
+    // Grants are INPUT, not projection: replay restores kb_access_grants verbatim (the 5 pre-epoch
+    // grants have no events, so rebuilding from events would report them spurious forever). The
+    // grant_created/grant_revoked walk arms are no-ops (see the match below) precisely because the
+    // final grant state rides in here — spec 2026-07-16 §7, Task 5 Step 5.
+    "kb_access_grants",
     "kb_topics",
     "kb_event_types",
     "kb_events",
