@@ -93,11 +93,13 @@ per-tenant integration, agent infrastructure, observability scope, governance su
 the insights you pursue). The org-shaped answers vary between organizations and evolve over time;
 anchor them with **temperkb.io** as one concrete, near-minimal reference point (Vercel
 functions / Neon / single-tenant / platform agents), the way the seed scenario anchors the
-show pages. State settled commitments plainly rather than leaving them as open forks — e.g.
-*administration is event-sourced* (auditable by construction), *firewalled from cognition*
-(governance is traceable but not knowledge; admin events don't enter cogmaps / subscriptions
-/ relationships), and *bounded at the persistence layer* (direct Postgres commands fall
-below the ledger — a system-responsibility boundary, not a gap).
+show pages. State settled commitments plainly rather than leaving them as open forks — but scope
+them to what ships, and name the mechanism rather than the aspiration. E.g. *access grants are
+event-sourced and readable* (the grant pair, not yet the whole administrative surface),
+*firewalled from cognition* (admin events carry **no producing anchor**, which is precisely what
+keeps them out of cogmaps / subscriptions / relationships — governance is traceable but not
+knowledge), and *bounded at the persistence layer* (direct Postgres commands fall below the
+ledger — a system-responsibility boundary, not a gap).
 
 ## The threaded seed (learn the cast once)
 
