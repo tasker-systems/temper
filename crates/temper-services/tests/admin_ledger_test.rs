@@ -969,6 +969,64 @@ async fn the_migrated_categories_match_the_bootseed_constants(pool: PgPool) {
     );
 }
 
+/// Registering an event type must state its category, and omitting it must fail LEGIBLY.
+///
+/// Regression guard for a real defect in this migration's first draft: the retax narrowed
+/// `kb_event_types_category_check` to ('domain','admin','system') but left the column DEFAULT at the
+/// retired 'cognition' inherited from `20260718000020`. That left a NOT NULL column whose default
+/// value its own CHECK forbade — so the next migration registering an event type with the idiom all
+/// eight prior ones use would abort at apply time, citing a literal present nowhere in the schema.
+///
+/// The fix drops the default rather than repointing it, so an unstamped registration fails with a
+/// plain NOT NULL error naming `category` instead of silently joining the trail allowlist. This test
+/// pins BOTH halves: the omission fails, and it fails as a not-null error rather than a check error.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn registering_an_event_type_requires_an_explicit_category(pool: PgPool) {
+    let err = sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES ($1, NULL, 1)",
+    )
+    .bind("some_future_event")
+    .execute(&pool)
+    .await
+    .expect_err("registering an event type without a category must fail");
+
+    let db = match &err {
+        sqlx::Error::Database(e) => e,
+        e => panic!("unexpected non-database error: {e}"),
+    };
+    assert_eq!(
+        db.code().as_deref(),
+        Some("23502"),
+        "must fail as NOT NULL (23502) naming `category`, not as a check violation (23514) citing a \
+         literal the author never wrote. Got: {db}"
+    );
+
+    // NON-VACUOUS CONTROL: the same insert WITH a category succeeds, so the failure above is about
+    // the missing category and not about the row being malformed in some other way.
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ($1, NULL, 1, 'domain')",
+    )
+    .bind("some_future_event")
+    .execute(&pool)
+    .await
+    .expect("an explicitly-categorised registration must succeed");
+
+    // And the vocabulary is closed: a category outside the CHECK is refused.
+    let bad = sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ($1, NULL, 1, 'cognition')",
+    )
+    .bind("another_future_event")
+    .execute(&pool)
+    .await
+    .expect_err("the retired 'cognition' literal must no longer be accepted");
+    assert!(
+        matches!(&bad, sqlx::Error::Database(e) if e.constraint() == Some("kb_event_types_category_check")),
+        "expected kb_event_types_category_check to reject the retired literal, got: {bad}"
+    );
+}
+
 /// Helper: attempt a raw insert, returning the constraint name that rejected it (or None if the
 /// insert was accepted). Raw SQL on purpose — these tests exist to prove the DATABASE refuses the
 /// row, so routing through a service or `_event_append` would test the wrong layer.

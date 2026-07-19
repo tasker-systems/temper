@@ -57,15 +57,28 @@
 --   admin  — authority acts (unchanged; the name was always right)
 --   system — configuration, e.g. `lens_created`
 --
--- THIS IS A PURE RENAME. `lens_created` moving to 'system' is behaviourally inert: it is unanchored,
--- and both trail functions already require `producing_anchor_table IS NOT NULL`, so it was never
--- returned by a trail. Nothing else keys on the literal (verified: only 20260718000020's two filter
--- sites and one stale comment in bootseed.rs).
+-- THIS IS A PURE RENAME. `lens_created` moving to 'system' is behaviourally inert, but NOT for the
+-- reason that first suggests itself: `lens_create` DOES conditionally anchor — pass it a `cogmap_id`
+-- and it writes `producing_anchor_table = 'kb_cogmaps'` (reproducible; the shipped seeds happen to
+-- pass `cogmap: None`, but the scenario DSL can author a cogmap-scoped lens by hand). The reason no
+-- trail ever returns it is the payload: `LensCreated` carries none of `resource_id`, `owner`,
+-- `block_id`, or `edge_id`, which are the only keys either trail function joins on. Do not simplify
+-- this to "it is unanchored" — that is false, and it would justify a wrong change later.
 --
--- NOT changed here, deliberately: `kb_event_types.category`'s DEFAULT still admits a newly-registered
--- type to trails without stamping — the permissive direction, which 20260718000020 argued against
--- for the FILTER but then chose for its own default. Making that fail-closed is a semantic change
--- and does not belong inside a rename. Left for a separate decision.
+-- Nothing else keys on the literal (verified: only 20260718000020's two filter sites and one stale
+-- comment in bootseed.rs).
+--
+-- THE DEFAULT IS DROPPED, and that is not incidental. `20260718000020` gave the column
+-- `DEFAULT 'cognition'`; retaxing the vocabulary without touching the DEFAULT would leave a NOT NULL
+-- column whose default value its own CHECK forbids — so the next migration to register an event type
+-- with the idiom all eight prior ones use (`INSERT INTO kb_event_types (name, payload_schema,
+-- schema_version) VALUES (...)`) would abort at apply time, naming a literal that appears nowhere in
+-- the vocabulary. Rather than restore a working-but-permissive default, drop it: a type registered
+-- without an explicit category now fails with a plain NOT NULL error naming the column, instead of
+-- silently joining the trail allowlist. That is what the CONSEQUENCE paragraph above already demands
+-- ("stamp `category` at REGISTRATION time"), so the schema now enforces what the prose asks for.
+--
+--   Every future event-type registration must spell `category` explicitly.
 --
 -- ORDERING IS LOAD-BEARING: this runs BEFORE kb_events gains its `category` column and the FK below.
 -- Once that FK exists with ON UPDATE RESTRICT, this very UPDATE is refused (a type with events
@@ -79,6 +92,10 @@ UPDATE kb_event_types SET category = 'system' WHERE name = 'lens_created';
 ALTER TABLE kb_event_types
   ADD CONSTRAINT kb_event_types_category_check
   CHECK (category IN ('domain', 'admin', 'system'));
+
+-- Must accompany the CHECK above, in the same migration. The inherited DEFAULT 'cognition' is not a
+-- member of the new vocabulary, so leaving it would make every category-omitting INSERT fail.
+ALTER TABLE kb_event_types ALTER COLUMN category DROP DEFAULT;
 
 -- The two trail readers, re-emitted from `20260718000020` VERBATIM with only the category literal
 -- changed (two sites; the rewrite was diffed to prove nothing else moved). The allowlist stays an
