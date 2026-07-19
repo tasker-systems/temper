@@ -12,7 +12,7 @@ pub async fn list_mine(
         .teams()
         .list_my_invitations()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&invitations, fmt)?);
     Ok(())
 }

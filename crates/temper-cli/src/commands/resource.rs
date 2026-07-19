@@ -710,7 +710,7 @@ fn link_session_to_task(
                     .relationships()
                     .assert(&req)
                     .await
-                    .map_err(crate::commands::client_err)
+                    .map_err(crate::actions::runtime::client_err_to_temper)
             });
             match result {
                 Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
@@ -892,8 +892,10 @@ fn inject_truncation_signal(envelope: &mut serde_json::Value, offset: usize) -> 
 }
 
 /// Emit the stderr note shown when a `list` page is truncated. Routed through
-/// `output::warning` (stderr) — NOT `output::hint` (stdout) — so it never
-/// corrupts the JSON document an agent parses on stdout. Names the exact escape
+/// `output::warning` rather than `output::hint` for *severity*, not for stream
+/// choice — both now write to stderr, so neither can corrupt the JSON document
+/// an agent parses on stdout. A capped page an agent silently mistakes for the
+/// whole set is a wrong answer, not a suggestion. Names the exact escape
 /// hatches (`--all`, a bigger `--limit`, `--offset`, or narrowing with
 /// `--sort`/filters) so an agent self-corrects instead of asserting a set is
 /// complete from a capped page.

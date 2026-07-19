@@ -16,7 +16,7 @@ pub async fn disconnect_remote(
         .slack()
         .admin_disconnect(principal)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     // Render FIRST (JSON to stdout), then consume the payload for the stderr caveats.
     println!("{}", crate::format::render(&row, fmt)?);

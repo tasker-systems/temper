@@ -99,7 +99,7 @@ pub async fn provision_remote(
         .machine_clients()
         .provision(&req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
     Ok(())
@@ -127,7 +127,7 @@ pub async fn issue_remote(
         .machine_clients()
         .issue(&req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     // Render the whole credential (JSON by default) so an agent capturing stdout gets the
     // secret; warn on stderr for a human at a TTY.
@@ -151,7 +151,7 @@ pub async fn rotate_secret_remote(
         .machine_clients()
         .rotate_secret(machine_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&cred, fmt)?);
     crate::output::warning(
@@ -180,7 +180,7 @@ pub async fn rebind_remote(
         .machine_clients()
         .rebind(from_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
     Ok(())
@@ -196,7 +196,7 @@ pub async fn list_remote(
         .machine_clients()
         .list(include_revoked)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&rows, fmt)?);
     Ok(())
 }
@@ -211,7 +211,7 @@ pub async fn show_remote(
         .machine_clients()
         .get(parse_uuid("machine client id", id)?)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     Ok(())
 }
@@ -227,7 +227,7 @@ pub async fn revoke_remote(
         .machine_clients()
         .revoke(parse_uuid("machine client id", id)?)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     crate::output::hint(
         "Grants and team memberships were NOT removed — revocation denies authentication only.",

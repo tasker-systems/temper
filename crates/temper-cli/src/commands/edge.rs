@@ -61,7 +61,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
                         .relationships()
                         .assert(&req)
                         .await
-                        .map_err(crate::commands::client_err)?;
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     print_ack("asserted", &ack, fmt)?;
                     Ok(())
                 })
@@ -84,7 +84,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
                         .relationships()
                         .retype(edge_handle, &req)
                         .await
-                        .map_err(crate::commands::client_err)?;
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     print_ack("retyped", &ack, fmt)?;
                     Ok(())
                 })
@@ -105,7 +105,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
                         .relationships()
                         .reweight(edge_handle, &req)
                         .await
-                        .map_err(crate::commands::client_err)?;
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     print_ack("reweighted", &ack, fmt)?;
                     Ok(())
                 })
@@ -126,7 +126,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
                         .relationships()
                         .fold(edge_handle, &req)
                         .await
-                        .map_err(crate::commands::client_err)?;
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     print_ack("folded", &ack, fmt)?;
                     Ok(())
                 })

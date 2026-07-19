@@ -329,7 +329,7 @@ pub fn request_access(message: Option<&str>) -> Result<()> {
                     output::warning("You already have a pending request.");
                     output::hint("  Run `temper auth status` to check its status.");
                 }
-                Err(e) => return Err(crate::commands::client_err(e)),
+                Err(e) => return Err(crate::actions::runtime::client_err_to_temper(e)),
             }
             Ok(())
         })
@@ -344,7 +344,7 @@ pub fn withdraw_request() -> Result<()> {
                 .access()
                 .get_own_request()
                 .await
-                .map_err(crate::commands::client_err)?;
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
 
             match request {
                 None => {
@@ -356,7 +356,7 @@ pub fn withdraw_request() -> Result<()> {
                             .access()
                             .withdraw_request()
                             .await
-                            .map_err(crate::commands::client_err)?;
+                            .map_err(crate::actions::runtime::client_err_to_temper)?;
                         output::success("Request withdrawn.");
                     }
                     JoinRequestStatus::Approved => {

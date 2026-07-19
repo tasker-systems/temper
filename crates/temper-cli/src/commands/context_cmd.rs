@@ -123,7 +123,7 @@ pub async fn create_remote(
         .contexts()
         .create(name, owner)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let mut row = serde_json::to_value(&context)
         .map_err(|e| crate::error::TemperError::Api(format!("context serialize: {e}")))?;
@@ -146,7 +146,7 @@ pub async fn list(
         .contexts()
         .list()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let mut rows = serde_json::to_value(&contexts)
         .map_err(|e| crate::error::TemperError::Api(format!("context serialize: {e}")))?;
@@ -186,7 +186,7 @@ pub async fn resolve_context_id(
         .contexts()
         .list()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     contexts
         .into_iter()
         .find(|c| c.owner_ref == owner && c.slug == slug)
@@ -212,7 +212,7 @@ fn map_share_err(action: &str, e: temper_client::error::ClientError) -> TemperEr
              administrator, or use `context create --owner +<team>` to create a new \
              team-owned context instead."
         )),
-        other => crate::commands::client_err(other),
+        other => crate::actions::runtime::client_err_to_temper(other),
     }
 }
 
@@ -305,14 +305,14 @@ pub async fn resolve_context_id_for_read(
         .contexts()
         .list()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let found = if owner == "@me" {
         let me = client
             .profile()
             .get()
             .await
-            .map_err(crate::commands::client_err)?;
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
         contexts
             .into_iter()
             .find(|c| c.kb_owner_table == "kb_profiles" && c.kb_owner_id == me.id && c.slug == slug)
@@ -348,7 +348,7 @@ pub async fn shape_remote(
         .contexts()
         .shape(context_id, lens_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&rows, fmt)?;
     crate::output::plain(rendered);
     Ok(())
@@ -367,7 +367,7 @@ pub async fn region_metrics_remote(
         .contexts()
         .region_metrics(context_id, lens_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&rows, fmt)?;
     crate::output::plain(rendered);
     Ok(())
@@ -385,7 +385,7 @@ pub async fn materialize_remote(
         .contexts()
         .materialize(context_id, threshold)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&ack, fmt)?;
     crate::output::plain(rendered);
     Ok(())

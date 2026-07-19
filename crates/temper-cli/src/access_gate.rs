@@ -30,35 +30,37 @@ pub fn render_system_access_required(
     output::error(format!(
         "You're signed in as {identity}, but this temper instance\n  requires approved access."
     ));
-    output::blank();
+    output::blank_err();
 
     match join_request_status {
         Some("pending") => {
-            output::plain("  Your access request is pending review.");
+            output::plain_err("  Your access request is pending review.");
             output::hint(format!(
                 "  Run `{CHECK_STATUS_COMMAND}` to check for updates."
             ));
         }
         Some("rejected") => {
-            output::plain("  Your previous request was not approved. You can submit a new one:");
+            output::plain_err(
+                "  Your previous request was not approved. You can submit a new one:",
+            );
             if let Some(cmd) = cli_command {
                 output::hint(format!("    {cmd}"));
             }
         }
         Some("withdrawn") => {
-            output::plain("  You withdrew your previous request. Submit a new one:");
+            output::plain_err("  You withdrew your previous request. Submit a new one:");
             if let Some(cmd) = cli_command {
                 output::hint(format!("    {cmd}"));
             }
         }
         _ => {
-            output::plain("  To request access, run:");
+            output::plain_err("  To request access, run:");
             if let Some(cmd) = cli_command {
                 output::hint(format!("    {cmd}"));
             }
             if let Some(url) = request_url {
-                output::blank();
-                output::plain(format!("  Or visit: {url}"));
+                output::blank_err();
+                output::plain_err(format!("  Or visit: {url}"));
             }
         }
     }
