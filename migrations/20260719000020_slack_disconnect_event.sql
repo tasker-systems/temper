@@ -1,7 +1,20 @@
 -- The Slack-disconnect ledger event (task 019f75ec).
 --
--- Registers `slack_principal_disconnected`, classifies it `admin`, and defines the SQL chokepoint
+-- Registers `slack_principal_disconnected` as an `admin` event type and defines the SQL chokepoint
 -- that unbinds the principal AND appends the event in one transaction.
+--
+-- CATEGORY IS SPELLED AT REGISTRATION, not stamped afterwards. `20260719000010` retaxed the
+-- vocabulary (cognition -> domain, plus `system`) and DROPPED the column's DEFAULT precisely so a
+-- registration that omits `category` fails loudly rather than silently joining the trail allowlist.
+-- Its CONSEQUENCE paragraph is binding on this migration: once any event of a type exists, the
+-- composite FK `kb_events_category_matches_type` is `ON UPDATE RESTRICT`, so a type's category can
+-- never be corrected afterwards. An earlier draft of this file used the pre-retax idiom -- INSERT
+-- without `category`, then `UPDATE ... SET category = 'admin'` -- which would abort at apply time on
+-- NOT NULL. That is the failure `20260719000010` was written to force, and it worked.
+--
+-- `admin` also buys the two new runtime guarantees for free: `kb_events_admin_is_unanchored`
+-- (admin => NULL producing anchor, which this function satisfies by passing NULL,NULL) and the
+-- element-trail allowlist, which now admits only `domain`.
 --
 -- WHY THE SCHEMA IS INLINED VERBATIM. The JSON below is copied byte-for-byte from the committed
 -- crates/temper-substrate/tests/fixtures/payloads/slack_principal_disconnected.v1.schema.json,
@@ -17,9 +30,11 @@
 -- stamped by its own forward migration, absent from system.yaml. This is safe because
 -- `bootseed_publishes_payload_schemas` counts non-NULL payload_schema rows against
 -- TYPED_EVENT_NAMES.len() rather than comparing the two SETS -- so a migration-stamped 19th name
--- satisfies it exactly as the 18th did.
+-- satisfies it exactly as the 18th did. (The bootseed loop classifies by
+-- `payloads::ADMIN_EVENT_NAMES`, which carries this name, so a `reset_schema` rebuild reproduces
+-- `admin` rather than defaulting it to `domain`.)
 
-INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES
+INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
   ('slack_principal_disconnected', $JS${
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SlackPrincipalDisconnected",
@@ -92,18 +107,9 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES
       "format": "uuid"
     }
   }
-}$JS$::jsonb, 1)
+}$JS$::jsonb, 1, 'admin')
 ON CONFLICT (name) DO UPDATE
   SET payload_schema = EXCLUDED.payload_schema, schema_version = EXCLUDED.schema_version;
-
--- CLASSIFY IT ADMIN. `kb_event_types.category` defaults to 'cognition' (20260718000020) and the
--- element-trail firewall is an ALLOWLIST (`et.category = 'cognition'`), so an admin type left
--- unstamped passes filter B and leans entirely on filter A (anchor nullity). Both halves ship for
--- exactly this reason -- neither default is safe alone. UPDATE-by-name, never INSERT: the row above
--- may or may not pre-exist, and an UPDATE is correct and idempotent either way.
-UPDATE kb_event_types
-   SET category = 'admin'
- WHERE name = 'slack_principal_disconnected';
 
 -- THE CHOKEPOINT. Task 5's shape (20260718000010): one function that performs the state mutation
 -- AND appends the event, in one transaction.
