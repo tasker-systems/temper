@@ -147,10 +147,11 @@ pub async fn list_by_actor(
     // prelude, and `tools::admin_ledger` calls `require_profile()` and no more. Neither gates
     // upstream. Do not relax this on the theory that a layer above repeats it — nothing does.
     //
-    // Under production's `access_mode = 'open'` this check short-circuits true for every
-    // profile, so on the actor axis the real gate is the caller-is-the-actor test below, and on
-    // the subject axis it is `readable_event_types`. That is intended: reading your own
-    // authorship is not an admin act.
+    // How much this check actually excludes is an OPERATIONAL setting, not a property of this
+    // code — do not reason about it from a value read at some past moment. Treat the real gate on
+    // the actor axis as the caller-is-the-actor test below, and on the subject axis as
+    // `readable_event_types`; both hold regardless of how the instance is configured. That is
+    // intended: reading your own authorship is not an admin act.
     if !access_service::has_system_access(pool, caller).await? {
         return Err(ApiError::NotFound);
     }

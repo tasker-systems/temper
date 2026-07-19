@@ -182,10 +182,11 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`).
         //
         // The gate lives in the SERVICES, not in these handlers — the handlers are gate-free by
-        // design, as `handlers::machine_clients`' module doc explains. It is load-bearing rather
-        // than defense-in-depth: production runs `access_mode = 'open'`, under which
-        // `has_system_access` is true for everyone, so the gated router admits all comers and the
-        // service check is the only thing left.
+        // design, as `handlers::machine_clients`' module doc explains. Treat it as load-bearing,
+        // not defense-in-depth: how much the router's `require_system_access` layer actually
+        // excludes is an operational setting an instance can change at any time, so the service
+        // check is the only guarantee that does not move. Do not relax it on the strength of a
+        // configuration value read at some past moment.
         .route(
             "/api/machine-clients",
             get(handlers::machine_clients::list).post(handlers::machine_clients::provision),
