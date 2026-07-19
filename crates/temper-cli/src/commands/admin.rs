@@ -3,7 +3,7 @@
 
 use crate::error::{Result, TemperError};
 use temper_core::types::access_gate::JoinRequestStatus;
-use temper_core::types::admin::{PromoteAdminRequest, UpdateSettingsRequest};
+use temper_core::types::admin::{AdminLedgerQuery, PromoteAdminRequest, UpdateSettingsRequest};
 
 /// Show settings when no flag is set; otherwise PATCH and render the result.
 ///
@@ -172,6 +172,68 @@ pub async fn reembed_remote(
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&summary, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// Read the admin ledger — "who granted what, to whom, when".
+///
+/// Exactly one axis. `--subject <kind>:<uuid>` asks what was done TO a thing; `--actor <uuid>`
+/// asks what a principal DID. They gate differently (subject reads are checked per act family
+/// against that subject; actor reads are self-gating), which is why the server refuses a request
+/// naming both rather than picking one — and why clap refuses it here too, so the round-trip is
+/// not spent learning that.
+///
+/// A refusal is a **404**, deliberately: on this surface "you may not read that" and "there is
+/// nothing there" are made indistinguishable, because a 403 would confirm the ledger holds
+/// something about the subject.
+pub async fn ledger_remote(
+    client: &temper_client::TemperClient,
+    subject: Option<&str>,
+    actor: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let mut query = AdminLedgerQuery {
+        limit,
+        offset,
+        ..Default::default()
+    };
+
+    match (subject, actor) {
+        (Some(_), Some(_)) => {
+            // Belt and braces: clap's `conflicts_with` already refuses this. Kept so the rule
+            // survives a future caller that builds the args programmatically.
+            return Err(TemperError::Api(
+                "pass either --subject or --actor, not both".to_string(),
+            ));
+        }
+        (None, None) => {
+            return Err(TemperError::Api(
+                "pass either --subject <kind>:<uuid> or --actor <uuid>".to_string(),
+            ));
+        }
+        (Some(spec), None) => {
+            // Passed through verbatim. The server owns the `<kind>:<uuid>` grammar AND the anchor
+            // vocabulary, and reports both with the offending value — a copy here would be a
+            // second grammar to keep in step for no gain.
+            query.subject = Some(spec.to_string());
+        }
+        (None, Some(actor)) => {
+            query.actor = Some(
+                uuid::Uuid::parse_str(actor)
+                    .map_err(|e| TemperError::Api(format!("invalid actor id '{actor}': {e}")))?,
+            );
+        }
+    }
+
+    let page = client
+        .admin()
+        .ledger(&query)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&page, fmt)?;
     println!("{rendered}");
     Ok(())
 }

@@ -167,6 +167,11 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/promote",
             post(handlers::access::promote_admin),
         )
+        // The admin ledger's read surface — operator-only, so plain `.route()` and OUT of the
+        // OpenAPI contract like its neighbours above. Authorization is in
+        // `admin_ledger_service`, which gates per act family rather than with a prelude, and
+        // denies with 404 so a refusal discloses nothing about the subject.
+        .route("/api/admin/ledger", get(handlers::admin_ledger::list))
         // Operator-only machine-principal registration (G3 Phase A). Mounted with plain
         // `.route()`, like `/api/access/admin/*` above, so it stays OUT of the OpenAPI
         // contract — it is an admin surface, not a public one. Its paths are allowlisted in

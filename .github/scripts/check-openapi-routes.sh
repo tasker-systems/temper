@@ -6,10 +6,14 @@
 # Every documented route in crates/temper-api/src/routes.rs is mounted via
 # `.routes(routes!(handler))`, which registers the axum route AND collects its
 # `#[utoipa::path]` into the spec. A route mounted with plain `.route(...)` is
-# axum-only: it never enters the OpenAPI contract. That is correct for exactly
-# nine operator-only / server-to-server surfaces (the allowlist below) and a bug
-# for anything else — an undocumented public route that the emitted openapi.json
+# axum-only: it never enters the OpenAPI contract. That is correct for the
+# operator-only / server-to-server surfaces on the allowlist below, and a bug for
+# anything else — an undocumented public route that the emitted openapi.json
 # silently omits.
+#
+# (This comment used to say "exactly nine". The allowlist had grown to 22 by the
+# time anyone noticed, because a count in prose is a second copy of the list —
+# the list itself is the count, so don't restate it.)
 #
 # This script fails if routes.rs mounts any plain `.route(` path that is NOT on
 # the allowlist. Because `.routes(routes!(…))` is the norm and plain `.route(`
@@ -38,6 +42,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/access/admin/requests/{id}
 /api/access/admin/settings
 /api/access/admin/promote
+/api/admin/ledger
 /api/machine-clients
 /api/machine-clients/{id}
 /api/machine-clients/{id}/rebind

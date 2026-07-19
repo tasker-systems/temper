@@ -6,9 +6,19 @@
 //! invisible to all of them. It is equally invisible to every *reader*, which is why identity
 //! lives in `kb_events."references"` (GIN-indexed, and consulted by no cognition reader).
 //!
-//! Two axes, both index-backed:
-//!   - by subject  → `references @> …`      (idx_kb_events_references, jsonb_path_ops)
-//!   - by actor    → `emitter_entity_id = …` (idx_kb_events_emitter, (emitter, occurred_at DESC))
+//! Two axes:
+//!   - by subject → `references @> …` (idx_kb_events_references, jsonb_path_ops)
+//!   - by actor   → `kb_profiles.id = …`, reached through `kb_events → kb_entities → kb_profiles`
+//!
+//! **The actor axis is a two-hop join, not a direct `emitter_entity_id` lookup** — this header
+//! used to say the latter, which reads as though the actor id were the index condition on
+//! `idx_kb_events_emitter`. It is not: a profile owns many entities
+//! (`kb_entities_profile_id_name_key` is UNIQUE on `(profile_id, name)`), so the actor predicate
+//! lands on `kb_profiles.id` one hop past the emitter. `idx_kb_events_emitter` still serves the
+//! **join** (`Index Cond: emitter_entity_id = en.id`), which is why the distinction is easy to
+//! miss. Whether the entity→profile step wants its own index is a real question, but it is a
+//! question about production data volume, and the dev database is far too small to answer it —
+//! every row estimate there is 1, so the plan shape proves nothing either way.
 //!
 //! This surface ships BEFORE any writer, deliberately (spec §5): the NULL anchor that firewalls
 //! admin events from cognition also hides them from every reader, so the read path had to be
@@ -245,4 +255,78 @@ async fn fetch(
             },
         )
         .collect()
+}
+
+/// Project a page onto the shared wire type in `temper_core::types::admin`.
+///
+/// **Both surfaces call this one function.** temper-api and temper-mcp each expose this read, and
+/// a conversion written twice is a wire contract that can answer two different shapes to the same
+/// question — the exact drift class the admin-event-sink arc exists to close. It lives here rather
+/// than in either surface because this crate is the one both already depend on.
+///
+/// The service type and the wire type are structurally identical but deliberately distinct:
+/// temper-client must deserialize the wire type and cannot depend on temper-substrate (which
+/// pulls `temper-ingest(embed)`, and would link ort/ONNX into the HTTP client). See the note in
+/// `temper_core::types::admin`; `admin_ledger_wire_parity_test` pins the two together.
+///
+/// `references` round-trips through JSON rather than being matched variant-by-variant — the
+/// vocabulary is a bounded set the parity test already pins, so a hand-written match here would be
+/// a third copy free to drift from both.
+pub fn to_wire_page(
+    entries: Vec<AdminLedgerEntry>,
+    epoch: Option<DateTime<Utc>>,
+) -> ApiResult<temper_core::types::admin::AdminLedgerResponse> {
+    let entries = entries
+        .into_iter()
+        .map(|e| {
+            let references = serde_json::to_value(&e.references)
+                .and_then(serde_json::from_value)
+                .map_err(|err| ApiError::Internal(format!("ledger refs: {err}")))?;
+
+            Ok(temper_core::types::admin::AdminLedgerEntry {
+                event_id: e.event_id,
+                event_type: e.event_type,
+                actor_profile_id: e.actor_profile_id,
+                actor_handle: e.actor_handle,
+                occurred_at: e.occurred_at,
+                payload: e.payload,
+                references,
+                correlation_id: e.correlation_id,
+            })
+        })
+        .collect::<ApiResult<Vec<_>>>()?;
+
+    Ok(temper_core::types::admin::AdminLedgerResponse { entries, epoch })
+}
+
+/// Parse a table name into `AnchorTable` via the enum's own serde renames, which already spell the
+/// table names exactly. Never a hand-written match: that would be a second copy of a bounded set,
+/// free to drift from the enum the moment a variant is added.
+///
+/// Private: surfaces take the whole `<kind>:<uuid>` spelling via [`parse_subject_spec`], so the
+/// kind half never crosses a boundary on its own.
+fn parse_anchor_table(kind: &str) -> ApiResult<temper_substrate::payloads::AnchorTable> {
+    serde_json::from_value(serde_json::Value::String(kind.to_string()))
+        .map_err(|_| ApiError::BadRequest(format!("unknown subject kind '{kind}'")))
+}
+
+/// Parse the `<kind>:<uuid>` subject spelling that the CLI and MCP both accept.
+///
+/// Split from the RIGHT: the uuid half is fixed-shape, so a stray colon belongs to the kind half,
+/// not the id. Lives here rather than in a surface because both surfaces take this spelling, and a
+/// parser written twice is two grammars.
+pub fn parse_subject_spec(spec: &str) -> ApiResult<RefTarget> {
+    let (kind, id) = spec.rsplit_once(':').ok_or_else(|| {
+        ApiError::BadRequest(format!(
+            "subject must be '<kind>:<uuid>' (e.g. kb_resources:0199...), got '{spec}'"
+        ))
+    })?;
+
+    let id = uuid::Uuid::parse_str(id)
+        .map_err(|e| ApiError::BadRequest(format!("invalid subject id '{id}' in '{spec}': {e}")))?;
+
+    Ok(RefTarget {
+        kind: parse_anchor_table(kind)?,
+        id,
+    })
 }
