@@ -128,7 +128,11 @@ impl ContextEnsurer for ClientContextEnsurer<'_> {
                 // 409: already exists on the server — idempotent success.
                 Ok(())
             }
-            Err(e) => Err(TemperError::Api(format!("create context '{name}': {e}"))),
+            // Lift through the one shared lifter, never `TemperError::Api(format!(..))`:
+            // flattening here would turn `ClientError::SystemAccessRequired` into its
+            // bare `Display` string and the enriched 403 renderer in `main.rs` would
+            // never fire. `/api/contexts` is a gated route, so that 403 is reachable.
+            Err(e) => Err(crate::actions::runtime::client_err_to_temper(e)),
         }
     }
 }
@@ -478,9 +482,13 @@ pub fn apply_answers(
             }
             let toml = render_config_toml(answers);
             std::fs::write(&config_path, toml)?;
-            output::dim(format!("Wrote global config to {}", config_path.display()));
+            // Prose to stderr: `run_non_interactive` renders an `InitSummary`
+            // payload to stdout, and these lines would interleave with that JSON
+            // document. Unlike `auth request-access` there *is* a payload here,
+            // so the split is real — the prose just has to stay off its stream.
+            output::dim_err(format!("Wrote global config to {}", config_path.display()));
         } else {
-            output::dim("Global config already exists, skipping");
+            output::dim_err("Global config already exists, skipping");
         }
 
         // Cloud-ensure step: only when an instance is configured.
@@ -489,7 +497,7 @@ pub fn apply_answers(
         }
     }
 
-    output::success(
+    output::success_err(
         "Temper initialized successfully. Run `temper pull default` to materialize a local projection.",
     );
     Ok(())
@@ -532,8 +540,13 @@ fn ensure_server_contexts(
             );
             return Ok(());
         }
+        // As above: `init` is the *first* command a new user runs against an
+        // invite-only instance, so this is the highest-value instance of the
+        // access guidance, not the lowest. The preceding arms match only
+        // `NotAuthenticated`/`TokenExpired`, so there is no sibling path that
+        // renders it correctly — flattening here loses it outright.
         Err(e) => {
-            return Err(TemperError::Api(format!("list contexts: {e}")));
+            return Err(crate::actions::runtime::client_err_to_temper(e));
         }
     };
 

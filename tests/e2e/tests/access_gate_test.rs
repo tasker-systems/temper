@@ -759,3 +759,255 @@ async fn access_gate_403_renders_entirely_on_stderr(pool: sqlx::PgPool) {
         "a failed gated command must leave stdout empty for its parser; stdout={stdout:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `temper init` renders the enriched 403 too
+// ---------------------------------------------------------------------------
+
+/// `temper init` must route its gated 403 through the enriched renderer.
+///
+/// This is the *highest-value* instance of the access guidance, not the lowest:
+/// `init` is the first command a new user runs against an invite-only instance,
+/// and it is exactly where "how do I request access?" needs answering. Both
+/// `/api/contexts` routes are in `gated_routes()`, so a gated caller genuinely
+/// receives the enriched 403 here.
+///
+/// Before the fix, `ensure_server_contexts`'s catch-all arm did
+/// `TemperError::Api(format!("list contexts: {e}"))`. `ClientError::SystemAccessRequired`'s
+/// `Display` is the bare string `"system access required"`, so the rich arm in
+/// `main.rs` never fired and the user got no email, no join-request status, and
+/// no remedy command. Unlike the `resource list` case there was no sibling path
+/// that rendered correctly — the preceding arms match only `NotAuthenticated`
+/// and `TokenExpired`.
+///
+/// Note the invocation: `ensure_server_contexts` is reachable only when an
+/// instance is configured (`AuthChoice::None` short-circuits it), so this drives
+/// `init` with `--instance-url`/`--idp temper-as` rather than a bare
+/// `--no-interactive`. A bare init never builds a client at all and would make
+/// this test green for the wrong reason.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn init_gated_403_renders_enriched_guidance_on_stderr(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_profile = preflight(&app, &app.token).await;
+    common::enable_invite_only(&pool, profile_id(&admin_profile)).await;
+
+    // A second, non-member user: authenticated, but gated out.
+    let second_token = common::generate_second_user_jwt();
+    preflight(&app, &second_token).await;
+
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("init-gate-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+
+    let init_vault = app.vault_dir.path().join("init-gate-vault");
+    let init_vault_arg = init_vault.to_string_lossy().to_string();
+    let base_url = app.base_url();
+
+    let output = common::run_temper_cli_with_token(
+        &base_url,
+        &second_token,
+        &config_path,
+        &[
+            "init",
+            "--no-interactive",
+            &init_vault_arg,
+            "--instance-url",
+            &base_url,
+            "--idp",
+            "temper-as",
+        ],
+    )
+    .await
+    .expect("spawn the temper binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "a gated `init` must exit non-zero; got success with stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    // The enriched guidance must actually be rendered — and on stderr.
+    assert!(
+        stderr.contains("requires approved access"),
+        "the 403 explanation must reach stderr; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("To request access, run:"),
+        "the remedy's lead-in must reach stderr; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("temper auth request-access"),
+        "the advertised remedy command must reach stderr; stderr={stderr:?}"
+    );
+
+    // The flattened form is what this test exists to forbid. Asserting its
+    // absence pins the *mechanism*, not just the symptom: if someone reverts to
+    // `TemperError::Api(format!(...))` the enriched assertions above go red, but
+    // this one names why.
+    assert!(
+        !stderr.contains("list contexts: system access required"),
+        "the gated error must not be flattened to a bare string; stderr={stderr:?}"
+    );
+
+    for leaked in [
+        "To request access, run:",
+        "temper auth request-access",
+        "requires approved access",
+    ] {
+        assert!(
+            !stdout.contains(leaked),
+            "the 403 block leaked {leaked:?} onto stdout, which agents parse as JSON; \
+             stdout={stdout:?}"
+        );
+    }
+
+    // A gated `init` renders no `InitSummary`, so stdout has no payload to carry
+    // and must be completely empty. This also pins the config-already-exists
+    // notice to stderr: it fires before the gate is reached, so before that line
+    // moved to `dim_err` this assertion caught it.
+    assert!(
+        stdout.trim().is_empty(),
+        "a failed gated `init` emits no payload, so stdout must stay empty; stdout={stdout:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `init`'s payload stream carries a payload, and nothing else
+// ---------------------------------------------------------------------------
+
+/// A successful `temper init --no-interactive` must emit **only** its JSON
+/// payload on stdout.
+///
+/// This is the same class as the tests above but the opposite shape: `init`
+/// genuinely *has* a payload — `run_non_interactive` renders an `InitSummary`
+/// and `println!`s it — so the fix is not "move everything to stderr" but "keep
+/// the prose off the payload's stream". Before the fix `output::dim`'s
+/// config-location notice and `output::success`'s closing line were written to
+/// stdout on either side of that JSON document, so `--format json` produced
+/// something no parser accepts.
+///
+/// Parsing the whole of stdout, rather than grepping for the prose strings, is
+/// deliberate: it states the actual invariant (stdout *is* a JSON document) and
+/// so catches any future prose line, not just the two that were there.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn init_emits_only_its_json_payload_on_stdout(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    preflight(&app, &app.token).await;
+
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("init-json-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+
+    let init_vault = app.vault_dir.path().join("init-json-vault");
+    let init_vault_arg = init_vault.to_string_lossy().to_string();
+
+    let output = common::run_temper_cli_with_token(
+        &app.base_url(),
+        &app.token,
+        &config_path,
+        &[
+            "--format",
+            "json",
+            "init",
+            "--no-interactive",
+            &init_vault_arg,
+        ],
+    )
+    .await
+    .expect("spawn the temper binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "init should succeed; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!(
+            "stdout must be exactly one JSON document, but did not parse ({e}); stdout={stdout:?}"
+        )
+    });
+    assert!(
+        parsed["vault_path"].is_string(),
+        "the parsed payload should be the InitSummary; parsed={parsed:?}"
+    );
+
+    // The prose belongs on stderr — assert it is actually there, so this cannot
+    // be satisfied by a build that simply stopped printing it.
+    assert!(
+        stderr.contains("Temper initialized successfully"),
+        "the closing confirmation must reach stderr; stderr={stderr:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `auth request-access` is prose, and prose does not belong on stdout
+// ---------------------------------------------------------------------------
+
+/// `temper auth request-access` must leave stdout empty.
+///
+/// The success block here is *entirely* prose — a confirmation line, an
+/// explanation, a hint, and a dimmed request id. `request_access` takes no
+/// `fmt` parameter and never calls `format::render`, so there is no payload on
+/// stdout to protect: on a non-TTY stdout (the agent default, JSON) the old code
+/// emitted four lines of prose onto the stream a caller parses.
+///
+/// This one was initially judged correct-as-is during PR #486, on the reading
+/// that it was payload-on-stdout / guidance-on-stderr. That reading was wrong.
+/// "Payload on stdout, guidance on stderr" is only a defense when a payload
+/// actually exists — check for the `fmt`/`render` call before invoking it.
+///
+/// The `blank()` was the tell: it was written to separate the hint from the
+/// request id, but went to a different stream than the hint, so the spacing was
+/// wrong on a terminal and the block fragmented on redirect.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn auth_request_access_leaves_stdout_empty(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_profile = preflight(&app, &app.token).await;
+    common::enable_invite_only(&pool, profile_id(&admin_profile)).await;
+
+    let second_token = common::generate_second_user_jwt();
+    preflight(&app, &second_token).await;
+
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("request-access-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+
+    let output = common::run_temper_cli_with_token(
+        &app.base_url(),
+        &second_token,
+        &config_path,
+        &["auth", "request-access"],
+    )
+    .await
+    .expect("spawn the temper binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "requesting access as a gated user should succeed; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    // Present on stderr: a renderer that printed nothing at all would sail
+    // through a stdout-only check, so assert both halves.
+    assert!(
+        stderr.contains("Access request submitted."),
+        "the confirmation must reach stderr; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("Request ID:"),
+        "the request id must reach stderr; stderr={stderr:?}"
+    );
+
+    assert!(
+        stdout.trim().is_empty(),
+        "`auth request-access` has no payload — every line it prints is prose, so stdout \
+         must stay empty for the parser; stdout={stdout:?}"
+    );
+}
