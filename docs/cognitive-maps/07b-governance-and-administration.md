@@ -4,7 +4,7 @@ order: 7.2
 parent: 07-operating-temper
 label: /cognitive-maps/operating-temper/governance-and-administration
 title: Governance & administration
-description: Authoring a map and reshaping the access graph beneath every map are different powers. Authoring is built; the administrative surface is org-shaped — how guarded it must be varies by organization. Administration is event-sourced (auditable by construction), with two deliberate boundaries.
+description: Authoring a map and reshaping the access graph beneath every map are different powers. Authoring is built; the administrative surface is org-shaped — how guarded it must be varies by organization. Access grants are event-sourced and readable, kept off the cognition path by an absent producing anchor, with deliberate boundaries.
 register: authoring vs. administration
 genre: invite
 ---
@@ -14,8 +14,8 @@ genre: invite
 > Dave is a maintainer of org-common. Carol owns directors. Someone made those things true —
 > added a person to a team, created the team, joined it into the right place. That isn't the same
 > act as *authoring a map*, and how guarded it needs to be is one of the most organization-shaped
-> decisions here. What *is* settled: every one of those administrative acts is an event, on the
-> ledger, auditable by construction.
+> decisions here. What *is* settled is the shape: an administrative act belongs on the ledger as an
+> event you can read back. Joining a team to a map already is one. The rest are on their way.
 
 ## Two different powers
 
@@ -56,18 +56,32 @@ maps. What it looks like — how separated, how audited, how authenticated — i
 
 ## What administration is, on the ledger
 
-Here's the part that's settled rather than open. Administrative acts are **events** — creating a
-team, granting a team to a map, each with an emitter and a producing anchor, exactly like every
-other change in the system. So governance is auditable *by construction*: every "who granted whom
-access to what, and when" is already on the ledger, no separate audit log to bolt on.
+Here's where the *shape* is settled, even though the coverage is still filling in. An
+administrative act is an **event** — granting a team access to a map, and revoking it, are the two
+that ship today — each carrying an emitter and, unlike every other change in the system, **no
+producing anchor at all**.
 
-Two boundaries make this precise, and they're deliberate:
+That absence is the whole design. An anchor is what hands an event to the region producers that
+grow cognitive maps; an event without one is invisible to them. So the boundary below isn't a
+policy someone has to remember to enforce — it falls out of the shape of the record.
 
+You read that record with `temper admin ledger`, over the API, or over MCP: every "who granted whom
+access to what, and when", no separate audit log to bolt on.
+
+Three limits make this precise. Two are deliberate boundaries; the first is simply where the work
+has got to:
+
+- **Coverage is the grant pair, not yet the whole surface.** Joining and unjoining a team↔map are
+  on the ledger. Creating a team, adding a member, disabling a profile are not — and for acts that
+  happened before the ledger opened, the history is gone rather than merely missing: `kb_teams`
+  never had a creator column to recover one from. The ledger therefore opens at a marked epoch and
+  is honest about starting there.
 - **Governance is traceable, but it isn't knowledge.** Administrative events are privacy- and
   auth-bound records, kept for **compliance**. By design they do **not** participate in cognitive
   maps, subscriptions, or resource relationships — a grant is not a concept, and the agents
   growing maps never see the governance stream as material to reason over. The two live on the
-  same ledger, firewalled by intent.
+  same ledger, separated on the write path by that absent anchor and filtered again on read, so
+  neither side has to trust the other to stay in its lane.
 - **The ledger stops at the persistence layer.** A command issued straight to Postgres can bypass
   the event stream entirely. That's not a hole in the audit — it's a **system-responsibility
   boundary**: below the application, you're in the domain of database controls and infrastructure
@@ -87,11 +101,13 @@ Two boundaries make this precise, and they're deliberate:
 > **Honest basis —** authoring is real (`cogmap_genesis`,
 > [`02_functions.sql`](../../schema-artifact/02_functions.sql)); the graph it administers is real
 > (`kb_profiles`, `kb_teams`, `kb_teams_parents`, `kb_team_members`, `kb_team_cogmaps` in
-> [`01_schema.sql`](../../schema-artifact/01_schema.sql)); the event ledger and producing-anchor
-> shape that admin events would use are real (`kb_events`). The **administrative surface itself is
-> unbuilt** (no admin functions in the artifact) and its *shape* is organization-specific — draw
-> it as a proposed dial. The compliance-stream firewall and the Postgres boundary are stated
-> commitments, not yet code.
+> [`01_schema.sql`](../../schema-artifact/01_schema.sql)). The **grant half of the administrative
+> surface is now built**: `grant_created` / `grant_revoked` are real event types on `kb_events`,
+> written with a NULL producing anchor, and readable through `temper admin ledger`. Draw those
+> solid. The **rest of the dial is still proposed** — no team-creation, membership, or
+> profile-disable events exist — so draw that half as the organization-shaped dial it remains. The
+> compliance-stream firewall is real for what ships (the absent anchor keeps grants away from
+> region producers); the Postgres boundary is still a stated commitment, not code.
 > **Fidelity —** conceptual.
 
 ---

@@ -92,14 +92,18 @@ deployment shapes:
    wire in, what their events carry, how much raw signal you admit before an agent makes sense of
    it. This is the boundary where Temper becomes infrastructure your other systems emit into.
    (Deployment goes deeper.)
-2. **Administration is event-sourced** *(settled, with boundaries).* Creating a team, granting a
-   team to a map — these are *events*, with an emitter and a producing anchor, so governance is
-   auditable by construction. Two deliberate limits, though. They're privacy- and auth-bound
-   records kept for **compliance**, and by design they do **not** participate in cognitive maps,
-   subscriptions, or resource relationships — governance is traceable, but it isn't knowledge. And
-   they stop at the persistence layer: a command issued straight to Postgres can bypass the
-   ledger, which is a system-responsibility boundary, not a gap. (Governance and audit carry
-   this.)
+2. **Administration is event-sourced** *(settled in shape, partial in coverage).* Granting a team
+   access to a map, and revoking it, are *events* — each with an emitter and, deliberately, **no
+   producing anchor**. That missing anchor is not an omission; it is the mechanism. An anchor is
+   what puts an event in front of the region producers that grow cognitive maps, so withholding it
+   is what keeps governance off that path. Read the record with `temper admin ledger`. Three
+   limits, though. Coverage is the grant pair today — creating a team, adding a member, and
+   disabling a profile are not yet on the ledger, and their history before it opened is not
+   reconstructable. The records that *are* there are privacy- and auth-bound, kept for
+   **compliance**, and by design do **not** participate in cognitive maps, subscriptions, or
+   resource relationships — governance is traceable, but it isn't knowledge. And they stop at the
+   persistence layer: a command issued straight to Postgres can bypass the ledger, which is a
+   system-responsibility boundary, not a gap. (Governance and audit carry this.)
 3. **What wakes an agent** *(open, and mostly yours).* Event volume, a cadence, salience crossing
    a floor — the rhythm of waking and sweeping a map (the *temper-system dreaming* we keep naming)
    depends on your traffic and your tolerances, and you'll re-tune it over time. (Deployment,
