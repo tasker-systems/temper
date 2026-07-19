@@ -96,7 +96,9 @@ deployment shapes:
    access to a map, and revoking it, are *events* — each with an emitter and, deliberately, **no
    producing anchor**. That missing anchor is not an omission; it is the mechanism. An anchor is
    what puts an event in front of the region producers that grow cognitive maps, so withholding it
-   is what keeps governance off that path. Read the record with `temper admin ledger`. Three
+   is what keeps governance off that path — and the database **refuses** to store an administrative
+   event that carries one, so the firewall holds by construction rather than by convention. Read the
+   record with `temper admin ledger`. Three
    limits, though. Coverage is the grant pair today — creating a team, adding a member, and
    disabling a profile are not yet on the ledger, and their history before it opened is not
    reconstructable. The records that *are* there are privacy- and auth-bound, kept for
