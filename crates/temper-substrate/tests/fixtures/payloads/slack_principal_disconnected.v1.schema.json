@@ -1,11 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SlackPrincipalDisconnected",
-  "description": "`slack_principal_disconnected` — the audit record of a Slack principal being unbound from a\ntemper profile. The subject is the **profile**, not the link: `AnchorTable` has no\n`kb_profile_auth_links` variant, and the auth-link row is deleted by the same act that emits\nthis — so the row it describes no longer exists to point at. `disconnected_by` is the acting\nprofile; it EQUALS the subject on the self-serve arm and DIFFERS on the admin arm, and telling\nthose two apart is most of why this event is worth having.",
+  "description": "`slack_principal_disconnected` — the audit record of a Slack principal being unbound from a\ntemper profile. The subject is the **profile**, not the link: `AnchorTable` has no\n`kb_profile_auth_links` variant, and the auth-link row is deleted by the same act that emits\nthis — so the row it describes no longer exists to point at. `disconnected_by` is the acting\nprofile; it EQUALS the subject on the self-serve arm and DIFFERS on the admin arm, and telling\nthose two apart is most of why this event is worth having.\n\n`idp_revocation` carries what happened to the grant AT SLACK, because \"the binding is gone\" and\n\"the token is dead\" are different facts and an offboarding auditor needs the second one. The\nunbind commits regardless of the revoke outcome (the revoke is best-effort by design — Slack\nbeing down must not block the only unbind lever), so without this field a disconnect performed\nwhile Slack was unreachable would read, on the ledger, as indistinguishable from a clean one.\nIt is `temper_core`'s own three-state enum rather than a copy: the ledger and the HTTP surface\nthen cannot disagree about what `revoked` means.",
   "type": "object",
   "properties": {
     "disconnected_by": {
       "$ref": "#/$defs/ProfileId"
+    },
+    "idp_revocation": {
+      "$ref": "#/$defs/IdpRevocation"
     },
     "slack_principal_id": {
       "type": "string"
@@ -22,7 +25,8 @@
     "subject_table",
     "subject_id",
     "slack_principal_id",
-    "disconnected_by"
+    "disconnected_by",
+    "idp_revocation"
   ],
   "$defs": {
     "AnchorTable": {
@@ -38,6 +42,26 @@
         "kb_profiles",
         "kb_connections",
         "kb_machine_clients"
+      ]
+    },
+    "IdpRevocation": {
+      "description": "What happened to the stored grant at the identity provider.\n\nA three-state enum rather than a `bool`, because `false` used to collapse\nthree genuinely different facts — \"there was no grant, so nothing was\nattempted\", \"a revoke was attempted and failed\", and (in AS mode) \"the\nUPDATE matched zero rows\" — and consumers could not tell them apart. The CLI\nconsequently warned \"the identity provider did not confirm revocation\" at a\nuser who had no grant at all.",
+      "oneOf": [
+        {
+          "description": "No stored grant, so no revocation was attempted.",
+          "type": "string",
+          "const": "not_attempted"
+        },
+        {
+          "description": "The IdP (or, in AS mode, the local token store) confirmed revocation.",
+          "type": "string",
+          "const": "revoked"
+        },
+        {
+          "description": "A revocation was attempted and did not succeed. The local grant was\ndestroyed regardless; the grant may remain live at the IdP.",
+          "type": "string",
+          "const": "failed"
+        }
       ]
     },
     "ProfileId": {

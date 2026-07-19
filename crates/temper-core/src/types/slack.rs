@@ -10,7 +10,18 @@ use serde::{Deserialize, Serialize};
 /// UPDATE matched zero rows" — and consumers could not tell them apart. The CLI
 /// consequently warned "the identity provider did not confirm revocation" at a
 /// user who had no grant at all.
+// NOT a doc comment, deliberately: `ToSchema` publishes the doc comment above as this type's
+// `description` in openapi.json, and from there into the generated Ruby gem and temper-ts's
+// schema.ts. Build-system rationale is not part of the API contract an SDK consumer reads, and
+// writing it there restales three committed artifacts for no reader's benefit.
+//
+// The `scenario-schema` derive lets this type appear in a ledger payload
+// (`temper_substrate::payloads::SlackPrincipalDisconnected::idp_revocation`) instead of the payload
+// mirroring a copy of these three variants. It is the same type the HTTP surface returns, so the
+// ledger and the API cannot disagree about what "revoked" means — the repo's shared-types-at-
+// boundaries rule, applied to an event payload rather than a wire DTO.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IdpRevocation {
@@ -21,6 +32,51 @@ pub enum IdpRevocation {
     /// A revocation was attempted and did not succeed. The local grant was
     /// destroyed regardless; the grant may remain live at the IdP.
     Failed,
+}
+
+impl IdpRevocation {
+    /// The wire spelling, exactly as the `#[serde(rename_all = "snake_case")]` above produces it.
+    ///
+    /// Exists because the ledger writer hands this to a plpgsql function as a bare `text` bind
+    /// (`_admin_slack_disconnected`), and the registry's `payload_schema` validates the result
+    /// against these three literals. Deliberately NOT `serde_json::to_string` — that yields a
+    /// *quoted* `"revoked"`, which matches no enum variant on the way back in, and it launders a
+    /// typed enum through a string round-trip to reach a value the type already knows. Same
+    /// reasoning as `temper_substrate::payloads::AnchorTable::as_str`.
+    ///
+    /// No `_ =>` arm: a new variant must be a compile error here, not a silent wrong spelling in an
+    /// append-only audit record.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IdpRevocation::NotAttempted => "not_attempted",
+            IdpRevocation::Revoked => "revoked",
+            IdpRevocation::Failed => "failed",
+        }
+    }
+}
+
+#[cfg(test)]
+mod idp_revocation_tests {
+    use super::IdpRevocation;
+
+    /// `as_str` and serde must not drift: the ledger writes via `as_str` and the payload is read
+    /// back through `Deserialize`, so a mismatch would produce audit rows that cannot deserialize
+    /// into the very struct that documents them.
+    #[test]
+    fn as_str_matches_the_serde_rename() {
+        for v in [
+            IdpRevocation::NotAttempted,
+            IdpRevocation::Revoked,
+            IdpRevocation::Failed,
+        ] {
+            let via_serde = serde_json::to_string(&v).expect("serialize");
+            assert_eq!(
+                via_serde.trim_matches('"'),
+                v.as_str(),
+                "as_str disagrees with the serde rename for {v:?}"
+            );
+        }
+    }
 }
 
 /// One principal that a disconnect actually unbound.

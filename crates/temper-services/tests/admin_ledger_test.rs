@@ -32,8 +32,23 @@ use uuid::Uuid;
 
 /// The admin event types this suite scans for. Mirrors the (private) `ADMIN_EVENT_TYPES` in
 /// `admin_ledger_service` — a test-local copy because that const is not (and should not be) part of
-/// the service's public API; a two-element drift here is caught by
-/// `no_admin_payload_spells_a_trail_matched_key`, which asserts every one of these types.
+/// the service's public API.
+///
+/// **What this const actually gates, and what it does NOT.** It is a real gate for
+/// `exactly_the_admin_event_types_are_categorised_admin`, which set-compares it against
+/// `kb_event_types WHERE category = 'admin'` — that catches a type registered without its
+/// `category` stamp, and vice versa.
+///
+/// It is **not** a gate for `no_admin_payload_spells_a_trail_matched_key`, despite that test binding
+/// it. That scan only inspects rows that EXIST, and the only writer in this file
+/// (`seed_admin_event`) hardcodes `WHERE et.name = 'grant_created'` — so for any type this suite
+/// cannot produce a row for, the `t.name = ANY($1)` predicate matches nothing and the scan passes
+/// VACUOUSLY. Adding a name here does not extend that coverage by itself.
+///
+/// `slack_principal_disconnected` is the live example: its banned-key assertion lives with its real
+/// writer, in `slack_disconnect_service`'s `the_disconnect_payload_spells_no_trail_matched_key`.
+/// When you add an admin type, put the banned-key assertion where the event is actually emitted, or
+/// teach `seed_admin_event` to take the type name — do not assume this const bought you the scan.
 const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] = &[
     "admin_ledger_opened",
     "grant_created",

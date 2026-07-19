@@ -141,11 +141,26 @@ new type. The coupling is manual and the const's own doc-comment names this test
    writes **exactly one** `slack_principal_disconnected` row naming actor and subject. Extend
    `disconnect_deletes_link_grant_and_intents_together` (`:327`) with a fourth assertion.
 2. **Idempotence**: a second disconnect writes **zero** further events (`disconnecting_twice_is_not_an_error`, `:418`).
-3. **Banned-key assertion** — asserted, not assumed. Covered by adding the name to
-   `ADMIN_EVENT_TYPES_FOR_TEST` so the existing corpus scan includes it.
-4. **Replay**: a database containing the new event replays successfully. This is the test that
-   catches a missing `from_canonical_name` arm; without it that omission ships silently.
-5. **E2E** (`tests/e2e/tests/slack_link_test.rs`): admin-initiated disconnect records actor ≠ subject.
+3. **Banned-key assertion** — asserted, not assumed, **against a row the real writer emitted**.
+   ~~Covered by adding the name to `ADMIN_EVENT_TYPES_FOR_TEST`.~~ **That was wrong**: the corpus
+   scan `no_admin_payload_spells_a_trail_matched_key` only inspects rows that exist, and its seeder
+   hardcodes `grant_created`, so for this type it matches zero rows and passes **vacuously**. Adding
+   the name buys the `category` gate (`exactly_the_admin_event_types_are_categorised_admin`) and
+   nothing else. The real scan lives with the writer, in `slack_disconnect_service`.
+4. **Replay**: rather than a DB replay test — infeasible here (the only replay suite is scenario-YAML
+   driven under `artifact-tests`, and scenarios cannot express an auth-link act) — a pure unit test
+   in `events.rs` drives `from_canonical_name` over `TYPED_EVENT_NAMES`. That function's
+   `_ => return None` is the only non-compiler-forced link in the replay chain, and it had **zero**
+   coverage repo-wide. It immediately found four typed names with no arm; see `NO_WRITE_PATH_YET`.
+5. **The gated wrapper**: `admin_disconnect_slack_principal` must be driven directly — a non-admin is
+   refused **and leaves no ledger row** (auth before writes), an admin succeeds and is recorded as
+   `disconnected_by` against the subject's `subject_id`. Testing only `disconnect_slack_principal`
+   bypasses the `is_system_admin` gate entirely and leaves the "gate and audit read the same
+   `req.actor`" claim unproven — which is the whole point of collapsing the duplicate param.
+6. **`idp_revocation` in at least two distinct states** (`failed` via an unreachable revoke URL,
+   `revoked` via AS mode). A field asserted only to exist would not be worth adding.
+7. **The emitter precondition, pinned as intentional**: an actor with no `<handle>@web` entity fails
+   loudly and unbinds nothing. See the decision recorded at the `resolve_emitter` call site.
 
 Each gate must be **verified red against the pre-fix commit** before being made green. A gate can be
 unreachable in exactly the way the code is wrong — PR #488's lesson.

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT _admin_slack_disconnected($1,$2,$3) AS \"was_linked!\"",
+  "query": "SELECT _admin_slack_disconnected($1,$2,$3,$4) AS \"was_linked!\"",
   "describe": {
     "columns": [
       {
@@ -13,12 +13,13 @@
       "Left": [
         "Uuid",
         "Text",
-        "Uuid"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "65dbc5f96d1cd5c4c68cf3421c4d0590b36c5379bb7995977845fc88b090b282"
+  "hash": "a990bdc452bdd1bac89d98c477300ae38b9f56cec557968b0f35df832a16bfde"
 }

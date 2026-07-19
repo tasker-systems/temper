@@ -21,6 +21,7 @@ use crate::ids::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::slack::IdpRevocation;
 use uuid::Uuid;
 
 // ── shared shapes ───────────────────────────────────────────────────────────
@@ -973,6 +974,14 @@ pub struct AdminLedgerOpened {
 /// this — so the row it describes no longer exists to point at. `disconnected_by` is the acting
 /// profile; it EQUALS the subject on the self-serve arm and DIFFERS on the admin arm, and telling
 /// those two apart is most of why this event is worth having.
+///
+/// `idp_revocation` carries what happened to the grant AT SLACK, because "the binding is gone" and
+/// "the token is dead" are different facts and an offboarding auditor needs the second one. The
+/// unbind commits regardless of the revoke outcome (the revoke is best-effort by design — Slack
+/// being down must not block the only unbind lever), so without this field a disconnect performed
+/// while Slack was unreachable would read, on the ledger, as indistinguishable from a clean one.
+/// It is `temper_core`'s own three-state enum rather than a copy: the ledger and the HTTP surface
+/// then cannot disagree about what `revoked` means.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct SlackPrincipalDisconnected {
@@ -980,6 +989,7 @@ pub struct SlackPrincipalDisconnected {
     pub subject_id: Uuid,
     pub slack_principal_id: String,
     pub disconnected_by: ProfileId,
+    pub idp_revocation: IdpRevocation,
 }
 
 /// The 19 typed event names — the registry-stamping and snapshot surfaces iterate this.
