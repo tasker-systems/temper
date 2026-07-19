@@ -293,14 +293,18 @@ async fn seed_admin_event(
     principal: Uuid,
 ) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
+        // `et.category` is carried from the registry rather than defaulted: `kb_events_category_
+        // _matches_type` (20260719000010) rejects an admin-typed row labelled 'domain', which is
+        // what the DEFAULT would give. Selecting it is also what `_event_append` does.
         r#"INSERT INTO kb_events
-               (event_type_id, emitter_entity_id, payload, "references")
+               (event_type_id, emitter_entity_id, payload, "references", category)
            SELECT et.id, $1,
                   jsonb_build_object('subject_table', $4::text, 'subject_id', $2::text),
                   jsonb_build_array(
                     jsonb_build_object('rel','subject',  'target', jsonb_build_object('kind',$4::text,'id',$2)),
                     jsonb_build_object('rel','principal','target', jsonb_build_object('kind','kb_teams','id',$3))
-                  )
+                  ),
+                  et.category
              FROM kb_event_types et WHERE et.name = 'grant_created'
            RETURNING id"#,
     )
@@ -765,13 +769,16 @@ async fn seed_poisoned_admin_event(
     edge: Option<Uuid>,
 ) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
-        r#"INSERT INTO kb_events (event_type_id, emitter_entity_id, payload)
+        // Carries `et.category` for the same reason as `seed_admin_event` above — an admin type
+        // taking the 'domain' DEFAULT violates `kb_events_category_matches_type`.
+        r#"INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, category)
            SELECT et.id, $1,
                   jsonb_strip_nulls(jsonb_build_object(
                     'resource_id', $2::text,
                     'owner', jsonb_build_object('table', 'kb_resources', 'id', $2::text),
                     'edge_id', $3::text
-                  ))
+                  )),
+                  et.category
              FROM kb_event_types et WHERE et.name = 'grant_created'
            RETURNING id"#,
     )
@@ -935,8 +942,249 @@ async fn exactly_the_admin_event_types_are_categorised_admin(pool: PgPool) {
         admin_typed, expected,
         "kb_event_types.category='admin' must name exactly the admin ledger's vocabulary — no \
          more (a cognition type stamped admin vanishes from every element trail) and no less (an \
-         admin type left 'cognition' loses the visible half of the trail firewall)"
+         admin type left 'domain' loses the visible half of the trail firewall)"
     );
+}
+
+/// The migration's stamping and the bootseed's rebuild must agree, or a `reset_schema` reseed
+/// silently reclassifies the registry.
+///
+/// Two different writers produce `kb_event_types.category`: migrations `20260718000020` /
+/// `20260719000010` stamp an EXISTING registry by name, while `bootseed::seed_system` rebuilds a
+/// TRUNCATEd one from `payloads::ADMIN_EVENT_NAMES` / `SYSTEM_EVENT_NAMES`. Nothing structurally
+/// ties those two together — they are a migration and a Rust const that happen to encode the same
+/// intent. This pins them: it reads the registry as MIGRATED and asserts it matches what the
+/// constants say, so a type added to one and not the other fails here rather than in whichever
+/// environment happens to reseed.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_migrated_categories_match_the_bootseed_constants(pool: PgPool) {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, category FROM kb_event_types ORDER BY name")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    for (name, category) in &rows {
+        let expected = if temper_substrate::payloads::ADMIN_EVENT_NAMES.contains(&name.as_str()) {
+            "admin"
+        } else if temper_substrate::payloads::SYSTEM_EVENT_NAMES.contains(&name.as_str()) {
+            "system"
+        } else {
+            "domain"
+        };
+        assert_eq!(
+            category, expected,
+            "`{name}` is categorised '{category}' by migration but the bootseed constants would \
+             rebuild it as '{expected}' — a reseed would silently reclassify it. Update whichever \
+             of the two is wrong; they are not structurally linked."
+        );
+    }
+
+    // Guard the guard: if the registry were empty this loop would assert nothing.
+    assert!(
+        rows.len() > 20,
+        "expected a populated event-type registry, got {} rows — the loop above would be vacuous",
+        rows.len()
+    );
+}
+
+/// Registering an event type must state its category, and omitting it must fail LEGIBLY.
+///
+/// Regression guard for a real defect in this migration's first draft: the retax narrowed
+/// `kb_event_types_category_check` to ('domain','admin','system') but left the column DEFAULT at the
+/// retired 'cognition' inherited from `20260718000020`. That left a NOT NULL column whose default
+/// value its own CHECK forbade — so the next migration registering an event type with the idiom all
+/// eight prior ones use would abort at apply time, citing a literal present nowhere in the schema.
+///
+/// The fix drops the default rather than repointing it, so an unstamped registration fails with a
+/// plain NOT NULL error naming `category` instead of silently joining the trail allowlist. This test
+/// pins BOTH halves: the omission fails, and it fails as a not-null error rather than a check error.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn registering_an_event_type_requires_an_explicit_category(pool: PgPool) {
+    let err = sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES ($1, NULL, 1)",
+    )
+    .bind("some_future_event")
+    .execute(&pool)
+    .await
+    .expect_err("registering an event type without a category must fail");
+
+    let db = match &err {
+        sqlx::Error::Database(e) => e,
+        e => panic!("unexpected non-database error: {e}"),
+    };
+    assert_eq!(
+        db.code().as_deref(),
+        Some("23502"),
+        "must fail as NOT NULL (23502) naming `category`, not as a check violation (23514) citing a \
+         literal the author never wrote. Got: {db}"
+    );
+
+    // NON-VACUOUS CONTROL: the same insert WITH a category succeeds, so the failure above is about
+    // the missing category and not about the row being malformed in some other way.
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ($1, NULL, 1, 'domain')",
+    )
+    .bind("some_future_event")
+    .execute(&pool)
+    .await
+    .expect("an explicitly-categorised registration must succeed");
+
+    // And the vocabulary is closed: a category outside the CHECK is refused.
+    let bad = sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ($1, NULL, 1, 'cognition')",
+    )
+    .bind("another_future_event")
+    .execute(&pool)
+    .await
+    .expect_err("the retired 'cognition' literal must no longer be accepted");
+    assert!(
+        matches!(&bad, sqlx::Error::Database(e) if e.constraint() == Some("kb_event_types_category_check")),
+        "expected kb_event_types_category_check to reject the retired literal, got: {bad}"
+    );
+}
+
+/// Helper: attempt a raw insert, returning the constraint name that rejected it (or None if the
+/// insert was accepted). Raw SQL on purpose — these tests exist to prove the DATABASE refuses the
+/// row, so routing through a service or `_event_append` would test the wrong layer.
+async fn try_raw_event(
+    pool: &PgPool,
+    type_name: &str,
+    category: Option<&str>,
+    anchor: Option<(&str, uuid::Uuid)>,
+) -> Option<String> {
+    let (anchor_table, anchor_id) = match anchor {
+        Some((t, id)) => (Some(t), Some(id)),
+        None => (None, None),
+    };
+    let res = sqlx::query(
+        r#"INSERT INTO kb_events
+               (event_type_id, emitter_entity_id, category, producing_anchor_table, producing_anchor_id)
+           SELECT et.id,
+                  (SELECT id FROM kb_entities WHERE name = 'system'),
+                  COALESCE($2, et.category),
+                  $3, $4
+             FROM kb_event_types et WHERE et.name = $1"#,
+    )
+    .bind(type_name)
+    .bind(category)
+    .bind(anchor_table)
+    .bind(anchor_id)
+    .execute(pool)
+    .await;
+
+    match res {
+        Ok(_) => None,
+        Err(sqlx::Error::Database(e)) => Some(e.constraint().unwrap_or("<none>").to_string()),
+        Err(e) => panic!("unexpected non-database error: {e}"),
+    }
+}
+
+/// The cognition firewall is DECLARATIVE, not conventional (migration `20260719000010`).
+///
+/// Before it, "an admin event never carries a producing anchor" held only because `_event_append`
+/// is the sole writer and the admin grant functions pass literal NULLs. A direct
+/// `INSERT INTO kb_events` could mint an anchored admin event, and the entire cognition firewall
+/// rests on that anchor being absent. This proves the database itself now refuses.
+///
+/// Each rejection is paired with the near-identical accepted insert that differs only in the thing
+/// under test — without those controls a constraint that rejected *everything* would pass too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_database_refuses_an_anchored_admin_event(pool: PgPool) {
+    let cogmap: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_cogmaps LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("a cogmap to anchor to");
+
+    // The headline: an admin event carrying a producing anchor.
+    assert_eq!(
+        try_raw_event(&pool, "grant_created", None, Some(("kb_cogmaps", cogmap))).await,
+        Some("kb_events_admin_is_unanchored".to_string()),
+        "an admin-typed event with a producing anchor must be rejected — the absent anchor is what \
+         keeps governance out of every region producer and element trail"
+    );
+
+    // NON-VACUOUS CONTROL: the same insert, anchor removed, must succeed. If this failed, the
+    // assertion above would prove nothing about anchors.
+    assert_eq!(
+        try_raw_event(&pool, "grant_created", None, None).await,
+        None,
+        "an UNanchored admin event must still be accepted — otherwise the rejection above is not \
+         about the anchor at all"
+    );
+
+    // The evasion the composite FK exists to close: lie about the category to slip past the CHECK.
+    // Without the FK this row would be admitted, and plain denormalisation would be theatre.
+    assert_eq!(
+        try_raw_event(
+            &pool,
+            "grant_created",
+            Some("domain"),
+            Some(("kb_cogmaps", cogmap))
+        )
+        .await,
+        Some("kb_events_category_matches_type".to_string()),
+        "mislabelling an admin type as 'domain' must be rejected by the FK — the CHECK alone is \
+         evadable, which is why the category is FK-bound to the registry"
+    );
+
+    // NON-VACUOUS CONTROL for the FK: an ordinary anchored cognition event is the overwhelmingly
+    // common write in the system. If the constraints rejected this, the ledger would be unusable.
+    assert_eq!(
+        try_raw_event(&pool, "charter_set", None, Some(("kb_cogmaps", cogmap))).await,
+        None,
+        "an ordinary anchored cognition event must be unaffected — this is the hot path"
+    );
+
+    // `lens_created` is unanchored AND not admin (it is system configuration). The CHECK is
+    // deliberately one-directional — `admin => unanchored`, never the converse — so that the third
+    // category `20260718000020` argues for stays representable.
+    assert_eq!(
+        try_raw_event(&pool, "lens_created", None, None).await,
+        None,
+        "an unanchored NON-admin event must be accepted — unanchored does not imply admin, and \
+         constraining the converse would misclassify system configuration"
+    );
+}
+
+/// `ON UPDATE RESTRICT` on the composite FK, and why it is not CASCADE.
+///
+/// CASCADE would try to rewrite `kb_events` rows, and `kb_events_append_only` fires BEFORE UPDATE
+/// and raises unconditionally — so the cascade would die inside a trigger whose message names
+/// neither constraint. RESTRICT is also right on the merits: an event's category is part of what
+/// that event WAS, and history must not be retroactively reclassifiable.
+///
+/// The consequence binds future work: a type's category is fixed once any event of that type
+/// exists, so new event types must be stamped at REGISTRATION time.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_type_with_events_cannot_be_reclassified(pool: PgPool) {
+    // `admin_ledger_opened` always has the epoch event, so this type always has a row.
+    let err = sqlx::query(
+        "UPDATE kb_event_types SET category = 'domain' WHERE name = 'admin_ledger_opened'",
+    )
+    .execute(&pool)
+    .await
+    .expect_err("reclassifying a type that has events must be refused");
+
+    let constraint = match &err {
+        sqlx::Error::Database(e) => e.constraint().unwrap_or("<none>").to_string(),
+        e => panic!("unexpected non-database error: {e}"),
+    };
+    assert_eq!(
+        constraint, "kb_events_category_matches_type",
+        "the refusal must come from the composite FK's RESTRICT, not from the append-only trigger \
+         — if this ever reports 'event ledger is append-only' the FK has been switched to CASCADE \
+         and is failing for a misleading reason"
+    );
+
+    // NON-VACUOUS CONTROL: a type with NO events reclassifies freely, so the refusal above is
+    // about the referencing rows and not about the registry being immutable in general.
+    sqlx::query("UPDATE kb_event_types SET category = 'admin' WHERE name = 'block_folded'")
+        .execute(&pool)
+        .await
+        .expect("a type with no events must still be reclassifiable");
 }
 
 /// Task 4 (spec 2026-07-16 §8): the epoch marker exists after migration and is NULL-anchored (the

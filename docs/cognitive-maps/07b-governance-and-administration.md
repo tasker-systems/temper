@@ -62,8 +62,10 @@ that ship today — each carrying an emitter and, unlike every other change in t
 producing anchor at all**.
 
 That absence is the whole design. An anchor is what hands an event to the region producers that
-grow cognitive maps; an event without one is invisible to them. So the boundary below isn't a
-policy someone has to remember to enforce — it falls out of the shape of the record.
+grow cognitive maps; an event without one is invisible to them. And it isn't a convention anyone has
+to remember: the database itself **refuses** an administrative event that carries an anchor. The
+boundary is enforced where it cannot be worked around, rather than in the code that happens to write
+these records today.
 
 You read that record with `temper admin ledger`, over the API, or over MCP: every "who granted whom
 access to what, and when", no separate audit log to bolt on.
@@ -80,8 +82,9 @@ has got to:
   auth-bound records, kept for **compliance**. By design they do **not** participate in cognitive
   maps, subscriptions, or resource relationships — a grant is not a concept, and the agents
   growing maps never see the governance stream as material to reason over. The two live on the
-  same ledger, separated on the write path by that absent anchor and filtered again on read, so
-  neither side has to trust the other to stay in its lane.
+  same ledger, **firewalled by construction**: the absent anchor is a database constraint, not a
+  discipline, and the read paths filter again on top of it. Neither side has to trust the other to
+  stay in its lane.
 - **The ledger stops at the persistence layer.** A command issued straight to Postgres can bypass
   the event stream entirely. That's not a hole in the audit — it's a **system-responsibility
   boundary**: below the application, you're in the domain of database controls and infrastructure
@@ -106,8 +109,9 @@ has got to:
 > written with a NULL producing anchor, and readable through `temper admin ledger`. Draw those
 > solid. The **rest of the dial is still proposed** — no team-creation, membership, or
 > profile-disable events exist — so draw that half as the organization-shaped dial it remains. The
-> compliance-stream firewall is real for what ships (the absent anchor keeps grants away from
-> region producers); the Postgres boundary is still a stated commitment, not code.
+> compliance-stream firewall is real for what ships and is enforced by the database itself — an
+> administrative event carrying a producing anchor is rejected, so draw that channel as a hard wall
+> rather than a routing choice. The Postgres boundary is still a stated commitment, not code.
 > **Fidelity —** conceptual.
 
 ---

@@ -96,10 +96,11 @@ functions / Neon / single-tenant / platform agents), the way the seed scenario a
 show pages. State settled commitments plainly rather than leaving them as open forks — but scope
 them to what ships, and name the mechanism rather than the aspiration. E.g. *access grants are
 event-sourced and readable* (the grant pair, not yet the whole administrative surface),
-*firewalled from cognition* (admin events carry **no producing anchor**, which is precisely what
-keeps them out of cogmaps / subscriptions / relationships — governance is traceable but not
-knowledge), and *bounded at the persistence layer* (direct Postgres commands fall below the
-ledger — a system-responsibility boundary, not a gap).
+*firewalled from cognition by construction* (admin events carry **no producing anchor**, and a
+database constraint refuses one that does — which is precisely what keeps them out of cogmaps /
+subscriptions / relationships; governance is traceable but not knowledge), and *bounded at the
+persistence layer* (direct Postgres commands fall below the ledger — a system-responsibility
+boundary, not a gap).
 
 ## The threaded seed (learn the cast once)
 
