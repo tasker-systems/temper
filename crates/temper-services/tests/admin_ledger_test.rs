@@ -34,8 +34,12 @@ use uuid::Uuid;
 /// `admin_ledger_service` — a test-local copy because that const is not (and should not be) part of
 /// the service's public API; a two-element drift here is caught by
 /// `no_admin_payload_spells_a_trail_matched_key`, which asserts every one of these types.
-const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] =
-    &["admin_ledger_opened", "grant_created", "grant_revoked"];
+const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] = &[
+    "admin_ledger_opened",
+    "grant_created",
+    "grant_revoked",
+    "slack_principal_disconnected",
+];
 
 /// Keys the `element_trail_*` functions match on by shape, with **no** event-type filter. An admin
 /// payload spelling any of these would leak an authority record into a cognition read gated only by

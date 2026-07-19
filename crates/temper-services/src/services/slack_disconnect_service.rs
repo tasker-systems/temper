@@ -17,7 +17,6 @@ use temper_core::types::slack::IdpRevocation;
 use super::access_service;
 use super::grant_crypto::VaultKey;
 use super::slack_grant_vault_service;
-use super::slack_link_service::SLACK_AUTH_PROVIDER;
 use crate::auth_config::AuthMode;
 use crate::error::{ApiError, ApiResult};
 use crate::oauth_client;
@@ -40,7 +39,7 @@ pub struct DisconnectOutcome {
     pub idp_revocation: IdpRevocation,
 }
 
-/// Inputs for a disconnect. A params struct because this crosses five
+/// Inputs for a disconnect. A params struct because this crosses several
 /// domain-related values and the codebase forbids growing the arg list.
 #[derive(Debug)]
 pub struct DisconnectRequest<'a> {
@@ -49,6 +48,14 @@ pub struct DisconnectRequest<'a> {
     pub mode: AuthMode,
     pub revoke_url: String,
     pub client_id: &'a str,
+    /// The profile performing the disconnect.
+    ///
+    /// On the self-serve arm this equals the subject being unbound — the caller
+    /// can only name their own principals. On the admin arm the two differ, and
+    /// **distinguishing those two cases is the point of the audit event this
+    /// field exists to feed**: "you unbound yourself" and "an operator unbound
+    /// you" are different facts about the same row disappearing.
+    pub actor: ProfileId,
 }
 
 /// Unbind a Slack principal: revoke the grant, then delete identity, secret and
@@ -60,6 +67,13 @@ pub async fn disconnect_slack_principal(
     pool: &PgPool,
     req: DisconnectRequest<'_>,
 ) -> ApiResult<DisconnectOutcome> {
+    // Resolved on the pool, before the transaction opens: the emitter is a read
+    // of the actor's entity, not part of the mutation, and the reference sink
+    // (`access_service::grant_capability`) resolves it the same way.
+    let emitter = temper_substrate::writes::resolve_emitter(pool, req.actor, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
     let mut tx = pool.begin().await?;
 
     // 1. Read + decrypt the RT while it still exists (locks the vault row).
@@ -124,19 +138,37 @@ pub async fn disconnect_slack_principal(
         > 0;
 
     // 4. Destroy the identity binding.
-    let was_linked = sqlx::query!(
-        r#"
-        DELETE FROM kb_profile_auth_links
-         WHERE auth_provider = $1
-           AND auth_provider_user_id = $2
-        "#,
-        SLACK_AUTH_PROVIDER,
-        req.slack_principal_id
+    //
+    // The DELETE and its `slack_principal_disconnected` event ride ONE
+    // transaction — this one — via the SQL chokepoint `_admin_slack_disconnected`
+    // (migrations/20260719000020). A Rust-side "delete, then insert an event"
+    // pair would be two statements that a mid-flight failure can split; the
+    // function makes the unbind and its record inseparable by construction.
+    //
+    // The subject profile is captured inside the function by `DELETE ...
+    // RETURNING profile_id`, and it HAS to be: the auth-link row does not
+    // survive the act, so there is nothing left to look up afterwards. It is
+    // also why the event's subject is the profile rather than the link —
+    // `AnchorTable` has no `kb_profile_auth_links` variant, and its `as_str` has
+    // no catch-all arm, so the link row is not addressable as an anchor at all.
+    // The Slack principal string rides in the payload instead.
+    //
+    // Emission is suppressed when nothing was linked. A disconnect of an
+    // already-unbound principal is a quiet no-op, not an administrative act, and
+    // `kb_events` is append-only — a spurious event cannot be retracted, only
+    // outlived. Mirrors `access_service::delete_grant`, which emits only when a
+    // grant row was actually removed.
+    //
+    // Correlation self-roots: there is no sibling event for this act to fuse
+    // with, and the SQL fn's `p_correlation` defaults NULL.
+    let was_linked = sqlx::query_scalar!(
+        r#"SELECT _admin_slack_disconnected($1,$2,$3) AS "was_linked!""#,
+        emitter.uuid(),
+        req.slack_principal_id,
+        req.actor.uuid(),
     )
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        > 0;
+    .fetch_one(&mut *tx)
+    .await?;
 
     // 5. Sweep intents.
     //
@@ -187,19 +219,23 @@ pub async fn disconnect_slack_principal(
 /// Note the router is NOT the gate: under `access_mode='open'` the gated router
 /// admits everyone, so this check is the only thing standing between a
 /// non-admin and unbinding someone else's account.
+///
+/// The operator is named by `req.actor` — the same field the self-serve arm
+/// fills with the caller's own id. It is deliberately NOT a separate parameter:
+/// this function both *gates on* the actor and *passes it through* to the
+/// disconnect, and two spellings of one identity is a drift waiting to happen.
 pub async fn admin_disconnect_slack_principal(
     pool: &PgPool,
-    actor: ProfileId,
     req: DisconnectRequest<'_>,
 ) -> ApiResult<DisconnectOutcome> {
     // Auth before writes — before the decrypt, before any DELETE.
-    if !access_service::is_system_admin(pool, actor).await? {
+    if !access_service::is_system_admin(pool, req.actor).await? {
         return Err(ApiError::Forbidden);
     }
 
     tracing::info!(
         principal = %req.slack_principal_id,
-        %actor,
+        actor = %req.actor,
         "admin slack disconnect authorized"
     );
 
@@ -270,6 +306,8 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use sqlx::PgPool;
+    use temper_substrate::payloads::{AnchorTable, SlackPrincipalDisconnected};
+    use temper_workflow::operations::Surface;
     use uuid::Uuid;
 
     // `key()` and `insert_profile()` exist in slack_grant_vault_service's test
@@ -284,21 +322,114 @@ mod tests {
     /// Minimal profile insert. The handle is the FULL id: two UUIDv7s minted in
     /// the same millisecond share leading bytes, so a truncated handle collides
     /// on `kb_profiles_handle_key`.
+    ///
+    /// The `<handle>@web` emitter entity is **not** optional garnish. Since the
+    /// disconnect began emitting a ledger event it resolves an emitter first
+    /// (`temper_substrate::writes::resolve_emitter`), and that is a `fetch_one`
+    /// with **no lazy creation** — a profile row with no emitter entity cannot
+    /// author anything, and every disconnect against it fails with "no emitter
+    /// entity `<handle>@web` for the resolved profile" before a single row is
+    /// deleted. The marker comes from `Surface::ApiHttp` rather than a literal
+    /// `"web"` so the fixture tracks the natural key instead of restating it.
     async fn insert_profile(pool: &PgPool) -> Uuid {
         let id = Uuid::now_v7();
+        let handle = format!("user-{id}");
         sqlx::query!(
             "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
             id,
-            format!("user-{id}"),
+            handle,
         )
         .execute(pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)")
+            .bind(id)
+            .bind(format!("{handle}@{}", Surface::ApiHttp.marker()))
+            .execute(pool)
+            .await
+            .expect("seed the emitter entity the disconnect authors through");
         id
+    }
+
+    /// One `slack_principal_disconnected` row, as the ledger stores it.
+    #[derive(Debug, sqlx::FromRow)]
+    struct DisconnectEventRow {
+        payload: serde_json::Value,
+        references: serde_json::Value,
+        producing_anchor_table: Option<String>,
+        producing_anchor_id: Option<Uuid>,
+    }
+
+    /// Every `slack_principal_disconnected` row in the ledger, oldest first.
+    ///
+    /// Deliberately UNFILTERED by principal: the tests below assert on the total
+    /// count, so a stray event attributed to some other principal is a failure
+    /// here rather than something a `WHERE` clause hides.
+    async fn disconnect_events(pool: &PgPool) -> Vec<DisconnectEventRow> {
+        sqlx::query_as::<_, DisconnectEventRow>(
+            r#"SELECT e.payload, e."references", e.producing_anchor_table, e.producing_anchor_id
+                 FROM kb_events e
+                 JOIN kb_event_types et ON et.id = e.event_type_id
+                WHERE et.name = 'slack_principal_disconnected'
+                ORDER BY e.id"#,
+        )
+        .fetch_all(pool)
+        .await
+        .expect("read the disconnect ledger")
+    }
+
+    /// Read a UUID out of a jsonb string field, failing loudly on either a
+    /// missing key or an unparseable value.
+    ///
+    /// Asserting on the parsed UUID rather than on the string keeps the tests
+    /// indifferent to how the SQL writer spells a uuid into jsonb; what is being
+    /// asserted is identity, not formatting.
+    fn json_uuid(value: &serde_json::Value, key: &str) -> Uuid {
+        let raw = value
+            .get(key)
+            .unwrap_or_else(|| panic!("payload has no {key:?} key: {value}"))
+            .as_str()
+            .unwrap_or_else(|| panic!("payload {key:?} is not a JSON string: {value}"));
+        Uuid::parse_str(raw).unwrap_or_else(|e| panic!("payload {key:?} is not a uuid: {raw} ({e})"))
+    }
+
+    /// Link `principal` to `subject`, then unbind it as `actor`.
+    ///
+    /// The shared arrangement for the ledger-event tests: everything they assert
+    /// is downstream of one linked-then-unbound act, and the only axis that
+    /// varies between them is whether `actor` equals `subject`.
+    async fn link_then_disconnect(pool: &PgPool, principal: &str, subject: Uuid, actor: Uuid) {
+        crate::services::slack_link_service::link_slack_principal(pool, subject, principal)
+            .await
+            .expect("link");
+
+        let out = disconnect_slack_principal(
+            pool,
+            DisconnectRequest {
+                slack_principal_id: principal,
+                key: &key(),
+                mode: AuthMode::ExternalIdp,
+                revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
+                client_id: "c",
+                actor: ProfileId::from(actor),
+            },
+        )
+        .await
+        .expect("disconnect");
+
+        assert!(
+            out.was_linked,
+            "the arrangement is only meaningful if a link was actually removed — an unlinked \
+             principal emits nothing, and every assertion downstream would be vacuous",
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn disconnecting_an_unlinked_principal_is_a_quiet_no_op(pool: PgPool) {
+        // There is no subject here — nothing is linked — so the actor is just
+        // some profile making the (no-op) request.
+        let actor = ProfileId::from(insert_profile(&pool).await);
+
         let out = disconnect_slack_principal(
             &pool,
             DisconnectRequest {
@@ -307,6 +438,7 @@ mod tests {
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/unused".to_string(),
                 client_id: "c",
+                actor,
             },
         )
         .await
@@ -363,6 +495,8 @@ mod tests {
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
+                // Self-serve shape: the actor unbinds their own principal.
+                actor: ProfileId::from(profile_id),
             },
         )
         .await
@@ -429,6 +563,9 @@ mod tests {
             mode: AuthMode::ExternalIdp,
             revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
             client_id: "c",
+            // Self-serve shape, twice over — the same actor unbinds their own
+            // principal, and the second call is the quiet no-op.
+            actor: ProfileId::from(profile_id),
         };
 
         let first = disconnect_slack_principal(&pool, req())
@@ -439,6 +576,221 @@ mod tests {
             .await
             .expect("second");
         assert!(!second.was_linked, "the second disconnect is a quiet no-op");
+
+        // "Quiet" includes the ledger. `kb_events` is append-only and enforced so
+        // by trigger, so a spurious second row cannot be retracted — only
+        // outlived. Emission is therefore conditioned on a row having actually
+        // been deleted, and this is the assertion that holds that condition in
+        // place: a writer that emitted unconditionally would leave 2 here and
+        // report a disconnect that never happened.
+        assert_eq!(
+            disconnect_events(&pool).await.len(),
+            1,
+            "only the disconnect that removed a link is an administrative act; the no-op second \
+             call must add nothing to an append-only ledger",
+        );
+    }
+
+    /// The audit record itself: exactly ONE event, naming who acted and who was unbound.
+    ///
+    /// **Exactly one, not at least one.** `kb_events` is append-only, so a
+    /// duplicate is immortal and would double-count the act for every reader of
+    /// the ledger; `>= 1` would pass against a writer that emitted twice.
+    ///
+    /// The both-NULL anchor is the **cognition firewall**. Admin acts ride
+    /// `kb_events` but must be invisible to every anchor-scoped cognition
+    /// reader; an event that acquired a producing anchor would surface an
+    /// authority record inside ordinary trail reads.
+    ///
+    /// The `references` assertion is not decoration either — `list_by_subject`
+    /// reads that axis, so an event with no `subject` reference is an audit
+    /// record that cannot be found by the person it is about.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_disconnect_writes_exactly_one_event_naming_actor_and_subject(pool: PgPool) {
+        let principal = "slack:T6:UEVENT";
+        let profile_id = insert_profile(&pool).await;
+
+        // Self-serve shape: the actor unbinds their own principal.
+        link_then_disconnect(&pool, principal, profile_id, profile_id).await;
+
+        let events = disconnect_events(&pool).await;
+        assert_eq!(
+            events.len(),
+            1,
+            "one unbind is one administrative act and must be exactly one ledger row",
+        );
+        let event = &events[0];
+
+        assert_eq!(
+            event.payload.get("slack_principal_id").and_then(|v| v.as_str()),
+            Some(principal),
+            "the payload must name the principal that was unbound — the link row is gone, so this \
+             is the only surviving record of WHICH binding was destroyed",
+        );
+        assert_eq!(
+            json_uuid(&event.payload, "subject_id"),
+            profile_id,
+            "the subject is the profile that was unbound",
+        );
+        assert_eq!(
+            json_uuid(&event.payload, "disconnected_by"),
+            profile_id,
+            "on the self-serve arm the actor IS the subject",
+        );
+        assert_eq!(
+            event.payload.get("subject_table").and_then(|v| v.as_str()),
+            Some(AnchorTable::Profiles.as_str()),
+            "the subject is a profile: `AnchorTable` has no `kb_profile_auth_links` variant, and \
+             the link row does not survive the act that describes it",
+        );
+
+        assert_eq!(
+            event.producing_anchor_table, None,
+            "the cognition firewall: an admin act carries no producing anchor",
+        );
+        assert_eq!(
+            event.producing_anchor_id, None,
+            "the cognition firewall: an admin act carries no producing anchor",
+        );
+
+        let references = event
+            .references
+            .as_array()
+            .expect("`references` is a jsonb array");
+        let subject_ref = references
+            .iter()
+            .find(|r| r.get("rel").and_then(|v| v.as_str()) == Some("subject"))
+            .expect("a `subject` reference — the axis `list_by_subject` reads");
+        let target = subject_ref
+            .get("target")
+            .expect("the subject reference carries a target");
+        assert_eq!(
+            target.get("kind").and_then(|v| v.as_str()),
+            Some(AnchorTable::Profiles.as_str()),
+        );
+        assert_eq!(json_uuid(target, "id"), profile_id);
+    }
+
+    /// An admin unbinding SOMEONE ELSE records both identities, distinctly.
+    ///
+    /// This is the case the event exists for. "You unbound yourself" and "an
+    /// operator unbound you" are different facts about the same row
+    /// disappearing, and if `disconnected_by` and `subject_id` ever collapse
+    /// onto one identity the ledger can no longer tell them apart — which is
+    /// the entire value of the record.
+    ///
+    /// **Why this bites:** actor and subject are two DIFFERENT profiles, so a
+    /// writer that derived `disconnected_by` from the deleted link row (the
+    /// tempting shortcut — the profile is right there in `RETURNING`) would
+    /// write the subject into both fields and fail here, while passing every
+    /// self-serve test in this file, where the two are equal by construction.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_admin_disconnect_records_the_operator_not_the_subject(pool: PgPool) {
+        let principal = "slack:T7:UADMIN";
+        let subject = insert_profile(&pool).await;
+        let operator = insert_profile(&pool).await;
+        assert_ne!(subject, operator, "the fixture must exercise actor != subject");
+
+        link_then_disconnect(&pool, principal, subject, operator).await;
+
+        let events = disconnect_events(&pool).await;
+        assert_eq!(events.len(), 1);
+        let payload = &events[0].payload;
+
+        assert_eq!(
+            json_uuid(payload, "disconnected_by"),
+            operator,
+            "the operator performed the act and must be named as its author",
+        );
+        assert_eq!(
+            json_uuid(payload, "subject_id"),
+            subject,
+            "the subject is the profile that lost its binding, NOT the operator",
+        );
+    }
+
+    /// The payload spells no key that `element_trail_*` matches on.
+    ///
+    /// `element_trail_node` and `element_trail_edge` match payload keys **by
+    /// shape, with no event-type filter** — so an admin payload that happened to
+    /// spell `resource_id`, `block_id`, `edge_id` or `owner` would leak an
+    /// authority record into any cognition trail read gated only by
+    /// `resources_visible_to`. Subjects are spelled `subject_table`/`subject_id`
+    /// precisely to stay outside that match.
+    ///
+    /// This scans **every key the writer actually emitted** rather than checking
+    /// that the four expected fields are present: the failure mode is an EXTRA
+    /// key nobody thought to look for, and a test that only inspects the fields
+    /// it expects is structurally incapable of seeing one.
+    ///
+    /// The sibling corpus scan in `tests/admin_ledger_test.rs`
+    /// (`no_admin_payload_spells_a_trail_matched_key`) covers this type in name
+    /// only — its seeder hardcodes `WHERE et.name = 'grant_created'`, so no
+    /// `slack_principal_disconnected` row exists in that corpus and the scan
+    /// matches zero rows for it. This test is the one that runs against a real
+    /// row from the real writer.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_disconnect_payload_spells_no_trail_matched_key(pool: PgPool) {
+        /// Keys `element_trail_node`/`element_trail_edge` match on by shape.
+        /// Mirrors `BANNED_ADMIN_PAYLOAD_KEYS` in `tests/admin_ledger_test.rs`.
+        const BANNED: &[&str] = &["resource_id", "block_id", "edge_id", "owner"];
+
+        let principal = "slack:T8:UBANNED";
+        let profile_id = insert_profile(&pool).await;
+        link_then_disconnect(&pool, principal, profile_id, profile_id).await;
+
+        let events = disconnect_events(&pool).await;
+        assert_eq!(events.len(), 1, "the scan below is vacuous without a row");
+
+        let payload = events[0]
+            .payload
+            .as_object()
+            .expect("the payload is a jsonb object");
+        assert!(
+            !payload.is_empty(),
+            "an empty payload would pass the scan below while carrying no audit value at all",
+        );
+        for key in payload.keys() {
+            assert!(
+                !BANNED.contains(&key.as_str()),
+                "payload key {key:?} is matched by element_trail_* on shape alone, which would \
+                 leak this authority record into an ordinary cognition read",
+            );
+        }
+    }
+
+    /// The SQL-built payload satisfies the Rust wire contract.
+    ///
+    /// The writer is plpgsql and the reader is a `#[derive(Deserialize)]`
+    /// struct; nothing in either language connects them. A field renamed on one
+    /// side, or a `subject_table` spelling `AnchorTable` cannot parse, compiles
+    /// and ships fine and fails only when something first tries to read the
+    /// event back. `verify_ledger_roundtrip` covers the seeded corpus; this
+    /// proves the same contract for the row this service actually emits.
+    ///
+    /// **Why this bites:** `from_value` is strict about the enum — a
+    /// `subject_table` of anything other than a spelling in `AnchorTable`'s
+    /// `#[serde(rename)]` set fails to parse, as does a missing or
+    /// non-uuid-shaped `disconnected_by`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_emitted_payload_deserializes_into_the_typed_struct(pool: PgPool) {
+        let principal = "slack:T9:UTYPED";
+        let profile_id = insert_profile(&pool).await;
+        link_then_disconnect(&pool, principal, profile_id, profile_id).await;
+
+        let events = disconnect_events(&pool).await;
+        assert_eq!(events.len(), 1);
+
+        let typed: SlackPrincipalDisconnected =
+            serde_json::from_value(events[0].payload.clone()).expect(
+                "the SQL-built payload must deserialize into the typed wire contract — a drift \
+                 between the plpgsql writer and this struct is invisible until a reader fails",
+            );
+
+        assert_eq!(typed.subject_table, AnchorTable::Profiles);
+        assert_eq!(typed.subject_id, profile_id);
+        assert_eq!(typed.slack_principal_id, principal);
+        assert_eq!(typed.disconnected_by, ProfileId::from(profile_id));
     }
 
     /// The cross-language contract, pinned.
@@ -518,6 +870,8 @@ mod tests {
                 mode: AuthMode::TemperAs,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "slack-link-client",
+                // Self-serve shape.
+                actor: ProfileId::from(profile_id),
             },
         )
         .await
@@ -567,6 +921,10 @@ mod tests {
         // The rotated key: same length, different bytes, so the AEAD open fails.
         let new_key = VaultKey::from_base64(&STANDARD.encode([9u8; 32])).unwrap();
         let profile_id = insert_profile(&pool).await;
+        // Admin-shaped: post-rotation cleanup is the operator's repair path, so
+        // the actor is a DIFFERENT profile from the subject being unbound. This
+        // is the actor != subject case the audit event exists to distinguish.
+        let operator = ProfileId::from(insert_profile(&pool).await);
 
         crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
             .await
@@ -601,6 +959,7 @@ mod tests {
                 mode: AuthMode::ExternalIdp,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "c",
+                actor: operator,
             },
         )
         .await
@@ -685,6 +1044,8 @@ mod tests {
                 mode: AuthMode::TemperAs,
                 revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
                 client_id: "slack-link-client",
+                // Self-serve shape.
+                actor: ProfileId::from(profile_id),
             },
         )
         .await

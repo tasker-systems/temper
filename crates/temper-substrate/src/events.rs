@@ -85,6 +85,9 @@ pub enum EventKind {
     GrantCreated,
     /// A capability revocation recorded on the admin ledger (spec §5). Fires from Task 5's chokepoint.
     GrantRevoked,
+    /// A Slack principal unbound from a temper profile. Fires from the SQL chokepoint
+    /// `_admin_slack_disconnected`, on both the self-serve and admin arms.
+    SlackPrincipalDisconnected,
 }
 
 impl EventKind {
@@ -117,6 +120,7 @@ impl EventKind {
             EventKind::AdminLedgerOpened => "admin_ledger_opened",
             EventKind::GrantCreated => "grant_created",
             EventKind::GrantRevoked => "grant_revoked",
+            EventKind::SlackPrincipalDisconnected => "slack_principal_disconnected",
         }
     }
 
@@ -154,6 +158,7 @@ impl EventKind {
             "admin_ledger_opened" => EventKind::AdminLedgerOpened,
             "grant_created" => EventKind::GrantCreated,
             "grant_revoked" => EventKind::GrantRevoked,
+            "slack_principal_disconnected" => EventKind::SlackPrincipalDisconnected,
             _ => return None,
         })
     }
@@ -1231,6 +1236,36 @@ pub async fn fire_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every typed event name must round-trip through `EventKind`.
+    ///
+    /// `from_canonical_name` ends in `_ => return None`, so unlike `as_canonical_name` it is NOT
+    /// compiler-forced: a missing arm compiles cleanly and then hard-fails at RUNTIME in
+    /// `replay.rs`'s "no projector for event type {name}" — against any database that has ever
+    /// recorded that act. That is precisely how `resource_finalized` shipped broken (see its
+    /// `EventKind` doc comment), and it stayed broken because nothing tested this function: before
+    /// this test, `from_canonical_name` had zero coverage anywhere in the repo.
+    ///
+    /// Driven off `payloads::TYPED_EVENT_NAMES` rather than a hand-listed array so it cannot drift
+    /// as names are added — that const is itself set-equality-tested against the committed snapshot
+    /// fixtures by `tests/payload_schema.rs`.
+    ///
+    /// Does NOT cover names that live in `kb_event_types` without a `TYPED_EVENT_NAMES` entry (the
+    /// NULL-`payload_schema` permissive set, e.g. `charter_set`). Closing that gap properly wants an
+    /// `EventKind::ALL` const, which is a larger change than the event this test shipped with.
+    #[test]
+    fn every_typed_event_name_round_trips_through_event_kind() {
+        for name in crate::payloads::TYPED_EVENT_NAMES {
+            let kind = EventKind::from_canonical_name(name).unwrap_or_else(|| {
+                panic!("no `from_canonical_name` arm for {name:?} — replay will hard-fail on it")
+            });
+            assert_eq!(
+                kind.as_canonical_name(),
+                name,
+                "{name:?} round-trips asymmetrically between the two name functions"
+            );
+        }
+    }
 
     #[test]
     fn event_type_maps_each_action_to_its_canonical_name() {

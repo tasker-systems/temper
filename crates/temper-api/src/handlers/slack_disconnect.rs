@@ -94,6 +94,9 @@ pub async fn disconnect_me(
                 mode: state.config.auth.mode,
                 revoke_url: provider.revoke_url.clone(),
                 client_id: &cfg.client_id,
+                // Self-serve: the actor IS the subject. The principals were
+                // derived from this profile's own link rows.
+                actor: profile_id,
             },
         )
         .await?;
@@ -141,13 +144,15 @@ pub async fn admin_disconnect(
     // planned `@temper disconnect` Slack surface has to remember to re-add.
     let outcome = admin_disconnect_slack_principal(
         &state.pool,
-        ProfileId::from(auth.0.profile.id),
         DisconnectRequest {
             slack_principal_id: &body.slack_principal_id,
             key: &cfg.vault_key,
             mode: state.config.auth.mode,
             revoke_url: provider.revoke_url,
             client_id: &cfg.client_id,
+            // The operator, not the subject. The service gates on this field
+            // and carries it into the disconnect.
+            actor: ProfileId::from(auth.0.profile.id),
         },
     )
     .await?;

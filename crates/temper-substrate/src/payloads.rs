@@ -967,8 +967,23 @@ pub struct AdminLedgerOpened {
     pub note: String,
 }
 
-/// The 18 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 18] = [
+/// `slack_principal_disconnected` — the audit record of a Slack principal being unbound from a
+/// temper profile. The subject is the **profile**, not the link: `AnchorTable` has no
+/// `kb_profile_auth_links` variant, and the auth-link row is deleted by the same act that emits
+/// this — so the row it describes no longer exists to point at. `disconnected_by` is the acting
+/// profile; it EQUALS the subject on the self-serve arm and DIFFERS on the admin arm, and telling
+/// those two apart is most of why this event is worth having.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct SlackPrincipalDisconnected {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    pub slack_principal_id: String,
+    pub disconnected_by: ProfileId,
+}
+
+/// The 19 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 19] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -987,6 +1002,7 @@ pub const TYPED_EVENT_NAMES: [&str; 18] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
+    "slack_principal_disconnected",
 ];
 
 /// The event names classified `kb_event_types.category = 'admin'` — the ledger's own vocabulary,
@@ -994,7 +1010,12 @@ pub const TYPED_EVENT_NAMES: [&str; 18] = [
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 3] = ["admin_ledger_opened", "grant_created", "grant_revoked"];
+pub const ADMIN_EVENT_NAMES: [&str; 4] = [
+    "admin_ledger_opened",
+    "grant_created",
+    "grant_revoked",
+    "slack_principal_disconnected",
+];
 
 /// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must
 /// deserialize into its struct. Catches drift from ANY write path — Rust, hand-SQL, foreign.
@@ -1046,6 +1067,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "grant_revoked" => {
                     serde_json::from_value::<GrantRevoked>(r.payload.clone())?;
+                }
+                "slack_principal_disconnected" => {
+                    serde_json::from_value::<SlackPrincipalDisconnected>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.

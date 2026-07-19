@@ -43,6 +43,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::AdminLedgerOpened>("admin_ledger_opened");
     check::<p::GrantCreated>("grant_created");
     check::<p::GrantRevoked>("grant_revoked");
+    check::<p::SlackPrincipalDisconnected>("slack_principal_disconnected");
 }
 
 #[test]
