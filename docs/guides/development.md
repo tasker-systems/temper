@@ -73,7 +73,7 @@ stays honest:
 
 ```bash
 cargo sqlx prepare --workspace -- --all-features   # production targets
-cargo make prepare-api && cargo make prepare-e2e   # test-target queries
+cargo make prepare-services && cargo make prepare-e2e   # test-target queries
 ```
 
 ## Admin / operator extras
