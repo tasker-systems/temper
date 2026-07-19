@@ -9,7 +9,8 @@ use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{
-    PromoteAdminRequest, ReembedRequest, ReembedSummary, UpdateSettingsRequest,
+    AdminLedgerQuery, AdminLedgerResponse, PromoteAdminRequest, ReembedRequest, ReembedSummary,
+    UpdateSettingsRequest,
 };
 use temper_core::types::team::TeamMemberRow;
 
@@ -46,6 +47,19 @@ impl<'a> AdminClient<'a> {
         let req = self.http.patch(path).json(body);
         self.http
             .send_json(&Method::PATCH, path, req, Some(&token))
+            .await
+    }
+
+    /// Read the admin ledger. Exactly one axis — see [`AdminLedgerQuery`].
+    ///
+    /// Denies with **404, not 403**: a 403 would confirm the ledger has something to hide about
+    /// the subject. So an error here means "nothing you may read", not "nothing exists".
+    pub async fn ledger(&self, query: &AdminLedgerQuery) -> Result<AdminLedgerResponse> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/admin/ledger";
+        let req = self.http.get(path).query(query);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
             .await
     }
 

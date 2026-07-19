@@ -591,6 +591,18 @@ impl TemperMcpService {
         tools::invocations::invocation_list(self, input).await
     }
 
+    #[tool(
+        description = "Read the admin ledger: who granted what, to whom, and when. Exactly one axis — `subject` ('<kind>:<uuid>', e.g. kb_resources:0199...) asks what was done TO a thing; `actor` (a profile uuid) asks what a principal DID. Your own acts are always readable; reading another actor's is an audit and requires admin. The response carries `epoch`, the point admin history begins — an empty `entries` with an epoch means 'nothing since then', never 'nothing ever'."
+    )]
+    async fn admin_ledger(
+        &self,
+        Parameters(input): Parameters<temper_core::types::admin::AdminLedgerInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::admin_ledger::admin_ledger(self, input).await
+    }
+
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
     async fn list_contexts(
         &self,

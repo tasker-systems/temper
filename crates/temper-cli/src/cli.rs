@@ -1053,6 +1053,25 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminRequestsAction,
     },
+    /// Read the admin ledger: who granted what, to whom, and when
+    ///
+    /// Exactly one axis. `--subject` asks what was done TO a thing; `--actor` asks what a
+    /// principal DID. A refusal is a 404 by design — on this surface "you may not read that"
+    /// and "there is nothing there" are deliberately indistinguishable.
+    Ledger {
+        /// Subject axis: `<kind>:<uuid>`, e.g. `kb_resources:0199c3f1-...`
+        #[arg(long, conflicts_with = "actor")]
+        subject: Option<String>,
+        /// Actor axis: a profile UUID. Your own acts are always readable; another's is an audit
+        /// and requires admin.
+        #[arg(long)]
+        actor: Option<String>,
+        /// Page size (server clamps to 200)
+        #[arg(long)]
+        limit: Option<i64>,
+        #[arg(long)]
+        offset: Option<i64>,
+    },
     /// SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling).
     Saml {
         #[command(subcommand)]

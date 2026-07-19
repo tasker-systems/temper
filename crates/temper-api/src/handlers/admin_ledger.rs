@@ -13,15 +13,13 @@
 
 use axum::extract::{Query, State};
 use axum::Json;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
+use temper_core::types::admin::{AdminLedgerQuery, AdminLedgerResponse};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::admin_ledger_service::{self, AdminLedgerEntry};
+use temper_services::services::admin_ledger_service;
 use temper_services::state::AppState;
-use temper_substrate::payloads::{AnchorTable, RefTarget};
+use temper_substrate::payloads::RefTarget;
 
 use crate::middleware::auth::AuthUser;
 
@@ -30,33 +28,6 @@ use crate::middleware::auth::AuthUser;
 /// will give me", and a 400 there teaches nothing.
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
-
-/// `GET /api/admin/ledger` — exactly one axis, never both.
-#[derive(Debug, Deserialize)]
-pub struct LedgerQuery {
-    /// Subject axis, table half: `kb_contexts`, `kb_cogmaps`, … Parsed through `AnchorTable`'s
-    /// own serde so the accepted set is the enum, not a second list that can drift from it.
-    pub subject_kind: Option<String>,
-    /// Subject axis, id half.
-    pub subject_id: Option<Uuid>,
-    /// Actor axis: whose acts to read. Self-gating — you may always read your own history.
-    pub actor: Option<Uuid>,
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-}
-
-/// Entries plus the epoch, always together.
-///
-/// The epoch is what stops an empty `entries` from lying. Admin history *begins* at the epoch —
-/// acts before it genuinely happened but no writer recorded them (spec §8) — so an empty list
-/// with an epoch means "nothing since T", never "nothing ever". Carrying it on every response is
-/// the whole reason there is no standalone epoch route: `ledger_epoch` takes no caller and has no
-/// gate, so the only safe place to surface it is inside a response the service has already gated.
-#[derive(Debug, Serialize)]
-pub struct AdminLedgerResponse {
-    pub entries: Vec<AdminLedgerEntry>,
-    pub epoch: Option<DateTime<Utc>>,
-}
 
 /// Resolve the requested axis, refusing ambiguity rather than silently preferring one.
 ///
@@ -69,47 +40,26 @@ enum Axis {
     Actor(ProfileId),
 }
 
-fn resolve_axis(q: &LedgerQuery) -> ApiResult<Axis> {
-    let has_subject = q.subject_kind.is_some() || q.subject_id.is_some();
-    let has_actor = q.actor.is_some();
-
-    match (has_subject, has_actor) {
-        (true, true) => Err(ApiError::BadRequest(
-            "pass either subject_kind+subject_id or actor, not both".to_string(),
+fn resolve_axis(q: &AdminLedgerQuery) -> ApiResult<Axis> {
+    match (q.subject.as_deref(), q.actor) {
+        (Some(_), Some(_)) => Err(ApiError::BadRequest(
+            "pass either subject or actor, not both".to_string(),
         )),
-        (false, false) => Err(ApiError::BadRequest(
-            "pass either subject_kind+subject_id or actor".to_string(),
+        (None, None) => Err(ApiError::BadRequest(
+            "pass either subject ('<kind>:<uuid>') or actor".to_string(),
         )),
-        (false, true) => Ok(Axis::Actor(ProfileId::from(
-            q.actor.expect("has_actor checked"),
-        ))),
-        (true, false) => {
-            // Half a subject is not a subject. Naming the missing half beats a generic 400.
-            let (Some(kind), Some(id)) = (q.subject_kind.as_deref(), q.subject_id) else {
-                return Err(ApiError::BadRequest(
-                    "subject_kind and subject_id must be given together".to_string(),
-                ));
-            };
-            Ok(Axis::Subject(RefTarget {
-                kind: parse_anchor_table(kind)?,
-                id,
-            }))
-        }
+        // The one place the `<kind>:<uuid>` spelling is understood, shared with temper-mcp.
+        (Some(spec), None) => Ok(Axis::Subject(admin_ledger_service::parse_subject_spec(
+            spec,
+        )?)),
+        (None, Some(actor)) => Ok(Axis::Actor(ProfileId::from(actor))),
     }
-}
-
-/// Parse a table name into `AnchorTable` via the enum's own serde renames, which already spell
-/// the table names exactly. A hand-written match here would be a second copy of a bounded set,
-/// free to drift from the enum the moment a variant is added.
-fn parse_anchor_table(kind: &str) -> ApiResult<AnchorTable> {
-    serde_json::from_value::<AnchorTable>(serde_json::Value::String(kind.to_string()))
-        .map_err(|_| ApiError::BadRequest(format!("unknown subject_kind '{kind}'")))
 }
 
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
-    Query(q): Query<LedgerQuery>,
+    Query(q): Query<AdminLedgerQuery>,
 ) -> ApiResult<Json<AdminLedgerResponse>> {
     let caller = ProfileId::from(auth.0.profile.id);
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -128,5 +78,7 @@ pub async fn list(
     // Only reached once the service has authorized the read above.
     let epoch = admin_ledger_service::ledger_epoch(&state.pool).await?;
 
-    Ok(Json(AdminLedgerResponse { entries, epoch }))
+    // The projection is shared with temper-mcp so the two surfaces cannot answer different
+    // shapes to the same question.
+    Ok(Json(admin_ledger_service::to_wire_page(entries, epoch)?))
 }

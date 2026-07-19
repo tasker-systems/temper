@@ -128,3 +128,164 @@ pub struct ReembedSummary {
     /// already had a live job (re-running never double-queues).
     pub enqueued: Vec<Uuid>,
 }
+
+// ---------------------------------------------------------------------------
+// The admin ledger's read surface (admin-event-sink Task 6).
+//
+// These carry the same wire shape as `temper_substrate::payloads::{EventRef, RefRel, RefTarget,
+// AnchorTable}`. **That is not accidental duplication awaiting a cleanup — do not "fix" it by
+// merging them.**
+//
+// They are a different TYPE because they are a different THING. Substrate's vocabulary describes
+// events in general: anything the system records, anchored anywhere. These describe ledger
+// entries — admin acts, deliberately bounded by reach and by event type
+// (`ADMIN_EVENT_TYPES`), firewalled from cognition by their NULL anchor, and readable only
+// through a gate that dispatches per act family. An admin-ledger reference is not a general
+// event reference that happens to look alike; it is a narrower claim with narrower rules.
+//
+// Keeping them distinct is a security posture as much as a modelling one. Types are not a hard
+// boundary, but they express INTENT, and the compiler enforces the intent for free: a general
+// event ref cannot be passed where a ledger ref is expected without someone writing a conversion
+// and thereby saying so. Collapsing them would delete that declaration and let admin-ledger data
+// flow into cognition paths — and vice versa — with nothing to notice.
+//
+// There is a practical constraint pointing the same way: temper-core is the dependency LEAF, and
+// temper-client (which deserializes this) cannot take a temper-substrate dependency — substrate
+// pulls `temper-ingest(embed)` non-optionally, so it would link ort/ONNX into the HTTP client.
+// Relocating the substrate types instead would restale the `kb_event_types.payload_schema`
+// fixtures (`grant_created.v1.schema.json` and friends) that the boot-seed stamps into the
+// registry.
+//
+// What the split must NOT become is silent drift in the wire form itself, since both sides read
+// and write the same `kb_events."references"` column. That is closed by test, not by hope:
+// `temper-api/tests/admin_ledger_wire_parity_test.rs` pins every variant in both directions and
+// stops compiling if either side gains one.
+// ---------------------------------------------------------------------------
+
+/// Why an event points at a thing. Mirrors `temper_substrate::payloads::RefRel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LedgerRefRel {
+    #[serde(rename = "supersedes")]
+    Supersedes,
+    #[serde(rename = "derived_from")]
+    DerivedFrom,
+    #[serde(rename = "touches")]
+    Touches,
+    /// What the act was performed ON.
+    #[serde(rename = "subject")]
+    Subject,
+    /// WHO the act was performed FOR.
+    #[serde(rename = "principal")]
+    Principal,
+}
+
+/// What an event points at. Mirrors `temper_substrate::payloads::AnchorTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LedgerRefKind {
+    #[serde(rename = "kb_contexts")]
+    Contexts,
+    #[serde(rename = "kb_cogmaps")]
+    Cogmaps,
+    #[serde(rename = "kb_resources")]
+    Resources,
+    #[serde(rename = "kb_edges")]
+    Edges,
+    #[serde(rename = "kb_content_blocks")]
+    ContentBlocks,
+    #[serde(rename = "kb_teams")]
+    Teams,
+    #[serde(rename = "kb_profiles")]
+    Profiles,
+    #[serde(rename = "kb_connections")]
+    Connections,
+    #[serde(rename = "kb_machine_clients")]
+    MachineClients,
+}
+
+/// One typed pointer out of a ledger event. Mirrors `temper_substrate::payloads::RefTarget`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerRefTarget {
+    pub kind: LedgerRefKind,
+    pub id: Uuid,
+}
+
+/// Mirrors `temper_substrate::payloads::EventRef`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerRef {
+    pub rel: LedgerRefRel,
+    pub target: LedgerRefTarget,
+}
+
+/// One act on the admin ledger.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLedgerEntry {
+    pub event_id: Uuid,
+    pub event_type: String,
+    pub actor_profile_id: Uuid,
+    pub actor_handle: String,
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+    pub payload: serde_json::Value,
+    pub references: Vec<LedgerRef>,
+    pub correlation_id: Option<Uuid>,
+}
+
+/// A page of the ledger, always carrying the epoch.
+///
+/// The epoch is what stops an empty `entries` from lying. Admin history *begins* at the epoch —
+/// acts before it genuinely happened, but no writer recorded them — so an empty list with an
+/// epoch reads as "nothing since T", never "nothing ever". There is deliberately no standalone
+/// epoch endpoint: `ledger_epoch` takes no caller and has no gate, so the only safe place to
+/// surface it is inside a response the service has already authorized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLedgerResponse {
+    pub entries: Vec<AdminLedgerEntry>,
+    pub epoch: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Query for `GET /api/admin/ledger` — **exactly one axis**, never both.
+///
+/// One type for both directions: temper-client serializes it into the query string, temper-api
+/// deserializes it back out. A second copy on the server side is how a client learns to send a
+/// parameter the server stopped reading.
+///
+/// The two axes answer different questions and gate differently — subject reads are gated per act
+/// family against that subject, actor reads are self-gating — so the server refuses a request
+/// naming both rather than picking one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AdminLedgerQuery {
+    /// Subject axis: `<kind>:<uuid>`, e.g. `kb_resources:0199c3f1-...`.
+    ///
+    /// Carried as ONE string, split only server-side. Splitting it into a kind half and an id half
+    /// on the wire would put the grammar in every client — and a parser written twice is two
+    /// grammars. `admin_ledger_service::parse_subject_spec` is the only place this is understood.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Actor axis: whose acts to read. Reading your own is always allowed; reading another's is
+    /// an audit, and audits are admin-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Uuid>,
+    /// Page size. Clamped server-side rather than rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+}
+
+/// MCP input for the `admin_ledger` tool.
+///
+/// Mirrors the CLI's two flags rather than [`AdminLedgerQuery`]'s split subject fields: an agent
+/// passes `subject: "kb_resources:<uuid>"` as one string, exactly as a human types it. The
+/// server-side split is the same code path either way.
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AdminLedgerInput {
+    /// Subject axis: `<kind>:<uuid>`, e.g. `kb_resources:0199c3f1-...`. Asks what was done TO a
+    /// thing. Mutually exclusive with `actor`.
+    pub subject: Option<String>,
+    /// Actor axis: a profile UUID. Asks what a principal DID. Your own acts are always readable;
+    /// reading another's is an audit and requires admin.
+    pub actor: Option<String>,
+    /// Page size. Clamped server-side to 200.
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}

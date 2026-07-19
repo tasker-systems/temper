@@ -105,7 +105,7 @@ async fn a_grant_made_over_http_is_readable_on_the_ledger_over_http(pool: sqlx::
     let (status, body) = get_ledger(
         &app,
         &app.token,
-        &format!("subject_kind=kb_resources&subject_id={resource_id}"),
+        &format!("subject=kb_resources:{resource_id}"),
     )
     .await;
 
@@ -139,7 +139,7 @@ async fn a_non_administrator_gets_404_from_the_ledger(pool: sqlx::PgPool) {
     let resource_id = ingest_into_context(&app, &app.token, *context.id).await;
     grant_read(&app, &app.token, resource_id, stranger_id).await;
 
-    let query = format!("subject_kind=kb_resources&subject_id={resource_id}");
+    let query = format!("subject=kb_resources:{resource_id}");
 
     // Prove the route EXISTS and serves this exact query before asserting anyone is denied it.
     // Without this the test is vacuous: an unmounted route also answers 404, so the assertion
@@ -207,17 +207,21 @@ async fn the_axes_are_exclusive_and_neither_defaults(pool: sqlx::PgPool) {
 
     for (query, why) in [
         (
-            format!("actor={owner_id}&subject_kind=kb_resources&subject_id={owner_id}"),
+            format!("actor={owner_id}&subject=kb_resources:{owner_id}"),
             "both axes at once",
         ),
         (String::new(), "no axis at all"),
         (
-            "subject_kind=kb_resources".to_string(),
-            "half a subject is not a subject",
+            "subject=kb_resources".to_string(),
+            "a subject with no ':<uuid>' half",
         ),
         (
-            format!("subject_kind=kb_nonsense&subject_id={owner_id}"),
-            "unknown subject_kind",
+            format!("subject=kb_nonsense:{owner_id}"),
+            "unknown subject kind",
+        ),
+        (
+            "subject=kb_resources:not-a-uuid".to_string(),
+            "unparseable subject id",
         ),
     ] {
         let (status, _) = get_ledger(&app, &app.token, &query).await;
@@ -227,4 +231,95 @@ async fn the_axes_are_exclusive_and_neither_defaults(pool: sqlx::PgPool) {
             "{why} must be a 400"
         );
     }
+}
+
+/// Full surface parity is always intended, so the CLI is driven as the production caller drives
+/// it — the real `temper` binary, over HTTP, through temper-client. A handler that only ever
+/// answers `reqwest` in a test is not a surface anyone has.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_cli_reads_the_ledger_on_both_axes(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let owner_id = provision(&app, &app.token).await;
+    let stranger_token = common::generate_second_user_jwt();
+    let stranger_id = provision(&app, &stranger_token).await;
+
+    let context = app
+        .client
+        .contexts()
+        .create("ledger-cli-ctx", None)
+        .await
+        .expect("ctx");
+    let resource_id = ingest_into_context(&app, &app.token, *context.id).await;
+    grant_read(&app, &app.token, resource_id, stranger_id).await;
+
+    // Subject axis, in the `<kind>:<uuid>` spelling the CLI and MCP share.
+    let out = common::run_temper_cli(
+        &app,
+        &[
+            "admin",
+            "ledger",
+            "--subject",
+            &format!("kb_resources:{resource_id}"),
+            "--format",
+            "json",
+        ],
+    )
+    .await
+    .expect("cli ran");
+    assert!(
+        out.status.success(),
+        "cli failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body: Value = serde_json::from_slice(&out.stdout).expect("cli emitted json");
+    assert_eq!(
+        body["entries"][0]["event_type"], "grant_created",
+        "subject axis via CLI: {body}"
+    );
+    assert!(!body["epoch"].is_null(), "CLI response carries the epoch");
+
+    // Actor axis.
+    let out = common::run_temper_cli(
+        &app,
+        &[
+            "admin",
+            "ledger",
+            "--actor",
+            &owner_id.to_string(),
+            "--format",
+            "json",
+        ],
+    )
+    .await
+    .expect("cli ran");
+    assert!(out.status.success(), "actor axis via CLI");
+    let body: Value = serde_json::from_slice(&out.stdout).expect("cli emitted json");
+    assert!(
+        body["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|e| e["event_type"] == "grant_created"),
+        "actor axis via CLI: {body}"
+    );
+
+    // The mirrored guard: clap refuses both axes locally, so the round-trip is never spent
+    // learning what the server would also have refused.
+    let out = common::run_temper_cli(
+        &app,
+        &[
+            "admin",
+            "ledger",
+            "--subject",
+            &format!("kb_resources:{resource_id}"),
+            "--actor",
+            &owner_id.to_string(),
+        ],
+    )
+    .await
+    .expect("cli ran");
+    assert!(
+        !out.status.success(),
+        "naming both axes must fail before the request is sent"
+    );
 }
