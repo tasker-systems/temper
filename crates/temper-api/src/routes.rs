@@ -172,12 +172,20 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // `admin_ledger_service`, which gates per act family rather than with a prelude, and
         // denies with 404 so a refusal discloses nothing about the subject.
         .route("/api/admin/ledger", get(handlers::admin_ledger::list))
-        // Operator-only machine-principal registration (G3 Phase A). Mounted with plain
-        // `.route()`, like `/api/access/admin/*` above, so it stays OUT of the OpenAPI
-        // contract — it is an admin surface, not a public one. Its paths are allowlisted in
-        // `.github/scripts/check-openapi-routes.sh`. The `is_system_admin` gate is enforced
-        // inside each handler (load-bearing: the gated router admits everyone under
-        // access_mode='open').
+        // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, like
+        // `/api/access/admin/*` above, so it stays OUT of the OpenAPI contract. Its paths are
+        // allowlisted in `.github/scripts/check-openapi-routes.sh`.
+        //
+        // NOT admin-only, despite sitting among the admin mounts. The gate is
+        // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize`),
+        // so any authenticated profile that owns any team can reach `provision`, `issue`, and
+        // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`).
+        //
+        // The gate lives in the SERVICES, not in these handlers — the handlers are gate-free by
+        // design, as `handlers::machine_clients`' module doc explains. It is load-bearing rather
+        // than defense-in-depth: production runs `access_mode = 'open'`, under which
+        // `has_system_access` is true for everyone, so the gated router admits all comers and the
+        // service check is the only thing left.
         .route(
             "/api/machine-clients",
             get(handlers::machine_clients::list).post(handlers::machine_clients::provision),
