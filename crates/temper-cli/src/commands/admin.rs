@@ -232,7 +232,7 @@ pub async fn ledger_remote(
         .admin()
         .ledger(&query)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&page, fmt)?;
     println!("{rendered}");
     Ok(())
