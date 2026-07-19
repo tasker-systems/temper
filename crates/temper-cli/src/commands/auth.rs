@@ -319,11 +319,15 @@ pub fn request_access(message: Option<&str>) -> Result<()> {
                 .await
             {
                 Ok(result) => {
-                    output::success("Access request submitted.");
-                    output::plain("  You'll gain access once an admin approves your request.");
+                    // Every line here is prose: `request_access` takes no `fmt`
+                    // parameter and never calls `format::render`, so there is no
+                    // payload on stdout to protect — which means stdout must stay
+                    // empty for the parser. The whole block goes to stderr.
+                    output::success_err("Access request submitted.");
+                    output::plain_err("  You'll gain access once an admin approves your request.");
                     output::hint("  Run `temper auth status` to check.");
-                    output::blank();
-                    output::dim(format!("  Request ID: {}", result.id));
+                    output::blank_err();
+                    output::dim_err(format!("  Request ID: {}", result.id));
                 }
                 Err(temper_client::error::ClientError::Conflict { .. }) => {
                     output::warning("You already have a pending request.");

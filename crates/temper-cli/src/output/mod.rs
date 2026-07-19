@@ -106,6 +106,28 @@ pub fn blank_err() {
     writeln!(out).ok();
 }
 
+/// Print a success message to **stderr** — the diagnostic twin of [`success`].
+///
+/// For a command whose "success" output is *entirely prose* — `auth
+/// request-access` is the motivating case: it takes no `fmt` parameter and
+/// never calls `format::render`, so it has no payload to put on stdout. The
+/// familiar "payload on stdout, guidance on stderr" split is only a defense
+/// when a payload actually exists; where none does, every line is guidance and
+/// belongs on stderr. Check for the `render` call before reaching for [`success`].
+pub fn success_err(msg: impl std::fmt::Display) {
+    let mut out = anstream::stderr().lock();
+    writeln!(out, "{SUCCESS}✓{SUCCESS:#} {SUCCESS}{msg}{SUCCESS:#}").ok();
+}
+
+/// Print dimmed/muted text to **stderr** — the diagnostic twin of [`dim`].
+///
+/// Secondary information accompanying a stderr block, so it travels with the
+/// block rather than fragmenting across streams; see [`plain_err`].
+pub fn dim_err(msg: impl std::fmt::Display) {
+    let mut out = anstream::stderr().lock();
+    writeln!(out, "{DIM}{msg}{DIM:#}").ok();
+}
+
 /// Print inline progress to stderr (no trailing newline).
 pub fn progress(msg: impl std::fmt::Display) {
     let mut out = anstream::stderr().lock();

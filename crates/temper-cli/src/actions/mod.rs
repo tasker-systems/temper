@@ -5,7 +5,6 @@ pub mod genesis;
 pub mod ingest;
 pub mod ingest_manifest;
 pub mod invocation;
-pub mod progress;
 pub mod reconcile;
 pub mod runtime;
 pub mod search;

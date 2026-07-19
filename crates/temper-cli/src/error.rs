@@ -47,5 +47,28 @@ impl From<TemperError> for CliError {
     }
 }
 
+// There is deliberately **no** `impl From<ClientError> for TemperError`, here or
+// anywhere in the workspace. Do not add one.
+//
+// It would be a genuine ergonomic win — every `client.foo().await?` would just
+// work — and that is exactly the problem. `ClientError` carries structure that
+// `TemperError` can only preserve if the conversion is deliberate:
+// `SystemAccessRequired(details)` must survive as its own variant for the
+// enriched 403 renderer to fire, and `is_network()` must survive to distinguish
+// a down server from a rejecting one. A blanket `From` makes every `?` a silent
+// flattening site, and the loss is invisible at the call site.
+//
+// This is not hypothetical. Two rival hand-written lifters once disagreed on
+// exactly those two properties, so which guidance a gated user saw depended on
+// which helper a call site happened to import — the enriched access-gate block
+// was unreachable on every path a normal user hits, for months, while its unit
+// tests stayed green. See PR #486.
+//
+// The single lifter is `actions::runtime::client_err_to_temper`. Because no
+// `From` impl exists, every conversion must be written by hand and is therefore
+// greppable — which is the only reason auditing this surface is tractable at
+// all. Adding the impl would not just risk a regression; it would remove the
+// property that lets anyone find the next one.
+
 /// Result alias for CLI commands that can raise a [`CliError`].
 pub type CliResult<T> = std::result::Result<T, CliError>;
