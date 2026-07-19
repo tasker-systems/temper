@@ -1944,6 +1944,45 @@ exist for that service — its `has_system_access` check is the only gate, and i
 
 Full surface parity is always intended. The read surface is useless if only Rust can reach it.
 
+> **AMENDED 2026-07-19, at pre-dispatch verification, before any code.** Four claims below were
+> checked against the tree and three were wrong. Corrected in place rather than discovered by the
+> implementer.
+>
+> **1. The surface is UNDOCUMENTED, so Step 5 inverts.** This task's original Step 5 called
+> regenerating `openapi.json` + the temper-rb gem + temper-ts's `schema.ts` **LOAD-BEARING**. It is
+> the opposite. **Every** operator-only surface is deliberately kept OUT of the OpenAPI contract —
+> `routes.rs:151-153` ("deliberately UNDOCUMENTED … plain `.route()` mounts them without adding them
+> to the OpenAPI contract"), covering all four `/api/access/admin/*` paths and all five
+> `/api/machine-clients*` paths, with a CI guard (`.github/scripts/check-openapi-routes.sh`) holding
+> a nine-path allowlist. **Decided 2026-07-19: the ledger read surface follows that convention.**
+> So `cargo make openapi` produces **no diff**, and Step 5 becomes *"add the new paths to the
+> allowlist"*. An implementer following the original text would regenerate, get an empty diff, and
+> have to guess which side was wrong.
+>
+> **2. That decision dissolves the DTO problem — do NOT add derives to temper-substrate.**
+> `AdminLedgerEntry` (`admin_ledger_service.rs:26-36`) derives only `Debug, Clone, serde::Serialize`.
+> The original Step 3 sketch derives `utoipa::ToSchema` on a response embedding
+> `Vec<AdminLedgerEntry>` — that does not compile, and the chain runs four types deep
+> (`references: Vec<EventRef>` → `EventRef{rel: RefRel, target: RefTarget{kind: AnchorTable, id}}`,
+> all in `temper-substrate/src/payloads.rs`, none carrying utoipa/ts-rs/schemars). Undocumented needs
+> **none** of it: serde alone carries the response. Only the MCP tool's *parameters* need `schemars`.
+>
+> **3. `ledger_epoch` takes no caller and has no gate** (`admin_ledger_service.rs:163`). **Decided
+> 2026-07-19:** it is exposed **only** embedded in the `list_by_subject` / `list_by_actor` responses,
+> which gate already. **No standalone epoch route** — that would be the one path reaching an ungated
+> function from an ungated caller.
+>
+> **4. The Step 1 test sketch below is INVENTED — none of its APIs exist.** There is no
+> `common::harness()`, `h.admin_client()`, `admin.create_context()`, `grant_context_to_team()`,
+> `get_admin_ledger_by_subject()`, `h.outsider_client()`, or `h.some_context_id`. The real harness is
+> `common::setup(pool) -> E2eTestApp` plus `run_temper_cli`, `run_temper_cli_with_token`,
+> `generate_test_jwt`, `generate_second_user_jwt`, `make_system_admin`, `add_to_gating_team`
+> (`tests/e2e/tests/common/mod.rs`). Model on `tests/e2e/tests/admin_surface_e2e.rs`.
+> **Its one correct claim is the 404:** `list_by_subject` returns `ApiError::NotFound` on an empty
+> readable-type set (`:100-104`), so deny-with-404 is real — keep that assertion.
+>
+> Treat the code blocks below as intent, not as source. (Plan intent survives; specifics rot.)
+
 **Files:**
 - Create: `crates/temper-api/src/handlers/admin_ledger.rs`
 - Modify: `crates/temper-api/src/routes.rs`, `crates/temper-api/src/handlers/mod.rs`
@@ -2023,16 +2062,16 @@ Register the route in `routes.rs` under `/api/admin/ledger` behind the existing 
 
 CLI `temper admin ledger --subject kb_contexts:<uuid>` / `--actor <ref>`, routed through `temper-client` over HTTP (the CLI never calls services directly). MCP tool `admin_ledger` with the same two axes, delegating to `admin_ledger_service`.
 
-- [ ] **Step 5: Regenerate the router's artifacts**
+- [ ] **Step 5: Extend the operator-only allowlist (NOT regenerate the artifacts)**
 
-OpenAPI, the temper-rb gem, and temper-ts's `schema.ts` are **all products of the router**. A new response DTO stales all three:
+**Superseded by the 2026-07-19 amendment above.** The surface is undocumented, so it contributes
+nothing to `openapi.json` and neither SDK restales. Instead, the new plain-`.route()` mounts must be
+added to the nine-path `ALLOWLIST` in `.github/scripts/check-openapi-routes.sh` — otherwise that
+guard fails the build, since its whole job is to catch a `.route(` mount that silently escaped the
+contract.
 
-```bash
-cargo make openapi
-git add openapi.json clients/temper-rb/lib/temper/generated clients/temper-ts/src/generated/schema.ts
-```
-
-The drift gates compare against **git**, not a fresh build — a correctly regenerated artifact still fails `cargo make check` while unstaged. Stage first, then check.
+Run `cargo make openapi` once anyway to **prove** the diff is empty. A non-empty diff means a
+`#[utoipa::path]` leaked onto a handler and the surface is not undocumented after all.
 
 - [ ] **Step 6: Run everything**
 
