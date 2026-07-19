@@ -34,7 +34,7 @@ env_files = ["./.env"]
 [env]
 # Compile sqlx query! macros against the committed workspace .sqlx cache, not the live DB — matches CI
 # (which also sets SQLX_OFFLINE=true). Compile-time only; runtime DB tests (test-db/test-e2e) still
-# connect normally. prepare-api and prepare-e2e override this (they must introspect the live DB).
+# connect normally. prepare-services and prepare-e2e override this (they must introspect the live DB).
 SQLX_OFFLINE = "true"
 
 # Point ORT at the model the repo already ships, exactly as every CI test job does. A `--workspace`
@@ -85,17 +85,6 @@ description = "Run temper-substrate write-path artifact tests on ephemeral per-t
 env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development" }
 script = '''
 cargo nextest run -p temper-substrate --features artifact-tests
-'''
-
-[tasks.prepare-api]
-description = "Regenerate temper-api's per-crate .sqlx cache (--all-targets: includes test-target queries)"
-env = { SQLX_OFFLINE = "false" }   # prepare must introspect the live dev DB to build the cache
-script = '''
-# Per-crate (run from the crate dir) — NOT `--workspace`, which clobbers per-crate caches.
-# `--all-targets` captures test-target macro queries (relationship_*_test), which the offline
-# clippy sweep in `cargo make check` compiles but plain `cargo sqlx prepare` misses.
-cd crates/temper-api
-cargo sqlx prepare -- --all-targets --all-features
 '''
 
 [tasks.prepare-services]
