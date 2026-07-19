@@ -314,6 +314,46 @@ back to deriving safety from topology.
   through `add_member`, so D7 alone does not close this. See §2. **Any gate on granting a role must be
   checked against the role being granted, not merely against the grantor's access to the team.**
 
+  > **SUPERSEDED IN PART 2026-07-18 by D4b** — D4a's reasoning is intact but its *placement* was one
+  > arm short. Putting the bar inside `contain_reach` meant it never ran for a system admin, leaving
+  > exactly the question D4a answers for maintainers unanswered for admins.
+
+- **D4b — A machine may NOT be a gating-team owner, on ANY arm including the admin's.** Decided
+  2026-07-18, closing the gap D4a left. The role bar moves out of `contain_reach` and into
+  `authorize_registration`, where it runs before the authority match; `contain_reach` keeps only the
+  membership and grant bars. **D3 is preserved unchanged** — an admin's *reach* stays unchecked and
+  it may still place a machine on any team at any role but `owner`.
+
+  The decision this records did not previously exist in either direction; the behavior was an
+  inference from an absence. Two arguments were weighed, and the grounding pass killed the second:
+
+  - **Bar it.** The human surface refuses to *grant* `owner` to every caller, with no admin
+    exemption — `add_member` (`team_service.rs:231-235`), `change_role` (`:526-530`), and invitation
+    issue (`invitation_service.rs:48`) all refuse it unconditionally. `apply_reach`'s raw
+    `ON CONFLICT DO UPDATE SET role` passes through none of them. On the gating team the result *is*
+    an `is_system_admin` principal (`is_system_admin` = `role = 'owner'` on the gating team, verified
+    against the live function), which can call `POST /api/machine-clients` and register further
+    machines — self-replicating administrative authority with no human in the loop and no session to
+    hang an accountability grain on.
+  - **Keep it — withdrawn as factually wrong.** The argument was that an admin can reach the same end
+    state through ownership *transfer*, so barring the raw-role path removes a shortcut rather than a
+    capability. **There is no ownership transfer.** `rg "fn .*transfer"` across the workspace returns
+    only `transfer_context` (contexts, not teams); `routes.rs` mounts no team-transfer route and
+    `handlers/teams.rs` has no handler. The three guards that name the operation — and the 400
+    description published in `openapi.json` — point at something that was never built. Filed as task
+    `019f77a2-4860-7300-a04e-df0d750dc4c7`.
+
+  So this is not one governed path among several. Barring it removes the **only** write in the system
+  that can add an `owner` to an existing team, it exists for machines only, and it was reachable
+  solely on the arm that skipped the guard. The correct remedy for the missing human capability is to
+  build the human operation, not to preserve an ungoverned machine path as its de-facto stand-in.
+
+  **The generalizable lesson, and it is the sibling of D4's:** D4a placed the right bar in the wrong
+  *layer*. A check about **what is being conferred** does not belong in a function whose job is
+  **whether the caller may confer their own reach** — the two have different exemption rules, so the
+  admin bypass silently swallowed a bar that was never meant to be exempted. When a guard and a
+  bypass share a call site, state which one the bypass is *for*.
+
 - **D5 — Lifecycle keyed by the owning team, EXCEPT `rebind`.** `provision`/`issue` key on the
   request's `owner_team_id`; `revoke`/`rotate_secret`/`get` key on the existing row's `team_id`; `list`
   is SQL-scoped. A team owner who mints a machine can operate it — rotate its secret, revoke it —
