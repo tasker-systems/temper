@@ -163,10 +163,16 @@ pub async fn list_by_actor(
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
-    // The front door, called rather than assumed. Both surfaces gate this upstream already
-    // (temper-api middleware, temper-mcp service) — this is defense in depth against a future
-    // route wired without the layer, and it is the same predicate, not a second copy of it.
-    // Vacuous under access_mode='open', where has_system_access short-circuits true. Intended.
+    // THE ONLY GATE — not defense in depth. Both surfaces authenticate and hand `caller`
+    // straight here: `handlers::admin_ledger::list` mounts on a plain `.route()` with no
+    // prelude, and `tools::admin_ledger` calls `require_profile()` and no more. Neither gates
+    // upstream. Do not relax this on the theory that a layer above repeats it — nothing does.
+    //
+    // How much this check actually excludes is an OPERATIONAL setting, not a property of this
+    // code — do not reason about it from a value read at some past moment. Treat the real gate on
+    // the actor axis as the caller-is-the-actor test below, and on the subject axis as
+    // `readable_event_types`; both hold regardless of how the instance is configured. That is
+    // intended: reading your own authorship is not an admin act.
     if !access_service::has_system_access(pool, caller).await? {
         return Err(ApiError::NotFound);
     }
