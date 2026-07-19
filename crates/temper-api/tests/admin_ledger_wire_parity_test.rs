@@ -13,8 +13,24 @@
 //!
 //! This crate is where the test can live at all — it is the one place both crates are in scope.
 //!
-//! **If you add a variant on either side, this stops compiling until you add it to the other.**
-//! That is its entire job. A mirror nobody checks is just two things drifting.
+//! **What this actually guarantees, stated precisely** — an earlier version of this comment claimed
+//! "add a variant on either side and this stops compiling", which overclaims in two ways:
+//!
+//! 1. **The compile-time half is one-directional.** `mirror_rel`/`mirror_kind` match exhaustively on
+//!    the *substrate* enums, so a new **substrate** variant breaks the build until it is mirrored.
+//!    A new **core** variant does not. That asymmetry is correct rather than a gap: the core types
+//!    are only ever produced by decoding what substrate wrote, so a core-only variant is
+//!    unconstructible in practice — but it is not what the old sentence promised.
+//! 2. **`ALL_RELS`/`ALL_KINDS` below are hand-maintained.** Nothing derives them from the enums (no
+//!    `strum` in this workspace), so a variant that is added to the exhaustive `match` but forgotten
+//!    here is mirrored yet never *serialized* by any assertion. Both lists are complete today
+//!    (5 rels, 9 kinds); if that stops being cheap to eyeball, derive them rather than trusting the
+//!    eyeball.
+//!
+//! The stakes for a rename specifically: renames are per-variant `#[serde(rename)]` on both sides,
+//! so divergence is one typo — and `admin_ledger_service::to_wire_page` turns an undecodable
+//! reference into a whole-page `ApiError::Internal`, i.e. one bad row denies an entire audit read.
+//! That is what these assertions are actually protecting.
 
 use temper_core::types::admin::{LedgerRef, LedgerRefKind, LedgerRefRel, LedgerRefTarget};
 use temper_substrate::payloads::{AnchorTable, EventRef, RefRel, RefTarget};

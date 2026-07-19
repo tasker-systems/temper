@@ -6,9 +6,19 @@
 //! invisible to all of them. It is equally invisible to every *reader*, which is why identity
 //! lives in `kb_events."references"` (GIN-indexed, and consulted by no cognition reader).
 //!
-//! Two axes, both index-backed:
-//!   - by subject  → `references @> …`      (idx_kb_events_references, jsonb_path_ops)
-//!   - by actor    → `emitter_entity_id = …` (idx_kb_events_emitter, (emitter, occurred_at DESC))
+//! Two axes:
+//!   - by subject → `references @> …` (idx_kb_events_references, jsonb_path_ops)
+//!   - by actor   → `kb_profiles.id = …`, reached through `kb_events → kb_entities → kb_profiles`
+//!
+//! **The actor axis is a two-hop join, not a direct `emitter_entity_id` lookup** — this header
+//! used to say the latter, which reads as though the actor id were the index condition on
+//! `idx_kb_events_emitter`. It is not: a profile owns many entities
+//! (`kb_entities_profile_id_name_key` is UNIQUE on `(profile_id, name)`), so the actor predicate
+//! lands on `kb_profiles.id` one hop past the emitter. `idx_kb_events_emitter` still serves the
+//! **join** (`Index Cond: emitter_entity_id = en.id`), which is why the distinction is easy to
+//! miss. Whether the entity→profile step wants its own index is a real question, but it is a
+//! question about production data volume, and the dev database is far too small to answer it —
+//! every row estimate there is 1, so the plan shape proves nothing either way.
 //!
 //! This surface ships BEFORE any writer, deliberately (spec §5): the NULL anchor that firewalls
 //! admin events from cognition also hides them from every reader, so the read path had to be
