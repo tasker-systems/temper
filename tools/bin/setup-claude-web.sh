@@ -85,6 +85,10 @@ persist_env 'export CORS_ORIGINS="http://localhost:3000"'
 persist_env 'export PORT="3000"'
 persist_env 'export ENABLE_SWAGGER="true"'
 
+# rtk — keep it strictly local: telemetry is opt-in upstream already, but pin it
+# off explicitly so a cloud session never phones home (see Phase 3d).
+persist_env 'export RTK_TELEMETRY_DISABLED="1"'
+
 log_ok "environment variables persisted to session"
 
 # ---------------------------------------------------------------------------
@@ -249,6 +253,74 @@ install_temper_cli() {
 install_temper_cli
 
 # ---------------------------------------------------------------------------
+# Phase 3d: rtk (Rust Token Killer) — token-efficient command output
+# ---------------------------------------------------------------------------
+# rtk (https://github.com/rtk-ai/rtk) is a CLI proxy that filters/compacts the
+# verbose output of common dev commands (git, cargo, test runners, …) before it
+# reaches the agent's context — 60-90% fewer tokens on typical commands, with the
+# full, unfiltered output still one `rtk proxy <cmd>` away when it's needed.
+#
+# What activates it is the committed PreToolUse/Bash hook in .claude/settings.json,
+# which delegates to tools/bin/rtk-hook.sh. That wrapper no-ops cleanly when rtk
+# isn't on PATH, so installing the binary *here* is exactly what turns rtk on for
+# a web session — and nothing changes for anyone who hasn't opted in.
+#
+# Prebuilt binary via the upstream installer (fast — no compile), dropped at
+# ~/.local/bin/rtk (already on PATH). Non-fatal: a missing rtk just means the
+# hook passes commands through unchanged. `RTK_VERSION` env var pins a version.
+RTK_FALLBACK_VERSION="v0.42.4"
+
+install_rtk() {
+  if command_exists rtk; then
+    log_ok "rtk already on PATH ($(command -v rtk))"
+    return
+  fi
+  if ! command_exists curl; then
+    log_warn "rtk not installed and curl unavailable — skipping (Bash hook passes through)"
+    return
+  fi
+
+  local installer="https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh"
+  local pin="${RTK_VERSION:-}"
+  local log="/tmp/rtk-install.log"
+
+  # The installer resolves "latest" from a release redirect, falling back to the
+  # GitHub API — which can 403 from rate-limiting in cloud sandboxes. On failure
+  # retry with a pinned version, which downloads the release archive directly.
+  # RTK_VERSION rides on the `sh` side of the pipe so the installer sees it.
+  if [ -n "$pin" ]; then
+    if curl -fsSL "$installer" | RTK_VERSION="$pin" sh >"$log" 2>&1; then
+      log_ok "rtk $pin installed to \$HOME/.local/bin/rtk"
+      return
+    fi
+  else
+    if curl -fsSL "$installer" | sh >"$log" 2>&1; then
+      log_ok "rtk (latest) installed to \$HOME/.local/bin/rtk"
+      return
+    fi
+    if curl -fsSL "$installer" | RTK_VERSION="$RTK_FALLBACK_VERSION" sh >"$log" 2>&1; then
+      log_ok "rtk $RTK_FALLBACK_VERSION installed (GitHub API unavailable, used pinned fallback)"
+      return
+    fi
+  fi
+
+  log_warn "rtk install failed (non-fatal) — Bash hook passes through; see $log for details"
+}
+
+install_rtk
+
+# rtk prints a once-per-day "no hook installed — run `rtk init -g`" nudge on its
+# first run, because it looks for its hook in the *global* ~/.claude/settings.json
+# and we register ours in the committed project .claude/settings.json instead. The
+# nudge is stderr-only (protocol-safe) but misleading here — savings are already on
+# — and could tempt a later agent into `rtk init -g`, which would add a second,
+# redundant hook. Pre-seed rtk's own once-per-day throttle marker so it stays quiet.
+if command_exists rtk; then
+  rtk_marker="${XDG_DATA_HOME:-$HOME/.local/share}/rtk/.hook_warn_last"
+  mkdir -p "$(dirname "$rtk_marker")" 2>/dev/null && : > "$rtk_marker" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
 # Phase 4: Detect available tools and services
 # ---------------------------------------------------------------------------
 log_section "Environment status"
@@ -260,7 +332,14 @@ command_exists cargo-make && echo "    cargo-make:    yes" || echo "    cargo-ma
 command_exists sqlx       && echo "    sqlx-cli:      yes" || echo "    sqlx-cli:      NOT INSTALLED"
 command_exists cargo-nextest && echo "    cargo-nextest: yes" || echo "    cargo-nextest: NOT INSTALLED"
 command_exists gh         && echo "    gh:            $(gh --version 2>/dev/null | head -1 | awk '{print $3}' || echo 'yes')" || echo "    gh:            NOT INSTALLED"
+command_exists rtk        && echo "    rtk:           $(rtk --version 2>/dev/null | awk '{print $2}' || echo 'yes')" || echo "    rtk:           NOT INSTALLED"
 echo ""
+
+if command_exists rtk; then
+  echo "  rtk active: Bash output is auto-compacted via the PreToolUse hook."
+  echo "    Full/raw output: rtk proxy <cmd>   ·   token savings: rtk gain"
+  echo ""
+fi
 
 echo "  Services:"
 if pg_isready -h localhost -p 5437 -q 2>/dev/null; then

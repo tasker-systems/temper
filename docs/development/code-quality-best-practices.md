@@ -172,7 +172,7 @@ one is a blocking review finding regardless of correctness.
   filter-builder producing the shared conditions and bind values — never duplicate filter logic.
 - **Cache regeneration is part of the change.** After touching SQL, regenerate the committed
   `.sqlx/` cache: `cargo sqlx prepare --workspace -- --all-features` for production targets, and
-  the per-crate `cargo make prepare-api` / `prepare-e2e` for **test-target** macro queries
+  the per-crate `cargo make prepare-services` / `prepare-e2e` for **test-target** macro queries
   (the workspace ritual skips test targets). A missing cache entry is caught only by offline
   `cargo make check`, not by the live-DB clippy job.
 

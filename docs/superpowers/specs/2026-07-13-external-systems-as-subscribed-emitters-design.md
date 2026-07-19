@@ -464,8 +464,10 @@ already establishes every piece:
 - **Teamless fails closed.** A teamless machine is admin-only to create, read, or operate — "the
   empty owning team fails closed, never open." A teamless connection inherits that.
 
-**Admin actions are events, firewalled from cognition** — consistent with the existing
-admin-event-sourcing shape.
+**Admin actions are events, firewalled from cognition** — following the shape established by
+[the admin event sink](2026-07-16-admin-event-sink-design.md): an emitter, a NULL producing anchor
+(which is what keeps the event away from region producers), and a type-discriminated read surface.
+There was no such shape when this spec was written; that one built it.
 
 **The credential half is already built.** PR #418 shipped `ClientCredentials` in `temper-ts`
 alongside `Temper::Credentials` in the Ruby gem, both pinned to one cross-language wire contract
