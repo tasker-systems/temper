@@ -710,7 +710,7 @@ fn link_session_to_task(
                     .relationships()
                     .assert(&req)
                     .await
-                    .map_err(crate::commands::client_err)
+                    .map_err(crate::actions::runtime::client_err_to_temper)
             });
             match result {
                 Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),

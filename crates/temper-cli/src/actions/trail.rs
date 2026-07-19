@@ -17,5 +17,5 @@ pub async fn element_trail_api(
         .events()
         .element_trail(kind, element_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }

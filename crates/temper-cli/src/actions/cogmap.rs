@@ -46,7 +46,7 @@ pub async fn shape_api(
         .cognitive_maps()
         .shape(cogmap_id, lens_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Call the region-metrics API for the given cogmap (and optional lens), both resolved to UUIDs.
@@ -59,7 +59,7 @@ pub async fn region_metrics_api(
         .cognitive_maps()
         .region_metrics(cogmap_id, lens_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Call the analytics API for the given cogmap (resolved to a UUID).
@@ -71,7 +71,7 @@ pub async fn analytics_api(
         .cognitive_maps()
         .analytics(cogmap_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Call the materialize API for the given cogmap (resolved to a UUID) — recompute regions when
@@ -86,7 +86,7 @@ pub async fn materialize_api(
         .cognitive_maps()
         .materialize(cogmap_id, threshold)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Strip an optional leading `+` sigil from a team ref, yielding the bare team token.
@@ -125,7 +125,7 @@ pub async fn resolve_team_id(
         .teams()
         .list()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     teams
         .into_iter()
         .find(|t| t.slug == token)
@@ -149,7 +149,7 @@ fn map_bind_err(action: &str, e: temper_client::error::ClientError) -> TemperErr
              (hold a grant on it) AND manage the target team (owner/maintainer) — or that \
              you are an instance administrator."
         )),
-        other => crate::commands::client_err(other),
+        other => crate::actions::runtime::client_err_to_temper(other),
     }
 }
 
@@ -202,7 +202,7 @@ pub async fn grant_api(
         .cognitive_maps()
         .grant(cogmap_id, &body)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Revoke a capability grant on the cogmap.
@@ -219,7 +219,7 @@ pub async fn revoke_api(
         .cognitive_maps()
         .revoke(cogmap_id, &body)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 #[cfg(test)]

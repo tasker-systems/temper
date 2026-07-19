@@ -195,7 +195,7 @@ pub fn reconcile(
                 .cognitive_maps()
                 .reconcile_cognitive_map(cogmap_id, &req, &act)
                 .await
-                .map_err(crate::commands::client_err)
+                .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 
@@ -246,7 +246,7 @@ pub fn create(
                 .cognitive_maps()
                 .create_cognitive_map(&req)
                 .await
-                .map_err(crate::commands::client_err)
+                .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 

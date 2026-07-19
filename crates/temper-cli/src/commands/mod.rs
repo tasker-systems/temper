@@ -29,16 +29,6 @@ pub mod warmup;
 
 use std::borrow::Cow;
 
-/// Convert a ClientError to a TemperError, preserving SystemAccessRequired details.
-pub fn client_err(e: temper_client::error::ClientError) -> crate::error::TemperError {
-    match e {
-        temper_client::error::ClientError::SystemAccessRequired(details) => {
-            crate::error::TemperError::SystemAccessRequired(details)
-        }
-        other => crate::error::TemperError::Api(other.to_string()),
-    }
-}
-
 /// Resolve a context name, falling back to "default" with a warning if the
 /// context directory doesn't exist in the vault.
 ///
