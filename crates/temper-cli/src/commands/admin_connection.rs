@@ -72,7 +72,7 @@ pub async fn provision_remote(
         .connections()
         .provision(&req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
     announce_capabilities(&row);
@@ -89,7 +89,7 @@ pub async fn list_remote(
         .connections()
         .list(include_revoked)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&rows, fmt)?);
     Ok(())
 }
@@ -104,7 +104,7 @@ pub async fn show_remote(
         .connections()
         .get(parse_uuid("connection id", id)?)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     announce_capabilities(&row);
     Ok(())
@@ -133,7 +133,7 @@ pub async fn attach_credential_remote(
         .connections()
         .attach_credential(parse_uuid("connection id", id)?, &credential)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
     announce_capabilities(&row.connection);
@@ -171,7 +171,7 @@ pub async fn set_webhook_events_remote(
         .connections()
         .set_webhook_events(parse_uuid("connection id", id)?, events)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
     announce_capabilities(&row);
@@ -189,7 +189,7 @@ pub async fn set_tool_manifest_remote(
         .connections()
         .set_tool_manifest(parse_uuid("connection id", id)?, tools)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     println!("{}", crate::format::render(&row, fmt)?);
     announce_capabilities(&row);
@@ -208,13 +208,13 @@ pub async fn grant_reach_remote(
 ) -> Result<()> {
     let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
     // A connection that declares a reach requires `affirm_reach`: the service returns Conflict
-    // otherwise, and that failure surfaces here via `client_err` — it IS the warning, so there is
+    // otherwise, and that failure surfaces here via the error lift — it IS the warning, so there is
     // no pre-check to duplicate it.
     let row = client
         .connections()
         .grant_reach(parse_uuid("connection id", id)?, team_id, affirm_reach)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     crate::output::hint(
         "Read-reach granted: the team's members now inherit read on what this connection receives. \
@@ -241,7 +241,7 @@ pub async fn revoke_reach_remote(
         .connections()
         .revoke_reach(parse_uuid("connection id", id)?, team_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     crate::output::hint(
         "The team now has no read-reach on this connection (idempotent — an absent grant was a no-op).",
@@ -259,7 +259,7 @@ pub async fn revoke_remote(
         .connections()
         .revoke(parse_uuid("connection id", id)?)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     crate::output::hint(
         "The connection's profile, emitter entity, and home context were NOT removed — events \

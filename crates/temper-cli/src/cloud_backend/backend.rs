@@ -135,13 +135,13 @@ mod embed_impl {
         ) -> Result<CommandOutput<()>, TemperError> {
             // The resource is addressed by id — dispatch straight to the by-id delete.
             //
-            // The delete call uses the structured `commands::client_err` mapper
-            // (not the lossy `client_err_to_temper` collapser) so a
-            // server-returned `SystemAccessRequired` is preserved as
-            // `TemperError::SystemAccessRequired { details }` and main.rs
-            // renders the rich CLI UI (email, join-request status, request URL,
-            // CLI hint). The pre-Phase-5 `delete_cloud` used `client_err` here
-            // for this reason; CloudBackend now mirrors that on the delete step.
+            // Errors lift through `client_err_to_temper`, which preserves a
+            // server-returned `SystemAccessRequired` as
+            // `TemperError::SystemAccessRequired { details }` so main.rs can
+            // render the rich CLI UI (email, join-request status, request URL,
+            // remedy command). That used to be true of only one of two rival
+            // lifters, and picking the wrong one silently degraded the 403 to a
+            // bare string — hence one lifter, no choice to get wrong.
             let id = uuid::Uuid::from(cmd.resource);
             // Carry the per-act correlation + authorship from the command onto the wire (discrete
             // ActInput shape, query params); the delete handler reassembles it into the act.
@@ -150,7 +150,7 @@ mod embed_impl {
                 .resources()
                 .delete(id, &act)
                 .await
-                .map_err(crate::commands::client_err)?;
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = cmd.resource;
             Ok(CommandOutput {
                 value: (),

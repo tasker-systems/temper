@@ -19,13 +19,13 @@ pub async fn settings_remote(
             .admin()
             .get_settings()
             .await
-            .map_err(crate::commands::client_err)?
+            .map_err(crate::actions::runtime::client_err_to_temper)?
     } else {
         client
             .admin()
             .update_settings(&req)
             .await
-            .map_err(crate::commands::client_err)?
+            .map_err(crate::actions::runtime::client_err_to_temper)?
     };
 
     let rendered = crate::format::render(&settings, fmt)?;
@@ -57,7 +57,7 @@ pub async fn promote_remote(
         .admin()
         .promote(&req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let rendered = crate::format::render(&row, fmt)?;
     println!("{rendered}");
@@ -73,7 +73,7 @@ pub async fn requests_list_remote(
         .admin()
         .list_requests()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&rows, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -105,7 +105,7 @@ pub async fn requests_review_remote(
         .admin()
         .review_request(request_id, decision, note.map(str::to_owned))
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let rendered = crate::format::render(&row, fmt)?;
     println!("{rendered}");
@@ -170,7 +170,7 @@ pub async fn reembed_remote(
         .admin()
         .reembed(&body)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&summary, fmt)?;
     println!("{rendered}");
     Ok(())

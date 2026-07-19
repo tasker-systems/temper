@@ -20,14 +20,30 @@ use temper_core::types::config::TemperConfig;
 
 use crate::error::{Result, TemperError};
 
-/// Lift a [`ClientError`] into a [`TemperError`], preserving the network/
-/// server distinction so callers can choose to fall back to local state on
-/// unreachable-server errors without swallowing legitimate 4xx/5xx responses.
+/// Lift a [`ClientError`] into a [`TemperError`] — **the** lifter; every CLI
+/// call site routes here.
+///
+/// Preserves two things the `to_string()` shortcut destroys:
+///
+/// 1. **The enriched access-gate 403.** `SystemAccessRequired` carries the
+///    caller's email, join-request status and the server-advertised remedy
+///    command; `main.rs` matches on that variant to render them. Flattening it
+///    to [`TemperError::Api`] leaves the user a bare "system access required"
+///    with no way to find out how to request it.
+/// 2. **The network/server distinction**, so callers can fall back to local
+///    state on an unreachable server without swallowing a legitimate 4xx/5xx.
+///
+/// There was briefly a second lifter that preserved (1) but not (2), while this
+/// one preserved (2) but not (1) — so which guidance the user got depended on
+/// which of two identical-looking helpers the call site happened to import, and
+/// on the primary read paths (`resource list`, `show`, `task`) the access-gate
+/// block never rendered at all. Two lifters is how that divergence hid. There
+/// is one.
 pub fn client_err_to_temper(e: ClientError) -> TemperError {
-    if e.is_network() {
-        TemperError::Network(e.to_string())
-    } else {
-        TemperError::Api(e.to_string())
+    match e {
+        ClientError::SystemAccessRequired(details) => TemperError::SystemAccessRequired(details),
+        e if e.is_network() => TemperError::Network(e.to_string()),
+        e => TemperError::Api(e.to_string()),
     }
 }
 

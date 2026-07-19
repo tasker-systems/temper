@@ -38,7 +38,7 @@ pub async fn invite_remote(
         .teams()
         .invite(team_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&inv, fmt)?);
     Ok(())
 }
@@ -53,7 +53,7 @@ pub async fn accept_invitation(
         .teams()
         .accept_invitation(token)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&resp, fmt)?);
     Ok(())
 }
@@ -68,7 +68,7 @@ pub async fn decline_invitation(
         .teams()
         .decline_invitation(token)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("Invitation declined.");
     Ok(())
 }
@@ -84,7 +84,7 @@ pub async fn list_invitations_remote(
         .teams()
         .list_invitations(team_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&invitations, fmt)?);
     Ok(())
 }
@@ -110,7 +110,7 @@ pub async fn create_remote(
         .teams()
         .create(&req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let rendered = crate::format::render(&team, fmt)?;
     println!("{rendered}");
@@ -138,7 +138,7 @@ pub async fn add_member_remote(
         .teams()
         .add_member(team_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let rendered = crate::format::render(&member, fmt)?;
     println!("{rendered}");
@@ -167,7 +167,7 @@ pub async fn update_remote(
         .teams()
         .update(team_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&row, fmt)?);
     Ok(())
 }
@@ -183,7 +183,7 @@ pub async fn delete_remote(
         .teams()
         .delete(team_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("Team deleted.");
     Ok(())
 }
@@ -211,7 +211,7 @@ pub async fn reassign_remote(
         .teams()
         .reassign(team_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&ack, fmt)?);
     Ok(())
 }
@@ -225,7 +225,7 @@ pub async fn list_remote(
         .teams()
         .list()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
 
     let rendered = crate::format::render(&teams, fmt)?;
     println!("{rendered}");
@@ -243,7 +243,7 @@ pub async fn show_remote(
         .teams()
         .get(team_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&detail, fmt)?);
     Ok(())
 }
@@ -259,12 +259,12 @@ pub async fn leave_remote(
         .profile()
         .get()
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     let outcome = client
         .teams()
         .remove_member(team_id, me.id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("You have left the team.");
     print_residual_nudge(team, &me.id.to_string(), &outcome.residual_owned);
     Ok(())
@@ -284,7 +284,7 @@ pub async fn remove_member_remote(
         .teams()
         .remove_member(team_id, profile_id)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("Member removed.");
     print_residual_nudge(team, profile, &outcome.residual_owned);
     Ok(())
@@ -335,7 +335,7 @@ pub async fn set_role_remote(
         .teams()
         .change_role(team_id, profile_id, &req)
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&member, fmt)?);
     Ok(())
 }

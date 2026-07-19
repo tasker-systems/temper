@@ -16,7 +16,7 @@ pub async fn delta_api(
         .steward()
         .delta(cogmap, threshold)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Advance the cogmap's ingest watermark to a given event id.
@@ -29,5 +29,5 @@ pub async fn advance_watermark_api(
         .steward()
         .advance_watermark(cogmap, event_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }

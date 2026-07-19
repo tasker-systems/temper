@@ -19,7 +19,7 @@ pub async fn open_api(
         .invocations()
         .open(req)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Close an open invocation envelope (204 No Content on success).
@@ -32,7 +32,7 @@ pub async fn close_api(
         .invocations()
         .close(invocation_id, req)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Read one envelope plus its acts.
@@ -44,7 +44,7 @@ pub async fn show_api(
         .invocations()
         .show(invocation_id)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// List envelopes, optionally narrowed by cogmap and/or status.
@@ -57,7 +57,7 @@ pub async fn list_api(
         .invocations()
         .list(cogmap, status)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 #[cfg(test)]

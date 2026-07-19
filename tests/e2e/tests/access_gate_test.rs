@@ -677,3 +677,85 @@ async fn audit_events_written_for_lifecycle(pool: sqlx::PgPool) {
     );
     assert!(reviewed, "approval must stamp reviewed_at (audit trail)");
 }
+
+// ---------------------------------------------------------------------------
+// The 403 guidance block is one stream: stderr
+// ---------------------------------------------------------------------------
+
+/// The access-gate 403 must render **entirely on stderr**, leaving stdout clean.
+///
+/// temper defaults to JSON on a non-TTY stdout (how agents invoke it), so any
+/// prose written there corrupts the document a caller parses. Before this gate
+/// existed the block was split: `output::error` went to stderr while the
+/// explanatory line, its spacing, and the `output::hint` remedy went to stdout
+/// — so an agent redirecting stderr away got a stdout carrying neither valid
+/// JSON nor the reason why.
+///
+/// This asserts both halves of the invariant, because either alone is passable
+/// by a broken implementation: the guidance must be *present on stderr* (a
+/// renderer that printed nothing would pass a stdout-only check) and *absent
+/// from stdout* (the actual regression). Both strings below lived on stdout
+/// before the fix, so this test goes red against it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn access_gate_403_renders_entirely_on_stderr(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_profile = preflight(&app, &app.token).await;
+    common::enable_invite_only(&pool, profile_id(&admin_profile)).await;
+
+    // A second, non-member user: authenticated, but gated out.
+    let second_token = common::generate_second_user_jwt();
+    preflight(&app, &second_token).await;
+
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("gate-stream-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+
+    let output = common::run_temper_cli_with_token(
+        &app.base_url(),
+        &second_token,
+        &config_path,
+        &["resource", "list", "--type", "task"],
+    )
+    .await
+    .expect("spawn the temper binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "a gated caller must exit non-zero; got success with stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    // The guidance must actually be rendered — on stderr.
+    assert!(
+        stderr.contains("requires approved access"),
+        "the 403 explanation must reach stderr; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("To request access, run:"),
+        "the remedy's lead-in must reach stderr; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("temper auth request-access"),
+        "the advertised remedy command must reach stderr; stderr={stderr:?}"
+    );
+
+    // ...and stdout must carry none of it. These are the exact lines that were
+    // written to stdout before the fix.
+    for leaked in [
+        "To request access, run:",
+        "temper auth request-access",
+        "requires approved access",
+    ] {
+        assert!(
+            !stdout.contains(leaked),
+            "the 403 block leaked {leaked:?} onto stdout, which agents parse as JSON; \
+             stdout={stdout:?}"
+        );
+    }
+    assert!(
+        stdout.trim().is_empty(),
+        "a failed gated command must leave stdout empty for its parser; stdout={stdout:?}"
+    );
+}

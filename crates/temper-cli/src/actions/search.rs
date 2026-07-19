@@ -121,7 +121,7 @@ pub async fn search_api(
         .search()
         .search_with_params(&params)
         .await
-        .map_err(crate::commands::client_err)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Truncate a snippet to max_chars (character count), breaking at word boundaries.

@@ -49,8 +49,12 @@ pub fn dim(msg: impl std::fmt::Display) {
 }
 
 /// Print a hint/suggestion (dimmed, for guidance text).
+///
+/// Goes to **stderr**, not stdout: temper defaults to JSON output on a non-TTY
+/// stdout (how agents invoke it), and a hint written there corrupts the payload.
+/// Guidance is for humans; the payload is for parsers.
 pub fn hint(msg: impl std::fmt::Display) {
-    let mut out = anstream::stdout().lock();
+    let mut out = anstream::stderr().lock();
     writeln!(out, "{HINT}{msg}{HINT:#}").ok();
 }
 
@@ -80,6 +84,26 @@ pub fn blank() {
 pub fn plain(msg: impl std::fmt::Display) {
     let mut out = anstream::stdout().lock();
     writeln!(out, "{msg}").ok();
+}
+
+/// Print unstyled text to **stderr** — the diagnostic twin of [`plain`].
+///
+/// For the prose lines of a multi-line *diagnostic* block. A block opened by
+/// [`error`] (stderr) and closed by [`hint`] (stderr) must not put its middle
+/// on stdout: redirecting one stream would leave the reader with a fragment,
+/// and on a JSON-by-default stdout the fragment corrupts the payload. A block
+/// belongs to one stream.
+pub fn plain_err(msg: impl std::fmt::Display) {
+    let mut out = anstream::stderr().lock();
+    writeln!(out, "{msg}").ok();
+}
+
+/// Print a blank line to **stderr** — the diagnostic twin of [`blank`].
+///
+/// Use inside a stderr block so its spacing travels with it; see [`plain_err`].
+pub fn blank_err() {
+    let mut out = anstream::stderr().lock();
+    writeln!(out).ok();
 }
 
 /// Print inline progress to stderr (no trailing newline).

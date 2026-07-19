@@ -315,7 +315,7 @@ pub async fn write_resource_file(
         .resources()
         .content(Uuid::from(row.id))
         .await
-        .map_err(crate::commands::client_err)?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     write_resource_file_from_parts(vault_root, row, &content)
 }
 
@@ -422,7 +422,7 @@ async fn list_context_resources(client: &TemperClient, context: &str) -> Result<
             .resources()
             .list(&params)
             .await
-            .map_err(crate::commands::client_err)?;
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
         let page_len = resp.rows.len() as i64;
         rows.extend(resp.rows);
         if page_len < PULL_PAGE_SIZE {
@@ -491,7 +491,7 @@ async fn record_context_cursor(
             .events()
             .latest_for_context(cid)
             .await
-            .map_err(crate::commands::client_err)?,
+            .map_err(crate::actions::runtime::client_err_to_temper)?,
         None => None,
     };
     write_cursor(
