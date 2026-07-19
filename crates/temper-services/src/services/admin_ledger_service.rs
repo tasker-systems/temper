@@ -51,7 +51,12 @@ pub struct AdminLedgerEntry {
 ///
 /// `admin_ledger_opened` has no `kb_event_types` row until the epoch marker migration ships. That
 /// is harmless: `= ANY($1)` simply matches nothing and `ledger_epoch` returns `None`.
-const ADMIN_EVENT_TYPES: &[&str] = &["admin_ledger_opened", "grant_created", "grant_revoked"];
+const ADMIN_EVENT_TYPES: &[&str] = &[
+    "admin_ledger_opened",
+    "grant_created",
+    "grant_revoked",
+    "slack_principal_disconnected",
+];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
 /// `subject` — empty means "nothing", which the caller turns into 404.
@@ -92,6 +97,22 @@ async fn readable_event_types(
     //   no such event type exists until step 5 of the spec's §9, and ADMIN_EVENT_TYPES does not
     //   list one. When one is added, it gets an arm HERE, and the default below keeps it
     //   admin-only until someone does.
+    //
+    // slack_principal_disconnected → DELIBERATELY ADMIN-ONLY. Decided 2026-07-19; this is not an
+    //   arm nobody got around to writing. An admin disconnect is plausibly one step in an
+    //   offboarding playbook, and nothing guarantees the ordering puts temper last — so letting the
+    //   subject read "an admin disconnected your Slack principal at 14:02" leaks the TIMING of an
+    //   in-flight administrative action, most consequentially a termination, before it completes.
+    //   The event body is unremarkable; the signal that an admin acted on you, right now, is not.
+    //   Self-serve disconnect stays readable via `list_by_actor`, which is not a hole in the policy:
+    //   on that arm actor == subject, so there is no third party whose action is being concealed,
+    //   and no reason to hide a person's own act from them. The line the policy draws is
+    //   actor != subject — NOT "disconnects are secret".
+    //   Rationale, the three independent things that enforce it, and the conditions for revisiting:
+    //   docs/decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md. That doc exists
+    //   precisely because the fail-closed default is doing policy work here, which makes
+    //   "deliberately absent" and "not written yet" indistinguishable in the code. A future arm
+    //   proposal for this type must revisit that doc FIRST.
     //
     // Default: absent from this fn ⇒ admin-only ⇒ fail closed. The default arm is expressed as
     // ABSENCE from the returned set rather than as a match arm nobody wrote.

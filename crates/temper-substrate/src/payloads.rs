@@ -21,6 +21,7 @@ use crate::ids::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::slack::IdpRevocation;
 use uuid::Uuid;
 
 // ── shared shapes ───────────────────────────────────────────────────────────
@@ -967,8 +968,32 @@ pub struct AdminLedgerOpened {
     pub note: String,
 }
 
-/// The 18 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 18] = [
+/// `slack_principal_disconnected` — the audit record of a Slack principal being unbound from a
+/// temper profile. The subject is the **profile**, not the link: `AnchorTable` has no
+/// `kb_profile_auth_links` variant, and the auth-link row is deleted by the same act that emits
+/// this — so the row it describes no longer exists to point at. `disconnected_by` is the acting
+/// profile; it EQUALS the subject on the self-serve arm and DIFFERS on the admin arm, and telling
+/// those two apart is most of why this event is worth having.
+///
+/// `idp_revocation` carries what happened to the grant AT SLACK, because "the binding is gone" and
+/// "the token is dead" are different facts and an offboarding auditor needs the second one. The
+/// unbind commits regardless of the revoke outcome (the revoke is best-effort by design — Slack
+/// being down must not block the only unbind lever), so without this field a disconnect performed
+/// while Slack was unreachable would read, on the ledger, as indistinguishable from a clean one.
+/// It is `temper_core`'s own three-state enum rather than a copy: the ledger and the HTTP surface
+/// then cannot disagree about what `revoked` means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct SlackPrincipalDisconnected {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    pub slack_principal_id: String,
+    pub disconnected_by: ProfileId,
+    pub idp_revocation: IdpRevocation,
+}
+
+/// The 19 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 19] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -987,6 +1012,7 @@ pub const TYPED_EVENT_NAMES: [&str; 18] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
+    "slack_principal_disconnected",
 ];
 
 /// The event names classified `kb_event_types.category = 'admin'` — the ledger's own vocabulary,
@@ -994,7 +1020,12 @@ pub const TYPED_EVENT_NAMES: [&str; 18] = [
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 3] = ["admin_ledger_opened", "grant_created", "grant_revoked"];
+pub const ADMIN_EVENT_NAMES: [&str; 4] = [
+    "admin_ledger_opened",
+    "grant_created",
+    "grant_revoked",
+    "slack_principal_disconnected",
+];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
 /// neither knowledge-graph history nor authority acts. Migration `20260719000010` introduced this
@@ -1056,6 +1087,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "grant_revoked" => {
                     serde_json::from_value::<GrantRevoked>(r.payload.clone())?;
+                }
+                "slack_principal_disconnected" => {
+                    serde_json::from_value::<SlackPrincipalDisconnected>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
