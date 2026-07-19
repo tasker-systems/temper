@@ -585,7 +585,12 @@ fn check_config_hash_staleness(skill_dir: &Path) -> Result<()> {
                 output::hint("  Run: temper skill install");
             }
             None => {
-                output::warning("Hash: UNKNOWN (no config-hash comment found)");
+                // Same stream (stdout) and shape (`status_icon`) as the up-to-date
+                // and STALE arms above: this is a *report*, and a non-passing outcome
+                // routed to stderr would render as silence for a caller reading the
+                // stdout report — indistinguishable from "the check did not run",
+                // which is the worst reading for UNKNOWN specifically.
+                output::status_icon(false, "Hash: UNKNOWN (no config-hash comment found)");
             }
         }
     }
