@@ -275,7 +275,7 @@ async fn seed_admin_event(
 ) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         // `et.category` is carried from the registry rather than defaulted: `kb_events_category_
-        // _matches_type` (20260719000010) rejects an admin-typed row labelled 'cognition', which is
+        // _matches_type` (20260719000010) rejects an admin-typed row labelled 'domain', which is
         // what the DEFAULT would give. Selecting it is also what `_event_append` does.
         r#"INSERT INTO kb_events
                (event_type_id, emitter_entity_id, payload, "references", category)
@@ -751,7 +751,7 @@ async fn seed_poisoned_admin_event(
 ) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         // Carries `et.category` for the same reason as `seed_admin_event` above — an admin type
-        // taking the 'cognition' DEFAULT violates `kb_events_category_matches_type`.
+        // taking the 'domain' DEFAULT violates `kb_events_category_matches_type`.
         r#"INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, category)
            SELECT et.id, $1,
                   jsonb_strip_nulls(jsonb_build_object(
@@ -923,7 +923,49 @@ async fn exactly_the_admin_event_types_are_categorised_admin(pool: PgPool) {
         admin_typed, expected,
         "kb_event_types.category='admin' must name exactly the admin ledger's vocabulary — no \
          more (a cognition type stamped admin vanishes from every element trail) and no less (an \
-         admin type left 'cognition' loses the visible half of the trail firewall)"
+         admin type left 'domain' loses the visible half of the trail firewall)"
+    );
+}
+
+/// The migration's stamping and the bootseed's rebuild must agree, or a `reset_schema` reseed
+/// silently reclassifies the registry.
+///
+/// Two different writers produce `kb_event_types.category`: migrations `20260718000020` /
+/// `20260719000010` stamp an EXISTING registry by name, while `bootseed::seed_system` rebuilds a
+/// TRUNCATEd one from `payloads::ADMIN_EVENT_NAMES` / `SYSTEM_EVENT_NAMES`. Nothing structurally
+/// ties those two together — they are a migration and a Rust const that happen to encode the same
+/// intent. This pins them: it reads the registry as MIGRATED and asserts it matches what the
+/// constants say, so a type added to one and not the other fails here rather than in whichever
+/// environment happens to reseed.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_migrated_categories_match_the_bootseed_constants(pool: PgPool) {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, category FROM kb_event_types ORDER BY name")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    for (name, category) in &rows {
+        let expected = if temper_substrate::payloads::ADMIN_EVENT_NAMES.contains(&name.as_str()) {
+            "admin"
+        } else if temper_substrate::payloads::SYSTEM_EVENT_NAMES.contains(&name.as_str()) {
+            "system"
+        } else {
+            "domain"
+        };
+        assert_eq!(
+            category, expected,
+            "`{name}` is categorised '{category}' by migration but the bootseed constants would \
+             rebuild it as '{expected}' — a reseed would silently reclassify it. Update whichever \
+             of the two is wrong; they are not structurally linked."
+        );
+    }
+
+    // Guard the guard: if the registry were empty this loop would assert nothing.
+    assert!(
+        rows.len() > 20,
+        "expected a populated event-type registry, got {} rows — the loop above would be vacuous",
+        rows.len()
     );
 }
 
@@ -1002,12 +1044,12 @@ async fn the_database_refuses_an_anchored_admin_event(pool: PgPool) {
         try_raw_event(
             &pool,
             "grant_created",
-            Some("cognition"),
+            Some("domain"),
             Some(("kb_cogmaps", cogmap))
         )
         .await,
         Some("kb_events_category_matches_type".to_string()),
-        "mislabelling an admin type as 'cognition' must be rejected by the FK — the CHECK alone is \
+        "mislabelling an admin type as 'domain' must be rejected by the FK — the CHECK alone is \
          evadable, which is why the category is FK-bound to the registry"
     );
 
@@ -1043,7 +1085,7 @@ async fn the_database_refuses_an_anchored_admin_event(pool: PgPool) {
 async fn a_type_with_events_cannot_be_reclassified(pool: PgPool) {
     // `admin_ledger_opened` always has the epoch event, so this type always has a row.
     let err = sqlx::query(
-        "UPDATE kb_event_types SET category = 'cognition' WHERE name = 'admin_ledger_opened'",
+        "UPDATE kb_event_types SET category = 'domain' WHERE name = 'admin_ledger_opened'",
     )
     .execute(&pool)
     .await

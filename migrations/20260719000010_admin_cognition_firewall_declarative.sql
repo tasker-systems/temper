@@ -19,8 +19,8 @@
 -- restore (replay.rs:320-334). Declarative constraints are cheaper and are checked by the planner.
 --
 -- WHY THE COMPOSITE FK IS LOAD-BEARING, not belt-and-braces. Denormalizing `category` onto
--- kb_events and adding only the CHECK is EVADABLE: label an admin-typed event 'cognition' and the
--- CHECK passes. The FK rejects it because (admin_type_id, 'cognition') is not a real registry pair.
+-- kb_events and adding only the CHECK is EVADABLE: label an admin-typed event 'domain' and the
+-- CHECK passes. The FK rejects it because (admin_type_id, 'domain') is not a real registry pair.
 -- The FK is what makes the CHECK unevadable, and it is also what stops the denormalized copy from
 -- drifting from the registry. Verified empirically 2026-07-19 (probe case T3).
 --
@@ -40,11 +40,123 @@
 -- unanchored and is NOT admin — it is system configuration — and 20260718000020 argues explicitly
 -- for leaving room for that third value. A bidirectional constraint would misclassify it.
 
+
+-- ── 0. Retax the category vocabulary BEFORE anything references it ─────────────────────────────
+-- `20260718000020` named the non-admin bucket 'cognition'. That is a misnomer, and it misleads in
+-- practice: the bucket holds `resource_created`, `resource_deleted`, `block_mutated`,
+-- `property_set`, `relationship_asserted` — ordinary substrate mutations, not agent reasoning.
+-- "Cognition" reads as the steward/agent-workflow story, which is a different thing entirely.
+--
+-- The misnomer already produced a misclassification, by that migration's OWN reasoning. Its header
+-- rejected an `is_admin boolean` because "`lens_created` is both-NULL-anchored and is NOT admin —
+-- it is system configuration — so a boolean would force it into a bucket that misdescribes it."
+-- It then stamped `lens_created` as 'cognition' — exactly the misdescription it was avoiding. The
+-- third value it wanted room for was never used. This migration uses it.
+--
+--   domain — ordinary knowledge-graph mutations (the trail's subject matter)
+--   admin  — authority acts (unchanged; the name was always right)
+--   system — configuration, e.g. `lens_created`
+--
+-- THIS IS A PURE RENAME. `lens_created` moving to 'system' is behaviourally inert: it is unanchored,
+-- and both trail functions already require `producing_anchor_table IS NOT NULL`, so it was never
+-- returned by a trail. Nothing else keys on the literal (verified: only 20260718000020's two filter
+-- sites and one stale comment in bootseed.rs).
+--
+-- NOT changed here, deliberately: `kb_event_types.category`'s DEFAULT still admits a newly-registered
+-- type to trails without stamping — the permissive direction, which 20260718000020 argued against
+-- for the FILTER but then chose for its own default. Making that fail-closed is a semantic change
+-- and does not belong inside a rename. Left for a separate decision.
+--
+-- ORDERING IS LOAD-BEARING: this runs BEFORE kb_events gains its `category` column and the FK below.
+-- Once that FK exists with ON UPDATE RESTRICT, this very UPDATE is refused (a type with events
+-- cannot be reclassified), and the rename would need the FK dropped and the append-only trigger
+-- disabled. Renaming first costs three statements; renaming later costs six and a trigger window.
+ALTER TABLE kb_event_types DROP CONSTRAINT kb_event_types_category_check;
+
+UPDATE kb_event_types SET category = 'domain' WHERE category = 'cognition';
+UPDATE kb_event_types SET category = 'system' WHERE name = 'lens_created';
+
+ALTER TABLE kb_event_types
+  ADD CONSTRAINT kb_event_types_category_check
+  CHECK (category IN ('domain', 'admin', 'system'));
+
+-- The two trail readers, re-emitted from `20260718000020` VERBATIM with only the category literal
+-- changed (two sites; the rewrite was diffed to prove nothing else moved). The allowlist stays an
+-- allowlist for the reason that migration gives: a future category added without touching these
+-- functions must be EXCLUDED from trail reads by default — the permissive direction is the
+-- leaking direction.
+CREATE OR REPLACE FUNCTION element_trail_node(
+    p_profile uuid,
+    p_resource uuid
+) RETURNS TABLE (
+    event_id uuid,
+    kind text,
+    actor_entity_id uuid,
+    occurred_at timestamptz,
+    metadata jsonb,
+    payload jsonb,
+    actor_name text
+) LANGUAGE sql STABLE AS $$
+    WITH ev_ids AS (
+        -- `producing_anchor_table IS NOT NULL` on every arm, not once at the end: it prunes inside
+        -- the index scans rather than after the UNION.
+        SELECT ev.id FROM kb_events ev
+         WHERE (ev.payload ->> 'resource_id')::uuid = p_resource
+           AND ev.producing_anchor_table IS NOT NULL
+        UNION
+        SELECT ev.id FROM kb_events ev
+         WHERE ev.payload -> 'owner' ->> 'table' = 'kb_resources'
+           AND (ev.payload -> 'owner' ->> 'id')::uuid = p_resource
+           AND ev.producing_anchor_table IS NOT NULL
+        UNION
+        SELECT ev.id FROM kb_events ev
+         JOIN kb_content_blocks b ON b.id = (ev.payload ->> 'block_id')::uuid
+        WHERE b.resource_id = p_resource
+          AND ev.producing_anchor_table IS NOT NULL
+    )
+    SELECT ev.id, et.name, ev.emitter_entity_id, ev.occurred_at, ev.metadata, ev.payload, en.name
+    FROM ev_ids
+    JOIN kb_events ev ON ev.id = ev_ids.id
+    JOIN kb_event_types et ON et.id = ev.event_type_id
+    JOIN kb_entities en ON en.id = ev.emitter_entity_id
+    WHERE et.category = 'domain'
+      AND EXISTS (
+        SELECT 1 FROM resources_visible_to(p_profile) v WHERE v.resource_id = p_resource
+    )
+    ORDER BY ev.id;
+$$;
+
+CREATE OR REPLACE FUNCTION element_trail_edge(
+    p_profile uuid,
+    p_edge uuid
+) RETURNS TABLE (
+    event_id uuid,
+    kind text,
+    actor_entity_id uuid,
+    occurred_at timestamptz,
+    metadata jsonb,
+    payload jsonb,
+    actor_name text
+) LANGUAGE sql STABLE AS $$
+    SELECT ev.id, et.name, ev.emitter_entity_id, ev.occurred_at, ev.metadata, ev.payload, en.name
+    FROM kb_edges edg
+    JOIN kb_events ev ON (ev.payload ->> 'edge_id')::uuid = edg.id
+    JOIN kb_event_types et ON et.id = ev.event_type_id
+    JOIN kb_entities en ON en.id = ev.emitter_entity_id
+    WHERE edg.id = p_edge
+      AND ev.producing_anchor_table IS NOT NULL
+      AND et.category = 'domain'
+      AND anchor_readable_by_profile(p_profile, edg.home_anchor_table, edg.home_anchor_id)
+      AND endpoint_readable_by_profile(p_profile, edg.source_table, edg.source_id)
+      AND endpoint_readable_by_profile(p_profile, edg.target_table, edg.target_id)
+    ORDER BY ev.id;
+$$;
+
 -- ── 1. The denormalized column ────────────────────────────────────────────────────────────────
--- DEFAULT 'cognition' matches 20260718000020's reasoning: additive over an existing table, and the
--- permissive-by-default direction is safe here ONLY because the FK below rejects a defaulted row
--- whose type is admin (probe case T4). The default creates no silent hole.
-ALTER TABLE kb_events ADD COLUMN category text NOT NULL DEFAULT 'cognition';
+-- DEFAULT 'domain' is the accurate value for the overwhelming majority of writes, and is safe
+-- ONLY because the FK below rejects a defaulted row whose type is admin or system (probe case T4).
+-- The default creates no silent hole: a mis-defaulted row fails rather than being quietly admitted.
+ALTER TABLE kb_events ADD COLUMN category text NOT NULL DEFAULT 'domain';
 
 -- ── 2. Backfill ───────────────────────────────────────────────────────────────────────────────
 -- The append-only trigger fires BEFORE UPDATE OR DELETE and raises unconditionally, so the backfill

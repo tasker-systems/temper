@@ -62,15 +62,17 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
                 .ok()
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?;
-        // `category` rides the same insert. Migration 20260718000020 stamps it by name, but
-        // `reset_schema` TRUNCATEs the registry and lets this loop rebuild it — so without carrying
-        // the classification here, `grant_created`/`grant_revoked` would come back as 'cognition'
-        // and the trail's belt-and-braces filter would silently classify them wrong on that
-        // baseline. Single source: `payloads::ADMIN_EVENT_NAMES`.
+        // `category` rides the same insert. Migrations 20260718000020 / 20260719000010 stamp it by
+        // name, but `reset_schema` TRUNCATEs the registry and lets this loop rebuild it — so without
+        // carrying the classification here, `grant_created`/`grant_revoked` would come back as
+        // 'domain' and the trail's belt-and-braces filter would silently classify them wrong on that
+        // baseline. Single source: `payloads::ADMIN_EVENT_NAMES` / `SYSTEM_EVENT_NAMES`.
         let category = if crate::payloads::ADMIN_EVENT_NAMES.contains(&et.as_str()) {
             "admin"
+        } else if crate::payloads::SYSTEM_EVENT_NAMES.contains(&et.as_str()) {
+            "system"
         } else {
-            "cognition"
+            "domain"
         };
         sqlx::query!(
             "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
