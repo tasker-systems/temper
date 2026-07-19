@@ -996,6 +996,16 @@ pub const TYPED_EVENT_NAMES: [&str; 18] = [
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
 pub const ADMIN_EVENT_NAMES: [&str; 3] = ["admin_ledger_opened", "grant_created", "grant_revoked"];
 
+/// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
+/// neither knowledge-graph history nor authority acts. Migration `20260719000010` introduced this
+/// third value and moved `lens_created` into it; `20260718000020` had argued for exactly such a
+/// value ("it is system configuration — a boolean would force it into a bucket that misdescribes
+/// it") and then left `lens_created` misfiled under the old non-admin bucket.
+///
+/// Serves the same purpose as [`ADMIN_EVENT_NAMES`]: the migration stamps an existing registry,
+/// this const re-stamps a registry rebuilt from scratch, so a reseed cannot silently reclassify.
+pub const SYSTEM_EVENT_NAMES: [&str; 1] = ["lens_created"];
+
 /// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must
 /// deserialize into its struct. Catches drift from ANY write path — Rust, hand-SQL, foreign.
 pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> {
