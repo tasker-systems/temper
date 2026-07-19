@@ -342,12 +342,14 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)")
-            .bind(id)
-            .bind(format!("{handle}@{}", Surface::ApiHttp.marker()))
-            .execute(pool)
-            .await
-            .expect("seed the emitter entity the disconnect authors through");
+        sqlx::query(
+            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
+        )
+        .bind(id)
+        .bind(format!("{handle}@{}", Surface::ApiHttp.marker()))
+        .execute(pool)
+        .await
+        .expect("seed the emitter entity the disconnect authors through");
         id
     }
 
@@ -390,7 +392,8 @@ mod tests {
             .unwrap_or_else(|| panic!("payload has no {key:?} key: {value}"))
             .as_str()
             .unwrap_or_else(|| panic!("payload {key:?} is not a JSON string: {value}"));
-        Uuid::parse_str(raw).unwrap_or_else(|e| panic!("payload {key:?} is not a uuid: {raw} ({e})"))
+        Uuid::parse_str(raw)
+            .unwrap_or_else(|e| panic!("payload {key:?} is not a uuid: {raw} ({e})"))
     }
 
     /// Link `principal` to `subject`, then unbind it as `actor`.
@@ -622,7 +625,10 @@ mod tests {
         let event = &events[0];
 
         assert_eq!(
-            event.payload.get("slack_principal_id").and_then(|v| v.as_str()),
+            event
+                .payload
+                .get("slack_principal_id")
+                .and_then(|v| v.as_str()),
             Some(principal),
             "the payload must name the principal that was unbound — the link row is gone, so this \
              is the only surviving record of WHICH binding was destroyed",
@@ -689,7 +695,10 @@ mod tests {
         let principal = "slack:T7:UADMIN";
         let subject = insert_profile(&pool).await;
         let operator = insert_profile(&pool).await;
-        assert_ne!(subject, operator, "the fixture must exercise actor != subject");
+        assert_ne!(
+            subject, operator,
+            "the fixture must exercise actor != subject"
+        );
 
         link_then_disconnect(&pool, principal, subject, operator).await;
 
@@ -781,8 +790,8 @@ mod tests {
         let events = disconnect_events(&pool).await;
         assert_eq!(events.len(), 1);
 
-        let typed: SlackPrincipalDisconnected =
-            serde_json::from_value(events[0].payload.clone()).expect(
+        let typed: SlackPrincipalDisconnected = serde_json::from_value(events[0].payload.clone())
+            .expect(
                 "the SQL-built payload must deserialize into the typed wire contract — a drift \
                  between the plpgsql writer and this struct is invisible until a reader fails",
             );
