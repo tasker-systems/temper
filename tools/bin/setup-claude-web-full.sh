@@ -91,6 +91,7 @@ command_exists cargo-make && echo "    cargo-make:    yes"
 command_exists sqlx       && echo "    sqlx-cli:      yes"
 command_exists cargo-nextest && echo "    cargo-nextest: yes"
 command_exists gh         && echo "    gh:            $(gh --version 2>/dev/null | head -1 | awk '{print $3}' || echo 'yes')"
+command_exists rtk        && echo "    rtk:           $(rtk --version 2>/dev/null | awk '{print $2}' || echo 'yes')"
 echo ""
 
 echo "  Services:"
