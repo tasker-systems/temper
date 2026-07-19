@@ -11,10 +11,14 @@
 //!    — which is what the Phase A comment on `apply_reach` asked for and could not get.
 //!
 //! The containment bar is the *human* bar, reached by CALLING the human predicates rather
-//! than restating them: teams need `can_manage` (what `add_member` requires) and a non-`Owner`
-//! role (what `add_member` refuses, per D7); grants need `can_grant` (what `grant_capability`
-//! requires of a non-admin). Tighten the human surface and the machine surface tightens with
-//! it — there is no second copy of the policy to drift.
+//! than restating them: teams need `can_manage` (what `add_member` requires); grants need
+//! `can_grant` (what `grant_capability` requires of a non-admin). Tighten the human surface
+//! and the machine surface tightens with it — there is no second copy of the policy to drift.
+//!
+//! The **role bar** is deliberately NOT part of containment (D4b). Containment asks whether the
+//! reach is a subset of the caller's own, and D3 answers "unchecked" for an admin; whether a
+//! machine may hold `owner` at all is a different question, and the human surface answers it
+//! `no` for every caller. So it runs in [`authorize_registration`], on both arms.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -98,7 +102,29 @@ pub(crate) async fn authorize_registration<'a>(
     // is a 400 too). Validating AFTER authorize means an unauthorized caller still gets 403,
     // not a hint about their payload.
     for spec in teams {
-        parse_team_role(&spec.role)?;
+        let role = parse_team_role(&spec.role)?;
+
+        // D4b — the ROLE bar, on BOTH arms including the admin's. It sits here rather than in
+        // `contain_reach` because it is not a containment question: containment asks *is this
+        // reach a subset of the caller's own?*, and D3 deliberately answers "unchecked" for an
+        // admin. This asks something else — *may a machine hold this role at all?* — and the
+        // human surface answers no to everyone, unconditionally: `add_member` and `change_role`
+        // both refuse `Owner` with no admin exemption, and invitations refuse it at issue time.
+        // `apply_reach`'s raw `ON CONFLICT DO UPDATE SET role` passes through none of them.
+        //
+        // D4a placed this bar for maintainers and stopped one arm short, on the reading that an
+        // admin could reach the same end state by promoting a human anyway. That reading was
+        // wrong twice over: no caller may *grant* `owner`, and the ownership-transfer operation
+        // those guards name **does not exist** (task 019f77a2-4860-7300-a04e-df0d750dc4c7).
+        // So this write is not a shortcut around a governed path — it is the only path, it
+        // exists for machines only, and on the gating team it manufactures an `is_system_admin`
+        // principal that can register further machines with no human in the loop.
+        //
+        // Reach stays unchecked for admins (D3 preserved) — an admin may still put a machine on
+        // any team, at any role but this one.
+        if matches!(role, TeamRole::Owner) {
+            return Err(ApiError::Forbidden);
+        }
     }
 
     match authority {
@@ -152,17 +178,10 @@ async fn contain_reach(
     teams: &[TeamSpec],
     grants: &[GrantSpec],
 ) -> ApiResult<()> {
+    // The D4a/D4b role bar is NOT here: it asks a question about the role itself, not about
+    // containment, so it runs for BOTH arms in `authorize_registration`. Do not restore a copy —
+    // a second copy is what would let the two arms drift apart again.
     for spec in teams {
-        // D4a — the ROLE bar. `can_manage` admits maintainers, and a gating-team maintainer
-        // is not a system admin; without this, they could mint a machine at role=owner on the
-        // gating team and thereby manufacture an `is_system_admin` principal. `apply_reach`'s
-        // raw `ON CONFLICT DO UPDATE SET role` never passes through `add_member`, so D7's
-        // guard does not cover this write site. Any gate on granting a role must check the
-        // role being granted, not merely the grantor's access to the team.
-        if spec.role.eq_ignore_ascii_case("owner") {
-            return Err(ApiError::Forbidden);
-        }
-
         // D4 — the membership bar: exactly what `add_member` requires of a human.
         team_service::require_manage_on_team(pool, spec.team_id, caller).await?;
     }
@@ -400,6 +419,36 @@ mod tests {
         assert!(matches!(err, ApiError::Forbidden));
     }
 
+    /// Spec D4b — the admin arm. A system admin skips containment entirely (D3), but the role
+    /// bar is not containment: no caller may mint a machine that *is* a gating-team owner, and
+    /// therefore an `is_system_admin` principal able to register further machines unattended.
+    ///
+    /// The mirror of `cannot_mint_owner_role_on_the_gating_team`, one arm over. Note the human
+    /// surface has no such escape hatch either — `add_member` and `change_role` refuse `Owner`
+    /// with no admin exemption, and no ownership-transfer operation exists to supply one.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn admin_cannot_mint_owner_role_on_the_gating_team(pool: PgPool) {
+        let gating = configure_gating_team(&pool).await;
+        let admin = mk_profile(&pool, "escalate-admin").await;
+        join(&pool, gating, admin, "owner").await;
+
+        assert!(
+            crate::services::access_service::is_system_admin(&pool, ProfileId::from(admin))
+                .await
+                .unwrap(),
+            "precondition: this caller IS a system admin, so it takes the D3 bypass arm"
+        );
+
+        let teams = vec![TeamSpec {
+            team_id: gating,
+            role: "owner".to_string(),
+        }];
+        let err = authorize_registration(&pool, ProfileId::from(admin), None, &teams, &[])
+            .await
+            .expect_err("even an admin may not mint a self-replicating admin principal");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn grant_without_can_grant_is_denied(pool: PgPool) {
         let alice = mk_profile(&pool, "grant-alice").await;
@@ -552,6 +601,12 @@ mod tests {
     }
 
     /// Spec D5 — the admin bypass survives, unchecked (Phase A D5).
+    ///
+    /// **Amended 2026-07-18 for D4b:** this asserted reach breadth using `role = "owner"`, which is
+    /// now barred on every arm. The `owner` role was incidental to what the test is *for* — the
+    /// claim is that an admin may reach a team it is not a member of and a cogmap it holds nothing
+    /// on, neither of which a non-admin could do. Both are still asserted here, at a role the bar
+    /// permits; `admin_cannot_mint_owner_role_on_the_gating_team` covers the carve-out.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn system_admin_reach_is_unchecked(pool: PgPool) {
         let gating = configure_gating_team(&pool).await;
@@ -563,7 +618,7 @@ mod tests {
 
         let teams = vec![TeamSpec {
             team_id: foreign,
-            role: "owner".to_string(),
+            role: "maintainer".to_string(),
         }];
         let grants = vec![GrantSpec {
             cogmap_id: l0,
