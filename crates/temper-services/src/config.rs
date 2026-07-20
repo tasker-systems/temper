@@ -3,7 +3,20 @@ use crate::broker::VercelConnectConfig;
 use crate::services::grant_crypto::VaultKey;
 use std::env;
 
-#[derive(Debug, Clone)]
+/// The instance's whole configuration.
+///
+/// `Debug` is hand-written to REDACT `internal_reconcile_secret`, `embed_dispatch_secret` and
+/// `slack_mint_secret` — the three plaintext shared secrets behind three separate signature gates,
+/// the last of which vends a token acting as any linked human. A derived `Debug` would print all
+/// three verbatim wherever an `ApiConfig` is formatted. This is the same reasoning already spelled
+/// out on [`SlackLinkConfig`] below ("would print it verbatim wherever this or the enclosing
+/// `ApiConfig` is formatted") — the nested config got the treatment before its parent did.
+///
+/// Redaction is PRESENCE-PRESERVING: each secret prints as `Some("redacted")` or `None`, because
+/// *whether* a secret is configured is exactly the operational fact a config dump is read for
+/// (each `None` disables an endpoint), while its value is exactly the fact that must never reach
+/// a log sink.
+#[derive(Clone)]
 pub struct ApiConfig {
     pub database_url: String,
     /// This instance's verified auth identity — issuer, JWKS, the one audience, and the mode.
@@ -71,6 +84,35 @@ pub struct SlackLinkConfig {
     /// too. Parsed once from `SLACK_VAULT_ENC_KEY` (32 bytes, base64) — a malformed key disables
     /// the whole link flow rather than half-configuring it.
     pub vault_key: VaultKey,
+}
+
+impl std::fmt::Debug for ApiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `.as_ref().map(|_| "redacted")` rather than a flat `&"redacted"`: it keeps the
+        // Some/None distinction (which endpoint is enabled) while dropping the value.
+        f.debug_struct("ApiConfig")
+            .field("database_url", &self.database_url)
+            .field("auth", &self.auth)
+            .field("auth_provider_name", &self.auth_provider_name)
+            .field("cors_origins", &self.cors_origins)
+            .field("port", &self.port)
+            .field("enable_swagger", &self.enable_swagger)
+            .field(
+                "internal_reconcile_secret",
+                &self.internal_reconcile_secret.as_ref().map(|_| "redacted"),
+            )
+            .field(
+                "embed_dispatch_secret",
+                &self.embed_dispatch_secret.as_ref().map(|_| "redacted"),
+            )
+            .field("vercel_connect", &self.vercel_connect)
+            .field("slack_link", &self.slack_link)
+            .field(
+                "slack_mint_secret",
+                &self.slack_mint_secret.as_ref().map(|_| "redacted"),
+            )
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for SlackLinkConfig {

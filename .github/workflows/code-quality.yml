@@ -80,6 +80,14 @@ jobs:
       - name: Security tripwire — handler-side authz drift
         run: bash .github/scripts/audit-handler-authz-drift.sh
 
+      # Unlike the three above, this one is not only a baseline tripwire: the pairwise-distinctness
+      # of the gates' secrets is computed from the source, so UPDATE_BASELINE cannot silence it.
+      - name: Security tripwire — internal signature gates use distinct secrets
+        run: bash .github/scripts/audit-signature-secrets.sh
+
+      - name: Security tripwire — credential types deriving Debug
+        run: bash .github/scripts/audit-credential-debug.sh
+
       - name: Check documentation builds
         run: cargo doc --workspace --no-deps --document-private-items
         env:
@@ -96,6 +104,46 @@ jobs:
         run: |
           cargo install cargo-audit --locked
           cargo audit
+
+  # The guards' own tests. Every script above is a bash tripwire whose entire value is that it
+  # FAILS when the thing it protects is broken — and nothing about a passing tripwire distinguishes
+  # "the invariant holds" from "this script can no longer fail". These harnesses feed each guard a
+  # deliberately broken fixture and assert it goes red, which is the only evidence that the green
+  # tick above means anything.
+  #
+  # This job exists because two of these harnesses (test-detect-ci-scope, test-check-openapi-routes)
+  # were committed with a `bash …` usage line and wired into NO job — so they ran nowhere, and the
+  # guards they cover had no standing proof they still bit. Same rot as `streaming_ingest_test` and
+  # the `scenario-schema` feature: a test no job runs is a test that runs nowhere.
+  #
+  # Pure bash, no toolchain, no services — it is deliberately cheap so there is no reason to scope
+  # it away later. Adding a guard means adding its harness HERE, in the same PR.
+  guard-tests:
+    name: CI Guard Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Guard test — detect-ci-scope
+        run: bash .github/scripts/test-detect-ci-scope.sh
+
+      - name: Guard test — check-openapi-routes
+        run: bash .github/scripts/test-check-openapi-routes.sh
+
+      - name: Guard test — audit-route-auth (per-builder layer wiring)
+        run: bash .github/scripts/test-audit-route-auth.sh
+
+      - name: Guard test — audit-signature-secrets (distinct keys)
+        run: bash .github/scripts/test-audit-signature-secrets.sh
+
+      - name: Guard test — audit-credential-debug
+        run: bash .github/scripts/test-audit-credential-debug.sh
+
+      - name: Guard test — audit-grant-sinks (SQL half)
+        run: bash .github/scripts/test-audit-grant-sinks.sh
 
   typescript-quality:
     name: TypeScript Quality
