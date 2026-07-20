@@ -260,6 +260,23 @@ run_test "an unrelated .github script does not run either SDK job" \
     ".github/scripts/check-openapi-routes.sh" \
     "DOCS_ONLY=false" "RUN_TEST_RUBY=false" "RUN_TEST_AGENTS_TS=false"
 
+# --- the security guards must run the job that runs THEM ---
+#
+# The SDK gates earn their trigger keys explicitly (above) because they are path-scoped jobs. The
+# security tripwires live in code-quality, which has no path scoping — so they are covered by the
+# plain "any non-doc change runs everything" rule rather than by a key of their own. That is a
+# CONSEQUENCE of two independent decisions, not something anyone stated, and it is exactly the
+# property that would rot silently if code-quality ever gained a path scope: the PR that disarms a
+# guard would be the PR that never runs it. Assert it, so adding such a scope has to break a test
+# instead of quietly un-gating the security tripwires.
+run_test "editing a security guard runs code-quality (the job that runs it)" \
+    ".github/scripts/audit-route-auth.sh" \
+    "DOCS_ONLY=false" "RUN_CODE_QUALITY=true"
+
+run_test "editing a guard's own test harness runs code-quality too" \
+    ".github/scripts/test-audit-signature-secrets.sh" \
+    "DOCS_ONLY=false" "RUN_CODE_QUALITY=true"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]
