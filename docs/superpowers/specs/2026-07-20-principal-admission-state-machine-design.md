@@ -107,6 +107,10 @@ dedicated authz layer is plausible and explicitly not in scope here.
 | **D11** | **Every provision path births `Denied`.** No door grants access. Approval is always a separate, admin-authored act. |
 | **D12** | The birth state is `Denied`, **not `Requested`** — `Request` is an explicit act by the principal, because it is what captures terms consent. |
 | **D13** | SAML's "the assertion *is* the grant" rationale is **withdrawn**. Identity assertion and access grant are different claims by different parties. |
+| **D14** | `Approve` is legal from **`Denied` as well as `Requested`** — machines have no self and can never `Request`, so without this the entire machine surface is a dead end. |
+| **D15** | A `Revoked` principal **cannot re-request**. `RequestReview` is a separate self act that sets a **marker and does not move standing** — so a revocation cannot be laundered back to `Denied`. |
+| **D16** | **`Reinstate` is dropped.** It was identical to `Approve`-from-`Revoked`, and the log's `prior_state` already makes a reinstatement legible. Eight acts, not nine. |
+| **D17** | Machine **credential revocation fires `Revoke` on standing in the same transaction** — one fact, one place, rather than two revocation facts that can drift. |
 
 ### On D10 — governance at the outset
 
@@ -166,6 +170,71 @@ which is strictly more correct under D9.
 *Terms are unconfigured today* (`terms_version` and `terms_resource_uri` are empty on both prod and
 local), so `Request` must handle "no terms configured" without blocking, and the acceptance columns
 stay nullable.
+
+### On D15 — review is a marker, not a transition
+
+A `Revoked` principal must be able to ask for reconsideration without that request being able to
+erase the revocation. The rejected alternative was to allow `Revoked → Request → Requested` and have
+`Withdraw` return to the *prior* state — which works, but preserves the audit signal by careful
+bookkeeping. **D15 makes it structural instead: there is no path out of `Revoked` except an admin
+act, so there is nothing to launder.**
+
+It is also the more honest model. *"Please let me in"* and *"please reconsider your decision"* are
+different speech acts with different admin context — a reviewer needs the revocation reason, which a
+plain `Request` has no slot for. This mirrors D5's separation exactly: **standing carries state, the
+record carries payload.**
+
+Three obligations, each a place this can quietly go wrong:
+
+1. **The marker is never an admission input.** It is an inbox signal only. Admission reads standing
+   and nothing else; `Revoked` denies whether or not a review is pending. ANDing the marker into the
+   decision would restore precisely the conjunction-across-provisional-facts shape D2 forbids. This
+   is stated as an obligation rather than left implied **because it is the tempting change** — a
+   future reader will see a pending review and reach for it.
+2. **It needs its own duplicate guard.** For join requests, `Requested` standing *is* the duplicate
+   guard (D12). A review does not move standing, so it does not inherit one — it needs its own
+   (e.g. a unique partial index on `(profile_id) WHERE decided_at IS NULL`). This is what
+   `idx_join_requests_one_pending` used to do, reappearing for a different reason.
+3. **Its open/decided lifecycle is not a regression on D5.** We remove a status column in D5 and
+   reintroduce a status-shaped thing here, so the distinction must be explicit:
+   `kb_join_requests.status` was removed because it **duplicated standing**. A review's open/decided
+   state duplicates nothing — standing stays `Revoked` throughout, whatever the outcome. Different
+   question, so it gets its own answer.
+
+### On D17 — one revocation fact, not two
+
+The pressure test reported machine revocation as a live D2 violation — a cross-table AND of
+`kb_machine_clients.revoked_at` with standing. **That was overstated, and the correction matters.**
+Credential revocation is rejected at *authentication*, not authorization:
+
+```rust
+// profile_service.rs:243-247
+if let Some(revoked_at) = client.revoked_at {
+    tracing::warn!(client_id, %revoked_at, "machine gate: rejected (revoked client)");
+    return Err(ApiError::Unauthorized(...))
+}
+```
+
+`Unauthorized` is Level 1. A revoked machine never reaches admission, so this is authenticate-then-
+authorize — the layered design working, exactly as `is_active` is caught before the gate. (The error
+shape is the same one §2 corrects: a true observation — two tables hold revocation facts — wired to
+the wrong conclusion.)
+
+What is real is thinner. The two facts can **disagree**: a machine can sit credential-revoked with
+standing `Approved` and its grants and memberships intact. That state is inert today — nothing can
+authenticate as it, `rebind` refuses a revoked source row, and a fresh `provision` mints a new
+profile — so the exposure is *drift*, not a present hole. It also reads badly in audit: the operator
+believes the machine is cut off while the ledger says the principal is admitted.
+
+D17 applies the same move D10 made: one fact, one place. `revoked_at` becomes purely an
+authentication detail, standing tells the whole story, and the two cannot drift because there is
+only one decision. No tenth act is needed — it is `Revoke` with a machine-shaped trigger.
+
+**One prior intent to preserve:** revocation deliberately *leaves* grants and memberships, so a
+`rebind` cannot silently resurrect them (`machine_registration_service.rs:381-386`). Firing `Revoke`
+on standing denies admission, which sits above grants and does not touch them — so that intent
+survives. Confirm it during implementation rather than assume it; this is the one place D17 reaches
+into a deliberate earlier decision.
 
 ### On D13 — why the SAML rationale was withdrawn
 
@@ -291,13 +360,49 @@ principal acting on its own standing), and **admin** — an actor for whom `is_s
 > working. The governance spec owns how a principal becomes admin. The two meet only at the seam in
 > §9, which is what keeps that boundary from becoming a circular dependency.
 
-| Act | Actor | Notes |
-|---|---|---|
-| `Provision { path }` | none | the credential is the authority; see below |
-| `Request` / `Withdraw` | self | |
-| `Approve` / `Reject` | admin | |
-| `Revoke { reason }` / `Reinstate` | admin | |
-| `Deactivate` / `Reactivate` | admin | |
+**Eight acts** (D16 dropped `Reinstate`), each with its legal source states and resulting state.
+Every cell not listed here is **illegal and refused with a reason** — there is no catchall.
+
+| Act | Actor | Legal from | → Resulting standing |
+|---|---|---|---|
+| `Provision { path }` | admin / none¹ | *absence only* | `Denied` (boot-seed: `Approved` + admin) |
+| `Request` | self | `Denied` | `Requested` |
+| `Withdraw` | self | `Requested` | `Denied` |
+| `Approve` | admin | `Requested`, **`Denied`** (D14), `Revoked` | `Approved` |
+| `Reject` | admin | `Requested` | `Denied` |
+| `Revoke { reason }` | admin | `Approved` | `Revoked` |
+| `Deactivate` | admin | any live state | `Deactivated` |
+| `Reactivate` | admin | `Deactivated` | **prior state, read from the log** |
+| `RequestReview` | self | `Revoked` | **unchanged — `Revoked`** (D15) |
+
+¹ `Provision`'s actor is **not** "none" universally: `temper admin machine provision` is admin-run.
+Under D11 this grants nothing either way, but the table should not imply an unauthenticated mint
+path exists.
+
+**`Reactivate` is the only data-dependent target in the machine.** That is a deliberate property and
+worth protecting — D15 exists partly to keep it at one, and a future act whose target depends on
+history should be treated as a design smell until argued for.
+
+**Two pipelines, not one.** `Request` is the *consent-capturing* act (D12), and machines have no
+terms to accept and no self to act — so:
+
+```
+humans   :  Denied ──Request──► Requested ──Approve──► Approved
+machines :  Denied ─────────────Approve─────────────► Approved
+```
+
+This makes `Requested` a human-only state, and `/admin/access` shows two kinds of row: people who
+asked, and machines awaiting a direct grant. That is intended, not an inconsistency to smooth.
+
+**Every self act is illegal from `Deactivated`, and is specified so explicitly** — even though
+`gate_resolved_profile` (`auth/mod.rs:242-246`) already makes it unreachable by refusing an
+`AuthenticatedProfile` to a deactivated principal. Leaning on another layer to make a cell
+unreachable is the cross-layer reasoning that produced this design's original bugs; the table stays
+total on its own terms.
+
+**`Revoke` is illegal from `Denied` and `Requested`** — you cannot revoke what was never granted.
+§5's diagram shows an arrow *into* `Revoked` originating at `Denied`; no act produces that edge, and
+the diagram should be redrawn.
 
 Provision is where the doors diverge, and it is the entire reason this exists:
 
@@ -496,9 +601,17 @@ testers.
 
 ## §12 Verification
 
-- **The state × act matrix is exhaustively enumerable** — five states × nine acts × actor-authority
-  variants, as a table test with no database. Adding a state fails compilation until every cell is
-  filled.
+- **The state × act matrix is exhaustively enumerable** — five states × **eight** acts (D16) ×
+  actor-authority variants, as a table test with no database. Adding a state fails compilation until
+  every cell is filled. **This test is writable only because §6 now specifies a resulting state for
+  every act**; it could not be written against the original spec, which named eight acts and gave a
+  target for one.
+- **Every illegal cell asserts a *reason*, not just a refusal.** The point of refusing at the act
+  (§3 D2) is that the actor learns why; a test that only checks "not admitted" would pass on a
+  silent denial.
+- **`RequestReview` must not change admission** — assert that a `Revoked` principal with a pending
+  review is still refused, and refused *identically* to one without. This is the D15 obligation that
+  a future reader is most likely to break.
 - **The backfill gets a differential test.** Seed a population spanning `open`/`invite_only`, member
   and non-member, all three tiers, active and deactivated; assert
   `old_has_system_access(p) == new_has_system_access(p)` for every `p`. Hand-writing the expected set
@@ -601,17 +714,21 @@ has now changed twice across the sessions that produced this design.
 ## §16 Pressure-test findings — status
 
 The 2026-07-20 pressure test confirmed the design intent (the two-machine split, the fail-closed
-obligations, D8) and found six places where the spec was **not implementable as written**. D10–D13
-resolved four of them. **Do not write an implementation plan that silently picks an answer to the
-two that remain.**
+obligations, D8) and found six places where the spec was **not implementable as written**. D10–D17
+resolved **all six**. What remains is the §11 cleanup list below — consequences to be drafted, not
+decisions to be made.
+
+One finding (F5) was **overstated by the pressure test itself**, and that is recorded rather than
+quietly dropped: the same error shape it caught in §2 and §7 — a true observation wired to the wrong
+conclusion — it also committed. Adversarial review is not self-verifying either.
 
 | | finding | status |
 |---|---|---|
 | **F1** | Phase 1 de-admins the instance | **RESOLVED by D10** — gating-owner loses authz meaning, so the trigger's demotion is cosmetic; Phase 1 stays additive and the trigger drops in Phase 2 |
 | **F2** | §9's seam costs a 21st writer to `kb_team_members` | **RESOLVED by D10** — no seam; governance holds its own state and `is_system_admin` has one reader to repoint |
-| **F3** | Eight of nine acts have no resulting state | **OPEN** — still the largest gap; §12's table test cannot be written until it closes |
+| **F3** | Eight of nine acts have no resulting state | **RESOLVED by D14–D16** — §6 now carries a full transition table; §12's matrix test is writable |
 | **F4** | SAML `Provision` read literally defeats `Revoke` | **RESOLVED by D11 + D13** — no door grants, and `Provision` fires only on mint |
-| **F5** | Machine credential revocation vs standing `Revoked` | **OPEN** — still a cross-table AND, still needs a rule |
+| **F5** | Machine credential revocation vs standing `Revoked` | **RESOLVED by D17** — and the finding itself was **overstated**: revocation denies at authentication, not authorization, so it was never a cross-table AND. See "On D17" |
 | **F6** | The boot-seed is a fourth provision door | **RESOLVED by D11, and promoted** — it is now the load-bearing genesis exception, deliberately accepted |
 
 The pre-existing admin-demotion bug (below) is **superseded by D10** rather than fixed: once
