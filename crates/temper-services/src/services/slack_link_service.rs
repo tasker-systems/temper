@@ -188,8 +188,15 @@ pub enum SlackLinkOutcome {
 ///
 /// `email` stays NULL: Slack supplies no email on the wire, which is exactly why the link is
 /// keyed on the opaque principal.
+///
+/// **Takes `&mut PgConnection`, not a pool.** The identity row and the sealed grant
+/// (`slack_grant_vault_service::store_grant`) are ONE fact — a link with no vaulted grant can
+/// never mint, and the state nonce that would let the user retry is already burned by the time
+/// either write runs. As two independent autocommits, a process death between them produced
+/// exactly that unrecoverable state with no page ever rendering. The executor type forces the
+/// callback to span both in one transaction.
 pub async fn link_slack_principal(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     profile_id: Uuid,
     slack_principal_id: &str,
 ) -> ApiResult<SlackLinkOutcome> {
@@ -208,7 +215,7 @@ pub async fn link_slack_principal(
         SLACK_AUTH_PROVIDER,
         slack_principal_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(match row {
@@ -222,6 +229,18 @@ mod tests {
     use super::*;
 
     const PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
+
+    /// Bind a principal on a one-off pooled connection.
+    ///
+    /// `link_slack_principal` takes `&mut PgConnection` so the callback can run it in the same
+    /// transaction as the vault write (see its docs); these tests exercise the upsert's semantics,
+    /// not that atomicity, so they hand it a connection straight off the pool.
+    async fn link(pool: &PgPool, profile_id: Uuid, principal: &str) -> SlackLinkOutcome {
+        let mut conn = pool.acquire().await.expect("acquire");
+        link_slack_principal(&mut conn, profile_id, principal)
+            .await
+            .expect("link")
+    }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn consume_returns_the_verifier_and_principal_once(pool: PgPool) {
@@ -294,9 +313,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_yields_the_handle_when_a_link_row_exists(pool: PgPool) {
         let profile_id = insert_profile(&pool, "j-cole-taylor").await;
-        link_slack_principal(&pool, profile_id, PRINCIPAL)
-            .await
-            .unwrap();
+        link(&pool, profile_id, PRINCIPAL).await;
 
         assert_eq!(
             lookup_linked_handle(&pool, PRINCIPAL).await.unwrap(),
@@ -317,9 +334,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_does_not_match_a_different_principal(pool: PgPool) {
         let profile_id = insert_profile(&pool, "someone-else").await;
-        link_slack_principal(&pool, profile_id, PRINCIPAL)
-            .await
-            .unwrap();
+        link(&pool, profile_id, PRINCIPAL).await;
 
         assert!(lookup_linked_handle(&pool, "slack:T0BHAHEN79C:UOTHER")
             .await
@@ -341,13 +356,11 @@ mod tests {
         let second = insert_profile(&pool, "second-owner").await;
 
         assert_eq!(
-            link_slack_principal(&pool, first, PRINCIPAL).await.unwrap(),
+            link(&pool, first, PRINCIPAL).await,
             SlackLinkOutcome::Linked,
         );
         assert_eq!(
-            link_slack_principal(&pool, second, PRINCIPAL)
-                .await
-                .unwrap(),
+            link(&pool, second, PRINCIPAL).await,
             SlackLinkOutcome::AlreadyLinkedToAnotherProfile,
             "a principal binds once — moving it to another profile must be refused",
         );
@@ -371,9 +384,7 @@ mod tests {
 
         for attempt in 1..=2 {
             assert_eq!(
-                link_slack_principal(&pool, profile_id, PRINCIPAL)
-                    .await
-                    .unwrap(),
+                link(&pool, profile_id, PRINCIPAL).await,
                 SlackLinkOutcome::Linked,
                 "attempt {attempt} for the same profile must succeed",
             );
@@ -409,12 +420,8 @@ mod tests {
         let first = "slack:T0BHAHEN79C:U0BH6A3L6JF";
         let second = "slack:T99OTHERWS:U0BH6A3L6JF";
 
-        link_slack_principal(&pool, profile_id, first)
-            .await
-            .unwrap();
-        link_slack_principal(&pool, profile_id, second)
-            .await
-            .unwrap();
+        link(&pool, profile_id, first).await;
+        link(&pool, profile_id, second).await;
 
         let mut got = lookup_slack_principals_for_profile(&pool, profile_id)
             .await
@@ -435,10 +442,8 @@ mod tests {
         let mine = insert_profile(&pool, "mine").await;
         let theirs = insert_profile(&pool, "theirs").await;
 
-        link_slack_principal(&pool, mine, PRINCIPAL).await.unwrap();
-        link_slack_principal(&pool, theirs, "slack:T0BHAHEN79C:UOTHER")
-            .await
-            .unwrap();
+        link(&pool, mine, PRINCIPAL).await;
+        link(&pool, theirs, "slack:T0BHAHEN79C:UOTHER").await;
         sqlx::query!(
             "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id)
              VALUES ($1, $2, 'auth0', $3)",
@@ -458,14 +463,42 @@ mod tests {
         );
     }
 
+    /// **FINDING C, the identity half.** `link_slack_principal` writes on the CALLER's connection,
+    /// so the directory row shares that transaction's fate.
+    ///
+    /// **Why this bites:** it rolls the transaction back and asserts the row is GONE. Against the
+    /// old `&PgPool` signature the upsert was its own autocommit and survived — which is precisely
+    /// what let the callback commit a link and then lose the grant, leaving a user permanently
+    /// "connected" and permanently unable to mint, with the state nonce already burned.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn link_is_rolled_back_with_its_caller_transaction(pool: PgPool) {
+        let profile_id = insert_profile(&pool, "rolled-back").await;
+
+        let mut tx = pool.begin().await.expect("begin");
+        assert_eq!(
+            link_slack_principal(&mut tx, profile_id, PRINCIPAL)
+                .await
+                .expect("link"),
+            SlackLinkOutcome::Linked,
+        );
+        tx.rollback().await.expect("rollback");
+
+        assert!(
+            lookup_linked_handle(&pool, PRINCIPAL)
+                .await
+                .unwrap()
+                .is_none(),
+            "the directory row must share the caller's transaction — surviving a rollback is the \
+             autocommit shape that made the callback's dual write unrecoverable",
+        );
+    }
+
     /// A deactivated profile is still LINKED. Reporting `None` here would loop the user into a
     /// link flow the callback then refuses — see the comment on `lookup_linked_handle`.
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_still_reports_a_deactivated_profile_as_linked(pool: PgPool) {
         let profile_id = insert_profile(&pool, "gone-away").await;
-        link_slack_principal(&pool, profile_id, PRINCIPAL)
-            .await
-            .unwrap();
+        link(&pool, profile_id, PRINCIPAL).await;
         sqlx::query!(
             "UPDATE kb_profiles SET is_active = false WHERE id = $1",
             profile_id
