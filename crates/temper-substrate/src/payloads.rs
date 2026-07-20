@@ -992,8 +992,52 @@ pub struct SlackPrincipalDisconnected {
     pub idp_revocation: IdpRevocation,
 }
 
-/// The 19 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 19] = [
+/// `principal_standing_changed` — one principal-admission transition (spec 2026-07-20 §10, D4).
+///
+/// ONE EVENT TYPE FOR ALL NINE ACTS, with the act in the payload. Nine types would mean nine
+/// schema snapshots, nine registrations and nine roundtrip arms for a distinction already carried
+/// in a field. The type boundary that IS worth drawing is standing-vs-governance, because that is
+/// the boundary spec §2 separates: "may you act" and "may you govern" are two questions.
+///
+/// `prior` is `None` exactly once per principal — the `provision` that created them.
+/// `actor` is `None` for the boot-seed genesis act and for backfilled rows: there is no actor to
+/// name, and inventing one would put a fabricated attribution on the ledger.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PrincipalStandingChanged {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    pub act: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior: Option<String>,
+    pub resulting: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `principal_governance_changed` — a principal gained or lost the authority to change the rules
+/// (spec 2026-07-20 D10).
+///
+/// Separate from `PrincipalStandingChanged` because governance is the separate question. A demote
+/// fired as a consequence of `Revoke`/`Deactivate` emits BOTH events in the same transaction, and
+/// the pair is what makes the causal story legible in the ledger.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PrincipalGovernanceChanged {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    /// `granted` | `revoked`.
+    pub change: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The 21 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 21] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1013,6 +1057,8 @@ pub const TYPED_EVENT_NAMES: [&str; 19] = [
     "grant_created",
     "grant_revoked",
     "slack_principal_disconnected",
+    "principal_standing_changed",
+    "principal_governance_changed",
 ];
 
 /// The event names classified `kb_event_types.category = 'admin'` — the ledger's own vocabulary,
@@ -1020,11 +1066,13 @@ pub const TYPED_EVENT_NAMES: [&str; 19] = [
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 4] = [
+pub const ADMIN_EVENT_NAMES: [&str; 6] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
     "slack_principal_disconnected",
+    "principal_standing_changed",
+    "principal_governance_changed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -1090,6 +1138,15 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "slack_principal_disconnected" => {
                     serde_json::from_value::<SlackPrincipalDisconnected>(r.payload.clone())?;
+                }
+                // Principal-admission acts (spec 2026-07-20 §10, D4). The transition functions in
+                // 20260720000030 emit these, so they get arms for the same reason the grant events
+                // above do: this is where the typed contract meets a really-emitted payload.
+                "principal_standing_changed" => {
+                    serde_json::from_value::<PrincipalStandingChanged>(r.payload.clone())?;
+                }
+                "principal_governance_changed" => {
+                    serde_json::from_value::<PrincipalGovernanceChanged>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
