@@ -92,6 +92,57 @@ async fn the_standing_tables_carry_no_team_dimension(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_standing_log_is_append_only_in_enforcement_not_only_in_comment(pool: PgPool) {
+    // The table's COMMENT says "Append-only. NEVER UPDATE OR DELETE A ROW HERE." A comment is not
+    // an enforcement — `SystemAuthorized`'s doc claims a type-state guarantee its public field does
+    // not hold, and this is the same failure mode. `kb_events`, the repo's only other append-only
+    // log, enforces it with a BEFORE DELETE OR UPDATE trigger; this asserts the same for this log.
+    //
+    // It matters here specifically: `principal_prior_standing` reads this log to decide what
+    // `Reactivate` restores to. A rewritable log means what a reactivation restores can be changed
+    // after the fact — Deactivated could be restored as Approved. That is the escalation path this
+    // trigger closes, and it is why kb_events is guarded rather than merely documented.
+    let p = a_profile_for_log(&pool).await;
+
+    sqlx::query("SELECT principal_standing_apply($1,'provision','denied',NULL,NULL)")
+        .bind(p)
+        .execute(&pool)
+        .await
+        .expect("seed one log row");
+
+    let upd = sqlx::query(
+        "UPDATE kb_principal_standing_events SET resulting_state='approved' WHERE profile_id=$1",
+    )
+    .bind(p)
+    .execute(&pool)
+    .await
+    .expect_err("UPDATE on the standing log must be refused");
+    assert!(
+        upd.to_string().contains("append-only"),
+        "UPDATE must raise the append-only guard, got: {upd}"
+    );
+
+    let del = sqlx::query("DELETE FROM kb_principal_standing_events WHERE profile_id=$1")
+        .bind(p)
+        .execute(&pool)
+        .await
+        .expect_err("DELETE on the standing log must be refused");
+    assert!(
+        del.to_string().contains("append-only"),
+        "DELETE must raise the append-only guard, got: {del}"
+    );
+}
+
+async fn a_profile_for_log(pool: &PgPool) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('logguard','LogGuard') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_standing_log_is_append_only_in_shape(pool: PgPool) {
     // The log has no UPDATE path in the design; assert it at least records both endpoints of a
     // transition, so `Reactivate` has something to restore from (spec §5, §11).
