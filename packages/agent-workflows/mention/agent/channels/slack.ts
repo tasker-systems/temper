@@ -1,8 +1,10 @@
 import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
+import { deliverEphemeral } from "../lib/ephemeral.js";
 import { decideIdentity, linkedPrompt, unlinkedPrompt } from "../lib/identity.js";
 import { requestLinkState } from "../lib/link.js";
+import { ephemeralEvents } from "./events.js";
 
 /**
  * Slack channel for the @temper mention agent.
@@ -16,6 +18,15 @@ import { requestLinkState } from "../lib/link.js";
  * (`connectSlackCredentials`) is the eventual path — see CLAUDE.md.
  */
 export default slackChannel({
+  /**
+   * Every eve default that posts PUBLICLY is replaced with a channel-root
+   * ephemeral. A dispatched turn will run under the mentioning human's full
+   * temper reach, so the answer — and every failure message that can quote it
+   * — belongs to that human alone. See `events.ts`, including the documented
+   * residual gap on `authorization.required`.
+   */
+  events: ephemeralEvents,
+
   /**
    * Replaces eve's default mention pipeline (auth derivation + a "Thinking..."
    * typing indicator). We keep the same auth derivation and add the human-only
@@ -57,37 +68,18 @@ export default slackChannel({
           ? linkedPrompt(link.handle)
           : unlinkedPrompt(link.authorize_url);
 
-      // Deliver privately, at the CHANNEL ROOT — not via `ctx.thread.postEphemeral`.
-      //
-      // eve's thread helper inherits the mention's `thread_ts`, so the ephemeral posts INTO a
-      // thread the user isn't viewing, where an ephemeral is invisible and leaves no badge —
-      // the symptom was total silence in the channel. A channel-root `chat.postEphemeral` (no
-      // `thread_ts`) shows inline where the user actually mentioned. Still ephemeral, still
-      // private-to-them: the unlinked arm carries a credential and must never go public.
-      //
-      // `ctx.slack.request` returns the raw Slack response instead of throwing on `ok:false`
-      // (eve's typed `postEphemeral` throws, and eve's dispatcher then swallows the throw). So
-      // on failure we can surface WHY — publicly, but with only the Slack error code, never the
-      // reply. Silence is the one outcome we refuse to ship again.
-      const res = await ctx.slack.request("chat.postEphemeral", {
-        channel: ctx.slack.channelId,
-        user: userId,
-        text: reply,
-      });
-      if (!res.ok) {
-        console.error("postEphemeral failed", { error: res.error });
-        await ctx.thread.post({
-          text: `I couldn't send you a private message (Slack: ${res.error ?? "unknown_error"}). Once that's sorted, mention me again.`,
-        });
-      }
+      // Deliver privately, at the CHANNEL ROOT. `deliverEphemeral` owns the why — the
+      // `thread_ts`-inheritance trap and the `{ ok, error }` failure surface — and is now
+      // shared with the event overrides in `events.ts`.
+      await deliverEphemeral(ctx, userId, reply);
     } catch (err) {
       // requestLinkState failed (API/network). eve swallows a thrown handler, so say something.
       console.error("link state lookup failed", err);
-      await ctx.slack.request("chat.postEphemeral", {
-        channel: ctx.slack.channelId,
-        user: userId,
-        text: "I couldn't check your temper account just now. Please try again in a moment.",
-      });
+      await deliverEphemeral(
+        ctx,
+        userId,
+        "I couldn't check your temper account just now. Please try again in a moment.",
+      );
     }
 
     // Deliberately DROP rather than dispatch, on BOTH arms. Unlinked, a turn would run the
