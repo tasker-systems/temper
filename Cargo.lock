@@ -5851,6 +5851,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-principal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "temper-services"
 version = "0.1.0"
 dependencies = [
