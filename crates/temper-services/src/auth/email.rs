@@ -47,9 +47,12 @@ pub(super) async fn resolve_email_from_claims(
         lookup_cached_email(&state.pool, &state.config.auth_provider_name, &claims.sub).await;
 
     match cached {
-        Some((email, _)) => {
+        // Propagate the STORED flag. This arm used to discard it and substitute
+        // `Some(true)` — see `lookup_cached_email` for why that was a profile-takeover
+        // primitive rather than a cosmetic default.
+        Some((email, email_verified)) => {
             tracing::debug!("resolved email from cached auth link");
-            Ok((email, Some(true)))
+            Ok((email, email_verified))
         }
         None => {
             let endpoint = state
@@ -76,24 +79,50 @@ pub(super) async fn resolve_email_from_claims(
 
 /// Look up the email for a known auth link in the database.
 ///
-/// Returns `Some((email, email_verified_placeholder))` if the user has logged
-/// in before and we cached their email in `kb_profile_auth_links`.
+/// Returns `Some((email, email_verified))` — **both columns read from the row**, never
+/// synthesized. If the row has no email, returns `None`.
+///
+/// # Why this reads the real column
+///
+/// It used to `SELECT email` only and return a hardcoded `Some(true)` for the flag, which its
+/// own doc called an `email_verified_placeholder`. That value is not cosmetic. Two consumers
+/// treat it as the identity provider's assertion:
+/// `profile_service::refresh_link_verification`, which PERSISTS it back onto the row, and
+/// `profile_service::reconcile_by_email`, which uses the stored flag to decide whether an
+/// address may be trusted to match one account against another. Read those two before changing
+/// anything here.
+///
+/// `refresh_link_verification`'s doc promises the flag "never flips false→true here without the
+/// provider's say-so". The provider never said so — this function did. **Never synthesize this
+/// value.** If it is not read from the row, it must be `None`, which both consumers treat as
+/// "unknown" rather than "yes".
+///
+/// Rows storing a real email at `email_verified = false` are ordinary, not exotic:
+/// `create_new_profile_and_link` and `create_link_for_existing_profile` both write the email with
+/// `email_verified` taken from the claims, and migration `20260709000004` deliberately backfilled
+/// every pre-existing row to `false`, its comment refusing a liberal backfill because it "would
+/// mark emails verified that never carried the claim". This function was performing that refused
+/// backfill one row at a time.
+///
+/// Nor is this rung exotic: it is the steady-state path for any deployment whose tokens lack an
+/// email claim, which `auth/mod.rs` describes as "the path that keeps every returning MCP human
+/// working".
 async fn lookup_cached_email(
     pool: &sqlx::PgPool,
     provider: &str,
     external_user_id: &str,
 ) -> Option<(String, Option<bool>)> {
-    let email = sqlx::query_scalar!(
-        "SELECT email FROM kb_profile_auth_links WHERE auth_provider = $1 AND auth_provider_user_id = $2",
+    let row = sqlx::query!(
+        "SELECT email, email_verified FROM kb_profile_auth_links \
+         WHERE auth_provider = $1 AND auth_provider_user_id = $2",
         provider,
         external_user_id,
     )
     .fetch_optional(pool)
     .await
-    .ok()?
-    .flatten();
+    .ok()??;
 
-    email.map(|e| (e, Some(true)))
+    row.email.map(|e| (e, Some(row.email_verified)))
 }
 
 /// Subset of the OIDC discovery document (`/.well-known/openid-configuration`).
