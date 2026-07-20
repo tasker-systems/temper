@@ -20,13 +20,48 @@ import { ephemeralEvents } from "./events.js";
  */
 export default slackChannel({
   /**
-   * Every eve default that posts PUBLICLY is replaced with a channel-root
-   * ephemeral. A dispatched turn will run under the mentioning human's full
-   * temper reach, so the answer — and every failure message that can quote it
-   * — belongs to that human alone. See `events.ts`, including the documented
-   * residual gap on `authorization.required`.
+   * Every eve default that routes model-derived text to a channel-visible sink
+   * — `thread.post` AND the `startTyping` status — is replaced with a
+   * channel-root ephemeral or a constant. A dispatched turn runs under the
+   * mentioning human's full temper reach, so the answer, every failure message
+   * that can quote it, and every reasoning/tool status derived from it belong
+   * to that human alone. See `events.ts`, including the documented residual gap
+   * on `authorization.required`.
+   *
+   * **The invariant is ONE `thread.post` in this agent, not zero**, and it is
+   * `ephemeralFailureNotice` in `lib/ephemeral.ts` — posted only when
+   * `chat.postEphemeral` itself failed, carrying only Slack's error code and
+   * never the undelivered reply. Silence was the one outcome worth refusing.
+   * Any OTHER `thread.post` is a bug.
    */
   events: ephemeralEvents,
+
+  /**
+   * DMs are deliberately NOT served.
+   *
+   * This is a real gate, not an omission. eve resolves
+   * `onDirectMessage ?? defaultOnDirectMessage`, and the default
+   * (`.../slack/defaults.js`) is:
+   *
+   *   async function defaultOnDirectMessage(e,t){
+   *     return await e.thread.startTyping(`Thinking...`),{auth:defaultSlackAuth(t,e)} }
+   *
+   * — it DISPATCHES UNCONDITIONALLY: no `decideIdentity`, no
+   * `principalType === "user"` gate, no link-state, no mint pre-flight. An
+   * unlinked human DMing would get a turn that dies into the generic
+   * `turn.failed` line with no path to a link URL, and a bot would get a turn
+   * at all. Leaving this key absent means inheriting that.
+   *
+   * It is currently unreachable — `message.im` is commented out in
+   * `slack-app-manifest.yml`'s phase-2 block — but `im:history` is already a
+   * live scope, so it is three uncommented lines away.
+   *
+   * Returning `null` drops. **Enabling `message.im` requires wiring the
+   * identity pipeline here first** (the `onAppMention` body, re-grounded: the
+   * DM ctx shape and whether a channel-root `chat.postEphemeral` is even
+   * meaningful in a DM both need verifying before that body is shared).
+   */
+  onDirectMessage: async () => null,
 
   /**
    * Replaces eve's default mention pipeline (auth derivation + a "Thinking..."
@@ -108,6 +143,29 @@ export default slackChannel({
           await deliverEphemeral(ctx, userId, revokedPrompt(link.handle));
           // DROP, for the same reason.
           return null;
+
+        default: {
+          // A FOURTH mint status. Without this arm the switch falls through and
+          // `onAppMention` returns `undefined` — which eve treats as a drop, so it
+          // fails closed, but SILENTLY: no ephemeral, no log, indistinguishable
+          // from a mention that never arrived.
+          //
+          // The `never` binding makes adding a variant to the Rust response a
+          // COMPILE error here, so the runtime arm below should be unreachable.
+          // It exists because the wire type is only as honest as the last person
+          // who regenerated it: a server that ships a new status before this
+          // agent redeploys reaches this at runtime with the types still passing.
+          const unexpected: never = mint;
+          console.error("unexpected mint status", {
+            status: (unexpected as { status?: unknown }).status,
+          });
+          await deliverEphemeral(
+            ctx,
+            userId,
+            "I couldn't check your temper account just now. Please try again in a moment.",
+          );
+          return null;
+        }
       }
     } catch (err) {
       // requestLinkState or requestMintedToken failed (API/network/secret drift). eve

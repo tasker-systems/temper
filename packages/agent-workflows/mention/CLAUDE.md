@@ -59,6 +59,33 @@ in user-facing copy.
 > instead of throwing on `ok:false`, so a delivery failure surfaces (a public, credential-free error
 > line) instead of being swallowed by eve's dispatcher. Do not "simplify" it back.
 
+**The invariant is exactly ONE `thread.post`, not zero.** It lives at the end of
+`deliverEphemeral` (`agent/lib/ephemeral.ts`) and fires only when `chat.postEphemeral` itself
+returned `ok:false`. It carries `ephemeralFailureNotice(error)` — **Slack's own error code and
+nothing else**: never the undelivered reply, never a URL, never anything derived from the caller's
+reach. It is public on purpose, because silence was the one outcome worth refusing. Any *other*
+`thread.post` in this agent is a bug. (This page previously claimed "zero", which was false; a
+wrong invariant is a maintenance hazard, because the next person greps for it, finds the one real
+call, and cannot tell a deliberate exception from a regression.)
+
+**Public sinks are not only `thread.post` — `thread.startTyping` is one too.** eve's
+`reasoning.appended` default pushes `firstNonEmptyLine(event.reasoningSoFar)` into the typing
+status, and its `actions.requested` default pushes `state.pendingToolCallMessage` (the model's own
+mid-turn narration) or the tool names. Both are overridden in `agent/channels/events.ts` with the
+constant `WORKING_STATUS`, and nothing writes `pendingToolCallMessage` any more — populating it
+was feeding an un-overridden public sink. `turn.started` and `authorization.completed` are left as
+eve's defaults, verified content-free. `tests/events.test.ts` derives all of this from eve's real
+`defaultEvents` **at runtime**, so an eve upgrade that ADDS a default handler fails the test
+instead of silently installing a new sink.
+
+**DMs are explicitly refused.** `agent/channels/slack.ts` supplies `onDirectMessage: async () =>
+null`. This is load-bearing: eve resolves `onDirectMessage ?? defaultOnDirectMessage`, and the
+default **dispatches unconditionally** — no `decideIdentity`, no `principalType === "user"` gate,
+no link-state, no mint pre-flight. Leaving the key absent inherits that. `message.im` is currently
+commented out in `slack-app-manifest.yml`'s phase-2 block, but `im:history` is already a live
+scope, so it is three uncommented lines away. **Enabling `message.im` requires wiring the identity
+pipeline into that handler first.**
+
 ## The `temper` connection (`agent/connections/temper.ts`)
 
 Registered by **filesystem convention** — there is no manifest to edit. The filename gives the

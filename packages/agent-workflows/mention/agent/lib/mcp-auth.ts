@@ -137,5 +137,21 @@ export async function getTemperToken({
         reason: "revoked",
         retryable: false,
       });
+
+    default: {
+      // A FOURTH mint status. Falling out of the switch would return `undefined`
+      // where eve expects a `TokenResult` — the connection would then call the MCP
+      // server with no credential, which is the one thing this function exists to
+      // prevent. The `never` binding makes a new variant a COMPILE error; the
+      // runtime arm covers a server that ships one before this agent redeploys.
+      const unexpected: never = outcome;
+      throw new ConnectionAuthorizationFailedError(TEMPER_CONNECTION_NAME, {
+        message: `The temper mint route returned an unrecognized status: ${String(
+          (unexpected as { status?: unknown }).status,
+        )}`,
+        reason: "unexpected_mint_status",
+        retryable: false,
+      });
+    }
   }
 }

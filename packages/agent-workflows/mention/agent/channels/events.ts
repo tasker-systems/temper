@@ -3,7 +3,8 @@ import type { SlackChannelEvents } from "eve/channels/slack";
 import { deliverEphemeral, resolveEphemeralRecipient } from "../lib/ephemeral.js";
 
 /**
- * Ephemeral replacements for every eve Slack default that posts PUBLICLY.
+ * Ephemeral (or content-free) replacements for every eve Slack default that
+ * routes MODEL-DERIVED TEXT to a sink the whole channel can observe.
  *
  * ## Why this file exists
  *
@@ -13,8 +14,41 @@ import { deliverEphemeral, resolveEphemeralRecipient } from "../lib/ephemeral.js
  * `eve/dist/src/public/channels/slack/defaults.js` (minified), where
  * `message.completed`, `turn.failed` and `session.failed` each end in
  * `await ...thread.post(...)`, and `defaultInputRequestedHandler` loops
- * `await t.thread.post(n)`. So these four sinks must be private BEFORE any
+ * `await t.thread.post(n)`. So these sinks must be private BEFORE any
  * dispatch exists, not after.
+ *
+ * ## `thread.post` is not the only public sink — `startTyping` is one too
+ *
+ * Two further defaults push model-derived text into the thread's typing
+ * status, which is NOT private:
+ *
+ *   "reasoning.appended"(e,t,n){let r=firstNonEmptyLine(e.reasoningSoFar);
+ *     ... await t.thread.startTyping(i) ...}
+ *   "actions.requested"(e,t,n){let r=t.state.pendingToolCallMessage;
+ *     ... if(r){await t.thread.startTyping(truncateTypingStatus(r));return}
+ *     ... `Running ${i.join(", ")}...` ...}
+ *   -- eve/dist/src/public/channels/slack/defaults.js
+ *
+ * `reasoningSoFar` is the model's raw reasoning; `pendingToolCallMessage` is
+ * the model's own mid-turn narration. Both are produced under the mentioning
+ * human's reach, so both are overridden below with a CONSTANT status string.
+ *
+ * `startTyping` currently resolves to `assistant.threads.setStatus`, which is
+ * scoped to assistant threads and may well no-op in an ordinary public channel
+ * — but that is a Slack-side accident, not a property of this code, and Slack
+ * keeps widening agent surfaces into channels. The override does not depend on
+ * it.
+ *
+ * ## The two defaults deliberately left in place
+ *
+ * `turn.started` calls `startTyping("Working...")` — a constant, no event data
+ * read. `authorization.completed` `chat.update`s a message id it only holds
+ * when `authorization.required` posted one, with text built from the
+ * connection display name and an outcome/reason code
+ * (`buildAuthCompletedText`, `.../slack/connections.js`) — no model or tool
+ * output. Both are content-free; see `tests/events.test.ts`, which derives
+ * this classification against eve's real `defaultEvents` so a future eve
+ * release adding a sink FAILS rather than silently opening one.
  *
  * ## A supplied handler REPLACES the default — there is no supplement
  *
@@ -55,19 +89,14 @@ import { deliverEphemeral, resolveEphemeralRecipient } from "../lib/ephemeral.js
  */
 
 /**
- * First non-empty line of a string, or `null`.
+ * The one status string this agent ever shows publicly.
  *
- * Mirrors eve's non-exported `firstNonEmptyLine`, used only to keep
- * `state.pendingToolCallMessage` byte-compatible with what the default
- * `actions.requested` handler expects to read back out of it.
+ * Constant by construction: it is the same string eve's own `turn.started`
+ * default uses, and it is derived from NOTHING on the event. Every handler
+ * that wants to signal "still working" uses this rather than anything the
+ * model produced.
  */
-export function firstNonEmptyLine(text: string): string | null {
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length > 0) return trimmed;
-  }
-  return null;
-}
+export const WORKING_STATUS = "Working...";
 
 /**
  * The completed assistant message — the actual answer, and the single
@@ -76,21 +105,21 @@ export function firstNonEmptyLine(text: string): string | null {
  * The `finishReason === "tool-calls"` early return is REPRODUCED from eve's
  * default and is load-bearing: that branch fires on every mid-turn message
  * boundary where the model narrates before calling a tool. Omitting it would
- * post tool chatter on every turn instead of once at the end. It writes the
- * narration to `state.pendingToolCallMessage`, which the default
- * `actions.requested` handler reads to render a typing indicator.
+ * deliver tool chatter on every turn instead of the answer once at the end.
+ *
+ * eve's default additionally stashes that narration in
+ * `state.pendingToolCallMessage` for its `actions.requested` handler to render
+ * as a typing status. This override deliberately does NOT: that field's only
+ * reader was a public sink, so writing it was feeding model prose to the very
+ * leak this file exists to close. `actionsRequested` below now overrides that
+ * reader with a constant, and nothing writes the field.
  */
 export const messageCompleted: NonNullable<SlackChannelEvents["message.completed"]> = async (
   event,
   ctx,
   callbackCtx,
 ) => {
-  if (event.finishReason === "tool-calls") {
-    ctx.state.pendingToolCallMessage = event.message ? firstNonEmptyLine(event.message) : null;
-    return;
-  }
-
-  ctx.state.pendingToolCallMessage = null;
+  if (event.finishReason === "tool-calls") return;
 
   if (!event.message) {
     // No text to disclose. The typing indicator is public but content-free,
@@ -100,6 +129,39 @@ export const messageCompleted: NonNullable<SlackChannelEvents["message.completed
   }
 
   await deliverToTriggeringUser(ctx, callbackCtx, event.message, "message.completed");
+};
+
+/**
+ * The model's running reasoning. eve's default pushes its first non-empty line
+ * into the public typing status; ours shows a constant.
+ *
+ * The reasoning trace is the least redacted thing a turn produces — it quotes
+ * tool results and names resources verbatim, all under the caller's reach. The
+ * typing indicator is kept (rather than no-op'd) because it is the only signal
+ * the asker gets that work continues, and `WORKING_STATUS` reads nothing off
+ * the event.
+ */
+export const reasoningAppended: NonNullable<SlackChannelEvents["reasoning.appended"]> = async (
+  _event,
+  ctx,
+) => {
+  await ctx.thread.startTyping(WORKING_STATUS);
+};
+
+/**
+ * The model is about to call tools. eve's default renders either the model's
+ * buffered narration or the tool names into the public typing status; ours
+ * shows the same constant.
+ *
+ * Tool names are excluded too. They are drawn from `TEMPER_READ_TOOLS`, so
+ * they are not model prose — but which tool the model reached for, and when,
+ * is still a read of the caller's private turn, and a constant costs nothing.
+ */
+export const actionsRequested: NonNullable<SlackChannelEvents["actions.requested"]> = async (
+  _event,
+  ctx,
+) => {
+  await ctx.thread.startTyping(WORKING_STATUS);
 };
 
 /** A failed turn. eve's default posts the failure into the channel; ours does not. */
@@ -141,6 +203,10 @@ export const sessionFailed: NonNullable<SlackChannelEvents["session.failed"]> = 
       "Start a new thread to continue — I can't pick this one back up.",
     ].join("\n"),
     "session.failed",
+    // The ONLY caller permitted the state fallback — see `StateFallback`. eve
+    // gives this handler no `SessionContext`, so state is its only recipient
+    // source, and its text is a fixed literal with nothing reach-derived in it.
+    "allow-state-fallback",
   );
 };
 
@@ -164,9 +230,17 @@ export const inputRequested: NonNullable<SlackChannelEvents["input.requested"]> 
   }
 };
 
-/** The four handlers, ready to spread into `slackChannel({ events })`. */
+/**
+ * The handlers, ready to spread into `slackChannel({ events })`.
+ *
+ * Every eve default that reads model-derived text is here. `tests/events.test.ts`
+ * asserts that against eve's actual `defaultEvents` at runtime, so this map
+ * cannot silently fall behind an eve upgrade.
+ */
 export const ephemeralEvents: SlackChannelEvents = {
   "message.completed": messageCompleted,
+  "reasoning.appended": reasoningAppended,
+  "actions.requested": actionsRequested,
   "turn.failed": turnFailed,
   "session.failed": sessionFailed,
   "input.requested": inputRequested,
@@ -180,6 +254,32 @@ export const ephemeralEvents: SlackChannelEvents = {
  * `thread.post` here would reintroduce exactly the leak these handlers exist
  * to close. The drop is logged so it stays diagnosable.
  */
+/**
+ * Whether a handler may fall back to `ctx.state.triggeringUserId` when the
+ * per-invocation auth context yields no recipient.
+ *
+ * **Only `session.failed` may.** A Slack session is keyed by `(channel, thread)`
+ * (`slackContinuationToken`), so two different humans mentioning in the SAME
+ * thread share one session and therefore one `state.triggeringUserId` — eve's
+ * `turn.started` wrapper overwrites it with whoever authenticated most recently.
+ * The state is thus not "this turn's asker"; it is "the last asker in this
+ * thread". Addressing a content-bearing message with it can hand A's answer to B.
+ *
+ * The per-invocation path (`session.auth.current`, read out of the async-local
+ * container by `buildCallbackContext`) is correct and is always preferred. The
+ * fallback exists solely because eve invokes `session.failed` with TWO arguments
+ * and no `SessionContext` (`buildAdapter`:
+ * `e===\`session.failed\`?t(r,a):t(r,a,buildCallbackContext())`), so that handler
+ * has no auth to read and state is its only source.
+ *
+ * That trade is acceptable ONLY because `session.failed`'s text is a fixed
+ * literal carrying nothing reach-derived: the worst case is B learning that A's
+ * session died. It would NOT be acceptable for `message.completed`, whose text
+ * is the answer itself — so those handlers take the default and cannot reach the
+ * fallback at all. This is a capability removed rather than a rule written down.
+ */
+type StateFallback = "allow-state-fallback" | "no-state-fallback";
+
 async function deliverToTriggeringUser(
   ctx: {
     readonly slack: {
@@ -192,6 +292,7 @@ async function deliverToTriggeringUser(
   callbackCtx: { readonly session: { readonly auth: { readonly current: unknown } } } | undefined,
   text: string,
   eventType: string,
+  allowStateFallback: StateFallback = "no-state-fallback",
 ): Promise<void> {
   const current = callbackCtx?.session.auth.current;
   const auth =
@@ -199,7 +300,9 @@ async function deliverToTriggeringUser(
       ? (current as { attributes: Record<string, string | readonly string[]>; authenticator: string })
       : null;
 
-  const userId = resolveEphemeralRecipient(auth, ctx.state.triggeringUserId);
+  const fallback =
+    allowStateFallback === "allow-state-fallback" ? ctx.state.triggeringUserId : undefined;
+  const userId = resolveEphemeralRecipient(auth, fallback);
   if (userId === null) {
     console.warn("dropping event: no ephemeral recipient", { eventType });
     return;

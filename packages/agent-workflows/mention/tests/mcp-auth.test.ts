@@ -88,15 +88,49 @@ describe("getTemperToken", () => {
     ).rejects.toMatchObject({ reason: "revoked", retryable: false });
   });
 
-  // FAILS IF: a failure carries the credential. The error message reaches logs and the model
-  // as a failed tool result, so it must never quote a token — and on these arms there is no
-  // token, so the guard is against a future arm that has one being logged the same way.
-  it("never puts an access token in the failure message", async () => {
-    requestMintedToken.mockResolvedValue({ status: "revoked" });
+  // FAILS IF: the minted token escapes anywhere other than the returned `TokenResult`.
+  //
+  // The `token` arm is the ONLY arm where a credential is in scope, so it is the only arm
+  // where this property can be violated — and therefore the only arm worth mocking. Adding a
+  // `console.log(outcome)` for debugging, or widening any thrown message to interpolate the
+  // outcome, makes this go red.
+  it("lets the access token reach the return value and NOTHING else", async () => {
+    const SECRET = "at-live-do-not-log-9f3c2b";
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+    requestMintedToken.mockResolvedValue({
+      status: "token",
+      access_token: SECRET,
+      expires_at_ms: 1_784_505_600_000,
+    });
 
-    await expect(
-      getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
-    ).rejects.not.toThrow(/at-/);
+    const result = await getTemperToken({ principal: { type: "user", id: PRINCIPAL } });
+
+    // The token DID come back — without this the assertions below would pass vacuously on a
+    // function that simply never produced a token at all.
+    expect(result.token).toBe(SECRET);
+
+    for (const spy of spies) {
+      for (const call of spy.mock.calls) {
+        expect(JSON.stringify(call) ?? "").not.toContain(SECRET);
+      }
+    }
+  });
+
+  // FAILS IF: a thrown failure interpolates the mint outcome. Error messages reach logs and
+  // the model as a failed tool result. The mock carries a token on an arm that must throw,
+  // which is exactly the shape a future "token but unusable" variant would have.
+  it("never puts an access token in a failure message", async () => {
+    const SECRET = "at-live-do-not-throw-4e1a";
+    requestMintedToken.mockResolvedValue({
+      status: "unrecognized_future_status",
+      access_token: SECRET,
+    } as unknown as MintOutcome);
+
+    await expect(getTemperToken({ principal: { type: "user", id: PRINCIPAL } })).rejects.toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining(SECRET) }),
+    );
   });
 });
 

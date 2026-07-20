@@ -8,6 +8,19 @@
  * event handlers all post via `ctx.thread.post`, which is public; this module
  * is the one delivery path that replaces them.
  *
+ * ## The exact invariant: ONE `thread.post` in this agent, not zero
+ *
+ * `deliverEphemeral` below contains it, and it is the only one. It fires only
+ * when `chat.postEphemeral` itself came back `ok:false`, and it carries only
+ * `ephemeralFailureNotice(error)` — Slack's own error code, never the reply,
+ * never a URL, never anything derived from the caller's temper reach. It is
+ * public deliberately: silence is the one outcome worth refusing (see below).
+ *
+ * Do not restate this as "zero `thread.post`". That claim was here, it was
+ * wrong, and a wrong invariant is worse than none — someone greps for it,
+ * finds this call, and cannot tell a deliberate exception from a regression.
+ * Any OTHER `thread.post` in this agent IS a regression.
+ *
  * ## Why the raw request, and why NOT `ctx.thread.postEphemeral`
  *
  * eve's thread helper inherits the mention's `thread_ts`, so the ephemeral

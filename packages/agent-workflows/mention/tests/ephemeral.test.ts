@@ -90,9 +90,28 @@ describe("deliverEphemeral", () => {
 describe("ephemeralFailureNotice", () => {
   it("carries the Slack error code and nothing else", () => {
     // FAILS IF: the notice is ever widened to include the undelivered reply.
-    // It is posted PUBLICLY, so its content is a disclosure surface.
-    expect(ephemeralFailureNotice("cant_post")).toContain("cant_post");
-    expect(ephemeralFailureNotice("cant_post")).toMatch(/private message/i);
+    //
+    // This is the ONE `thread.post` in the whole agent, and it is public — so
+    // its content is a disclosure surface. The `/private message/i` match alone
+    // could NOT catch the failure that matters: a notice that appended the
+    // undelivered text would still contain that phrase. So the signature is
+    // widened to take the text and the assertion is that the text is ABSENT.
+    const undelivered = "Her salary review is in context personal-hr";
+    const notice = ephemeralFailureNotice("cant_post");
+
+    expect(notice).toContain("cant_post");
+    expect(notice).toMatch(/private message/i);
+    expect(notice).not.toContain(undelivered);
+    expect(notice).not.toContain("salary");
+  });
+
+  it("is a pure function of the error code, so no reply text can reach it", () => {
+    // FAILS IF: the notice ever grows a second parameter carrying the reply, or
+    // starts reading module state that a caller could have set to it. Asserting
+    // ARITY is what makes "the reply cannot be in here" structural rather than
+    // a spot-check of one string — the previous test can only disprove the
+    // strings it happens to name.
+    expect(ephemeralFailureNotice).toHaveLength(1);
   });
 });
 

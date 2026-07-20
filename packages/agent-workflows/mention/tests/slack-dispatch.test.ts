@@ -237,3 +237,61 @@ describe("onAppMention — the mint pre-flight", () => {
     expect(requestMintedToken).not.toHaveBeenCalled();
   });
 });
+
+describe("onDirectMessage — the gate that must exist", () => {
+  /** The channel config object, so absence-of-key is distinguishable from a null return. */
+  async function channelConfig() {
+    return (await import("../agent/channels/slack.js")).default as AnyArgs;
+  }
+
+  // FAILS IF: `onDirectMessage` is removed from the channel config. eve resolves
+  // `onDirectMessage ?? defaultOnDirectMessage`, so an ABSENT key is not "DMs are ignored" —
+  // it is eve's `defaultOnDirectMessage`, which does
+  // `startTyping("Thinking...")` then `{auth: defaultSlackAuth(...)}`: an UNCONDITIONAL
+  // dispatch with no `decideIdentity`, no `principalType === "user"` gate, no link-state and
+  // no mint pre-flight. Asserting the key is defined is the only way to tell the two apart,
+  // because both look like "nothing happens" from outside until `message.im` is subscribed.
+  it("is supplied explicitly, so eve's unconditional default cannot apply", async () => {
+    const channel = await channelConfig();
+
+    expect(channel.onDirectMessage).toBeDefined();
+    expect(typeof channel.onDirectMessage).toBe("function");
+  });
+
+  // FAILS IF: the handler ever starts dispatching. DMs are out of T4 scope; serving one means
+  // wiring the identity pipeline first. A non-null return here would run a model turn under
+  // an identity nothing has checked.
+  it("drops every DM, dispatching nothing", async () => {
+    const channel = await channelConfig();
+    const { ctx, request, post } = fakeCtx();
+
+    const result = await channel.onDirectMessage(ctx as AnyArgs, {} as AnyArgs);
+
+    expect(result).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    expect(requestLinkState).not.toHaveBeenCalled();
+    expect(requestMintedToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("onAppMention — an unrecognized mint status", () => {
+  // FAILS IF: the `default:` arm is dropped from the switch. Without it the switch falls
+  // through, `onAppMention` returns `undefined`, and the mention dies with NO ephemeral and
+  // NO log — failing closed, but silently and indistinguishably from a lost mention. The
+  // `never` binding makes this a compile error too; this test covers the runtime case where
+  // the server ships a new status before the agent redeploys, which types cannot catch.
+  it("delivers the generic retry ephemeral and logs, instead of silently returning undefined", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({ status: "quarantined" } as unknown as MintOutcome);
+    const { ctx, request } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toBeNull();
+    expect(ephemeralTexts(request)).toHaveLength(1);
+    expect(ephemeralTexts(request)[0]).toMatch(/try again/i);
+    expect(error).toHaveBeenCalled();
+  });
+});
