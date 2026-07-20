@@ -41,11 +41,20 @@
 #   .github/scripts/audit-route-auth.sh          # verify (CI mode)
 #   .github/scripts/audit-route-auth.sh --list   # print current review-required routes
 #   UPDATE_BASELINE=1 .github/scripts/audit-route-auth.sh   # rewrite baseline after review
+#
+# ROUTES_FILE may be overridden to point at a fixture (see test-audit-route-auth.sh). Under a
+# fixture only the wiring assertions (b) are meaningful — the baseline diff (c) will of course
+# disagree, which is why the test harness asserts on the FAIL MESSAGE, not just the exit code.
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-ROUTES_FILE="crates/temper-api/src/routes.rs"
+ROUTES_FILE="${ROUTES_FILE:-crates/temper-api/src/routes.rs}"
+
+# The app builders in routes.rs, and which of them each auth layer must be mounted in. Every
+# signature-gated group is served by BOTH builders (see create_internal_app's doc comment: the
+# split exists only for Vercel's per-function maxDuration), so both mounts are load-bearing.
+APP_BUILDERS='create_app create_internal_app'
 
 # Groups whose routes are authenticated by construction (a require_auth layer). They grow freely.
 AUTH_COVERED='auth_only_routes|gated_routes'
@@ -98,14 +107,55 @@ if [[ -n "$UNKNOWN_GROUPS" ]]; then
 fi
 
 # (b) The layer wiring must still be present — guards against a silently deleted auth layer.
-require_substr() {
-  grep -q -- "$1" "$ROUTES_FILE" || { echo "audit-route-auth: FAIL — missing auth wiring: '$1' not found in $ROUTES_FILE" >&2; fail=1; }
+#
+# This is asserted PER APP BUILDER, not over the file as a whole, and that distinction is the
+# whole point. Every signature-gated group is mounted TWICE — once in `create_app` (the
+# single-process deploy: local, e2e, self-hosted) and once in `create_internal_app` (the separate
+# Vercel function that exists only to carry a longer maxDuration). Deleting ONE of the two mounts
+# leaves the layer's name still present elsewhere in the file, so the old whole-file `grep -q`
+# stayed GREEN through exactly that edit — while one deployed surface served the route UNGATED.
+# For slack_mint that is not a downgrade to authenticated-but-broad, it is act-as-any-user.
+#
+# A grep that cannot distinguish "mounted twice" from "mounted once" cannot defend a layer that
+# must be mounted twice. Slice each builder's body and assert within it.
+
+# Print the body of function NAME from ROUTES_FILE: its signature line through the closing brace
+# at column 0. Bash 3.2 compatible (no assoc arrays) — recomputed per call, the file is small.
+app_body() {
+  awk -v fname="$1" '
+    $0 ~ "^(pub )?fn "fname"\\(" { inside=1 }
+    inside { print }
+    inside && /^\}/ { exit }
+  ' "$ROUTES_FILE"
 }
-require_substr 'auth::require_auth'
-require_substr 'require_system_access'
-require_substr 'require_internal_signature'
-require_substr 'require_slack_link_signature'
-require_substr 'require_slack_mint_signature'
+
+# require_layer_in LAYER BUILDER... — LAYER must appear in each named builder's body.
+require_layer_in() {
+  local layer="$1"; shift
+  local app body
+  for app in "$@"; do
+    body="$(app_body "$app")"
+    if [[ -z "$body" ]]; then
+      echo "audit-route-auth: FAIL — app builder '$app' not found in $ROUTES_FILE (renamed or removed?)" >&2
+      fail=1
+      continue
+    fi
+    printf '%s\n' "$body" | grep -q -- "$layer" || {
+      echo "audit-route-auth: FAIL — missing auth wiring: '$layer' not mounted in ${app}() in $ROUTES_FILE" >&2
+      echo "  This layer must be mounted in EVERY builder that serves its route group; a surface" >&2
+      echo "  missing it serves that group unauthenticated. See create_internal_app's doc comment." >&2
+      fail=1
+    }
+  done
+}
+
+# User-auth layers: create_app only — create_internal_app deliberately serves no user-auth surface.
+require_layer_in 'auth::require_auth'                create_app
+require_layer_in 'require_system_access'             create_app
+# Signature gates: served by BOTH builders, so both mounts must be present.
+require_layer_in 'require_internal_signature'        $APP_BUILDERS
+require_layer_in 'require_slack_link_signature'      $APP_BUILDERS
+require_layer_in 'require_slack_mint_signature'      $APP_BUILDERS
 
 # (c) The review-required route set must match the reviewed baseline.
 NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -u)"
