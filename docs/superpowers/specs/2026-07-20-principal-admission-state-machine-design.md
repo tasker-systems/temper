@@ -1,7 +1,9 @@
 # Principal Admission — a fail-closed state machine
 
 **Date:** 2026-07-20
-**Status:** design, approved in brainstorm; not yet planned
+**Status:** design complete and **planned**. Phase 1's implementation plan is
+[`docs/superpowers/plans/2026-07-20-principal-admission-phase-1.md`](../plans/2026-07-20-principal-admission-phase-1.md).
+Phase 2 (the drops) is not yet planned.
 **Supersedes in part:** the `access_mode` retirement goal (`019f7cdb-a1b6-7e80-b19a-349a3d427671`)
 
 ## §1 Why this exists
@@ -67,14 +69,37 @@ than across a boundary. What this buys is disproportionate to what it costs, and
 narrow: **gating-team ownership has exactly one authorization reader.**
 
 ```
-SQL readers of is_system_admin : context_reassign (which simply calls it)
-Rust callers                   : ~12, ALL routed through access_service::is_system_admin (:44)
+SQL callers of is_system_admin : 1 — context_reassign_fns.sql:76 (in-database, never touches Rust)
+Rust call sites                : 21 production, all reaching the SQL fn via a passthrough wrapper
 ```
 
-One chokepoint. When governance holds its own state, `is_system_admin` changes body in one place and
-gating-team ownership stops carrying authorization meaning at all — the ~20 writers to
-`kb_team_members` become ordinary team-role churn. There is no cross-machine invariant left to
-maintain, because there is no longer a second place where admin-ness lives.
+One chokepoint — **the SQL function body.** When governance holds its own state, `is_system_admin`
+changes body in one place and gating-team ownership stops carrying authorization meaning at all —
+the ~20 writers to `kb_team_members` become ordinary team-role churn. There is no cross-machine
+invariant left to maintain, because there is no longer a second place where admin-ness lives.
+
+> **Correction (planning, 2026-07-20).** An earlier draft of this block said *"Rust callers: ~12,
+> ALL routed through `access_service::is_system_admin` (:44)"*. **Both halves are wrong**, and the
+> error is the same shape §2 and §7 correct below — a true observation wired to the wrong object.
+>
+> There are **21 production Rust call sites**, not ~12 (`db_backend.rs:2030`,
+> `connection_service.rs:75`, `admin_ledger_service.rs:80,181`, `cogmap_service.rs:68`,
+> `machine_registration_service.rs:379`, `slack_disconnect_service.rs:267`, `machine_authz.rs:51`,
+> `context_service.rs:376`, `team_service.rs:150,283`, `machine_client_service.rs:93`,
+> `access_service.rs:104,432,915`, `handlers/access.rs:145,163,189,205,223`, `handlers/embed.rs:195`).
+> And they are **not** all routed through Rust: `20260715000010_context_reassign_fns.sql:76` calls
+> the predicate *in-database*, where no Rust-level audit would ever see it.
+>
+> **The conclusion survives, via a better object.** `access_service::is_system_admin` (`:44`) is a
+> pure passthrough — `sqlx::query_scalar!("SELECT is_system_admin($1)")` — so the real chokepoint
+> is the **SQL body**, which is strictly better than the Rust wrapper this spec originally named:
+> it covers the in-database caller too. Repointing one body moves all 22 sites at once. D10's
+> economics are intact; only the thing to repoint changed.
+>
+> Worth carrying: naming the Rust wrapper as the chokepoint would have left
+> `context_reassign_fns.sql:76` — an `IF NOT` site that fails **open into system admin** (§7) —
+> silently unrepointed. *"Which object does this system actually use for this?"* is the question
+> that catches it; *"is this claim true?"* is not.
 
 **Out — Level 3.** Resource authorization (`resources_visible_to`, `can_modify_resource`, team
 roles, cogmap grants) is untouched. It is SQL-resident, large, and has a settled design. A future
@@ -96,7 +121,7 @@ dedicated authz layer is plausible and explicitly not in scope here.
 |---|---|
 | **D1** | Two machines, explicitly separated: a **persisted** `Standing` lifecycle and a **pure, per-request** `Admission`. Standing is evidence the admission machine reads. |
 | **D2** | Standing is **one authoritative state in one table**. Not a conjunction across tables. |
-| **D3** | The pure machine lives in a **new crate, `temper-principal`**, with no `sqlx` dependency — purity enforced by the compiler, not by convention. |
+| **D3** | The pure machine lives in a **new crate, `temper-principal`**, with no `sqlx` dependency — purity enforced by the compiler, not by convention. It therefore depends on **nothing in this workspace** and holds **no identifiers**; see below. |
 | **D4** | Transitions write a **dedicated append-only log** *and* emit a registered **admin-category `kb_events`** record, atomically. |
 | **D5** | "Requested" is a **standing state**; `kb_join_requests` keeps only request-shaped payload (message, terms acceptance, decision note) and loses its status column. |
 | **D6** | `is_active` is **folded in** as the `Deactivated` state. Its non-auth readers move or consume a maintained projection. |
@@ -111,6 +136,57 @@ dedicated authz layer is plausible and explicitly not in scope here.
 | **D15** | A `Revoked` principal **cannot re-request**. `RequestReview` is a separate self act that sets a **marker and does not move standing** — so a revocation cannot be laundered back to `Denied`. |
 | **D16** | **`Reinstate` is dropped.** It was identical to `Approve`-from-`Revoked`, and the log's `prior_state` already makes a reinstatement legible. Eight acts, not nine. |
 | **D17** | Machine **credential revocation fires `Revoke` on standing in the same transaction** — one fact, one place, rather than two revocation facts that can drift. |
+| **D18** | **`access_mode` is retired**, not left standing beside the machine. Phase 1 removes every reader and the concept; Phase 2 drops the column with the other drops. |
+
+### On D18 — `access_mode` cannot survive alongside standing
+
+*(Added during planning, 2026-07-20. §14 said the retirement was "still real work" but did not say
+what this design does with it in the meantime; that gap turned out to be load-bearing.)*
+
+`create_join_request` hard-rejects in open mode:
+
+```rust
+// access_service.rs:671-678
+AccessMode::Open => return Err(ApiError::BadRequest(
+    "System is in open mode — no access request needed".to_string())),
+```
+
+Under D11 every door births `Denied` **regardless of mode**, so an `open` instance would mint
+principals who are denied and then refuse them the one act that could change it. **A dead end, and
+one this design creates.** Leaving `access_mode` in place is therefore not a neutral deferral.
+
+Nothing is lost by retiring it. `access_mode` selected between "everyone has access" and
+"gating-team members have access"; standing answers that per-principal, which is strictly more
+expressive. `open` is simply the state where every principal happens to be `Approved` — and there is
+no longer a single `UPDATE` that can flip a whole instance's access. **That loss of a global switch
+is the point, not a regression to compensate for.**
+
+**Phasing:** the *concept* goes in Phase 1 (every reader, the settings flag, the gate-path usage);
+the *column* goes in Phase 2 with `system_access`, `is_active`, and `kb_join_requests.status`. That
+keeps Phase 1 additive-on-schema and preserves the auto-deploy invariant D10 just recovered.
+
+### On D3 — "no `sqlx`" rules out `temper-core`, and that is a feature
+
+*(Added during planning, 2026-07-20 — the constraint was not anticipated when D3 was written.)*
+
+D3 asks for compiler-enforced purity. The obvious way to write the crate — take `ProfileId` from
+`temper-core` — **defeats it silently**, because `temper-core`'s `sqlx` dependency is not optional:
+
+```toml
+# crates/temper-core/Cargo.toml:22-30
+sqlx = { version = "0.8", features = ["chrono","json","macros","postgres","runtime-tokio-rustls","uuid"] }
+```
+
+and `define_id!` (`temper-core/src/types/ids.rs:6-108`) emits `Type`/`Encode`/`Decode`/
+`PgHasArrayType` impls **ungated**, so `ProfileId` is sqlx-coupled by construction. A
+`temper-principal` that took one would link sqlx transitively and D3 would hold only by wishful
+thinking — the exact "enforced by convention" failure D3 exists to prevent.
+
+So the crate depends on **nothing in this workspace** and takes **no identifiers at all**: the
+machine judges assembled evidence and every id stays on the seam's side of the boundary. That is
+§4's own description of the design (*"`temper-principal` never resolves a credential. It judges
+assembled evidence"*), and it satisfies D3 more strongly than D3 asked for. `cargo tree -p
+temper-principal | grep -c sqlx` returning `0` is the check that keeps it honest.
 
 ### On D10 — governance at the outset
 
@@ -372,10 +448,17 @@ the request carries payload.
 Nine acts. Three actor authorities: **none** (the credential itself is the authority), **self** (the
 principal acting on its own standing), and **admin** — an actor for whom `is_system_admin` holds.
 
-> **On "admin" as an actor authority when governance is out of scope (§2).** This spec *consumes*
-> admin-ness as an input; it does not define or grant it. `is_system_admin` exists today and keeps
-> working. The governance spec owns how a principal becomes admin. The two meet only at the seam in
-> §9, which is what keeps that boundary from becoming a circular dependency.
+> **On "admin" as an actor authority.** *(Rewritten — D10 superseded this note.)* An earlier version
+> read *"when governance is out of scope (§2)"* and said a separate governance spec owns how a
+> principal becomes admin, with the two meeting only at §9's seam. **D10 removed the seam by
+> shipping both machines together**, so there is no other spec and no boundary to keep from becoming
+> circular.
+>
+> What survives is the separation of *questions*, which is the part that mattered: admission asks
+> *may you act*, governance asks *may you govern*, and `is_system_admin` reads governance state
+> alone — never ANDing across tables at read time (§9). The one direction they touch is
+> one-directional and by transition: `Revoke` and `Deactivate` demote, so "admin, but admission
+> revoked" is never representable. Promotion guards on standing being `Approved`.
 
 **Eight acts** (D16 dropped `Reinstate`), each with its legal source states and resulting state.
 Every cell not listed here is **illegal and refused with a reason** — there is no catchall.
@@ -463,8 +546,31 @@ Three, all about edges rather than the happy path.
 3. **No catchall admits.** Every `match` over `Standing` is exhaustive with no `_ =>` arm. Adding a
    state becomes a compile error at every decision site — the property the separate crate buys.
 
-`AdmittedPrincipal` is constructible only by the machine, preserving the type-state guarantee
-`SystemAuthorized` has today: passing Level 2 without having passed Level 1 stays unrepresentable.
+`AdmittedPrincipal` is constructible only by the machine: passing Level 2 without having passed
+Level 1 stays unrepresentable.
+
+> **Correction (planning, 2026-07-20).** This sentence originally ended *"…preserving the type-state
+> guarantee `SystemAuthorized` has today."* **There is no such guarantee today, and the premise was
+> false.**
+>
+> ```rust
+> // temper-services/src/auth/mod.rs:263
+> pub struct SystemAuthorized(pub AuthenticatedProfile);
+> // temper-core/src/types/auth.rs:63-66 — both fields pub
+> pub struct AuthenticatedProfile { pub profile: Profile, pub claims: AuthClaims }
+> ```
+>
+> `grep -rn 'impl AuthenticatedProfile\|impl SystemAuthorized' crates/` returns **nothing**. Both
+> types have fully public fields and no constructor, so any crate can build either by struct
+> literal. `SystemAuthorized`'s own doc comment claims it is *"only obtainable from
+> `require_system_access`"* and `gate_resolved_profile`'s claims that constructing an
+> `AuthenticatedProfile` without passing the gate *"requires going out of your way"* — both
+> describe an intent the types do not enforce.
+>
+> So `AdmittedPrincipal` must **add** the property (private field, no public constructor), not
+> inherit it. This is deliberately scoped to the new type: retrofitting the two older ones touches
+> every construction site across both surfaces and is filed separately. **The hazard worth naming
+> is the doc comments**, which will keep telling a future reader that a guarantee exists.
 
 `Refusal` is a typed enum, which retires a wart — the enriched 403 currently carries
 `access_mode: String`, and its tests assert a sentinel `"join_request"` that is not a real mode
@@ -571,10 +677,34 @@ writers to disagree about.
   record in a single transaction, so a standing change without its audit record is not
   representable.
 
-This mirrors the hybrid the repo already chose. Production event emission is SQL-resident — there
-are **zero** production `INSERT INTO kb_events` statements in `crates/`; substrate's `events.rs`
-describes itself as the firing surface for *"seeding, scenario loading, and tests"*, while *"the SQL
-functions stay the atomic event+materialize+commit mechanism."*
+The **event** half mirrors the hybrid the repo already chose. Production event emission is
+SQL-resident — there are **zero** production `INSERT INTO kb_events` statements in `crates/`;
+substrate's `events.rs` describes itself as the firing surface for *"seeding, scenario loading, and
+tests"*, while *"the SQL functions stay the atomic event+materialize+commit mechanism."*
+
+> **Correction (planning, 2026-07-20).** The three-part shape *"writes the row, appends the log, and
+> emits the `kb_events` record"* reads as though it follows an existing pattern. **It does not — the
+> repo's pattern is two-part.** Every atomic function in `migrations/` mutates the projection row
+> and then calls `PERFORM _event_append(…)`; there is no separate transition-log table alongside a
+> ledger emission anywhere. The only log-shaped table is `kb_resource_audits`, which no
+> `_event_append` function writes.
+>
+> The dedicated log is therefore **new construction**, and an implementer should treat it as such
+> rather than looking for a template that does not exist. The *event* half has one —
+> `20260718000010_admin_grant_fns.sql` and `20260719000020_slack_disconnect_event.sql:144-206`.
+>
+> **Why both halves are still right**, stated now that they cannot be justified by precedent:
+> `Reactivate` must restore the prior state rather than guess it (§5), and reading that from
+> `kb_events` would put the admission machine behind the admin-ledger read gate — which dispatches
+> per act and answers a different question entirely. One cheap local read beats coupling the gate
+> to the ledger.
+
+**One committer, not one per transition.** Read literally, *"one SQL function per transition"* is
+nine near-identical functions differing by a string literal — the enumerate-don't-compose shape.
+What this clause is *buying* is atomicity: a standing change without its audit record must be
+unrepresentable. A single committer that always writes all three in one statement buys exactly that,
+in one place rather than nine that can drift. **The legality decision stays in `temper-principal`**;
+if the SQL grows a transition table there are two of them, in two languages, and they will disagree.
 
 Substrate's role here is the **payload wire contract** (`payloads.rs`), one struct per new event
 type.
@@ -654,6 +784,22 @@ backfill to `Denied` and silently lose their request-ness — `Requested` would 
 backfill. A second pass sets `Requested` for profiles with a pending row. **Prod has zero join
 requests** (§15), so this is correctness-only there, but the enterprise instance is unverified.
 
+**Governance — a third pass this section originally omitted.** *(Added during planning, 2026-07-20.)*
+§11 was written before D10 brought governance into scope, so it enumerates no governance backfill.
+**Without one, repointing `is_system_admin` de-admins every existing admin** — and under D11 no door
+grants access, so the instance would hold zero admins and have no way to make one. A migration would
+lock the operator out of their own instance.
+
+Existing admins are gating-team **owners** under the old definition, so the pass is an
+`INSERT … SELECT` over `kb_team_members` where `role = 'owner'` on the gating team, with
+`granted_by` left NULL — a migration is not an actor, and inventing one would put a fabricated
+attribution on the ledger. **This is the highest-stakes statement in the backfill**, and the
+migration should assert the resulting count rather than trust it.
+
+The §9 invariant is worth asserting in the same breath: every governance row must belong to a
+principal whose standing is `Approved`. If that fires, the pass admitted someone to govern an
+instance they may not use.
+
 **A synthetic genesis log entry.** §5 promises `Reactivate` "restores rather than guesses", but the
 standing log begins at migration time — so every backfilled `Deactivated` row has no prior state to
 restore, which is exactly the case §5 says cannot happen. The backfill must write a genesis entry
@@ -699,11 +845,44 @@ testers.
 > write. **The trigger was never the problem; the problem was that admin-ness lived in the table the
 > trigger writes.**
 
-**Phase 2 must enumerate what the drops break.** Dropping `system_access` breaks three SQL functions
-that reference it — `ensure_auto_join_memberships`, `backfill_auto_join_team`, and
-`sync_system_membership` itself. Dropping `is_active` breaks four more: `can_modify_resource`,
-`context_authorable_by_profile`, `graph_home_contexts`, and `resources_visible_to`. Each needs its
-rewrite specified in the migration, not discovered at apply time.
+**Phase 2 must enumerate what the drops break.** Dropping `system_access` breaks **two** SQL
+functions whose bodies reference the column — `ensure_auto_join_memberships` and
+`backfill_auto_join_team` — plus the **trigger definition** `trg_sync_system_membership`, which
+names the column in its `AFTER INSERT OR UPDATE OF system_access` clause. Dropping
+`kb_profiles.is_active` breaks **no SQL at all**. Each needs its rewrite specified in the migration,
+not discovered at apply time.
+
+> **Correction (planning, 2026-07-20), and it makes Phase 2 materially smaller.** This paragraph
+> originally said dropping `is_active` breaks four functions — `can_modify_resource`,
+> `context_authorable_by_profile`, `graph_home_contexts`, `resources_visible_to`. **All four read a
+> different table's column:**
+>
+> ```
+> can_modify_resource            ::  r.is_active   → kb_resources
+> context_authorable_by_profile  ::  t.is_active   → kb_teams
+> graph_home_contexts            ::  rr.is_active  → kb_resources
+> resources_visible_to           ::  r.is_active   → kb_resources
+> ```
+>
+> Derived two independent ways that agree: `pg_proc` introspection restricted to functions whose
+> body mentions **both** `kb_profiles` and `is_active` returns exactly those four, and inspecting
+> each shows the alias binds elsewhere; and a separate sweep over `migrations/` finds **no** SQL
+> function or view anywhere reading `kb_profiles.is_active`. There is no index or constraint on it
+> either.
+>
+> The list was almost certainly produced by grepping for `is_active` inside functions that mention
+> `kb_profiles` — a true observation, wired to the wrong conclusion, for the third time in this
+> document. **Checking the alias is the whole difference**, and it is the same discipline that
+> separated §7's latent trap from a live exploit.
+>
+> It also said `sync_system_membership` references `system_access`. Its **body** does not — it calls
+> `has_system_access(NEW.id)` and touches only `kb_team_members`/`kb_teams`. The column appears in
+> the **trigger**, not the function. Immaterial to the outcome, but Phase 2's migration must drop
+> the right object.
+>
+> Consequence: profile deactivation is enforced **entirely in Rust**, at exactly two sites —
+> `auth/mod.rs:246` and `slack_grant_vault_service.rs:214`. That answers §13's open question 2
+> empirically (below).
 
 **Order matters within Phase 2.** The trigger's `ELSE DELETE` branch is currently the only automatic
 path by which losing access removes gating-team membership. It may only be dropped *after* the
@@ -764,8 +943,15 @@ is not a surprise. Note this leaves review requests needing their **own** guard 
 
 1. **Where the `has_system_access` call sites belong.** The predicate's *definition* is settled; its
    *placement* across Level 3's SQL is not, and may want rethinking once standing exists. Deliberately
-   deferred, not forgotten.
-2. **Which non-auth `is_active` readers move** versus consume a maintained projection (D6).
+   deferred, not forgotten. **Still open.**
+2. ~~**Which non-auth `is_active` readers move** versus consume a maintained projection (D6).~~
+   **ANSWERED empirically during planning, 2026-07-20 — see §11's correction.** There are exactly
+   **two** readers of `kb_profiles.is_active` and both are Rust: `auth/mod.rs:246` (the Level 1
+   deactivation gate) and `slack_grant_vault_service.rs:214`. **Zero** SQL functions, views, or
+   indexes read it. The question presumed a population of non-auth readers large enough to need a
+   policy; there is one, and `slack_link_service.rs:85` documents a third site that deliberately
+   does *not* filter on it. Phase 1 leaves both in place reading the surviving column; Phase 2 moves
+   them alongside the drop. No projection is needed.
 
 ## §14 What this supersedes
 
@@ -847,7 +1033,35 @@ has now changed twice across the sessions that produced this design.
 The 2026-07-20 pressure test confirmed the design intent (the two-machine split, the fail-closed
 obligations, D8) and found six places where the spec was **not implementable as written**. D10–D17
 resolved **all six**, and the §11/§5/§12 consequences have now been drafted into those sections.
-**The design is complete; the next step is an implementation plan.**
+**The design is complete and Phase 1 is planned** —
+[`plans/2026-07-20-principal-admission-phase-1.md`](../plans/2026-07-20-principal-admission-phase-1.md),
+17 tasks across 8 beats.
+
+### The planning pass found four more false claims — all in the *grounding*, none in the design
+
+Writing the plan meant re-verifying every symbol this spec names. **The design survived intact; four
+of its factual claims did not.** They are corrected in place above rather than dropped, because each
+was load-bearing on some piece of work:
+
+| | claim | status |
+|---|---|---|
+| §2 | "~12 Rust callers, ALL routed through `access_service::is_system_admin`" | **CORRECTED** — 21 sites plus an in-database caller. Conclusion survives via a better object: the SQL body, not the Rust wrapper |
+| §7 | "`AdmittedPrincipal` … preserving the type-state guarantee `SystemAuthorized` has today" | **CORRECTED** — no such guarantee exists; both older types have public fields and no `impl` block. The property must be *added* |
+| §10 | "row + log + event" reads as an existing pattern | **CORRECTED** — the repo's pattern is two-part; the dedicated log is new construction |
+| §11 | "Dropping `is_active` breaks four more" SQL functions | **CORRECTED** — it breaks **zero**; all four read another table's column. Makes Phase 2 materially smaller and answers §13 Q2 |
+
+**Three of the four are the same error shape**, and it is the one this document has now committed
+five times counting the pressure test's own F5: *a true observation wired to the wrong object.* Every
+one of them survived a reading that asked "is this claim true?" and died to one that asked "**which
+object does this system actually use for this?**" §2's callers really do exist; §11's four functions
+really do mention `is_active`; §10's atomic functions really are the pattern to copy — for the event
+half. The predicate held and the referent was wrong.
+
+Two constraints the spec did not anticipate were also found, and both are recorded above as
+decisions rather than as errata: **D3 rules out depending on `temper-core`** (its `sqlx` dep is not
+optional), and **D18 retires `access_mode`**, which could not be deferred because D11 turns an
+`open` instance into a dead end. §11 also gained a **governance backfill pass** it never had — without
+it, repointing `is_system_admin` de-admins the instance and D11 leaves no door to make a new admin.
 
 One finding (F5) was **overstated by the pressure test itself**, and that is recorded rather than
 quietly dropped: the same error shape it caught in §2 and §7 — a true observation wired to the wrong
