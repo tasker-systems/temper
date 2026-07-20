@@ -22,7 +22,9 @@ the install guides.
 
 | Symptom | Most likely cause | Where to look |
 |---|---|---|
-| Every mention `401`s at temper | `SLACK_LINK_SECRET` differs between agent and temper-api, or is unset on either | `crates/temper-api/src/middleware/internal_auth.rs:123-141` (fail-closed on unset) |
+| Every mention `401`s at temper | `SLACK_LINK_SECRET` differs between `temper-mention` and `temper-cloud`, or is unset on either | `crates/temper-api/src/middleware/internal_auth.rs:123-141` (fail-closed on unset) |
+| Mentions resolve, but the answer never comes and the log shows a mint `401` | `SLACK_MINT_SECRET` set but **not byte-identical** on both projects — a clipped trailing `=` does this. It is an opaque string, never decoded | `internal_auth.rs:82`; `packages/agent-workflows/mention/agent/lib/link.ts:20` |
+| An env var was changed and nothing changed | Vercel does **not** rebuild on an env change — redeploy | [Deployment](#deployment-and-secret-sequencing) |
 | Mentions work; the bot says it can't answer | `SLACK_MINT_SECRET` unset ⇒ the mint route is **disabled but the link flow is fine** | `internal_auth.rs:166-179`; `crates/temper-services/src/config.rs:181` |
 | The whole link flow says "Account linking is not configured" | One of the **four** link vars missing, *or* `SLACK_VAULT_ENC_KEY` malformed | `config.rs:204-225` — all-or-nothing, and a bad key logs loudly then disables |
 | A user is "connected" but every mention says re-link | Linked with no vaulted grant ⇒ mint answers `not_vaulted` | `crates/temper-api/src/handlers/slack_mint.rs` `NotVaulted` arm |
@@ -307,14 +309,42 @@ underlying principle is the same and is worth stating once: **turn on a fail-clo
 before the code that needs it; turn on a capability only when something legitimate is asking for
 it.** They differ because one key is a *prerequisite* and the other is a *capability*.
 
+### Which deployments this actually lives on
+
+> **The server half is `temper-cloud`, not `temper-api`.** Those name a crate *and* two different
+> Vercel projects, and they are not the same target:
+>
+> | Vercel project | What it is | Slack? |
+> |---|---|---|
+> | **`temper-cloud`** | the temperkb.io community deployment | **Yes** — every Slack variable below goes here |
+> | **`temper-mention`** | the `@temper` mention agent (`packages/agent-workflows/mention`) | **Yes** — the agent-side variables |
+> | `temper-api` | the enterprise deployment | **No** — no Slack piece is deployed here yet |
+>
+> "Deploy temper-api" is the right sentence about the *crate* and the wrong one about the
+> *environment*. Set Slack variables on **temper-cloud**.
+>
+> Vercel does **not** rebuild on an environment-variable change. After setting any of these,
+> trigger a redeploy or the running function keeps the old values — and a build-time variable like
+> `TEMPER_MCP_URL` will keep failing until you do.
+
 Ordering that follows from this:
 
-1. Deploy temper-api with all four link vars including `SLACK_VAULT_ENC_KEY`. Linking works; minting
-   is off and rejecting.
-2. Deploy the agent with `TEMPER_API_URL`, `SLACK_LINK_SECRET`, `TEMPER_MCP_URL`. Mentions resolve
-   link state.
-3. **Only then** set `SLACK_MINT_SECRET` — byte-identical on both sides, and **different from**
+1. Deploy **temper-cloud** with all four link vars including `SLACK_VAULT_ENC_KEY`. Linking works;
+   minting is off and rejecting.
+2. Deploy **temper-mention** with `TEMPER_API_URL`, `SLACK_LINK_SECRET`, `TEMPER_MCP_URL`. Mentions
+   resolve link state.
+3. **Only then** set `SLACK_MINT_SECRET` on **both** — byte-identical, and **different from**
    `SLACK_LINK_SECRET`.
+
+> **On generating `SLACK_MINT_SECRET`:** `openssl rand -base64 32` is right, but note it is an
+> **opaque string** — `verify(secret.as_bytes(), …)` (`internal_auth.rs:82`) and
+> `createHmac("sha256", secret)` (`link.ts:20`) both consume it raw. It is **never base64-decoded**,
+> so the trailing `=` is part of the secret, not encoding to strip.
+>
+> **Do not carry this reasoning to `SLACK_VAULT_ENC_KEY`**, which *is* decoded
+> (`VaultKey::from_base64`, `config.rs:207`) and must be exactly 32 bytes. Two base64-looking Slack
+> secrets, only one of them actually base64. A mismatched mint secret is a **401 on every mention,
+> silent** — not a warning, not a degraded mode.
 
 Rolling back is the reverse: unset `SLACK_MINT_SECRET` first, which cleanly disables minting while
 leaving linking untouched.
