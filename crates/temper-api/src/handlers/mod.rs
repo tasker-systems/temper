@@ -22,5 +22,6 @@ pub mod search;
 pub mod segments;
 pub mod slack_disconnect;
 pub mod slack_link;
+pub mod slack_mint;
 pub mod steward;
 pub mod teams;

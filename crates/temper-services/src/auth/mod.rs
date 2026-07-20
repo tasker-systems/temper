@@ -312,6 +312,7 @@ mod tests {
             embed_dispatch_secret: None,
             vercel_connect: None,
             slack_link: None,
+            slack_mint_secret: None,
         };
         AppState::new(
             pool,

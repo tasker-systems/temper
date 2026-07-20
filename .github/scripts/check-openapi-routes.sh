@@ -56,6 +56,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/connections/{id}/reach
 /internal/saml/reconcile
 /internal/slack/link-state
+/internal/slack/mint
 /api/auth/slack/callback
 /api/embed/dispatch
 /api/embed/warm

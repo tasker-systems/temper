@@ -22,6 +22,7 @@ pub mod saml_provisioning_service;
 pub mod slack_disconnect_service;
 pub mod slack_grant_vault_service;
 pub mod slack_link_service;
+pub mod slack_mint_service;
 pub mod steward_service;
 pub mod team_service;
 pub mod workflow_job_service;

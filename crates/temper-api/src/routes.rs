@@ -275,6 +275,27 @@ fn slack_link_internal_routes() -> Router<AppState> {
     )
 }
 
+/// Internal, server-to-server only — gated by `require_slack_mint_signature`, NOT `require_auth`
+/// and NOT the link-state gate. Called by the Slack mention agent to obtain an
+/// act-as-the-human access token for a mentioning user.
+///
+/// A **third** router rather than a second route on [`slack_link_internal_routes`], even though
+/// the caller is the same agent, because the keys must differ. Link-state answers a question
+/// ("is this principal linked?"); this vends a credential carrying that human's entire reach.
+/// Sharing one key would make compromise of the cheap capability yield the expensive one — the
+/// same reasoning that already separates `internal_routes` from `slack_link_internal_routes`,
+/// applied where the stakes are highest. One scheme, three secrets, three routers — the layer is
+/// applied at each merge site so the route can never be mounted ungated.
+/// Excluded from the OpenAPI contract entirely.
+fn slack_mint_internal_routes() -> Router<AppState> {
+    use axum::routing::post;
+
+    Router::new().route(
+        "/internal/slack/mint",
+        post(handlers::slack_mint::slack_mint),
+    )
+}
+
 /// The browser-facing Slack link callback — the registered `redirect_uri`.
 ///
 /// Ungated by design: it is the IdP's redirect target, so it carries no bearer and no
@@ -362,6 +383,12 @@ pub fn create_app(state: AppState) -> Router {
             crate::middleware::internal_auth::require_slack_link_signature,
         ));
 
+    let slack_mint_internal =
+        slack_mint_internal_routes().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_slack_mint_signature,
+        ));
+
     let embed_internal = embed_internal_routes();
 
     let mut app = Router::new()
@@ -370,6 +397,7 @@ pub fn create_app(state: AppState) -> Router {
         .merge(gated)
         .merge(internal)
         .merge(slack_link_internal)
+        .merge(slack_mint_internal)
         .merge(slack_link_public_routes())
         .merge(embed_internal);
 
@@ -404,11 +432,17 @@ pub fn create_internal_app(state: AppState) -> Router {
             state.clone(),
             crate::middleware::internal_auth::require_slack_link_signature,
         ));
+    let slack_mint_internal =
+        slack_mint_internal_routes().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_slack_mint_signature,
+        ));
     let embed_internal = embed_internal_routes();
 
     let app = Router::new()
         .merge(internal)
         .merge(slack_link_internal)
+        .merge(slack_mint_internal)
         .merge(embed_internal);
 
     apply_transport_layers(app, state)

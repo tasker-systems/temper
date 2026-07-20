@@ -7,7 +7,7 @@
 //! (and a cached access token) are stored as XChaCha20-Poly1305 ciphertext via
 //! [`grant_crypto`](super::grant_crypto); the database never sees plaintext or the key.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -32,8 +32,17 @@ const DEFAULT_AT_TTL_SECS: u64 = 3600;
 /// log would otherwise write an act-as-the-human credential to disk.
 #[derive(Clone, PartialEq, Eq)]
 pub enum MintOutcome {
-    /// A valid access token the caller may present as the linked human.
-    Token(String),
+    /// A valid access token the caller may present as the linked human, with the absolute instant
+    /// it expires.
+    ///
+    /// `expires_at` is carried because the consumer is a token *cache*: eve's `TokenResult` takes
+    /// an optional `expiresAt` and refreshes proactively when it has one. Without it the runtime
+    /// caches until something 401s, which turns every expiry into a user-visible failed turn
+    /// before the retry. It is the same instant stored on the vault row, not a re-derivation.
+    Token {
+        access_token: String,
+        expires_at: DateTime<Utc>,
+    },
     /// A vault row exists but is not mintable — explicitly revoked, or its profile deactivated.
     /// Mints nothing. (A live token handed out earlier still survives to its own `exp` — see the
     /// migration's note on honest revocation semantics.)
@@ -46,7 +55,7 @@ pub enum MintOutcome {
 impl std::fmt::Debug for MintOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Token(_) => f.write_str("Token(redacted)"),
+            Self::Token { expires_at, .. } => write!(f, "Token(redacted, expires_at={expires_at})"),
             Self::Revoked => f.write_str("Revoked"),
             Self::NotVaulted => f.write_str("NotVaulted"),
         }
@@ -227,7 +236,10 @@ pub async fn mint_access_token(
                 &aad(slack_principal_id, FIELD_AT),
             )?;
             tx.commit().await?;
-            return Ok(MintOutcome::Token(token));
+            return Ok(MintOutcome::Token {
+                access_token: token,
+                expires_at,
+            });
         }
     }
 
@@ -273,7 +285,10 @@ pub async fn mint_access_token(
     .await?;
 
     tx.commit().await?;
-    Ok(MintOutcome::Token(tokens.access_token))
+    Ok(MintOutcome::Token {
+        access_token: tokens.access_token,
+        expires_at: access_expires_at,
+    })
 }
 
 /// Read and decrypt the stored refresh token, for the disconnect path only.
@@ -471,7 +486,23 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(out, MintOutcome::Token("cached-access-token".to_string()));
+        // Assert the token AND that the expiry rides along pointing at the future. The expiry is
+        // what the caller hands eve as `TokenResult.expiresAt`; a zero or past value would still
+        // be "a token" and would still pass a token-only assertion, while making the runtime
+        // refresh on every single call.
+        match out {
+            MintOutcome::Token {
+                access_token,
+                expires_at,
+            } => {
+                assert_eq!(access_token, "cached-access-token");
+                assert!(
+                    expires_at > Utc::now(),
+                    "the cached mint must report a future expiry, got {expires_at}",
+                );
+            }
+            other => panic!("expected the cached token, got {other:?}"),
+        }
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -620,7 +651,19 @@ mod tests {
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
             .await
             .unwrap();
-        assert_eq!(out, MintOutcome::Token("at2-fresh".to_string()));
+        match out {
+            MintOutcome::Token {
+                access_token,
+                expires_at,
+            } => {
+                assert_eq!(access_token, "at2-fresh");
+                assert!(
+                    expires_at > Utc::now(),
+                    "a re-stored grant must serve a future expiry, got {expires_at}",
+                );
+            }
+            other => panic!("expected the re-stored token, got {other:?}"),
+        }
     }
 
     /// The principal is the key, WHOLE. A different principal must not read another's grant.
