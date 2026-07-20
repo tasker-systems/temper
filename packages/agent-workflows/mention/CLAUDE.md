@@ -91,6 +91,19 @@ pipeline into that handler first.**
 Registered by **filesystem convention** — there is no manifest to edit. The filename gives the
 connection its name and its tools become `temper__*`.
 
+> **`agent/channels/` and `agent/connections/` are DISCOVERY directories, not folders.** Every
+> module in them is loaded by `eve build` and required to export the matching shape. A helper
+> module parked next to `channels/slack.ts` because that is where its callers live fails the build
+> with *"Expected the channel export `default` from `channels/…` to match the public eve shape"*.
+> Helpers go in `agent/lib/`. This cost a red CI run: `events.ts` (the ephemeral event overrides)
+> was authored into `channels/` and had to move.
+>
+> **`npm test` and `npm run typecheck` are both blind to this** — discovery happens only at build.
+> Run **`npm run build`** before pushing, and note it needs `TEMPER_MCP_URL` set to *something*
+> (`connections/temper.ts` resolves it at module load, so a missing value fails the build rather
+> than the first user turn — deliberate, and the same as the steward). CI supplies a reserved
+> `.invalid` host for exactly this.
+
 **`principalType: "user"`, and that is the whole point.** The steward is app-scoped and speaks as a
 machine; this agent speaks as whoever mentioned it, under exactly their reach. eve keys the token
 cache on `user:${issuer}:${id}` so concurrent users never share tokens — which is why

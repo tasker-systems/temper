@@ -9,7 +9,7 @@ import {
   sessionFailed,
   turnFailed,
   WORKING_STATUS,
-} from "../agent/channels/events.js";
+} from "../agent/lib/events.js";
 
 /**
  * eve's REAL default handler table, imported at runtime.

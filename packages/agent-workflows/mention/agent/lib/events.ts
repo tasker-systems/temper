@@ -1,6 +1,6 @@
 import type { SlackChannelEvents } from "eve/channels/slack";
 
-import { deliverEphemeral, resolveEphemeralRecipient } from "../lib/ephemeral.js";
+import { deliverEphemeral, resolveEphemeralRecipient } from "./ephemeral.js";
 
 /**
  * Ephemeral (or content-free) replacements for every eve Slack default that

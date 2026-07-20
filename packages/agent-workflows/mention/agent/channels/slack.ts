@@ -5,7 +5,7 @@ import { deliverEphemeral } from "../lib/ephemeral.js";
 import { decideIdentity, notVaultedPrompt, revokedPrompt, unlinkedPrompt } from "../lib/identity.js";
 import { requestLinkState } from "../lib/link.js";
 import { requestMintedToken } from "../lib/mint.js";
-import { ephemeralEvents } from "./events.js";
+import { ephemeralEvents } from "../lib/events.js";
 
 /**
  * Slack channel for the @temper mention agent.
