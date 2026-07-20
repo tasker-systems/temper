@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrincipalGovernanceChanged",
+  "description": "`principal_governance_changed` — a principal gained or lost the authority to change the rules\n(spec 2026-07-20 D10).\n\nSeparate from `PrincipalStandingChanged` because governance is the separate question. A demote\nfired as a consequence of `Revoke`/`Deactivate` emits BOTH events in the same transaction, and\nthe pair is what makes the causal story legible in the ledger.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "change": {
+      "description": "`granted` | `revoked`.",
+      "type": "string"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "subject_table": {
+      "$ref": "#/$defs/AnchorTable"
+    }
+  },
+  "required": [
+    "subject_table",
+    "subject_id",
+    "change"
+  ],
+  "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients"
+      ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

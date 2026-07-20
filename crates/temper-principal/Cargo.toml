@@ -1,0 +1,16 @@
+[package]
+name = "temper-principal"
+version = "0.1.0"
+edition = "2021"
+description = "The pure principal-admission and standing-transition machines. No I/O, no database."
+
+# DELIBERATELY EMPTY OF WORKSPACE DEPENDENCIES.
+#
+# Spec D3 requires no `sqlx` here, "purity enforced by the compiler, not by convention". That
+# rules out `temper-core`: its sqlx dependency is NON-OPTIONAL (temper-core/Cargo.toml:22) and
+# `define_id!` emits sqlx Type/Encode/Decode impls ungated (temper-core/src/types/ids.rs:6-108),
+# so taking `ProfileId` would pull sqlx straight back in and D3 would hold only by wishful
+# thinking. This crate therefore takes NO ids at all — it judges assembled evidence and the
+# seam in temper-services owns every identifier (spec §4).
+[dependencies]
+serde = { version = "1", features = ["derive"] }
