@@ -759,4 +759,78 @@ mod tests {
             "expected SystemAccessDenied, got {err:?}",
         );
     }
+
+    /// Seed a human whose cached auth link stores a real email that the provider
+    /// NEVER verified — the ordinary shape for any row created from an unverified
+    /// claim, and the shape migration `20260709000004` deliberately backfilled every
+    /// pre-existing row into.
+    async fn seed_unverified_link(pool: &PgPool, sub: &str, email: &str) -> uuid::Uuid {
+        let profile_id = uuid::Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, $2, $2, $3, '{}')",
+            profile_id,
+            format!("human-{sub}"),
+            email,
+        )
+        .execute(pool)
+        .await
+        .expect("seed profile");
+        sqlx::query!(
+            "INSERT INTO kb_profile_auth_links \
+               (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at) \
+             VALUES ($1, $2, 'test-provider', $3, $4, false, true, now())",
+            uuid::Uuid::now_v7(),
+            profile_id,
+            sub,
+            email,
+        )
+        .execute(pool)
+        .await
+        .expect("seed unverified link");
+        profile_id
+    }
+
+    /// An unverified cached email must NOT be promoted to verified by the act of
+    /// signing in with a token that carries no email claim.
+    ///
+    /// FAILS IF: `lookup_cached_email` synthesizes the flag (it returned a hardcoded
+    /// `Some(true)` from a query that selected only `email`), or
+    /// `resolve_email_from_claims` discards the stored flag and substitutes `Some(true)`
+    /// — it did BOTH, and either one alone reopens this.
+    ///
+    /// The assertion is on the PERSISTED ROW, not on the returned claims, because the
+    /// damage is durable: `refresh_link_verification` writes `email_verified = true`,
+    /// and that row then satisfies `reconcile_by_email`'s `AND email_verified` filter,
+    /// letting a pre-created account holding someone else's address capture that
+    /// person's first genuinely-verified sign-in.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_unverified_cached_email_is_not_promoted_by_signing_in(pool: PgPool) {
+        let profile_id =
+            seed_unverified_link(&pool, "auth0|unverified", "victim@example.test").await;
+
+        // A token with NO email claim, so the ladder falls to the cached-link rung.
+        let authed = authenticate_token(
+            &state(pool.clone()),
+            &human_raw("auth0|unverified", None),
+            "tok",
+        )
+        .await
+        .expect("a linked human still authenticates from the cached email");
+        assert_eq!(authed.profile.id, profile_id);
+
+        let still_unverified = sqlx::query_scalar!(
+            "SELECT email_verified FROM kb_profile_auth_links \
+             WHERE auth_provider = 'test-provider' AND auth_provider_user_id = $1",
+            "auth0|unverified",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the link row survives the sign-in");
+
+        assert!(
+            !still_unverified,
+            "signing in with no email claim must not mark an unverified email verified"
+        );
+    }
 }
