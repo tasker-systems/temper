@@ -1129,7 +1129,8 @@ pub enum AdminMachineAction {
         /// Team recorded as this machine's OWNER. Not its reach.
         #[arg(long = "owner-team")]
         owner_team: Option<String>,
-        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (role defaults to `member`).
+        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (`member` by default, and the
+        /// highest a machine may hold — `maintainer`/`owner` are refused).
         /// Repeatable. Reach is plural and never inferred from --owner-team.
         #[arg(long = "team")]
         teams: Vec<String>,
@@ -1161,7 +1162,8 @@ pub enum AdminMachineAction {
         /// Team recorded as this machine's OWNER. Not its reach.
         #[arg(long = "owner-team")]
         owner_team: Option<String>,
-        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (role defaults to `member`). Repeatable.
+        /// Team to enroll in, as `<ref>` or `<ref>:<role>` (`member` by default, and the highest
+        /// a machine may hold — `maintainer`/`owner` are refused). Repeatable.
         #[arg(long = "team")]
         teams: Vec<String>,
         /// Cogmap to grant, as `<ref>` or `<ref>:ro` (defaults to read+write). Repeatable.
