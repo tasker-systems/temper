@@ -316,24 +316,39 @@ safe to share.
 
 Five, plus absence.
 
-```
-        (no row) ──────────────► fail-closed: DENIED
-            │
-            │ Provision
-            ▼
-  ┌──── Denied ◄──────────┐
-  │        │              │ Reject
-  │        │ Request      │
-  │        ▼              │
-  │    Requested ─────────┘
-  │        │ Approve
-  │        ▼
-  │    Approved
-  │        │ Revoke
-  │        ▼
-  └───► Revoked
+> **§6's transition table is authoritative. This diagram is an aid.** The earlier version of this
+> sketch showed an edge from `Denied` into `Revoked` that no act produces, and in this repo a
+> disagreement between prose and sketch tends to resolve in the sketch's favour. If the two ever
+> diverge again, §6 wins.
 
-  Deactivate / Reactivate move any state to and from Deactivated.
+```
+   (no row) ──────────────────────────────────► fail-closed: DENIED
+       │
+       │ Provision — every door births Denied (D11)
+       ▼
+   ┌──────────┐    Request     ┌───────────┐
+   │  Denied  │───────────────►│ Requested │
+   │          │◄───────────────│           │
+   └──────────┘  Withdraw      └───────────┘
+        │         Reject             │
+        │                            │ Approve
+        │  Approve (D14 — machines)  │
+        └──────────────┐             │
+                       ▼             ▼
+                  ┌──────────────────────┐
+                  │       Approved       │
+                  └──────────────────────┘
+                             │ Revoke
+                             ▼
+                  ┌──────────────────────┐   Approve (D16 — no separate Reinstate)
+                  │       Revoked        │──────────────────────► Approved
+                  └──────────────────────┘
+                        ▲        │
+                        └────────┘  RequestReview — sets a marker;
+                                    standing UNCHANGED (D15)
+
+   Deactivate : any live state ─────► Deactivated
+   Reactivate : Deactivated ────────► the prior state, read from the log
 ```
 
 - **`Denied`** — provisioned, never granted. Where OAuth first-login lands, by design (§8).
@@ -341,9 +356,11 @@ Five, plus absence.
   duplicate is refusable. **Per-principal, with no team dimension** — see D9.
 - **`Approved`** — may use the instance.
 - **`Revoked`** — *was* granted and lost it. A different sentence to the user and a different signal
-  in an audit than never having had it.
+  in an audit than never having had it. **Only an admin act leaves this state** (D15): the principal
+  may `RequestReview`, which sets a marker and moves nothing.
 - **`Deactivated`** — the principal itself is disabled. Prior standing is recoverable from the log,
-  so reactivation restores rather than guesses.
+  so reactivation restores rather than guesses. **Backfilled rows are the exception** — the log
+  begins at migration time, so they have no prior state to restore; see §11.
 
 Rejection is deliberately **not** a state: a rejected request returns standing to `Denied` so the
 principal may re-request — `join_request_rejection_allows_resubmit` (`access_gate_test.rs:403`)
@@ -574,14 +591,86 @@ Two mechanical consequences, both easy to trip over:
 
 ## §11 Backfill and phasing
 
-**Backfill by evaluating the old predicate, not by reading the tier.** For each profile, run today's
-`has_system_access` at migration time: `true` → `Approved`, `false` → `Denied`; `is_active = false`
-→ `Deactivated`.
+**Backfill by evaluating the old predicate, not by reading the tier.** A tier-based backfill would
+silently lock out anyone whose access comes entirely from gating-team membership with
+`system_access = 'none'` — confirmed on prod as exactly the `anonymous` row (§15), and potentially
+most of an instance elsewhere.
 
-This makes the cutover **behaviour-preserving by construction** on every instance, whatever its
-configuration. A tier-based backfill would silently lock out anyone whose access comes entirely from
-gating-team membership with `system_access = 'none'` — a population that is one row here and could
-be most of an instance elsewhere.
+### The rule, with precedence and a total arm
+
+The original three-line rule had **no stated ordering** and **no NULL arm**, and both gaps are
+load-bearing. Evaluated in order, first match wins:
+
+| # | condition | standing |
+|---|---|---|
+| 0 | profile is a **connection profile** | **no row at all** (D7) |
+| 1 | `is_active = false` | `Deactivated` |
+| 2 | `has_system_access(id) IS TRUE` | `Approved` |
+| 3 | otherwise — including **`NULL`** | `Denied` |
+
+Rule 3 is written `IS TRUE … else Denied` rather than `false → Denied` **so that `NULL` is handled
+by decision rather than by omission.** Today's predicate returns `NULL` when `kb_system_settings` is
+empty (§7), and a rule with only `true`/`false` arms would leave that case to whatever the migration
+happened to do.
+
+Rule 0 is not optional. Under `access_mode = 'open'` the old predicate returns `true` for **every**
+profile, so a literal per-profile backfill would mint connection profiles `Approved` rows — directly
+contradicting D7 and **dissolving the structural safety D7 claims**. There is no discriminator
+column on `kb_profiles`; kind is inferable only via `NOT EXISTS (SELECT 1 FROM kb_connections …)`.
+
+**Rules 1 and 2 both match a deactivated principal whose old predicate is true, and the ordering is
+the decision.** `Deactivated` wins, because D6 folds `is_active` in and a principal who is disabled
+is disabled. The cost is stated honestly below.
+
+### What "behaviour-preserving" does and does not mean
+
+The original claim — behaviour-preserving **by construction**, on every instance — is **too strong,
+and the overstatement hid a real contradiction.** §11's rule and D6 cannot both be fully satisfied:
+for a deactivated principal with old-predicate-true, the backfill assigns `Deactivated`, so the new
+predicate returns `false` where the old returned `true`. On an `open` instance that is *every*
+deactivated profile.
+
+The precise claim, which is true:
+
+- **The predicate is not preserved for deactivated principals.** It flips `true → false`,
+  deliberately.
+- **Auth-observable behaviour *is* preserved**, because `gate_resolved_profile`
+  (`auth/mod.rs:242-246`) rejects `!profile.is_active` at **Level 1**, and `require_system_access`
+  only accepts an `AuthenticatedProfile` — the type-state makes reaching Level 2 without Level 1
+  impossible. No deactivated principal ever reaches the predicate through auth.
+- **The behaviour that does change** is in the non-auth callers that pass a third party's id.
+  `backfill_auto_join_team` (`WHERE has_system_access(p.id)`) today enrols deactivated profiles and
+  will stop; `ensure_auto_join_memberships` and `access_service.rs:914` likewise. These are
+  **deliberate, named changes**, not incidental fallout.
+
+**On temperkb.io this cell is empty** — all six principals are `is_active = true` (§15) — so the
+change is unobservable there. The enterprise instance is unverified, which is why the rule is
+specified rather than assumed harmless.
+
+### Two passes the single rule cannot express
+
+**Pending requests.** The old predicate cannot see `status = 'pending'`, so in-flight requests would
+backfill to `Denied` and silently lose their request-ness — `Requested` would be unreachable by the
+backfill. A second pass sets `Requested` for profiles with a pending row. **Prod has zero join
+requests** (§15), so this is correctness-only there, but the enterprise instance is unverified.
+
+**A synthetic genesis log entry.** §5 promises `Reactivate` "restores rather than guesses", but the
+standing log begins at migration time — so every backfilled `Deactivated` row has no prior state to
+restore, which is exactly the case §5 says cannot happen. The backfill must write a genesis entry
+recording the pre-deactivation standing (rule 2 evaluated *ignoring* rule 1), or `Reactivate` is
+undefined for every pre-existing deactivated principal.
+
+This matters more than it looks, because the evidence is actively destroyed: `sync_system_membership`
+**deletes** auto-join memberships whenever the predicate reads false, so once the predicate is
+repointed, a `Deactivated` principal's gating-team membership — the very thing their access was
+derived from — is gone and does not come back.
+
+### The three `system_access` writers
+
+`bootseed.rs:32`, `scenario/loader.rs:53`, and `scenario/access/loader.rs:143` write the column
+directly (§15) and are **not** test-gated. They must be re-pointed to mint standing rows in Phase 1,
+before the column is dropped. The boot-seed is also the genesis admin door (D11), so it is the one
+writer that legitimately produces `Approved` + admin.
 
 It also gives the one row we *do* want to change a better story: `anonymous` backfills to `Approved`
 (it is a gating-team member today), and revoking it becomes a **deliberate, audited transition**
@@ -593,11 +682,38 @@ testers.
 
 **Phasing follows deployment character, not size.**
 
-1. **Additive** — add the tables, backfill, repoint the predicates, route all writes through the
-   machine. Rides auto-deploy safely under the additive-only-on-`main` invariant. `system_access` and
-   `is_active` survive as maintained projections so nothing reading them breaks mid-flight.
-2. **Destructive** — drop `kb_profiles.system_access`, `kb_profiles.is_active`, and
-   `kb_join_requests.status`. Operator-run per target via the cutover runbook. Separate PR.
+1. **Additive** — add the standing and governance tables, backfill (including both extra passes),
+   repoint `has_system_access` and `is_system_admin`, re-point the three `system_access` writers, and
+   route all writes through the machines. Rides auto-deploy safely under the additive-only-on-`main`
+   invariant. `system_access` and `is_active` survive as projections so nothing reading them breaks
+   mid-flight.
+2. **Destructive** — drop `kb_profiles.system_access`, `kb_profiles.is_active`,
+   `kb_join_requests.status`, and `trg_sync_system_membership`. Operator-run per target via the
+   cutover runbook. Separate PR.
+
+> **Why Phase 1 is additive again (D10).** Before governance moved in scope, it was not: writing the
+> projection value `approved` fires `trg_sync_system_membership`, which re-derives gating-team role
+> from the tier and **strips admin** — measured, `owner → watcher`, `is_system_admin` `true → false`
+> (§16 F1). Phase 1 had no compliant exit. Under D10 admin-ness no longer lives in
+> `kb_team_members`, so that demotion is cosmetic team-role churn and the projection is safe to
+> write. **The trigger was never the problem; the problem was that admin-ness lived in the table the
+> trigger writes.**
+
+**Phase 2 must enumerate what the drops break.** Dropping `system_access` breaks three SQL functions
+that reference it — `ensure_auto_join_memberships`, `backfill_auto_join_team`, and
+`sync_system_membership` itself. Dropping `is_active` breaks four more: `can_modify_resource`,
+`context_authorable_by_profile`, `graph_home_contexts`, and `resources_visible_to`. Each needs its
+rewrite specified in the migration, not discovered at apply time.
+
+**Order matters within Phase 2.** The trigger's `ELSE DELETE` branch is currently the only automatic
+path by which losing access removes gating-team membership. It may only be dropped *after* the
+governance machine owns demotion — otherwise there is a window in which a `Revoke` leaves the owner
+row intact.
+
+**Dropping `kb_join_requests.status` also drops `idx_join_requests_one_pending`.** That is intended,
+not collateral: `Requested` standing is the duplicate guard now (D12), and it is per-principal rather
+than per-team, which is more correct under D9. Say so in the migration so the index's disappearance
+is not a surprise. Note this leaves review requests needing their **own** guard (D15).
 
 ## §12 Verification
 
@@ -612,10 +728,25 @@ testers.
 - **`RequestReview` must not change admission** — assert that a `Revoked` principal with a pending
   review is still refused, and refused *identically* to one without. This is the D15 obligation that
   a future reader is most likely to break.
-- **The backfill gets a differential test.** Seed a population spanning `open`/`invite_only`, member
-  and non-member, all three tiers, active and deactivated; assert
-  `old_has_system_access(p) == new_has_system_access(p)` for every `p`. Hand-writing the expected set
-  is where a subtle case gets missed.
+- **The backfill gets a differential test — but not the one originally specified.**
+  `old(p) == new(p) ∀p` is **unsatisfiable** on any population containing a deactivated profile, by
+  the deliberate flip in §11. The test is:
+  - `old(p) == new(p)` for every `p` **where `is_active`** — the preservation claim, scoped to where
+    it is true;
+  - a **separate** assertion that deactivated profiles flip `true → false`, so the intended change is
+    pinned rather than merely tolerated;
+  - connection profiles get **no standing row** (D7 / rule 0);
+  - profiles with a pending request land in `Requested`, not `Denied`.
+
+  **`system_access` is not a dimension of the predicate** — it appears nowhere in
+  `has_system_access`'s body. Fanning the population across all three tiers triples its size and
+  tests nothing about admission. Keep one representative per tier only to exercise
+  `trg_sync_system_membership`, which *does* read it.
+
+  Configurations to run the whole population against: `open`/`gating set`,
+  `invite_only`/`gating set`, `invite_only`/`gating NULL`, `open`/`gating NULL`, and
+  **`kb_system_settings` empty** (the NULL arm — this one fails against today's function, which is
+  the point).
 - **SQL totality has its own test** — `has_system_access` and `is_system_admin` return non-`NULL` for
   a profile with no standing row, a deactivated one, and an unknown state value.
 - **Containment is retired (D11), so its tests change shape.** There is no longer a minter-standing
@@ -715,8 +846,8 @@ has now changed twice across the sessions that produced this design.
 
 The 2026-07-20 pressure test confirmed the design intent (the two-machine split, the fail-closed
 obligations, D8) and found six places where the spec was **not implementable as written**. D10–D17
-resolved **all six**. What remains is the §11 cleanup list below — consequences to be drafted, not
-decisions to be made.
+resolved **all six**, and the §11/§5/§12 consequences have now been drafted into those sections.
+**The design is complete; the next step is an implementation plan.**
 
 One finding (F5) was **overstated by the pressure test itself**, and that is recorded rather than
 quietly dropped: the same error shape it caught in §2 and §7 — a true observation wired to the wrong
