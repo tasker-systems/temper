@@ -22,6 +22,28 @@ pub enum TeamRole {
     Watcher,
 }
 
+impl TeamRole {
+    /// Numeric rank for the strict hierarchy Owner > Maintainer > Member > Watcher.
+    ///
+    /// `TeamRole` deliberately does not derive `Ord` — the derive would rank by declaration
+    /// order, which puts `Owner` *lowest* and silently inverts every comparison. Callers that
+    /// need to compare authority use this instead.
+    ///
+    /// A role added to this enum must be given a rank here, and the compiler's exhaustiveness
+    /// check is what makes that non-optional. That is the point: policy ceilings expressed as
+    /// `a.rank() <= b.rank()` (see `machine_authz`) then bar the new role by construction
+    /// rather than by someone remembering to extend a hand-listed set.
+    #[must_use]
+    pub fn rank(self) -> u8 {
+        match self {
+            TeamRole::Owner => 3,
+            TeamRole::Maintainer => 2,
+            TeamRole::Member => 1,
+            TeamRole::Watcher => 0,
+        }
+    }
+}
+
 /// Response row for team endpoints — matches the real `kb_teams` columns.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
