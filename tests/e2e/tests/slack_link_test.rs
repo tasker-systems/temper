@@ -240,20 +240,38 @@ fn sign_idp_access_token(issuer: &str, sub: &str, email: &str) -> String {
     jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &key).expect("sign IdP JWT")
 }
 
+/// `refresh_token` is an `Option` so the stub can model the misconfigured-client case: a 200 that
+/// omits it entirely, which is what an IdP with `offline_access` (or rotation) not enabled on the
+/// link client actually returns. `skip_serializing_if` matters — a JSON `null` is a different wire
+/// shape from an absent key, and it is absence the real misconfiguration produces.
 #[derive(Debug, Serialize)]
 struct StubTokenResponse {
     access_token: String,
-    refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
     expires_in: u64,
 }
 
 /// Mount the RFC 6749 token endpoint on the stub, returning `access_token` on any exchange.
 async fn stub_token_endpoint(app: &SlackLinkApp, access_token: String) {
+    mount_token_endpoint(app, access_token, Some(STUB_REFRESH_TOKEN.to_string())).await;
+}
+
+/// The same endpoint, but answering WITHOUT a refresh token — the misconfigured-link-client shape.
+async fn stub_token_endpoint_without_refresh_token(app: &SlackLinkApp, access_token: String) {
+    mount_token_endpoint(app, access_token, None).await;
+}
+
+async fn mount_token_endpoint(
+    app: &SlackLinkApp,
+    access_token: String,
+    refresh_token: Option<String>,
+) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(StubTokenResponse {
             access_token,
-            refresh_token: STUB_REFRESH_TOKEN.to_string(),
+            refresh_token,
             expires_in: 86400,
         }))
         .mount(&app.idp)
@@ -1546,14 +1564,105 @@ async fn mint_rejects_forged_and_unsigned_calls(pool: PgPool) {
     assert_eq!(res.status(), 401, "an unsigned call must be refused");
 }
 
+/// **FINDING D.** An exchange that returns no refresh token must NOT render a success page, and
+/// must leave NOTHING behind.
+///
+/// The IdP answering 200-without-`refresh_token` is a link-client misconfiguration
+/// (`offline_access` or refresh-token rotation not enabled). There is nothing to vault, so the
+/// link can never mint. The old code fired a `warn!` and returned the slug, rendering
+/// "Account connected." — the user was told the thing worked and then hit an unexplained failure
+/// at their next mention, with no reason to suspect the link.
+///
+/// **Why this bites, three ways.** Each assertion falsifies a different half-fix:
+///  1. The page must not say "connected" — a fix that only rolled back but still rendered success
+///     would pass a row-count-only test.
+///  2. `kb_profile_auth_links` must be EMPTY — a fix that only changed the page but left the
+///     directory row would pass a page-only test, and leaves the user in the worst state of the
+///     three: `lookup_linked_handle` reads that table, so link-state would keep reporting them
+///     connected while every mint answers `not_vaulted`, and `link_slack_principal` refuses to
+///     rebind, so re-linking cannot repair it. Rolled back, they are cleanly unlinked and one
+///     mention away from retrying.
+///  3. `kb_slack_grant_vault` must be empty too — the obvious sanity leg.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn callback_without_a_refresh_token_does_not_report_success(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    let sub = "idp-sub-no-refresh-token";
+    let email = "no-rt-71c0ad@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint_without_refresh_token(
+        &app,
+        sign_idp_access_token(&app.issuer(), sub, email),
+    )
+    .await;
+
+    let res = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("GET callback");
+    assert_eq!(
+        res.status(),
+        200,
+        "the callback always renders a page — a human is looking at it"
+    );
+    let body = res.text().await.expect("callback body");
+
+    assert!(
+        !body.contains("Account <em>connected</em>."),
+        "a link that can never mint must not render the success page: {body}",
+    );
+    assert!(
+        body.contains("Not <em>connected</em>."),
+        "the failure page is what the human must see: {body}",
+    );
+    assert!(
+        body.contains("Nothing was saved."),
+        "the page must tell the human the truth about what happened: {body}",
+    );
+
+    let links: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider_user_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("count auth links");
+    assert_eq!(
+        links, 0,
+        "the directory row must be rolled back — a link with no grant is unrepairable, because \
+         link-state reads this table and link_slack_principal refuses to rebind",
+    );
+
+    let grants: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("count grants");
+    assert_eq!(grants, 0, "nothing was vaulted, by construction");
+}
+
 /// A principal whose link row stands but whose grant was never vaulted mints nothing, and says so
 /// distinctly.
 ///
-/// This is not a hypothetical arm. `slack_link.rs` lets the callback succeed when the IdP returns
-/// no refresh token — the directory row is written and only a `warn!` fires — and
-/// `lookup_linked_handle` reads that table, NOT the vault. So such a user is told "you're
-/// connected" by link-state and then cannot mint. The two endpoints must disagree in a way the
-/// agent can act on, which is why this is its own status rather than an error or a null token.
+/// This is not a hypothetical arm, and its provenance is worth stating precisely because this
+/// comment used to describe a BUG as though it were the design.
+///
+/// It once read: "`slack_link.rs` lets the callback succeed when the IdP returns no refresh token
+/// — the directory row is written and only a `warn!` fires — so such a user is told 'you're
+/// connected' and then cannot mint." That was true, and it was the defect, not the contract: the
+/// callback rendered "Account connected." at a user whose link could never mint. The callback now
+/// ROLLS BACK that whole link and renders an error page instead
+/// (`callback_without_a_refresh_token_does_not_report_success` below), so it no longer manufactures
+/// this state.
+///
+/// The state remains REACHABLE by other routes, which is why mint must still answer it honestly:
+/// a user who linked before T3 shipped has a directory row and no vault row at all, and
+/// `lookup_linked_handle` reads that table, NOT the vault — so link-state calls them linked while
+/// the vault has nothing. The two endpoints must disagree in a way the agent can act on, which is
+/// why this is its own status rather than an error or a null token.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mint_reports_not_vaulted_distinctly_from_revoked(pool: PgPool) {
     let app = setup_slack_app(&pool).await;

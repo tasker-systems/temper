@@ -222,12 +222,27 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
                 .to_string()
         })?;
 
+    // ONE TRANSACTION for the identity row AND the sealed grant.
+    //
+    // They used to be two independent autocommits, and the window between them was not benign.
+    // Process death after the directory row committed and before the vault row did left the user
+    // LINKED with a refresh token that existed only in this stack frame — and unrecoverable,
+    // because `consume_intent` burned the state nonce above, so no retry of this callback can
+    // re-derive it. The old comment here argued the failure was benign because "the user is shown
+    // a retry page"; that holds for an observable `Err` return below and does NOT hold for a kill
+    // between two commits, where no page renders at all. A rollback of both is recoverable (the
+    // user mentions @temper and gets a fresh intent); a half-write is not.
+    let mut tx =
+        state.pool.begin().await.map_err(|_| {
+            "Something went wrong saving the link. Mention @temper again.".to_string()
+        })?;
+
     // Auth before write: the profile is resolved and gated above this line.
     //
     // A principal binds ONCE. If it is already bound to a different profile the write is
     // refused rather than moved — see `link_slack_principal` and spec D4.
     let outcome = slack_link_service::link_slack_principal(
-        &state.pool,
+        &mut tx,
         profile.profile.id,
         &intent.slack_principal_id,
     )
@@ -259,39 +274,64 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<String, Stri
     // and secret (this vault) stay in separate tables; kb_profile_auth_links has no secret column.
     //
     // Auth-before-write: the profile is resolved and gated well above this line, and the vault
-    // write comes after. If it fails, the directory row still stands and the user is shown a
-    // retry page — re-linking is idempotent and re-stores the grant.
-    match tokens.refresh_token.as_deref() {
-        Some(refresh_token) => {
-            slack_grant_vault_service::store_grant(
-                &state.pool,
-                &cfg.vault_key,
-                slack_grant_vault_service::NewGrant {
-                    profile_id: profile.profile.id,
-                    slack_principal_id: &intent.slack_principal_id,
-                    refresh_token,
-                    access_token: &tokens.access_token,
-                    access_ttl_secs: tokens.expires_in,
-                },
-            )
-            .await
-            .map_err(|_| {
-                "Something went wrong saving your connection. Mention @temper again.".to_string()
-            })?;
-            tracing::info!(profile_id = %profile.profile.id, "slack link: established and grant vaulted");
-        }
-        None => {
-            // `offline_access` was requested but the IdP returned no refresh token — a client
-            // misconfiguration (offline_access or refresh-token rotation not enabled on the
-            // link client). The directory link stands, but acting as the human needs a grant,
-            // so surface it loudly for the operator rather than silently linking an inert row.
-            tracing::warn!(
-                profile_id = %profile.profile.id,
-                "slack link: established but NO refresh token returned -- grant not vaulted; \
-                 check the link client's offline_access / refresh-token-rotation settings",
-            );
-        }
-    }
+    // write comes after. Both now ride `tx`, so a failure on either rolls back BOTH — there is no
+    // longer a "linked but not vaulted" state for this handler to leave behind.
+    let Some(refresh_token) = tokens.refresh_token.as_deref() else {
+        // `offline_access` was requested but the IdP returned no refresh token — a client
+        // misconfiguration (offline_access or refresh-token rotation not enabled on the link
+        // client). There is nothing to vault, so acting as the human is impossible: this link
+        // could never mint.
+        //
+        // THIS ARM MUST NOT RENDER SUCCESS. It used to `warn!` and return `Ok(slug)`, which
+        // rendered "Account connected." at a user whose link was inert — they were told the
+        // thing worked, then hit an unexplained failure at their next mention, with no reason
+        // to suspect the link. Telling them the truth costs one retry; the lie costs a silent
+        // dead end. (`tests/e2e/tests/slack_link_test.rs` documented that broken shape.)
+        //
+        // `tx` is DROPPED without commit, so the directory row is rolled back too. That is the
+        // deliberate call: half-linked is the worst of the three states. Linked-with-no-grant
+        // reads as "connected" to `lookup_linked_handle` (which reads the auth-link table, not
+        // the vault), so link-state would keep telling the agent this user is fine while every
+        // mint answers `not_vaulted` — and re-linking cannot repair it, because
+        // `link_slack_principal` refuses to rebind. Rolling back leaves the user cleanly
+        // UNLINKED, which is the one state the flow can recover from on its own: they mention
+        // @temper, get a fresh intent, and try again once the operator fixes the client.
+        tracing::warn!(
+            profile_id = %profile.profile.id,
+            "slack link: NO refresh token returned -- link rolled back rather than left inert; \
+             check the link client's offline_access / refresh-token-rotation settings",
+        );
+        return Err(
+            "Your account was verified, but the connection could not be completed — this \
+             instance's sign-in client did not return the credential needed to act on your \
+             behalf. Nothing was saved. Mention @temper again to retry, and tell your temper \
+             administrator if it keeps happening."
+                .into(),
+        );
+    };
+
+    slack_grant_vault_service::store_grant(
+        &mut tx,
+        &cfg.vault_key,
+        slack_grant_vault_service::NewGrant {
+            profile_id: profile.profile.id,
+            slack_principal_id: &intent.slack_principal_id,
+            refresh_token,
+            access_token: &tokens.access_token,
+            access_ttl_secs: tokens.expires_in,
+        },
+    )
+    .await
+    .map_err(|_| {
+        "Something went wrong saving your connection. Mention @temper again.".to_string()
+    })?;
+
+    // The commit is the point: identity and grant land together or not at all.
+    tx.commit().await.map_err(|_| {
+        "Something went wrong saving your connection. Mention @temper again.".to_string()
+    })?;
+
+    tracing::info!(profile_id = %profile.profile.id, "slack link: established and grant vaulted");
 
     Ok(profile.profile.slug.clone())
 }

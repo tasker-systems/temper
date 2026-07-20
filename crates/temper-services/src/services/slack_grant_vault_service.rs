@@ -23,6 +23,32 @@ const AT_REFRESH_SKEW: Duration = Duration::minutes(5);
 /// refresh default; Auth0 always sends one, so this only guards a spec-legal omission.
 const DEFAULT_AT_TTL_SECS: u64 = 3600;
 
+/// Ceiling on a provider-supplied `expires_in`, in seconds (24h). A CLAMP, not a validation.
+///
+/// `expires_in` is an unbounded `u64` off the wire, and it used to be cast straight to `i64` for
+/// `Duration::seconds`. A hostile or broken IdP answering with a huge value wraps that cast
+/// NEGATIVE, so `access_expires_at` lands in the PAST, the cached-token branch of
+/// [`mint_access_token`] never takes, and every single mention spends a refresh — which maximizes
+/// exposure to the documented RT-rotation dual-write window (see that function's docs) on every
+/// mention rather than once a day.
+///
+/// Clamping rather than erroring is deliberate: a too-long TTL is not a reason to refuse a
+/// mint, and treating the cache as shorter-lived than the provider claims is always safe (the
+/// worst case is one extra refresh). 24h matches the link exchange's own `expires_in`, so no
+/// real Auth0/AS response is affected.
+const MAX_AT_TTL_SECS: u64 = 86_400;
+
+/// Turn a provider-supplied `expires_in` into a cache lifetime that cannot be negative.
+///
+/// After [`MAX_AT_TTL_SECS`] the `as i64` is provably lossless — the value is at most 86_400.
+fn access_ttl(expires_in: Option<u64>) -> Duration {
+    Duration::seconds(
+        expires_in
+            .unwrap_or(DEFAULT_AT_TTL_SECS)
+            .min(MAX_AT_TTL_SECS) as i64,
+    )
+}
+
 /// What a mint produced. A typed outcome, not `Option<String>`: "no grant on file" and "the
 /// grant was revoked" are different facts the caller (T4) must be able to tell apart and say
 /// something specific about, and neither is an error.
@@ -117,7 +143,24 @@ const FIELD_AT: &[u8] = b"at";
 /// one and **clears any prior revocation** — a new consent is a new, working grant, so a user who
 /// disconnected and reconnected is not left mysteriously revoked. The principal binds to one
 /// profile (T2's guarantee), so `profile_id` is re-stamped defensively but does not move.
-pub async fn store_grant(pool: &PgPool, key: &VaultKey, grant: NewGrant<'_>) -> ApiResult<()> {
+///
+/// **Takes `&mut PgConnection`, not a pool, so the callback can run this in the SAME transaction
+/// as [`slack_link_service::link_slack_principal`].** These two writes used to be independent
+/// autocommits, and the gap between them was not benign: process death after the directory row
+/// committed and before the vault row did left the user LINKED with a refresh token that existed
+/// only in a dropped stack frame — unrecoverable, because the state nonce was already burned, so
+/// no retry of that callback could re-derive it. The handler's own comment argued the failure was
+/// benign because "the user is shown a retry page", which holds for an observable `Err` return and
+/// does NOT hold for a kill between two commits, where no page renders at all. The executor type
+/// is what makes that shape unrepresentable. Mirrors
+/// [`take_refresh_token_for_disconnect`], which takes `&mut PgConnection` for the same reason.
+///
+/// [`slack_link_service::link_slack_principal`]: super::slack_link_service::link_slack_principal
+pub async fn store_grant(
+    conn: &mut sqlx::PgConnection,
+    key: &VaultKey,
+    grant: NewGrant<'_>,
+) -> ApiResult<()> {
     let (rt_nonce, rt_ciphertext) = key.encrypt(
         grant.refresh_token.as_bytes(),
         &aad(grant.slack_principal_id, FIELD_RT),
@@ -126,8 +169,7 @@ pub async fn store_grant(pool: &PgPool, key: &VaultKey, grant: NewGrant<'_>) -> 
         grant.access_token.as_bytes(),
         &aad(grant.slack_principal_id, FIELD_AT),
     );
-    let ttl = grant.access_ttl_secs.unwrap_or(DEFAULT_AT_TTL_SECS);
-    let access_expires_at = Utc::now() + Duration::seconds(ttl as i64);
+    let access_expires_at = Utc::now() + access_ttl(grant.access_ttl_secs);
 
     sqlx::query!(
         r#"
@@ -155,7 +197,7 @@ pub async fn store_grant(pool: &PgPool, key: &VaultKey, grant: NewGrant<'_>) -> 
         at_ciphertext,
         access_expires_at,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -263,8 +305,7 @@ pub async fn mint_access_token(
         tokens.access_token.as_bytes(),
         &aad(slack_principal_id, FIELD_AT),
     );
-    let ttl = tokens.expires_in.unwrap_or(DEFAULT_AT_TTL_SECS);
-    let access_expires_at = Utc::now() + Duration::seconds(ttl as i64);
+    let access_expires_at = Utc::now() + access_ttl(tokens.expires_in);
 
     sqlx::query!(
         r#"
@@ -409,6 +450,10 @@ mod tests {
 
     /// Seal a grant under the test key. Wraps the [`NewGrant`] construction the tests would
     /// otherwise repeat.
+    ///
+    /// `store_grant` takes `&mut PgConnection` (so the link callback can run it in the same
+    /// transaction as the directory write); these tests need no such atomicity, so they hand it a
+    /// one-off pooled connection.
     async fn store(
         pool: &PgPool,
         profile: Uuid,
@@ -417,8 +462,9 @@ mod tests {
         at: &str,
         ttl: Option<u64>,
     ) {
+        let mut conn = pool.acquire().await.expect("acquire");
         store_grant(
-            pool,
+            &mut conn,
             &key(),
             NewGrant {
                 profile_id: profile,
@@ -503,6 +549,102 @@ mod tests {
             }
             other => panic!("expected the cached token, got {other:?}"),
         }
+    }
+
+    /// **The `expires_in` cast must not wrap.** A hostile or broken IdP answering with a huge
+    /// `expires_in` used to be cast `as i64` unchecked, wrapping NEGATIVE — so `access_expires_at`
+    /// landed in the PAST, the cached-token branch never took, and every mint spent a refresh,
+    /// maximizing exposure to the documented RT-rotation dual-write window.
+    ///
+    /// **Why this bites:** `u64::MAX as i64` is `-1`, so without the clamp the stored expiry is one
+    /// second ago and the cached branch is skipped — mint then tries to refresh against a
+    /// deliberately unreachable `token_url` and the call ERRORS. Only the clamped version can hand
+    /// back the cached token. The stored expiry is asserted directly too, because a future change
+    /// that made mint tolerate a refresh failure would otherwise mask the wrap.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_huge_expires_in_is_clamped_rather_than_wrapping_negative(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile,
+            PRINCIPAL,
+            "rt",
+            "cached-access-token",
+            Some(u64::MAX),
+        )
+        .await;
+
+        let stored: DateTime<Utc> = sqlx::query_scalar!(
+            "SELECT access_expires_at FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+            PRINCIPAL,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .expect("access_expires_at is written by store_grant");
+        assert!(
+            stored > Utc::now(),
+            "a huge expires_in must clamp to a FUTURE expiry, not wrap to the past: {stored}",
+        );
+
+        // Unreachable token_url: a passing test proves the cached branch took, i.e. no refresh.
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            "http://127.0.0.1:1/unused",
+            "client",
+            PRINCIPAL,
+        )
+        .await
+        .expect("a clamped expiry must serve the cached token without refreshing");
+        match out {
+            MintOutcome::Token { access_token, .. } => {
+                assert_eq!(access_token, "cached-access-token");
+            }
+            other => panic!("expected the cached token, got {other:?}"),
+        }
+    }
+
+    /// **FINDING C, the service half.** `store_grant` writes on the CALLER's connection, so it
+    /// shares that transaction's fate.
+    ///
+    /// **Why this bites:** it rolls the transaction back and asserts the row is GONE. Against the
+    /// old `&PgPool` signature the INSERT was its own autocommit and survived the rollback — which
+    /// is exactly the property that let the callback commit a directory row and then lose the
+    /// grant to a process death.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn store_grant_is_rolled_back_with_its_caller_transaction(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+
+        let mut tx = pool.begin().await.expect("begin");
+        store_grant(
+            &mut tx,
+            &key(),
+            NewGrant {
+                profile_id: profile,
+                slack_principal_id: PRINCIPAL,
+                refresh_token: "rt",
+                access_token: "at",
+                access_ttl_secs: Some(3600),
+            },
+        )
+        .await
+        .expect("store");
+        tx.rollback().await.expect("rollback");
+
+        let rows: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+            PRINCIPAL,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap_or_default();
+        assert_eq!(
+            rows, 0,
+            "the grant must share the caller's transaction — surviving a rollback is the \
+             autocommit shape that made the callback's dual write unrecoverable",
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

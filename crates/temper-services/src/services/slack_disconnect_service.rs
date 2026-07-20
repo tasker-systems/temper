@@ -354,6 +354,45 @@ mod tests {
         VaultKey::from_base64(&STANDARD.encode([3u8; 32])).unwrap()
     }
 
+    /// Bind a principal to a profile, on a one-off pooled connection.
+    ///
+    /// `link_slack_principal` and `store_grant` take `&mut PgConnection` so the link callback can
+    /// run BOTH in one transaction — the two writes are one fact, and as separate autocommits a
+    /// process death between them left a user linked with an unrecoverable grant. These disconnect
+    /// tests only need the rows to exist beforehand, so they arrange each on its own connection.
+    async fn seed_link(pool: &PgPool, profile_id: Uuid, principal: &str) {
+        let mut conn = pool.acquire().await.expect("acquire");
+        crate::services::slack_link_service::link_slack_principal(&mut conn, profile_id, principal)
+            .await
+            .expect("link");
+    }
+
+    /// Seal a grant for `principal` under `key`. The access token and TTL are fixed because no
+    /// disconnect test varies them — what varies is the key (the rotation test) and the refresh
+    /// token (the AS-mode tests, which match it against `kb_oauth_refresh_tokens`).
+    async fn seed_grant(
+        pool: &PgPool,
+        key: &VaultKey,
+        profile_id: Uuid,
+        principal: &str,
+        refresh_token: &str,
+    ) {
+        let mut conn = pool.acquire().await.expect("acquire");
+        crate::services::slack_grant_vault_service::store_grant(
+            &mut conn,
+            key,
+            crate::services::slack_grant_vault_service::NewGrant {
+                profile_id,
+                slack_principal_id: principal,
+                refresh_token,
+                access_token: "at",
+                access_ttl_secs: Some(3600),
+            },
+        )
+        .await
+        .expect("store");
+    }
+
     /// Minimal profile insert. The handle is the FULL id: two UUIDv7s minted in
     /// the same millisecond share leading bytes, so a truncated handle collides
     /// on `kb_profiles_handle_key`.
@@ -521,9 +560,7 @@ mod tests {
     /// is downstream of one linked-then-unbound act, and the only axis that
     /// varies between them is whether `actor` equals `subject`.
     async fn link_then_disconnect(pool: &PgPool, principal: &str, subject: Uuid, actor: Uuid) {
-        crate::services::slack_link_service::link_slack_principal(pool, subject, principal)
-            .await
-            .expect("link");
+        seed_link(pool, subject, principal).await;
 
         let out = disconnect_slack_principal(
             pool,
@@ -583,22 +620,8 @@ mod tests {
         let key = key();
         let profile_id = insert_profile(&pool).await;
 
-        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
-            .await
-            .expect("link");
-        crate::services::slack_grant_vault_service::store_grant(
-            &pool,
-            &key,
-            crate::services::slack_grant_vault_service::NewGrant {
-                profile_id,
-                slack_principal_id: principal,
-                refresh_token: "rt",
-                access_token: "at",
-                access_ttl_secs: Some(3600),
-            },
-        )
-        .await
-        .expect("store");
+        seed_link(&pool, profile_id, principal).await;
+        seed_grant(&pool, &key, profile_id, principal, "rt").await;
         crate::services::slack_link_service::create_intent(
             &pool,
             principal,
@@ -686,9 +709,7 @@ mod tests {
         let principal = "slack:T2:U2";
         let key = key();
         let profile_id = insert_profile(&pool).await;
-        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
-            .await
-            .expect("link");
+        seed_link(&pool, profile_id, principal).await;
 
         let req = || DisconnectRequest {
             slack_principal_id: principal,
@@ -975,22 +996,8 @@ mod tests {
         let profile_id = insert_profile(&pool).await;
         let refresh_token = "as-refresh-token-sample";
 
-        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
-            .await
-            .expect("link");
-        crate::services::slack_grant_vault_service::store_grant(
-            &pool,
-            &key,
-            crate::services::slack_grant_vault_service::NewGrant {
-                profile_id,
-                slack_principal_id: principal,
-                refresh_token,
-                access_token: "at",
-                access_ttl_secs: Some(3600),
-            },
-        )
-        .await
-        .expect("store");
+        seed_link(&pool, profile_id, principal).await;
+        seed_grant(&pool, &key, profile_id, principal, refresh_token).await;
 
         // The AS's own row for that token, as the TypeScript writer would leave it.
         sqlx::query(
@@ -1082,22 +1089,15 @@ mod tests {
         // is the actor != subject case the audit event exists to distinguish.
         let operator = ProfileId::from(insert_profile(&pool).await);
 
-        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
-            .await
-            .expect("link");
-        crate::services::slack_grant_vault_service::store_grant(
+        seed_link(&pool, profile_id, principal).await;
+        seed_grant(
             &pool,
             &old_key,
-            crate::services::slack_grant_vault_service::NewGrant {
-                profile_id,
-                slack_principal_id: principal,
-                refresh_token: "rt-sealed-under-the-old-key",
-                access_token: "at",
-                access_ttl_secs: Some(3600),
-            },
+            profile_id,
+            principal,
+            "rt-sealed-under-the-old-key",
         )
-        .await
-        .expect("store");
+        .await;
         crate::services::slack_link_service::create_intent(
             &pool,
             principal,
@@ -1182,22 +1182,15 @@ mod tests {
         let key = key();
         let profile_id = insert_profile(&pool).await;
 
-        crate::services::slack_link_service::link_slack_principal(&pool, profile_id, principal)
-            .await
-            .expect("link");
-        crate::services::slack_grant_vault_service::store_grant(
+        seed_link(&pool, profile_id, principal).await;
+        seed_grant(
             &pool,
             &key,
-            crate::services::slack_grant_vault_service::NewGrant {
-                profile_id,
-                slack_principal_id: principal,
-                refresh_token: "a-token-the-as-never-minted",
-                access_token: "at",
-                access_ttl_secs: Some(3600),
-            },
+            profile_id,
+            principal,
+            "a-token-the-as-never-minted",
         )
-        .await
-        .expect("store");
+        .await;
 
         let out = disconnect_slack_principal(
             &pool,
@@ -1267,9 +1260,7 @@ mod tests {
         // Deliberately emitterless: a profile row that cannot author anything.
         let (actor, _handle) = insert_profile_without_emitter(&pool).await;
 
-        crate::services::slack_link_service::link_slack_principal(&pool, subject, principal)
-            .await
-            .expect("link");
+        seed_link(&pool, subject, principal).await;
 
         let err = disconnect_slack_principal(
             &pool,
@@ -1321,9 +1312,7 @@ mod tests {
         // gating-team ownership, so the refusal can only come from the gate.
         let intruder = insert_profile(&pool).await;
 
-        crate::services::slack_link_service::link_slack_principal(&pool, subject, principal)
-            .await
-            .expect("link");
+        seed_link(&pool, subject, principal).await;
 
         assert!(
             !access_service::is_system_admin(&pool, ProfileId::from(intruder))
@@ -1382,9 +1371,7 @@ mod tests {
         assert_ne!(subject, admin, "the fixture must exercise actor != subject");
         make_system_admin(&pool, admin).await;
 
-        crate::services::slack_link_service::link_slack_principal(&pool, subject, principal)
-            .await
-            .expect("link");
+        seed_link(&pool, subject, principal).await;
 
         let out = admin_disconnect_slack_principal(
             &pool,
