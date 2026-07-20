@@ -21,12 +21,15 @@ clients), not just the web UI.
   servers** that validate one configurable issuer/JWKS/audience. SAML is federated *upstream* behind
   Temper's own AS and re-minted as Temper-signed JWTs. **A Vercel/OIDC connector slots into the exact
   same seam SAML uses.**
-- **Recommendation: Option B — add Vercel as an upstream OIDC connector behind Temper's existing
-  Authorization Server**, mirroring the SAML SP. Nothing in the Rust validation path changes; the
-  CLI's `authorization_code`+PKCE flow, the MCP DCR discovery, refresh tokens, and machine tokens
-  all keep working unchanged. This is precisely the *"OAuth-native flow through Vercel, with the org
-  routing its Vercel connector as a federated pole from the primary IdP"* that the ask floated — and
-  it is a small, well-bounded change because the federation building blocks are already IdP-agnostic.
+- **Recommendation (decided): Option B1 — add the *corporate IdP* as an upstream OIDC connector
+  behind Temper's existing Authorization Server**, mirroring the SAML SP. Nothing in the Rust
+  validation path changes; the CLI's `authorization_code`+PKCE flow, the MCP DCR discovery, refresh
+  tokens, and machine tokens all keep working unchanged. This is precisely the *"OAuth-native flow
+  through Vercel, with the org routing its Vercel connector as a federated pole from the primary
+  IdP"* that the ask floated — and it is a small, well-bounded change because the federation building
+  blocks are already IdP-agnostic. **B1 forecloses nothing:** temperkb.io stays on Auth0
+  (`ExternalIdp`), and the existing SAML-direct flow stays fully viable for orgs that don't want
+  Vercel as a front door.
 - Passport-the-gate is still useful — but **layer it on the web UI only** (`temper-ui` is a separate
   Vercel project), never in front of the API/MCP project.
 
@@ -220,6 +223,85 @@ Why:
 
 ---
 
+## Part 4b — Deployment auth as a first-class, typed posture
+
+The ask surfaced a real gap: an instance's auth posture is currently **inferred** from which env
+vars and DB rows happen to be populated (`AS_ISSUER` present ⇒ AS mode; a single active
+`kb_saml_idp` row ⇒ SAML upstream). Nowhere does an operator *declare* "this instance is deployment
+mode X" and have boot *verify* the pieces agree. As more postures appear (community OAuth,
+SAML-direct, Vercel-Passport-fronted, Vercel-OIDC), inference gets fragile. Make the posture
+explicit and typed.
+
+### Two orthogonal axes (this is the whole model)
+
+The four "modes" in the ask are not four token pipelines — they are combinations of two axes:
+
+**Axis 1 — token-issuance posture** (env, boot-blocking, the existing `AuthMode`, unchanged):
+- `ExternalIdp` — an external OAuth/OIDC IdP mints tokens; Temper is a pure resource server.
+  (Auth0/community, and **temperkb.io stays exactly here**.)
+- `TemperAs` — Temper's own AS mints tokens, federating an upstream.
+
+**Axis 2 — upstream federation connector** (only in `TemperAs`; DB-resident + typed, generalizing
+today's `kb_saml_idp`):
+- `saml` — direct to a managed SAML IdP (Okta). *Exactly today's flow — stays viable, unchanged.*
+- `oidc` — direct to an OIDC authorization server. B1 points this at the **corporate IdP** (the same
+  issuer Passport fronts). Pointed at `vercel.com` it is "Sign in with Vercel" (B2) — same code path,
+  different config.
+
+Mapping the ask's four deployment modes onto the axes:
+
+| Deployment mode | Axis 1 | Axis 2 | Web-UI gate |
+|---|---|---|---|
+| Auth0 / community OAuth | `ExternalIdp` | — | none |
+| SAML direct (Okta) | `TemperAs` | `saml` | none |
+| **Vercel Passport (B1)** | `TemperAs` | `oidc` → corp IdP | **Passport on `temper-ui`** |
+| Vercel OIDC / Sign in with Vercel | `TemperAs` | `oidc` → vercel.com | optional |
+
+So **"Vercel Passport" is not a fourth token pipeline** — it is `TemperAs` + `oidc`(corp IdP) +
+Passport enabled on the *separate* UI project. That is why B1 doesn't foreclose anything: an org that
+doesn't want Vercel as a front door just uses `saml` (or `oidc` → their own IdP). Nothing is retired.
+
+### The guardrail: identity stays in env, connector config goes in DB
+
+Do **not** move the resource server's cryptographic identity (issuer / JWKS / audience) into a
+mutable settings table. `auth_config.rs` is deliberately env-driven and boot-blocking for a reason it
+documents at length: an ambiguous or runtime-mutable issuer/audience is a security hole (it once
+silently disabled audience validation). Keep the boundary:
+
+- **Env, boot-blocking, immutable per deploy** — Axis-1 posture + the crypto identity:
+  `AUTH_ISSUER`, `JWKS_URL`, `AUTH_AUDIENCE`, `AS_ISSUER`/`AS_AUDIENCE`. Already correct; leave it.
+- **DB, typed, operator-managed** — Axis-2 connector selection + its config (the `kb_saml_idp`
+  precedent), plus non-crypto posture flags (e.g. "Passport expected on UI", org display name).
+
+### On `kb_system_settings` — prefer a typed connector table, not a KV blob
+
+A generic `kb_system_settings` key/value table invites exactly the untyped-JSON anti-pattern the
+repo's code-quality rules forbid ("typed structs over inline JSON", "parse don't validate"). The
+better shape, matching the existing precedent:
+
+- Generalize `kb_saml_idp` → a typed **`kb_auth_connector`** table with a discriminated
+  `connector_type ∈ {saml, oidc}` and typed, per-type config (SAML: cert / sso_url / entity ids /
+  attr maps; OIDC: issuer / authorize / token / jwks / userinfo / client_id / secret-ref / scopes /
+  claim map). One active connector per instance today; the discriminant leaves room for per-org
+  connectors later.
+- If a broader system-settings surface is genuinely wanted, keep **auth** out of a loose KV:
+  represent the declared deployment mode as an explicit **enumerated value that boot cross-checks
+  against env + the active connector** (fail-closed if they disagree), mirroring `auth_config.rs`'s
+  "name the rule, verify it, refuse if violated" philosophy — not a switch that mutates behavior at
+  runtime.
+
+### Dispatch changes (small)
+
+- `handleAuthorize` (`oauth/endpoints.ts`): dispatch to `/oauth/{saml,oidc}/login` by the active
+  connector's `connector_type` instead of the hardcoded `/oauth/saml/login`.
+- Add the `oidc` connector's two legs (`/oauth/oidc/login`, `/oauth/oidc/callback`) as siblings of
+  the SAML pair; everything downstream of `{sub, email}` is shared.
+- Reuse `reconcileMemberships` with `provider: "oidc:<connector_key>"` and the upstream `groups` claim.
+- Rust validation path + discovery: unchanged (instance stays `TemperAs`; metadata already advertises
+  the AS).
+
+---
+
 ## Part 5 — Implementation sketch for Option B (for when we build it)
 
 Not built here — this is the shape a follow-up PR would take.
@@ -251,18 +333,30 @@ essentially untouched. That is the payoff of Temper already being its own AS.
 
 ---
 
-## Part 6 — Decisions the client needs to make
+## Part 6 — Decisions
 
-1. **Which instance is this for** — `temperkb.io` (currently `ExternalIdp`/Auth0) or an
-   enterprise self-hosted instance (`TemperAs`/SAML)? Option B assumes (and produces) an AS-mode
-   instance. If it's temperkb.io, this also means moving that instance to AS mode.
-2. **Upstream = corporate IdP (B1) or "Sign in with Vercel" (B2)?** B1 keeps the corp IdP as the
-   single source of truth (recommended); B2 makes Vercel accounts the identity.
-3. **Do they also want Passport on the web UI?** It's a clean add on `temper-ui` and gives the
-   browser experience the "private-by-default corporate login" story — but it is *additive*, not the
-   mechanism for CLI/API/MCP.
-4. **Agent/MCP identity roadmap:** the Vercel agent-credential connection layer is beta; for now,
-   Temper's own `client_credentials` machine principals remain the M2M path and are unaffected.
+**Resolved (2026-07-20):**
+
+1. **Approach = B1** — federate the *corporate IdP* as an upstream `oidc` connector behind Temper's
+   AS. Not B2 (Vercel accounts as identity).
+2. **temperkb.io is unchanged** — stays `ExternalIdp`/Auth0 (community/simple OAuth shape).
+3. **SAML-direct stays viable** — B1 is additive; orgs that don't want Vercel as a front door keep
+   `saml` (or `oidc` → their own IdP). Nothing is retired.
+4. **Deployment posture becomes first-class and typed** (Part 4b) — two axes, a typed
+   `kb_auth_connector` (not a KV `kb_system_settings`), crypto identity stays in env.
+
+**Open:**
+
+1. **Is "Vercel OIDC" a distinct connector, or just `oidc` → vercel.com?** Modeled here as the
+   latter (same `oidc` code path, Vercel config), keeping the taxonomy to two connector types. If
+   "Vercel OIDC" means the workload-identity `getVercelOidcToken` (machine→cloud, *not* user
+   identity), it is not an auth mode at all and drops out.
+2. **Where does the declared `deployment_mode` enum live** — env (consistent with `auth_config.rs`)
+   or a DB row that boot cross-checks? Either works; the invariant is fail-closed on disagreement.
+3. **Passport on the web UI now or later?** Additive on the separate `temper-ui` project; not on the
+   critical path for CLI/API/MCP.
+4. **Agent/MCP identity roadmap:** the Vercel agent-credential connection layer is beta; Temper's own
+   `client_credentials` machine principals remain the M2M path and are unaffected.
 
 ---
 
