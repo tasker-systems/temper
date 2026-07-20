@@ -344,18 +344,21 @@ essentially untouched. That is the payoff of Temper already being its own AS.
    `saml` (or `oidc` → their own IdP). Nothing is retired.
 4. **Deployment posture becomes first-class and typed** (Part 4b) — two axes, a typed
    `kb_auth_connector` (not a KV `kb_system_settings`), crypto identity stays in env.
+5. **"Vercel OIDC" = the `oidc` connector pointed at Vercel**, not a distinct type. Taxonomy stays at
+   two connector types (`saml`, `oidc`). (The workload-identity `getVercelOidcToken` is machine→cloud,
+   not user identity, and is out of scope.)
+6. **`deployment_mode` is an env var** — resolved next to `parse_auth_config`, set-once boot posture,
+   never twiddled at runtime; fail-closed if it disagrees with the env posture / active connector.
+7. **Upstream OIDC `client_secret` lives in env** (one deployment secret, like `AS_*`), referenced by
+   name from `kb_oidc_idp.client_secret_ref`; distinct prefix from `AS_*` (e.g.
+   `OIDC_UPSTREAM_CLIENT_SECRET`) to keep "our AS" and "the upstream IdP" separate. No vault, no DB
+   secret column.
 
 **Open:**
 
-1. **Is "Vercel OIDC" a distinct connector, or just `oidc` → vercel.com?** Modeled here as the
-   latter (same `oidc` code path, Vercel config), keeping the taxonomy to two connector types. If
-   "Vercel OIDC" means the workload-identity `getVercelOidcToken` (machine→cloud, *not* user
-   identity), it is not an auth mode at all and drops out.
-2. **Where does the declared `deployment_mode` enum live** — env (consistent with `auth_config.rs`)
-   or a DB row that boot cross-checks? Either works; the invariant is fail-closed on disagreement.
-3. **Passport on the web UI now or later?** Additive on the separate `temper-ui` project; not on the
+1. **Passport on the web UI now or later?** Additive on the separate `temper-ui` project; not on the
    critical path for CLI/API/MCP.
-4. **Agent/MCP identity roadmap:** the Vercel agent-credential connection layer is beta; Temper's own
+2. **Agent/MCP identity roadmap:** the Vercel agent-credential connection layer is beta; Temper's own
    `client_credentials` machine principals remain the M2M path and are unaffected.
 
 ---

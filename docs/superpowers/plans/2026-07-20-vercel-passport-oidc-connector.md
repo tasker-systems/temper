@@ -52,11 +52,11 @@ without a wide nullable table or a JSON blob.
   `is_active WHERE is_active`).
 - `kb_saml_idp` (existing, detail): keyed 1:1 to a `kb_auth_connector` row of type `saml`. Columns
   unchanged; add the FK. Existing single-active-row semantics move up to the head table.
-- `kb_oidc_idp` (new, detail): keyed 1:1 to a `kb_auth_connector` row of type `oidc`. Typed columns:
-  `issuer`, `authorization_endpoint`, `token_endpoint`, `jwks_uri`, `userinfo_endpoint` (nullable),
-  `client_id`, `client_secret_ref` (**never plaintext** — see Security), `scopes` (text[],
-  default `{openid,email,profile}`), `sub_claim` (default `sub`), `email_claim` (default `email`),
-  `groups_claim` (nullable), `nameid_format` n/a.
+- `kb_oidc_idp` (new, detail): keyed 1:1 to a `kb_auth_connector` row of type `oidc`. Typed,
+  **non-secret** columns: `issuer`, `authorization_endpoint`, `token_endpoint`, `jwks_uri`,
+  `userinfo_endpoint` (nullable), `client_id`, `client_secret_ref` (an **env var *name***, not the
+  secret — see Security), `scopes` (text[], default `{openid,email,profile}`), `sub_claim`
+  (default `sub`), `email_claim` (default `email`), `groups_claim` (nullable). No secret column.
 
 **Migration posture.** Per the repo's additive-only-on-`main` invariant, the `main` migration is
 purely additive (new tables/enum, nullable FK on `kb_saml_idp`). Back-filling the existing SAML row
@@ -110,8 +110,9 @@ Siblings of `/oauth/saml/{login,acs}` in `oauth/endpoints.ts`, new module `oauth
 Make the posture explicit and fail-closed, mirroring `auth_config.rs`'s philosophy.
 
 - Enumerated `deployment_mode`: `external_idp | saml_direct | oidc_direct` (Vercel Passport is
-  `oidc_direct` + a UI gate; it is not its own token mode). Location TBD (spec Part 6 open item) —
-  env var (consistent with `auth_config.rs`) or a `kb_auth_connector`-adjacent declaration.
+  `oidc_direct` + a UI gate; it is not its own token mode). **Decided: an env var**, resolved in/next
+  to `parse_auth_config` — consistent with `auth_config.rs` (set-once boot posture, never twiddled at
+  runtime), not a DB row.
 - **Boot cross-check** (extend `parse_auth_config` or a sibling): assert the declared mode agrees
   with the env posture and the active connector — e.g. `external_idp` ⇒ `AS_ISSUER` unset;
   `saml_direct`/`oidc_direct` ⇒ `AS_ISSUER` set **and** an active connector of the matching type
@@ -142,10 +143,15 @@ Temper-issued JWTs.
 
 - **Upstream leg uses its own PKCE + `nonce`**; `state` = one-time relay state, bound and consumed.
 - **`id_token` fully verified**: signature (JWKS), `iss`, `aud == client_id`, `exp`/`nbf`, `nonce`.
-- **`client_secret` never stored plaintext.** Store an encrypted secret or an env-resolved ref
-  (reuse the Slack-grant vault pattern / `SLACK_VAULT_ENC_KEY`-style encryption, or a
-  `*_CLIENT_SECRET` env var referenced by name). A confidential OIDC client needs the live secret to
-  call the token endpoint, so it is encrypted-at-rest, not hashed.
+- **`client_secret` lives in env, never in the DB.** It is one deployment-level secret (like the
+  `AS_*` family / the EdDSA signing keys), not a per-user grant — so it does **not** use the Slack
+  vault (that pattern exists for many user-scoped secrets that need at-rest DB encryption). `kb_oidc_idp`
+  stores only `client_secret_ref` (the env var *name*); the value is set alongside `AS_*`, e.g.
+  `OIDC_UPSTREAM_CLIENT_SECRET`. **Distinct prefix from `AS_*` deliberately:** `AS_*` is *our* AS's
+  identity (the issuer we mint); the upstream client credentials are the party we authenticate *to* —
+  keep the two identities visibly separate, per the `auth_config.rs` anti-conflation discipline. A
+  confidential OIDC client needs the live secret to call the token endpoint, so it cannot be hashed;
+  keeping it in env (not DB) is what keeps it out of the connector table.
 - **Crypto identity unchanged**: `AUTH_ISSUER`/`JWKS_URL`/`AUTH_AUDIENCE`/`AS_*` stay env,
   boot-blocking; the connector never touches them.
 - **No PII in logs**: callback/token-exchange errors log message only (same rule as SAML ACS).
