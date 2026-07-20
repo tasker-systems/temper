@@ -77,6 +77,27 @@ dedicated authz layer is plausible and explicitly not in scope here.
 | **D6** | `is_active` is **folded in** as the `Deactivated` state. Its non-auth readers move or consume a maintained projection. |
 | **D7** | Connection profiles get **no standing row at all**. Absence denies, so their safety is structural. |
 | **D8** | Backfill by evaluating the **old predicate**, making the cutover behaviour-preserving on every instance. |
+| **D9** | `Requested` is **per-principal and carries no team dimension**. Asking to join a *team* is orthogonal to standing in the system and is out of scope. |
+
+### On D9 — two different questions wearing one table
+
+`kb_join_requests` is shaped as though requests were per-team: `team_id` is a NOT NULL FK and the
+uniqueness constraint is `(team_id, requesting_profile_id) WHERE status = 'pending'`. In practice
+`create_join_request` only ever targets the gating team — it resolves `gating_team_slug` and errors
+if none is configured — so every row that exists is really *"may I use this instance?"* wearing a
+per-team shape.
+
+Those are two different questions. **"May I be in the system at all"** is a property of the
+principal and is what standing models. **"May I join this team"** is a property of a
+(principal, team) pair, is ordinary membership, and does not affect whether the principal is
+admitted. Conflating them is what put a `team_id` on a system-access request.
+
+So standing carries the system question with no team dimension, and team-join-as-such stays
+orthogonal and unbuilt — there is very little of it today. The practical consequence for
+implementation: **do not carry `team_id` into the standing tables**, and do not treat the existing
+unique index as evidence that standing needs a per-team key. When the request record loses its
+status column (D5), its `team_id` stays where it is, describing the request rather than the
+standing.
 
 ### On D2 — why not AND
 
@@ -145,7 +166,8 @@ Five, plus absence.
 ```
 
 - **`Denied`** — provisioned, never granted. Where OAuth first-login lands, by design (§8).
-- **`Requested`** — has asked. Still denied, but the refusal can say so and a duplicate is refusable.
+- **`Requested`** — has asked for **system** access. Still denied, but the refusal can say so and a
+  duplicate is refusable. **Per-principal, with no team dimension** — see D9.
 - **`Approved`** — may use the instance.
 - **`Revoked`** — *was* granted and lost it. A different sentence to the user and a different signal
   in an audit than never having had it.
@@ -327,9 +349,6 @@ testers.
    *placement* across Level 3's SQL is not, and may want rethinking once standing exists. Deliberately
    deferred, not forgotten.
 2. **Which non-auth `is_active` readers move** versus consume a maintained projection (D6).
-3. **Whether `Requested` needs a per-team dimension.** `kb_join_requests` has a unique index on
-   `(team_id, requesting_profile_id) WHERE status = 'pending'`; standing is per-principal. If a
-   principal can meaningfully request access to more than one team, these do not line up.
 
 ## §14 What this supersedes
 
