@@ -45,6 +45,14 @@ const SLACK_PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
 /// Shared with the "mention agent" (this test, standing in for it). Gates the intent route.
 const SLACK_SECRET: &str = "slack-link-e2e-secret";
 
+/// The mint gate's key. **Deliberately a different value from [`SLACK_SECRET`]**, because the
+/// separation of these two keys is itself the security property under test: link-state answers a
+/// question, the mint endpoint vends an act-as-the-human token, and a compromise of the former
+/// must not confer the latter. `mint_refuses_the_link_state_key` is the bite probe — it signs a
+/// mint call with `SLACK_SECRET` and requires a 401, so collapsing these into one variable turns
+/// that test red instead of silently widening the gate.
+const MINT_SECRET: &str = "slack-mint-e2e-secret";
+
 const CLIENT_ID: &str = "slack-link-client";
 
 /// A fixed 32-byte vault key (base64), so the grant vault can seal the RT the stub hands back.
@@ -132,6 +140,20 @@ impl SlackLinkApp {
 /// `create_app`); it does not reuse it because `setup` hard-codes `issuer: "test-issuer"`
 /// and `slack_link: None`, which are the two values this flow turns on.
 async fn setup_slack_app(pool: &PgPool) -> SlackLinkApp {
+    setup_slack_app_with_mint_secret(pool, Some(MINT_SECRET)).await
+}
+
+/// As [`setup_slack_app`], but with the mint gate's key injectable so a test can spawn an
+/// instance with minting **unconfigured**.
+///
+/// `SLACK_MINT_SECRET` is deliberately independent of `SlackLinkConfig`'s all-or-nothing set, so
+/// "link flow on, minting off" is a real and reachable deployment state — not a misconfiguration.
+/// It is what every instance running today looks like before the mint secret is set, which is
+/// precisely why it needs a test rather than an assumption.
+async fn setup_slack_app_with_mint_secret(
+    pool: &PgPool,
+    mint_secret: Option<&str>,
+) -> SlackLinkApp {
     let idp = MockServer::start().await;
 
     let decoding_key =
@@ -162,6 +184,7 @@ async fn setup_slack_app(pool: &PgPool) -> SlackLinkApp {
             public_base_url: "https://temper.test".to_string(),
             vault_key: vault_key(),
         }),
+        slack_mint_secret: mint_secret.map(str::to_owned),
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);
@@ -845,7 +868,12 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
         .await
         .expect("mint")
     {
-        MintOutcome::Token(t) => assert!(!t.is_empty(), "the cached mint must yield a token"),
+        MintOutcome::Token { access_token, .. } => {
+            assert!(
+                !access_token.is_empty(),
+                "the cached mint must yield a token"
+            )
+        }
         other => panic!("expected a cached token, got {other:?}"),
     }
 
@@ -861,7 +889,10 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
         .await
         .expect("refreshing mint")
     {
-        MintOutcome::Token(t) => assert!(!t.is_empty(), "the refreshing mint must yield a token"),
+        MintOutcome::Token { access_token, .. } => assert!(
+            !access_token.is_empty(),
+            "the refreshing mint must yield a token"
+        ),
         other => panic!("expected a refreshed token, got {other:?}"),
     }
 
@@ -1355,4 +1386,275 @@ async fn disconnect_unbinds_every_principal_the_profile_holds(pool: PgPool) {
         "no sealed grant may survive — a surviving one still mints act-as-the-human tokens",
     );
     assert_eq!(count_intents(&pool).await, 0, "no intent may survive");
+}
+
+// ---------------------------------------------------------------------------------------------
+// T4 — the mint route (`POST /internal/slack/mint`)
+//
+// Every test below drives the ROUTE, never `mint_access_token` directly. That is deliberate and
+// load-bearing: the rule these endpoints enforce is *"naming a principal must not be sufficient
+// to mint its token,"* and the only thing enforcing it is the signature layer the route is
+// mounted behind. A test that called the service function would bypass the gate entirely and
+// prove nothing about authorization — the exact shape of vacuous gate this repo has been bitten
+// by before.
+// ---------------------------------------------------------------------------------------------
+
+/// POST `/internal/slack/mint` as the mention agent would: HMAC over the RAW body, keyed on
+/// [`MINT_SECRET`].
+///
+/// `secret` is a parameter rather than a constant so the cross-key probe can sign with the WRONG
+/// key without hand-rolling the scheme.
+async fn post_mint(
+    app: &SlackLinkApp,
+    principal: &str,
+    secret: &[u8],
+    signature: Option<String>,
+) -> reqwest::Response {
+    let body = format!(r#"{{"slack_principal_id":"{principal}"}}"#);
+    let ts = now_unix();
+    let sig =
+        signature.unwrap_or_else(|| temper_core::internal_sig::sign(secret, ts, body.as_bytes()));
+
+    app.http
+        .post(format!("http://{}/internal/slack/mint", app.addr))
+        .header("Content-Type", "application/json")
+        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
+        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
+        .body(body)
+        .send()
+        .await
+        .expect("post mint")
+}
+
+/// Link [`SLACK_PRINCIPAL`] through the real callback so a sealed grant exists to mint from.
+async fn link_a_vaulted_principal(app: &SlackLinkApp) {
+    let sub = "idp-sub-mint";
+    let email = "mint-7c41de@example.invalid";
+    provision_profile(app, sub, email).await;
+    stub_token_endpoint(app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(body.contains("Linked as"), "the link must succeed: {body}");
+}
+
+/// The happy path, through the gate: a vaulted principal mints a token with an expiry.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_returns_a_token_for_a_vaulted_principal(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app).await;
+
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(res.status(), 200, "a signed mint for a vaulted principal");
+
+    let body: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(body["status"], "token");
+    assert!(
+        body["access_token"].as_str().is_some_and(|t| !t.is_empty()),
+        "the token arm must carry a non-empty access token: {body}",
+    );
+
+    // The expiry must be in the FUTURE, in milliseconds. A seconds-valued timestamp would still
+    // be "a number" and still deserialize — it would just tell eve the token expired in 1970 and
+    // make it refresh on every single call. Asserting the magnitude is what catches the unit.
+    let expires_at_ms = body["expires_at_ms"].as_i64().expect("expires_at_ms");
+    let now_ms = now_unix() * 1000;
+    assert!(
+        expires_at_ms > now_ms,
+        "expiry must be in the future (ms since epoch); got {expires_at_ms} against now {now_ms} \
+         — a value below `now` usually means seconds were sent where ms were expected",
+    );
+}
+
+/// **The bite probe for the two-key split.** A mint call signed with the LINK-STATE key must be
+/// refused.
+///
+/// This is the test that fails if anyone "simplifies" the config by reusing `SLACK_LINK_SECRET`
+/// for both gates. Without it the collapse would be invisible: every other test here would stay
+/// green, because they all sign with whatever key the endpoint happens to use.
+///
+/// What it protects is not hypothetical. Link-state answers *"is this principal linked?"*; the
+/// mint endpoint hands back a bearer that resolves to a real profile with that human's FULL reach
+/// — `resources_visible_to` takes a profile and nothing else, so there is no narrowing behind it.
+/// One shared key would make compromise of the cheap capability yield the expensive one.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_refuses_the_link_state_key(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app).await;
+
+    // Signed correctly — with the WRONG secret. This is a well-formed signature by a caller who
+    // legitimately holds the link-state key and nothing more.
+    let res = post_mint(&app, SLACK_PRINCIPAL, SLACK_SECRET.as_bytes(), None).await;
+    assert_eq!(
+        res.status(),
+        401,
+        "the link-state key must NOT open the mint endpoint — holding the cheap capability must \
+         never confer the act-as-the-human one",
+    );
+
+    // And the converse, so the separation is proven in both directions rather than assumed: the
+    // mint key must not open link-state either.
+    let body = format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#);
+    let ts = now_unix();
+    let sig = temper_core::internal_sig::sign(MINT_SECRET.as_bytes(), ts, body.as_bytes());
+    let res = app
+        .http
+        .post(format!("http://{}/internal/slack/link-state", app.addr))
+        .header("Content-Type", "application/json")
+        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
+        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
+        .body(body)
+        .send()
+        .await
+        .expect("post link state with the mint key");
+    assert_eq!(
+        res.status(),
+        401,
+        "the mint key must not open link-state either — two keys, two doors",
+    );
+}
+
+/// A forged signature and an unsigned call are both refused, and neither mints.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_rejects_forged_and_unsigned_calls(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app).await;
+
+    let forged = temper_core::internal_sig::sign(
+        b"not-the-slack-mint-secret",
+        now_unix(),
+        format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#).as_bytes(),
+    );
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), Some(forged)).await;
+    assert_eq!(res.status(), 401, "a forged signature must be refused");
+
+    let res = app
+        .http
+        .post(format!("http://{}/internal/slack/mint", app.addr))
+        .header("Content-Type", "application/json")
+        .body(format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#))
+        .send()
+        .await
+        .expect("post unsigned mint");
+    assert_eq!(res.status(), 401, "an unsigned call must be refused");
+}
+
+/// A principal whose link row stands but whose grant was never vaulted mints nothing, and says so
+/// distinctly.
+///
+/// This is not a hypothetical arm. `slack_link.rs` lets the callback succeed when the IdP returns
+/// no refresh token — the directory row is written and only a `warn!` fires — and
+/// `lookup_linked_handle` reads that table, NOT the vault. So such a user is told "you're
+/// connected" by link-state and then cannot mint. The two endpoints must disagree in a way the
+/// agent can act on, which is why this is its own status rather than an error or a null token.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_reports_not_vaulted_distinctly_from_revoked(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app).await;
+
+    // Drop the sealed grant while leaving the identity row: exactly the linked-but-unvaulted
+    // shape the callback can produce.
+    sqlx::query("DELETE FROM kb_slack_grant_vault WHERE slack_principal_id = $1")
+        .bind(SLACK_PRINCIPAL)
+        .execute(&pool)
+        .await
+        .expect("drop the vault row");
+
+    // link-state still calls this user linked — the premise of the whole arm.
+    let res = post_link_state(&app, SLACK_PRINCIPAL, None).await;
+    assert_eq!(res.status(), 200);
+    let link_body: serde_json::Value = res.json().await.expect("link-state body");
+    assert_eq!(
+        link_body["status"], "linked",
+        "the premise: an unvaulted user still reads as linked, which is why mint must be honest",
+    );
+
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(
+        res.status(),
+        200,
+        "no grant on file is not a transport error"
+    );
+    let body: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(body["status"], "not_vaulted");
+    assert!(
+        body["access_token"].is_null(),
+        "no token may ride along on a not_vaulted answer: {body}",
+    );
+}
+
+/// A revoked grant mints nothing, and is reported as `revoked` rather than `not_vaulted`.
+///
+/// The distinction matters to the human: `not_vaulted` means "finish linking", `revoked` means
+/// "this link was deliberately severed". Collapsing them would make one of those sentences a lie.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_reports_a_revoked_grant_as_revoked(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app).await;
+
+    sqlx::query("UPDATE kb_slack_grant_vault SET revoked_at = now() WHERE slack_principal_id = $1")
+        .bind(SLACK_PRINCIPAL)
+        .execute(&pool)
+        .await
+        .expect("revoke the grant");
+
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(
+        body["status"], "revoked",
+        "a revoked grant must be distinguishable from one that was never vaulted: {body}",
+    );
+}
+
+/// A malformed principal is refused at the route, on the same shape checks link-state applies.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_rejects_a_malformed_principal(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    let res = post_mint(&app, "not-a-slack-principal", MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(
+        res.status(),
+        400,
+        "a principal without the slack: prefix must be refused before any vault lookup",
+    );
+}
+
+/// With `SLACK_MINT_SECRET` unset the mint endpoint is DISABLED — and the link flow still works.
+///
+/// Two assertions, and the second is the point. Fail-closed is easy to get right by accident (an
+/// unset key trivially fails an HMAC comparison); what is easy to get WRONG is the blast radius.
+/// Folding the mint key into `parse_slack_link`'s all-or-nothing set would have made an unset
+/// mint secret silently disable the entire link flow — which is live in production — turning a
+/// missing variable into an outage rather than one dark endpoint. This test is what would catch
+/// that regression.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_is_disabled_without_its_secret_but_linking_still_works(pool: PgPool) {
+    let app = setup_slack_app_with_mint_secret(&pool, None).await;
+    link_a_vaulted_principal(&app).await;
+
+    // Correctly signed with the key the ENABLED instance uses. It must still be refused, because
+    // this instance has no mint key at all.
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(
+        res.status(),
+        401,
+        "an instance with no mint secret must refuse every mint, however well signed",
+    );
+
+    // The blast radius: link-state is untouched. An operator who has not yet set the mint secret
+    // has a dark mint endpoint, NOT a broken Slack integration.
+    let res = post_link_state(&app, SLACK_PRINCIPAL, None).await;
+    assert_eq!(
+        res.status(),
+        200,
+        "the link flow must survive an unset mint secret — the two keys are independent",
+    );
 }

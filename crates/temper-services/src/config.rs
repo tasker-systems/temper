@@ -29,6 +29,23 @@ pub struct ApiConfig {
     /// Slack account-link configuration. `None` when the three env vars are not all
     /// set — the link flow's endpoints are then disabled rather than half-configured.
     pub slack_link: Option<SlackLinkConfig>,
+    /// Shared secret gating the internal **mint** endpoint (`/internal/slack/mint`), which vends
+    /// an act-as-the-human access token to the Slack mention agent. `None` disables that endpoint.
+    ///
+    /// DELIBERATELY NOT a field on [`SlackLinkConfig`], for two independent reasons:
+    ///
+    /// 1. **Privilege asymmetry.** `SLACK_LINK_SECRET` gates an endpoint that answers *"is this
+    ///    principal linked?"*. This one gates an endpoint that hands back **a token acting as any
+    ///    linked human, with that human's full reach**. The existing two-secret split
+    ///    (`INTERNAL_RECONCILE_SECRET` vs `SLACK_LINK_SECRET`) exists so neither principal can
+    ///    forge the other's calls; the same reasoning applies with far more force here, because
+    ///    the endpoint that *confers reach* must not share a key with one that merely answers a
+    ///    question. Compromising the low-privilege secret must not yield act-as-any-user.
+    /// 2. **`parse_slack_link` is all-or-nothing.** Folding this in would mean a deploy that has
+    ///    not yet set `SLACK_MINT_SECRET` silently disables the *entire* link flow — which is
+    ///    live in production today. Additive and independent keeps that from being a cliff: an
+    ///    unset mint secret disables minting only, and the link flow is untouched.
+    pub slack_mint_secret: Option<String>,
 }
 
 /// Slack account-link configuration. `None` when the three values are not all present —
@@ -119,6 +136,7 @@ impl ApiConfig {
             embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
+            slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
         })
     }
 }

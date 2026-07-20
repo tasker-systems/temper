@@ -1,8 +1,11 @@
 //! HMAC-signature gates for internal, non-JWT server-to-server callers.
 //!
-//! Two principals use the identical scheme with two different keys: the co-deployed
-//! Authorization Server (SAML reconcile, `INTERNAL_RECONCILE_SECRET`) and the Slack mention
-//! agent (link-intent minting, `SLACK_LINK_SECRET`). Each signs its request with
+//! Three gates use the identical scheme with three different keys: the co-deployed
+//! Authorization Server (SAML reconcile, `INTERNAL_RECONCILE_SECRET`), the Slack mention agent
+//! asking what to say (link state, `SLACK_LINK_SECRET`), and the same agent asking for an
+//! act-as-the-human token (mint, `SLACK_MINT_SECRET`). The last two share a *caller* but not a
+//! *key*, because they differ enormously in what their key is worth: one answers a question, the
+//! other confers a human's full reach. Each signs its request with
 //! `HMAC(secret, "{timestamp}.{raw_body}")`. The secret never crosses the wire, and a
 //! captured request is replay-proof (a stale timestamp is rejected). The signing scheme +
 //! the shared known-answer vector live in `temper_core::internal_sig`.
@@ -29,10 +32,10 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 
 /// The shared gate: fresh timestamp + valid HMAC over the exact bytes received.
 ///
-/// `secret` is passed in rather than read from state because two different principals use
-/// this scheme with two different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`)
-/// and the Slack mention agent (`SLACK_LINK_SECRET`). One scheme, one implementation, two
-/// keys; a shared key would let either forge the other's calls.
+/// `secret` is passed in rather than read from state because three gates use this scheme with
+/// three different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`), the mention agent's
+/// link-state call (`SLACK_LINK_SECRET`), and its mint call (`SLACK_MINT_SECRET`). One scheme,
+/// one implementation, three keys; a shared key would let any holder forge another's calls.
 async fn require_signature_with(
     secret: &str,
     label: &'static str,
@@ -135,4 +138,42 @@ pub async fn require_slack_link_signature(
         }
     };
     require_signature_with(&secret, "slack link", request, next).await
+}
+
+/// Rejects the request unless it carries a fresh, valid HMAC signature over its body, keyed on
+/// `SLACK_MINT_SECRET`.
+///
+/// **This is the highest-privilege gate in the file, and the reason it has its own key.** The
+/// other two guard endpoints that *report* something — a membership reconcile, a link-state
+/// answer. This one guards an endpoint that hands back an **act-as-the-human access token**: a
+/// bearer that resolves to a real profile and carries that human's full reach, personal contexts
+/// included. `resources_visible_to` takes a profile and nothing else, so there is no narrowing to
+/// fall back on — whoever holds the minted token is, to temper, that person.
+///
+/// Sharing `SLACK_LINK_SECRET` here would mean that compromising the ability to ask *"is this
+/// principal linked?"* also confers *"give me a token for any linked human."* The endpoint that
+/// **confers reach** cannot share a key with one that merely answers a question, however
+/// convenient one variable would be. Same scheme, third key.
+///
+/// The gate is also what makes the principal trustworthy at all: `mint_access_token` enforces no
+/// authorization and mints for whatever principal it is handed, so the rule *"naming a principal
+/// must not be sufficient to mint its token"* is enforced HERE, by possession of this secret, and
+/// nowhere else. See `slack_mint_service` for why that cannot be a predicate in the service.
+///
+/// Fail-closed: no secret ⇒ endpoint disabled. Note that an instance can legitimately run with
+/// the link flow configured and minting off (the secret is independent of `SlackLinkConfig`), so
+/// this rejection is not evidence of misconfiguration on its own.
+pub async fn require_slack_mint_signature(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let secret = match state.config.slack_mint_secret.as_deref() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            tracing::warn!("slack mint: rejected (endpoint disabled — SLACK_MINT_SECRET unset)");
+            return Err(ApiError::Unauthorized("slack mint disabled".to_string()));
+        }
+    };
+    require_signature_with(&secret, "slack mint", request, next).await
 }
