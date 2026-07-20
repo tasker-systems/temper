@@ -14,7 +14,18 @@
 #   embed_internal_routes         (none)                                self-gated: EMBED_DISPATCH_SECRET
 #   internal_routes               require_internal_signature            HMAC (INTERNAL_RECONCILE_SECRET)
 #   slack_link_internal_routes    require_slack_link_signature          HMAC (SLACK_LINK_SECRET)
+#   slack_mint_internal_routes    require_slack_mint_signature          HMAC (SLACK_MINT_SECRET)
 #   slack_link_public_routes      (none)                                by-design public: PKCE+state callback
+#
+# On slack_mint_internal_routes specifically: it is a THIRD signature group rather than a route on
+# slack_link_internal_routes because the keys must differ. Link-state answers "is this principal
+# linked?"; the mint route vends an act-as-the-human access token carrying that human's FULL reach
+# (resources_visible_to takes a profile and nothing else — there is no narrowing behind it). One
+# shared key would make compromise of the cheap capability yield the expensive one. Its signature
+# gate is ALSO the only thing enforcing "naming a principal must not be sufficient to mint its
+# token" — mint_access_token authorizes nothing itself — so a lost layer here is not a downgrade
+# to authenticated-but-broad, it is act-as-any-user. That is why it belongs in REVIEW_GROUPS and
+# gets a require_substr wiring assertion below.
 #
 # A route added to auth_only/gated is authenticated by construction — safe, no review needed.
 # A route added to any of the OTHER groups is unauthenticated-at-the-middleware (public, a
@@ -39,7 +50,7 @@ ROUTES_FILE="crates/temper-api/src/routes.rs"
 # Groups whose routes are authenticated by construction (a require_auth layer). They grow freely.
 AUTH_COVERED='auth_only_routes|gated_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
-REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_link_public_routes'
+REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes'
 
 # Reviewed baseline: <group>\t<handler> for every route in a REVIEW group. Each is unauthenticated
 # at the middleware and carries its own control (see the table above). A change here means a new or
@@ -51,6 +62,7 @@ embed_internal_routes	handlers::slack_disconnect::reap_intents
 internal_routes	handlers::internal_saml::reconcile
 public_routes	handlers::health::health_check
 slack_link_internal_routes	handlers::slack_link::slack_link_state
+slack_mint_internal_routes	handlers::slack_mint::slack_mint
 slack_link_public_routes	handlers::slack_link::callback
 EOF
 
@@ -93,6 +105,7 @@ require_substr 'auth::require_auth'
 require_substr 'require_system_access'
 require_substr 'require_internal_signature'
 require_substr 'require_slack_link_signature'
+require_substr 'require_slack_mint_signature'
 
 # (c) The review-required route set must match the reviewed baseline.
 NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -u)"
