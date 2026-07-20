@@ -55,10 +55,26 @@ a predicate whose basis has changed twice. This design gives the question exactl
 Covers the four mint paths, standing, requests, revocation, deactivation, and machine registration's
 containment rule.
 
-**Out — governance.** Whether a principal may *change the rules* (`is_system_admin`, promotion,
-demotion) is a **separate state machine with its own spec**, deliberately. Admission asks *may you
-act*; governance asks *may you govern*. Different authority, different blast radius, different
-revocation semantics. This spec defines only the seam (§9).
+**In — governance (changed 2026-07-20, see D10).** Whether a principal may *change the rules*
+(`is_system_admin`, promotion, demotion) was originally deferred to a separate spec, with this one
+defining only the seam (§9). The pressure test showed the seam does not hold as written: admin-ness
+*is* a `kb_team_members` row, so maintaining "admin implies Approved" by transition means adding a
+twenty-first uncoordinated writer to the system's most-written table.
+
+Governance is therefore **in scope and lands at the outset**. Admission still asks *may you act* and
+governance still asks *may you govern* — two machines, two questions — but they ship together rather
+than across a boundary. What this buys is disproportionate to what it costs, and the reason is
+narrow: **gating-team ownership has exactly one authorization reader.**
+
+```
+SQL readers of is_system_admin : context_reassign (which simply calls it)
+Rust callers                   : ~12, ALL routed through access_service::is_system_admin (:44)
+```
+
+One chokepoint. When governance holds its own state, `is_system_admin` changes body in one place and
+gating-team ownership stops carrying authorization meaning at all — the ~20 writers to
+`kb_team_members` become ordinary team-role churn. There is no cross-machine invariant left to
+maintain, because there is no longer a second place where admin-ness lives.
 
 **Out — Level 3.** Resource authorization (`resources_visible_to`, `can_modify_resource`, team
 roles, cogmap grants) is untouched. It is SQL-resident, large, and has a settled design. A future
@@ -87,6 +103,83 @@ dedicated authz layer is plausible and explicitly not in scope here.
 | **D7** | Connection profiles get **no standing row at all**. Absence denies, so their safety is structural. |
 | **D8** | Backfill by evaluating the **old predicate**, making the cutover behaviour-preserving on every instance. |
 | **D9** | `Requested` is **per-principal and carries no team dimension**. Asking to join a *team* is orthogonal to standing in the system and is out of scope. |
+| **D10** | **Governance lands at the outset**, not as a later spec. Admin-ness moves off gating-team ownership onto governance state, which has one authorization reader to repoint. |
+| **D11** | **Every provision path births `Denied`.** No door grants access. Approval is always a separate, admin-authored act. |
+| **D12** | The birth state is `Denied`, **not `Requested`** — `Request` is an explicit act by the principal, because it is what captures terms consent. |
+| **D13** | SAML's "the assertion *is* the grant" rationale is **withdrawn**. Identity assertion and access grant are different claims by different parties. |
+
+### On D10 — governance at the outset
+
+Deciding this first dissolves three of the pressure test's six findings rather than solving them
+individually (§16). The seam problem (F2) disappears because there is no seam. The Phase 1
+de-admin (F1) disappears by a less obvious route: `trg_sync_system_membership`'s harm was demoting
+the gating-team owner, and once that role carries no authorization meaning, the demotion is
+cosmetic. **Phase 1 can then write projections freely and the trigger can be dropped in Phase 2
+where it belongs — the additive/destructive split survives.** What forced Phase 1 to be destructive
+was never the trigger; it was that admin-ness lived in the table the trigger writes.
+
+### On D11 — every door births `Denied`
+
+The uniform rule retires machinery rather than adding it. **Minter containment (§6) becomes
+unnecessary, not relocated**: a minter who cannot confer access is moot when minting never confers
+access. That guard — and the escalation it failed to prevent — is what began this entire design arc,
+and D11 ends it by removing the thing it was guarding.
+
+It also closes F4 structurally. A revoked SAML principal re-asserting cannot be silently
+re-approved, because `Provision` no longer grants under any path.
+
+The genesis case is the deliberate exception: on a fresh instance no admin exists, so nobody could
+ever be approved. The boot-seed mints the first admin, and that is **load-bearing rather than a
+loose end** (F6). This is accepted, not worked around — bootstrapping temper already requires
+database write access, and the bootstrap SoP and scripts foreground that reality.
+
+### On D12 — `Denied`, not `Requested`
+
+`kb_join_requests` carries consent:
+
+```
+accepted_terms_version  varchar(32)
+accepted_terms_at       timestamptz
+source                  varchar(16) NOT NULL
+```
+
+Birthing a principal into `Requested` would produce a standing state whose paired record has no
+terms acceptance — forcing either fabricated consent or an empty request row that lies about having
+been requested. **Terms cannot be accepted on someone's behalf as a side effect of an IdP
+assertion.** The `source` column makes the same point: the record is designed to say where the
+asking came from, which presumes an asking happened.
+
+Three parties, three acts: the IdP asserts *who you are*; only the principal accepts *the terms*;
+only an admin grants *access*. Born-`Requested` collapses the first two.
+
+The usual argument for born-`Requested` — that a principal landing on a bare 403 has no path
+forward — is answered elsewhere: `Refusal` is a typed enum (§7), so `Denied` refuses with *"you may
+request access"* and `Requested` with *"your request is pending."* That messaging distinction is the
+real justification for `Requested` existing as a state, and it only works if the two states mean
+different things.
+
+`Requested` thereby earns a second job: with D5 moving the status column onto standing, it **is**
+the duplicate-request guard — which matters, because dropping `status` also drops
+`idx_join_requests_one_pending`. A per-principal standing state replaces a per-team partial index,
+which is strictly more correct under D9.
+
+*Terms are unconfigured today* (`terms_version` and `terms_resource_uri` are empty on both prod and
+local), so `Request` must handle "no terms configured" without blocking, and the acceptance columns
+stay nullable.
+
+### On D13 — why the SAML rationale was withdrawn
+
+The original §8 justified SAML → `Approved` on the grounds that the principal was provisioned
+upstream. That conflates two different assertions by two different parties:
+
+> *"It's one thing for SAML to say 'our org and IdP say you can use this', and another for the
+> in-app version to say 'we agree and now you have access' — and I shouldn't conflate them, because
+> it's across that precise boundary that interception and access escalation or mismanagement
+> happen."*
+
+Team assignment already works this way: SAML does not auto-assign teams; a person is invited by an
+admin or a team owner. Auto-granting *system* access on an IdP assertion was the odd one out, and
+there is no articulated JTBD spec for auto-SAML provisioning to justify it.
 
 ### On D9 — two different questions wearing one table
 
@@ -208,21 +301,32 @@ principal acting on its own standing), and **admin** — an actor for whom `is_s
 
 Provision is where the doors diverge, and it is the entire reason this exists:
 
+**Under D11 the doors no longer diverge — every path births `Denied`:**
+
 | path | resulting standing | guard |
 |---|---|---|
-| SAML assertion | `Approved` | none — the IdP is the authority; no human in the loop to bound |
+| SAML assertion | `Denied` | none needed — the assertion establishes identity, not access (D13) |
 | OAuth first-login | `Denied` | none |
-| Machine registration | `Approved` | **containment** — may not exceed the minter's own standing |
+| Machine registration | `Denied` | none needed — containment is retired (D11) |
+| Boot-seed (genesis) | `Approved` + admin | **the deliberate exception** — mints the first admin; see D11 |
 
-**SAML and OAuth share one mint function today** (`create_new_profile_and_link`, reached from both
-`resolve_federated_human` and `authenticate`). The divergence must therefore be carried by the act,
-never by a constant at the shared site. The failure direction is permissive and silent: every OAuth
-signup born `Approved` would open the instance to anyone who can sign in, and nothing would notice.
+This is the reason the uniform rule is worth having. **SAML and OAuth share one mint function**
+(`create_new_profile_and_link`, reached from both `resolve_federated_human` and `authenticate`), and
+under the old design the two doors had to diverge *at a shared site* — a constant at that site would
+have been permissive and silent, opening the instance to anyone who could sign in, with nothing to
+notice. A uniform birth state removes the divergence entirely, so there is no per-door constant left
+to get wrong.
 
-**The containment guard refuses the act rather than minting a denied machine.** Minting a credential
-*is* approval by intent, so a minter who cannot confer access should not receive a credential that
-silently does not work. Today that case registers cleanly and 403s later, with the explanation in a
-log line nobody reads.
+**`Provision` fires only on profile mint, never on a returning principal.** An existing auth link
+returns at step 1 of `resolve_human_from_claims` and never reaches the mint; a returning principal's
+standing is **loaded, not set**. Stated explicitly because the earlier per-*assertion* wording made
+`Revoke` defeatable on the SAML door (F4) — D11 closes that structurally, and this sentence keeps it
+closed if a future door is added.
+
+> **Correction to the actor column.** `Provision`'s actor authority is listed above as *"none — the
+> credential is the authority."* That is wrong for machines: `temper admin machine provision` is
+> **admin-run**. Under D11 this matters less than it did (provision grants nothing either way), but
+> the act table should say so rather than imply an unauthenticated mint path exists.
 
 ## §7 Fail-closed obligations
 
@@ -287,25 +391,53 @@ smooth, and not a default that fell out of the schema.
 
 - Do **not** change OAuth's provision to `Approved` because new users are locked out. That is the
   feature.
-- SAML and machine registration are `Approved` for a *different* reason: the principal was
-  provisioned upstream, so the assertion or the registration **is** the grant. Same resulting state,
-  two unrelated rationales — do not collapse them into one rule.
+- **Do not restore SAML's auto-approval** (D13). An earlier draft of this spec had SAML and machine
+  registration born `Approved` because "the principal was provisioned upstream, so the assertion or
+  the registration **is** the grant." That rationale was withdrawn by its own author. An IdP
+  asserting *"our org says this person may use this"* and the instance deciding *"we agree, and now
+  they have access"* are different claims by different parties, and **it is across exactly that
+  boundary that interception and access escalation happen.** Team assignment already respects this
+  boundary — SAML does not auto-assign teams — and system access was the odd one out.
+- A future reader with an inbox full of pending SAML users will be tempted to auto-approve them.
+  That temptation is what this bullet exists to refuse. If auto-provisioning is ever wanted, it needs
+  an articulated JTBD spec first; there is none today, and its absence is why the shortcut was a
+  mistake.
 - Consequently `/admin/access` is not an inbox, it is **the gate** (task
-  `019f7ce2-0b12-7420-b5f1-cb2ce78a743d`).
+  `019f7ce2-0b12-7420-b5f1-cb2ce78a743d`), and under D11 it is now the **only** way any principal
+  gains access.
 
-## §9 The governance seam
+## §9 Governance — no longer a seam (D10)
 
-Governance is a separate machine and a separate spec. This spec fixes only the invariant between
-them, and requires it be **maintained by a transition, never checked at read time**:
+**This section previously specified a seam between two separately-shipped machines. D10 removed the
+seam by shipping them together; what follows is what replaces it.** The original text required the
+invariant be "maintained by a transition, never checked at read time" — sound in the abstract, and
+false in this schema, because admin-ness *is* a `kb_team_members` row (F2).
+
+The invariant is unchanged:
 
 - **`admin` implies `Approved`.** Promotion guards on standing being `Approved` — you cannot govern
   an instance you may not use.
-- **Revoke and Deactivate fire a demotion in the governance machine, in the same transaction.**
+- **Revoke and Deactivate demote**, so "admin, but admission revoked" is never representable.
 
-Without this, "admin, but admission revoked" is representable, and `is_system_admin` would have to
-consult admission to be safe — reintroducing a cross-table AND in the hottest predicate in the
-system. Maintaining it by transition lets `is_system_admin` read one thing and be correct by
-construction.
+What changes is where it is enforced. Governance holds **its own state**, so:
+
+- `is_system_admin` reads governance state directly. It never consults admission at read time, and
+  it never ANDs across tables — the property the old seam was trying to buy, obtained by
+  construction instead of by discipline.
+- Gating-team ownership **stops being an authorization fact**. It becomes an ordinary team role.
+  The ~20 uncoordinated writers to `kb_team_members` (`promote_admin`, `ensure_auto_join_memberships`,
+  `sync_system_membership`, `enroll_in_gating_team`, `apply_reach`, the `team_service` member
+  operations, `saml_provisioning_service`, and the rest) stop being able to alter anyone's authority,
+  because there is no longer authority stored there to alter.
+- `promote_admin`'s raw INSERT is retired in the same change. Under the old design this was a
+  *requirement* for the invariant to hold (one writer maintaining it against nineteen breaking it);
+  under D10 it is merely cleanup, because the row it writes no longer confers anything.
+
+**The pre-existing demotion bug dies with it.** Today `promote_admin` writes the membership but
+deliberately not the tier, while `ensure_auto_join_memberships` derives the role *from* the tier —
+so they disagree, the tier wins, and a promoted admin is silently demoted `owner → watcher` by any
+join-request approval (§16). Once admin-ness is not a team role, there is nothing for the two
+writers to disagree about.
 
 ## §10 Persistence
 
@@ -373,10 +505,16 @@ testers.
   is where a subtle case gets missed.
 - **SQL totality has its own test** — `has_system_access` and `is_system_admin` return non-`NULL` for
   a profile with no standing row, a deactivated one, and an unknown state value.
-- **Containment gets a test per door**, including a minter without standing being refused *at the
-  act*, with a reason.
+- **Containment is retired (D11), so its tests change shape.** There is no longer a minter-standing
+  guard to test. What replaces it is the stronger assertion: **no provision path, under any actor,
+  yields `Approved`** — one test per door, plus a test that a machine minted by an admin is still
+  born `Denied`. That is a property of the whole surface rather than of one guard, and it fails
+  loudly if a future door is added carelessly.
 - **The mint split gets one test per path, never one for the pair** — the two doors share a mint
-  function and the failure is silent and permissive.
+  function. Under D11 both must birth `Denied`, so this test now guards *uniformity* rather than
+  *divergence*, but the reason for testing each path separately is unchanged.
+- **`Provision` on a returning principal must not touch standing** — assert that a `Revoked` SAML
+  principal re-asserting through the IdP stays `Revoked`.
 
 ## §13 Open questions
 
@@ -444,6 +582,13 @@ written it invites the next reader to run the grep, get four hits, and conclude 
 | `anonymous` | tier `none`, gating member, old predicate **`true`** — §11's D8 case, confirmed at exactly one row |
 | `kb_join_requests` | **zero rows** — D5's status-column drop has no data to migrate |
 
+**Why the join-request table is empty, and why that matters.** Prod was never really wired up for
+join requests: the instance was left `open` until the two other alpha-tester accounts joined, then
+closed to `invite_only`. Nobody has ever submitted one. So the request surface can be reshaped
+freely — D5's status-column drop, the loss of `idx_join_requests_one_pending`, and the D12 rework of
+`Request` all land on an empty table with no migration story and no user-visible regression. This is
+unusual latitude and should be used now rather than assumed to persist.
+
 Two consequences worth carrying into planning. **D8 is vindicated empirically:** `anonymous` has
 access purely via membership with tier `none`, so a tier-based backfill would have locked it out,
 exactly as §11 predicted and at exactly the predicted cardinality. And because every prod principal
@@ -453,12 +598,29 @@ enterprise instance remains unverified.
 **Production state moves and must be re-verified foregrounded before implementation.** `access_mode`
 has now changed twice across the sessions that produced this design.
 
-## §16 Open design forks — raised by the pressure test, NOT yet decided
+## §16 Pressure-test findings — status
 
 The 2026-07-20 pressure test confirmed the design intent (the two-machine split, the fail-closed
-obligations, D8) and found six places where the spec is **not yet implementable**. These are
-recorded here unresolved: each needs a decision, and none has been made. **Do not write an
-implementation plan that silently picks one.**
+obligations, D8) and found six places where the spec was **not implementable as written**. D10–D13
+resolved four of them. **Do not write an implementation plan that silently picks an answer to the
+two that remain.**
+
+| | finding | status |
+|---|---|---|
+| **F1** | Phase 1 de-admins the instance | **RESOLVED by D10** — gating-owner loses authz meaning, so the trigger's demotion is cosmetic; Phase 1 stays additive and the trigger drops in Phase 2 |
+| **F2** | §9's seam costs a 21st writer to `kb_team_members` | **RESOLVED by D10** — no seam; governance holds its own state and `is_system_admin` has one reader to repoint |
+| **F3** | Eight of nine acts have no resulting state | **OPEN** — still the largest gap; §12's table test cannot be written until it closes |
+| **F4** | SAML `Provision` read literally defeats `Revoke` | **RESOLVED by D11 + D13** — no door grants, and `Provision` fires only on mint |
+| **F5** | Machine credential revocation vs standing `Revoked` | **OPEN** — still a cross-table AND, still needs a rule |
+| **F6** | The boot-seed is a fourth provision door | **RESOLVED by D11, and promoted** — it is now the load-bearing genesis exception, deliberately accepted |
+
+The pre-existing admin-demotion bug (below) is **superseded by D10** rather than fixed: once
+admin-ness is not a team role, the two disagreeing writers have nothing to disagree about. It may
+still be worth filing if the fix is wanted before this design ships.
+
+> **Historical note — the original text of the four resolved findings is kept below**, because the
+> reasoning that produced D10–D13 is only legible against the problem it solved. Do not read them as
+> open work.
 
 **F1 — §11 Phase 1 de-admins the instance.** §11 calls `system_access` a "maintained projection so
 nothing reading them breaks mid-flight." It is not inert. `trg_sync_system_membership` fires
