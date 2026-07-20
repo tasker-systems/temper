@@ -20,10 +20,9 @@ mod standing;
 mod transition;
 
 // Re-exports are restored by the tasks that fill each module:
-//   Task 2 — act.rs, transition.rs
-//   Task 3 — admission.rs, refusal.rs
-// pub use act::{Act, ActorAuthority, Provisioner};
+//   Task 3 — admission.rs
+pub use act::{Act, ActorAuthority, Provisioner};
 // pub use admission::{admit, AdmittedPrincipal};
-// pub use refusal::Refusal;
+pub use refusal::Refusal;
 pub use standing::Standing;
-// pub use transition::transition;
+pub use transition::transition;
