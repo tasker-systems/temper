@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   decideIdentity,
   isHumanPrincipal,
-  linkedPrompt,
+  notVaultedPrompt,
+  revokedPrompt,
   unlinkedPrompt,
   type PrincipalLike,
 } from "../agent/lib/identity.js";
@@ -135,23 +136,44 @@ describe("unlinkedPrompt", () => {
   });
 });
 
-describe("linkedPrompt", () => {
-  it("names the handle", () => {
-    expect(linkedPrompt("j-cole-taylor")).toContain("@j-cole-taylor");
+describe("the broken-credential prompts", () => {
+  it("each names the handle and offers the remedy", () => {
+    // FAILS IF: either reply becomes a bare error with nothing the user can act on. The
+    // handle is what makes it clear WHICH account is affected, and the remedy is the only
+    // reason a user reads past the first line.
+    for (const message of [notVaultedPrompt("j-cole-taylor"), revokedPrompt("j-cole-taylor")]) {
+      expect(message).toContain("@j-cole-taylor");
+      expect(message).toContain("temper slack disconnect");
+    }
   });
 
-  it("never asks a linked user to connect again", () => {
-    // The regression this whole branch exists to kill: a linked user was told to link on
-    // every mention, forever. If the linked reply ever grows a URL or the word "connect",
-    // we are back where we started.
-    const message = linkedPrompt("j-cole-taylor");
-    expect(message.toLowerCase()).not.toContain("connect your account");
-    expect(message).not.toContain("http");
+  it("are DISTINCT from each other", () => {
+    // FAILS IF: the two are collapsed into one shared string. "No credential is stored" and
+    // "your access was revoked" are different facts — one is an incomplete link, the other a
+    // deliberate withdrawal (possibly an admin deactivating the profile) — and a user who is
+    // told the wrong one goes looking in the wrong place.
+    expect(notVaultedPrompt("someone")).not.toBe(revokedPrompt("someone"));
+    expect(revokedPrompt("someone").toLowerCase()).toContain("revoked");
+    expect(notVaultedPrompt("someone").toLowerCase()).not.toContain("revoked");
   });
 
-  it("does not leak task numbers or internal plans", () => {
-    // It is allowed to say "not yet". It is not allowed to say "in T4".
-    expect(linkedPrompt("someone")).not.toMatch(/\bT\d\b/);
+  it("say plainly that retrying will not help", () => {
+    // FAILS IF: the not_vaulted copy loses its finality. Without it the user mentions again,
+    // gets the identical message, and concludes the agent is simply broken — which is the
+    // exact experience the pre-flight fork exists to prevent.
+    expect(notVaultedPrompt("someone").toLowerCase()).toMatch(/won't fix/);
+  });
+
+  it("carry no URL, no task numbers and no dates", () => {
+    // FAILS IF: someone "helpfully" pastes an authorize URL here. There is none to offer —
+    // both states are reached from link-state's `linked` arm, which carries no
+    // `authorize_url` — so any URL in this copy is invented. Also guards the copy rules: no
+    // task numbers, no dates, no internal plans in user-facing text.
+    for (const message of [notVaultedPrompt("someone"), revokedPrompt("someone")]) {
+      expect(message).not.toContain("http");
+      expect(message).not.toMatch(/\bT\d\b/);
+      expect(message).not.toMatch(/\b20\d\d\b/);
+    }
   });
 });
 

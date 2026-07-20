@@ -2,8 +2,9 @@ import { defaultSlackAuth, slackChannel } from "eve/channels/slack";
 import type { SlackContext, SlackMessage } from "eve/channels/slack";
 
 import { deliverEphemeral } from "../lib/ephemeral.js";
-import { decideIdentity, linkedPrompt, unlinkedPrompt } from "../lib/identity.js";
+import { decideIdentity, notVaultedPrompt, revokedPrompt, unlinkedPrompt } from "../lib/identity.js";
 import { requestLinkState } from "../lib/link.js";
+import { requestMintedToken } from "../lib/mint.js";
 import { ephemeralEvents } from "./events.js";
 
 /**
@@ -63,30 +64,63 @@ export default slackChannel({
       // Ask what to SAY, not for a URL. A linked user gets no challenge and mints no intent;
       // asking for a URL unconditionally is what re-prompted linked users forever.
       const link = await requestLinkState(decision.principalId);
-      const reply =
-        link.status === "linked"
-          ? linkedPrompt(link.handle)
-          : unlinkedPrompt(link.authorize_url);
 
-      // Deliver privately, at the CHANNEL ROOT. `deliverEphemeral` owns the why — the
-      // `thread_ts`-inheritance trap and the `{ ok, error }` failure surface — and is now
-      // shared with the event overrides in `events.ts`.
-      await deliverEphemeral(ctx, userId, reply);
+      if (link.status === "unlinked") {
+        // Deliver privately, at the CHANNEL ROOT. `deliverEphemeral` owns the why — the
+        // `thread_ts`-inheritance trap and the `{ ok, error }` failure surface — and is
+        // shared with the event overrides in `events.ts`.
+        await deliverEphemeral(ctx, userId, unlinkedPrompt(link.authorize_url));
+        // DROP: a turn here would run the model under no identity — no tools, nothing to
+        // ground an answer in. The prompt IS the reply.
+        return null;
+      }
+
+      // PRE-FLIGHT THE MINT, before dispatching. The connection's `getToken` would mint too,
+      // but a failure there is a FAILED TURN, and a failed turn is routed to the
+      // `turn.failed` handler, which says one deliberately detail-free sentence
+      // (`events.ts` — it must not quote model or tool output). That is exactly the generic
+      // error each of these three states must NOT collapse into: "you were never vaulted"
+      // and "your access was revoked" need different sentences and a remedy, and neither is
+      // fixed by trying again. Minting here is what lets us say the true thing.
+      //
+      // This does mean a successful turn mints TWICE — once here, once inside `getToken`.
+      // That is deliberately cheap, not overlooked: the server returns the CACHED access
+      // token without touching the refresh token whenever it outlives a 5-minute skew
+      // (`slack_grant_vault_service.rs`, `mint_access_token`: "Cached access token still
+      // comfortably valid? Hand it back — no refresh, no RT rotation."). So the second mint
+      // is a row read, never a second spend of the grant.
+      const mint = await requestMintedToken(decision.principalId);
+
+      switch (mint.status) {
+        case "token":
+          // DISPATCH. Returning `auth` is what gives the turn its identity — eve projects
+          // this same `principalId` into the connection principal, so the tools run under
+          // this human and no one else.
+          return { auth: decision.auth };
+
+        case "not_vaulted":
+          await deliverEphemeral(ctx, userId, notVaultedPrompt(link.handle));
+          // DROP: dispatching would fail in `getToken` and overwrite this specific,
+          // actionable message with the generic turn-failure line.
+          return null;
+
+        case "revoked":
+          await deliverEphemeral(ctx, userId, revokedPrompt(link.handle));
+          // DROP, for the same reason.
+          return null;
+      }
     } catch (err) {
-      // requestLinkState failed (API/network). eve swallows a thrown handler, so say something.
-      console.error("link state lookup failed", err);
+      // requestLinkState or requestMintedToken failed (API/network/secret drift). eve
+      // swallows a thrown handler, so say something. This is the one genuinely generic
+      // reply, and it is generic honestly: we do not know what is wrong, and unlike the
+      // three states above, trying again really may work.
+      console.error("temper account lookup failed", err);
       await deliverEphemeral(
         ctx,
         userId,
         "I couldn't check your temper account just now. Please try again in a moment.",
       );
+      return null;
     }
-
-    // Deliberately DROP rather than dispatch, on BOTH arms. Unlinked, a turn would run the
-    // model under no identity — no tools, nothing to ground an answer in. Linked, there is
-    // still nothing to dispatch TO: reads under proven identity are a later task. Until then
-    // the prompt IS the reply, and the default `message.completed` handler would post an
-    // ungrounded turn if we dispatched one.
-    return null;
   },
 });

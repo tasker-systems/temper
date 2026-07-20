@@ -1,0 +1,239 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { LinkState } from "../agent/lib/link.js";
+import type { MintOutcome } from "../agent/lib/mint.js";
+
+/**
+ * The dispatch fork in `onAppMention`: who gets a model turn, and who gets which sentence.
+ *
+ * `slackChannel` is stubbed to the identity function so the channel module hands back its own
+ * config object and `onAppMention` is directly callable. `defaultSlackAuth` is stubbed too —
+ * building a real one would mean constructing eve's whole inbound webhook surface, and
+ * `identity.test.ts` already covers the auth-context forks.
+ */
+const { slackChannel, defaultSlackAuth, requestLinkState, requestMintedToken } = vi.hoisted(
+  () => ({
+    slackChannel: vi.fn((config: unknown) => config),
+    defaultSlackAuth: vi.fn(),
+    requestLinkState: vi.fn<(p: string) => Promise<LinkState>>(),
+    requestMintedToken: vi.fn<(p: string) => Promise<MintOutcome>>(),
+  }),
+);
+
+vi.mock("eve/channels/slack", () => ({ slackChannel, defaultSlackAuth }));
+vi.mock("../agent/lib/link.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent/lib/link.js")>()),
+  requestLinkState,
+}));
+vi.mock("../agent/lib/mint.js", () => ({ requestMintedToken }));
+
+/** The principal the whole pipeline is keyed on — 3 segments, never split. */
+const PRINCIPAL = "slack:T012AB3CD:U024BE7LH";
+const USER_ID = "U024BE7LH";
+
+/** A human `SessionAuthContext`, reduced to what the channel reads. */
+function humanAuth() {
+  return {
+    principalId: PRINCIPAL,
+    principalType: "user",
+    authenticator: "slack-webhook",
+    attributes: { user_id: USER_ID, team_id: "T012AB3CD" },
+  };
+}
+
+/** A pre-dispatch `SlackContext`: `slack` + `thread`, and no `state`. */
+function fakeCtx() {
+  const request = vi.fn(async (_operation: string, _body: unknown) => ({ ok: true }));
+  const post = vi.fn(async (_message: { text: string }) => undefined);
+  return { ctx: { slack: { channelId: "C123", request }, thread: { post } }, request, post };
+}
+
+/** The text of every ephemeral delivered during a call. */
+function ephemeralTexts(request: ReturnType<typeof fakeCtx>["request"]): string[] {
+  return request.mock.calls
+    .filter(([operation]) => operation === "chat.postEphemeral")
+    .map(([, body]) => (body as { text: string }).text);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyArgs = any;
+
+/**
+ * Drive one mention. Imported lazily so the module-level `vi.mock`s are installed first, and
+ * so each test gets the config object built by the stubbed `slackChannel`.
+ */
+async function mention(ctx: unknown) {
+  const channel = (await import("../agent/channels/slack.js")).default as AnyArgs;
+  return channel.onAppMention(ctx as AnyArgs, {} as AnyArgs);
+}
+
+beforeEach(() => {
+  defaultSlackAuth.mockReturnValue(humanAuth());
+  requestLinkState.mockReset();
+  requestMintedToken.mockReset();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("onAppMention — the mint pre-flight", () => {
+  // FAILS IF: a linked user with a live credential is still dropped (the pre-Beat-D
+  // `return null`), or dispatched without `auth` — which would run the turn under no
+  // identity and give the model no reach at all.
+  it("DISPATCHES with the caller's auth when a token is minted", async () => {
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({
+      status: "token",
+      access_token: "at-1",
+      expires_at_ms: 1_784_505_600_000,
+    });
+    const { ctx, request } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toEqual({ auth: humanAuth() });
+    // No ephemeral on the happy path: the model's answer is the reply, delivered by the
+    // `message.completed` override.
+    expect(ephemeralTexts(request)).toEqual([]);
+  });
+
+  // FAILS IF: a not_vaulted user is DISPATCHED. That is the headline bug this fork exists to
+  // prevent — the turn would die inside `getToken` and the user would get `turn.failed`'s
+  // deliberately detail-free line instead of the one message that tells them what to do.
+  it("never dispatches a not_vaulted user, and says something specific instead", async () => {
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({ status: "not_vaulted" });
+    const { ctx, request, post } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toBeNull();
+    const [text] = ephemeralTexts(request);
+    expect(text).toBeDefined();
+    // The load-bearing content: retrying is futile, and here is the remedy.
+    expect(text).toMatch(/won't fix/i);
+    expect(text).toContain("temper slack disconnect");
+    // Private, always. A credential-adjacent status line must not reach the channel.
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF: a revoked user is DISPATCHED. Same failure mode as above, and additionally the
+  // one where a revoked grant is treated as a transient error worth retrying.
+  it("never dispatches a revoked user, and says something specific instead", async () => {
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({ status: "revoked" });
+    const { ctx, request, post } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toBeNull();
+    const [text] = ephemeralTexts(request);
+    expect(text).toMatch(/revoked/i);
+    expect(text).toContain("temper slack disconnect");
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF: the three failure replies are collapsed into one generic message. Each pair
+  // must differ, so a shared "something went wrong" string — the tempting simplification —
+  // trips this even though every individual reply still "says something".
+  it("gives unlinked, not_vaulted and revoked three DISTINCT replies", async () => {
+    const replies: string[] = [];
+
+    requestLinkState.mockResolvedValue({
+      status: "unlinked",
+      authorize_url: "https://temper.test/authorize/abc123",
+    });
+    let harness = fakeCtx();
+    await mention(harness.ctx);
+    replies.push(...ephemeralTexts(harness.request));
+
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    for (const status of ["not_vaulted", "revoked"] as const) {
+      requestMintedToken.mockResolvedValue({ status });
+      harness = fakeCtx();
+      await mention(harness.ctx);
+      replies.push(...ephemeralTexts(harness.request));
+    }
+
+    expect(replies).toHaveLength(3);
+    expect(new Set(replies).size).toBe(3);
+    // And the unlinked one is the only one carrying a URL — the other two are reached from
+    // the `linked` arm, which has none to offer.
+    expect(replies.filter((r) => r.includes("http"))).toHaveLength(1);
+  });
+
+  // FAILS IF: the mint is called with anything but the whole principal, or the pre-flight is
+  // moved after the dispatch (in which case it would not run at all on this path).
+  it("mints for the WHOLE principal before deciding", async () => {
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({ status: "not_vaulted" });
+
+    await mention(fakeCtx().ctx);
+
+    expect(requestMintedToken).toHaveBeenCalledWith(PRINCIPAL);
+  });
+
+  // FAILS IF: the unlinked arm starts minting. `link-state` already said there is no link, so
+  // a mint could only ever answer not_vaulted — a wasted signed call to the expensive route.
+  it("does not mint for an unlinked user", async () => {
+    requestLinkState.mockResolvedValue({
+      status: "unlinked",
+      authorize_url: "https://temper.test/authorize/abc123",
+    });
+
+    const result = await mention(fakeCtx().ctx);
+
+    expect(result).toBeNull();
+    expect(requestMintedToken).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF: a mint transport failure escapes the try/catch. eve SWALLOWS a thrown handler,
+  // so the symptom would be total silence — and a 401 here (mint secret drift) is exactly the
+  // outage where silence is most expensive.
+  it("says something when the mint call itself throws, and drops", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockRejectedValue(new Error("mint failed: 401"));
+    const { ctx, request } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toBeNull();
+    const [text] = ephemeralTexts(request);
+    expect(text).toMatch(/try again/i);
+    // Never quote the transport error: it is derived from an endpoint that hands out
+    // credentials, and the user can do nothing with a status code.
+    expect(text).not.toContain("401");
+  });
+
+  // FAILS IF: the bot gate is lost when the fork was rewritten. A dispatched bot is how
+  // mention loops start, and it would now dispatch a bot with a MINTED token.
+  it("still drops a non-human principal before any lookup", async () => {
+    defaultSlackAuth.mockReturnValue({
+      principalId: "slack:T012AB3CD:bot:U024BE7LH",
+      principalType: "service",
+      authenticator: "slack-webhook",
+      attributes: { user_id: "U024BE7LH" },
+    });
+
+    const result = await mention(fakeCtx().ctx);
+
+    expect(result).toBeNull();
+    expect(requestLinkState).not.toHaveBeenCalled();
+    expect(requestMintedToken).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF: the no-user_id drop is lost. Without a user id there is nowhere to deliver an
+  // ephemeral, and dispatching anyway would send the model's answer through handlers that
+  // cannot address it privately either.
+  it("still drops when there is no user_id to deliver to", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    defaultSlackAuth.mockReturnValue({ ...humanAuth(), attributes: {} });
+
+    const result = await mention(fakeCtx().ctx);
+
+    expect(result).toBeNull();
+    expect(requestMintedToken).not.toHaveBeenCalled();
+  });
+});

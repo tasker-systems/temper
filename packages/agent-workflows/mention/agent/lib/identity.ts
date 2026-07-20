@@ -110,20 +110,50 @@ export function unlinkedPrompt(authorizeUrl: string): string {
 }
 
 /**
- * The reply shown to a Slack user whose account IS linked.
+ * The remedy both broken-credential replies below end on.
  *
- * It exists so a linked user stops being asked to link again on every mention. There is
- * still nothing to dispatch to — answering questions is a later task — so this says exactly
- * that and nothing more. Honest and unfalsifiable: no task numbers, no internal plan, no
- * date we would have to keep.
- *
- * Delivered ephemerally like its unlinked sibling. Nothing here is a credential, but a
- * per-mention "here's your status" in a public thread is noise the channel didn't ask for.
+ * There is no authorize URL to offer here, and that is structural rather than an omission:
+ * `link-state` only carries `authorize_url` on its `unlinked` arm (`link.ts`, `LinkState`),
+ * and both of these states are reached from the `linked` arm. So the honest instruction is
+ * the one that MAKES the user unlinked — after `temper slack disconnect`, the next mention
+ * takes the unlinked arm and gets a fresh URL from `unlinkedPrompt`.
  */
-export function linkedPrompt(handle: string): string {
+const RECONNECT_REMEDY =
+  "Run `temper slack disconnect`, then mention me again — I'll send you a fresh connect link.";
+
+/**
+ * The reply for a linked user whose stored credential is missing.
+ *
+ * Distinct from {@link revokedPrompt} on purpose. This user did nothing wrong and nothing
+ * was taken away: their link predates the credential store, or the link never completed.
+ * The load-bearing sentence is that RETRYING WILL NOT FIX IT — without it the user mentions
+ * again, gets the same nothing, and reasonably concludes the agent is broken.
+ */
+export function notVaultedPrompt(handle: string): string {
   return [
-    `You're connected as @${handle}.`,
+    `You're connected as @${handle}, but I don't have a stored credential I can use to look things up as you.`,
     "",
-    "I can't answer questions yet — that part's still being built. Nothing for you to do; I'll be able to help here soon.",
+    "Mentioning me again won't fix this — the connection needs to be made afresh.",
+    "",
+    RECONNECT_REMEDY,
+  ].join("\n");
+}
+
+/**
+ * The reply for a linked user whose access was revoked.
+ *
+ * Distinct from {@link notVaultedPrompt}: something WAS granted and has since been withdrawn
+ * (an explicit revocation, or a deactivated temper profile —
+ * `slack_grant_vault_service.rs`, `mint_access_token`, reports both as `Revoked`). Saying
+ * "no credential stored" here would misdescribe a deliberate act, and a user whose profile an
+ * admin deactivated needs to know access was removed rather than mislaid.
+ */
+export function revokedPrompt(handle: string): string {
+  return [
+    `Your temper access from Slack has been revoked, so I can't look anything up as @${handle}.`,
+    "",
+    "If that wasn't deliberate, reconnecting will restore it.",
+    "",
+    RECONNECT_REMEDY,
   ].join("\n");
 }

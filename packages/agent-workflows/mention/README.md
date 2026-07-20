@@ -78,21 +78,30 @@ vercel env add SLACK_BOT_TOKEN production
 vercel env add SLACK_SIGNING_SECRET production
 ```
 
-The account-link flow needs two more. `TEMPER_API_URL` is the temper API this agent asks about each
-mentioning user's link state (e.g. `https://temperkb.io`), and `SLACK_LINK_SECRET` is the shared
-HMAC secret gating `POST /internal/slack/link-state`:
+The account link and the answers need four more. `TEMPER_API_URL` is the temper API this agent
+asks about each mentioning user's link state and asks for their access token (e.g.
+`https://temperkb.io`); `TEMPER_MCP_URL` is the MCP endpoint the model's tools call (e.g.
+`https://temperkb.io/api/mcp`); `SLACK_LINK_SECRET` and `SLACK_MINT_SECRET` are the shared HMAC
+secrets gating `POST /internal/slack/link-state` and `POST /internal/slack/mint`:
 
 ```bash
 vercel env add TEMPER_API_URL production
+vercel env add TEMPER_MCP_URL production
 vercel env add SLACK_LINK_SECRET production
+vercel env add SLACK_MINT_SECRET production
 ```
 
-`SLACK_LINK_SECRET` must be **the same value** on this agent and on the temper-api deployment
-(where it is set alongside `SLACK_LINK_CLIENT_ID` and `PUBLIC_BASE_URL` — see
-[enterprise-install.md](../../../docs/guides/enterprise-install.md)). It is a secret with no
-default and no discovery: if the two sides disagree, every mention gets a 401 and the user sees
-the generic "couldn't start the account-connect flow" reply. Generate one with
-`openssl rand -hex 32`.
+Both secrets must be **the same value** on this agent and on the temper-api deployment (where
+they are set alongside `SLACK_LINK_CLIENT_ID` and `PUBLIC_BASE_URL` — see
+[enterprise-install.md](../../../docs/guides/enterprise-install.md)). Neither has a default or any
+discovery: if the two sides disagree, every mention gets a 401 and the user sees a generic
+"couldn't check your temper account" reply. Generate each with `openssl rand -hex 32`.
+
+**They must be two DIFFERENT values.** `SLACK_LINK_SECRET` gates an endpoint that answers a
+question ("is this principal linked?"); `SLACK_MINT_SECRET` gates one that hands back a token
+carrying that human's entire temper reach. Sharing one value would make compromise of the cheap
+capability yield the expensive one — which is why temper enforces the split with a separate router
+and layer, and why the agent has a test asserting it never signs a mint with the link key.
 
 Then redeploy so the functions pick them up (push to `main`, or redeploy from the dashboard).
 
