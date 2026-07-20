@@ -45,39 +45,37 @@ CREDENTIAL_FIELDS='access_token|refresh_token|id_token|client_secret|hmac_secret
 # but they are the population from which a leak would come, so the set is frozen rather than
 # ignored. A new entry means a new type whose credential could be formatted into a log.
 #
-# REVIEWED 2026-07-20 (T4 agent-half CI guard sweep) — initial baseline, 7 entries:
-#   temper-auth/token.rs TokenResponse         — OAuth token response; Debug used in CLI error paths.
+# REVIEWED 2026-07-20 (T4 agent-half CI guard sweep) — initial baseline, 7 entries; two were
+# retired the same day by the fixes noted below, leaving 5:
 #   temper-client/auth.rs TokenResponse        — same shape, client-side; private to the module.
 #   temper-core/types/machine.rs IssuedMachineCredential — one-time client_secret, returned once.
 #   temper-services/auth/secret.rs MintedSecret — plaintext + hash pair from mint_secret().
 #   temper-core/types/config.rs LlmConfig      — api_key field; Debug'd in config-dump paths.
 #   temper-cli/src/saml/mod.rs SamlProvisionConfig — reconcile_secret + signing_key_pem, CLI-side.
 #
-#   ⚠️ temper-services/config.rs ApiConfig — BASELINED BUT NOT ENDORSED. It derives `Debug` and
-#      holds `internal_reconcile_secret`, `embed_dispatch_secret` and `slack_mint_secret` as
-#      plaintext `Option<String>` — i.e. the keys behind ALL THREE signature gates that
-#      audit-signature-secrets.sh exists to keep separate. Anything that formats an ApiConfig with
-#      `{:?}` prints all three.
-#      The striking part is that this was half-seen already: the comment above `SlackLinkConfig`
-#      (config.rs:56) reads "`Debug` would print it verbatim wherever this or THE ENCLOSING
-#      `ApiConfig` is formatted", and a redacting impl was hand-written for SlackLinkConfig on
-#      exactly that reasoning — while ApiConfig's own three secrets were left derived. The nested
-#      config got the treatment its parent still needs.
-#      Fixing it means a hand-written redacting `Debug` on ApiConfig, which is a change to
-#      crates/ and therefore out of scope for this guard-only change. Baselined so the guard can
-#      ship green; tracked as the first follow-up this guard should retire.
+#   RETIRED 2026-07-20 (T4 security-audit fixes) — two entries left this baseline by being FIXED,
+#   which is the outcome the guard exists to produce:
+#     temper-services/config.rs ApiConfig — now hand-writes a redacting `Debug`. It had derived one
+#       over `internal_reconcile_secret`, `embed_dispatch_secret` and `slack_mint_secret`, the keys
+#       behind all three signature gates audit-signature-secrets.sh keeps separate; anything that
+#       formatted it with `{:?}` printed all three. The irony the initial baseline recorded — that
+#       `SlackLinkConfig`'s hand-written impl cites "wherever this or THE ENCLOSING `ApiConfig` is
+#       formatted" as its reason, while ApiConfig itself was left derived — is now resolved.
+#     temper-auth/token.rs TokenResponse — now hand-writes a redacting `Debug`. It is bound on the
+#       Slack mint path holding BOTH the rotated refresh token and an act-as-the-human access token.
+#   Note temper-client/auth.rs TokenResponse is a DIFFERENT type of the same name and remains
+#   baselined: it is private to its module and client-side.
 #
 # The redacting hand-written impls (MintOutcome, NewGrant, SlackMintResponse, VaultKey,
-# BrokerToken, SlackLinkConfig) correctly do NOT appear here — they do not derive Debug. That
+# BrokerToken, SlackLinkConfig, and now ApiConfig and temper-auth's TokenResponse) correctly do NOT
+# appear here — they do not derive Debug. That
 # asymmetry is the guard's real signal: the convention exists, and this is who is outside it.
 read -r -d '' BASELINE <<'EOF' || true
-crates/temper-auth/src/token.rs	TokenResponse
 crates/temper-cli/src/saml/mod.rs	SamlProvisionConfig
 crates/temper-client/src/auth.rs	TokenResponse
 crates/temper-core/src/types/config.rs	LlmConfig
 crates/temper-core/src/types/machine.rs	IssuedMachineCredential
 crates/temper-services/src/auth/secret.rs	MintedSecret
-crates/temper-services/src/config.rs	ApiConfig
 EOF
 
 # Emit <file>\t<type> for every struct/enum that (1) derives Debug and (2) has a credential field.
