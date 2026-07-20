@@ -54,6 +54,13 @@ const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] = &[
     "grant_created",
     "grant_revoked",
     "slack_principal_disconnected",
+    // Principal-admission acts (spec 2026-07-20 §10, D4), registered 'admin' by
+    // 20260720000020. Per the note above, listing them here does NOT buy the banned-key scan —
+    // `seed_admin_event` only writes `grant_created`, so that scan stays vacuous for these two.
+    // Their real writer is `principal_standing_apply` (20260720000030), and the payload it builds
+    // spells only subject_table/subject_id/act/prior/resulting/actor/reason.
+    "principal_standing_changed",
+    "principal_governance_changed",
 ];
 
 /// Keys the `element_trail_*` functions match on by shape, with **no** event-type filter. An admin
