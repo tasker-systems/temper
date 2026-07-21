@@ -1144,6 +1144,36 @@ impl DbBackend {
         }
     }
 
+    /// Tick the evidential-standing memo after a resource write (Set 3, Phase B). Recomputes the
+    /// touched finding's standing components and UPSERTs its `kb_resource_standing` memo row via the
+    /// shipped SQL (Task 5's [`temper_substrate::write::refresh_resource_standing`]).
+    ///
+    /// **Never fails the write**, exactly as [`Self::tick_region_clocks`] does not — the resource has
+    /// already committed. And the memo is a write-cost optimization + parity anchor, NOT the read's
+    /// authority: the read path `resource_standing_shape` recomputes every component live at read time,
+    /// so a memo that lags a write is never *read-incorrect* — nothing in Set 3 reads the memo directly.
+    /// A refresh failure is therefore logged and swallowed; the memo stays stale only until the next
+    /// write over this finding re-drives it. Escalating would trade a self-healing staleness for a
+    /// user-visible 500.
+    ///
+    /// Wired onto the resource create/update paths only, NOT the edge paths (`assert_relationship` /
+    /// `fold_relationship`). Edge-incident refresh (both endpoints, when resources) is a clean follow-up
+    /// — safe to defer precisely because the memo is not the read authority (above), so an edge write
+    /// that leaves an endpoint's memo lagging is still never read-incorrect.
+    async fn tick_resource_standing(&self, finding: ResourceId) {
+        match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
+            Ok(()) => tracing::debug!(
+                finding = %finding.uuid(),
+                "resource standing memo refreshed"
+            ),
+            Err(e) => tracing::warn!(
+                finding = %finding.uuid(),
+                error = %e,
+                "resource standing refresh failed; memo is stale until the next write re-drives it"
+            ),
+        }
+    }
+
     /// Per-act correlation-integrity gate. When an authored act carries an `invocation_id`, the caller
     /// must be able to read the invocation's originating cogmap (absent OR unreadable → uniform 404, no
     /// existence oracle — matching the `invocation_show`/`close_invocation` deny→NotFound contract), and
@@ -1357,6 +1387,12 @@ impl DbBackend {
         // T6 — tick the two region clocks (spec §3.5). The resource has committed; region geometry is
         // a projection over it, so a clock failure is logged, never escalated (see `region_clocks`).
         self.tick_region_clocks(cmd.home, emitter).await;
+
+        // Set 3 — refresh the new finding's evidential-standing memo. Same self-healing posture as the
+        // region clocks above: the resource has committed, the memo is a write-cost optimization over
+        // it, and a failure is logged not escalated.
+        self.tick_resource_standing(ResourceId::from(new_id.uuid()))
+            .await;
 
         let row = native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
             .await?;
@@ -1604,6 +1640,11 @@ impl Backend for DbBackend {
                 "could not resolve home anchor; region clocks not ticked"
             ),
         }
+
+        // Set 3 — refresh the revised finding's evidential-standing memo (same self-healing posture as
+        // the region clocks above). Unlike the region tick this needs no home anchor: the memo keys on
+        // the finding itself, so it always fires on a resource update.
+        self.tick_resource_standing(ResourceId::from(new_id)).await;
 
         let row =
             native_resource_row(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
