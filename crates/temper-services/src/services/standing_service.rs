@@ -88,13 +88,14 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
         other => other,
     };
 
-    // Decide. A refusal carries a human reason. INTERIM mapping: the refusal reason rides on
-    // `ApiError::BadRequest` rather than the plan's placeholder `Forbidden2`, which does not exist,
-    // or the payload-less `ApiError::Forbidden`, whose Display would drop the reason the caller and
-    // the test both need. Beat H / Task 17 replaces this with the typed `Refusal` carried on
-    // `ApiError::SystemAccessRequired`; until then a refused transition is a 4xx that names why.
-    let resulting = transition(current, &act, params.authority)
-        .map_err(|r| ApiError::BadRequest(r.reason()))?;
+    // Decide. A refusal carries a human reason. INTERIM mapping (Beat H / Task 17 replaces this
+    // whole thing with the typed `Refusal` carried on `ApiError::SystemAccessRequired`): a refused
+    // transition is a 4xx that names why. `Forbidden` (payload-less) would drop the reason the
+    // caller and the test both need, so the reason rides `BadRequest`/`Conflict`. The one contract
+    // we must preserve NOW is the 409 the DB unique index used to give a duplicate join request
+    // (D12 makes `requested` standing the duplicate guard, so the index no longer fires) — the
+    // deployed CLI's "you already have a pending request" branch keys on it.
+    let resulting = transition(current, &act, params.authority).map_err(refusal_to_api_error)?;
 
     let reason = match &act {
         Act::Revoke { reason } => Some(reason.clone()),
@@ -129,6 +130,23 @@ fn act_name(act: &Act) -> &'static str {
         Act::Deactivate => "deactivate",
         Act::Reactivate { .. } => "reactivate",
         Act::RequestReview => "request_review",
+    }
+}
+
+/// Map a machine refusal to the interim HTTP-shaped error. An "already in a non-terminal state"
+/// refusal — re-`Request`ing while `Requested`, or acting on an already-`Approved` principal — is a
+/// conflict with current state, not a malformed request, so it keeps the 409 the DB unique index
+/// used to give a duplicate join request (the deployed CLI's Conflict branch keys on it). Everything
+/// else is the interim `BadRequest` (a 4xx that names why). Task 17 supersedes this whole mapping
+/// with the typed `Refusal` carried on `ApiError::SystemAccessRequired`.
+fn refusal_to_api_error(refusal: Refusal) -> ApiError {
+    match &refusal {
+        Refusal::Requested
+        | Refusal::IllegalTransition {
+            from: Some(Standing::Requested) | Some(Standing::Approved),
+            ..
+        } => ApiError::Conflict(refusal.reason()),
+        _ => ApiError::BadRequest(refusal.reason()),
     }
 }
 

@@ -376,6 +376,24 @@ pub fn withdraw_request() -> Result<()> {
     })
 }
 
+/// Ask an admin to reconsider a revocation (D15). Does not restore access by itself.
+pub fn request_review(message: Option<&str>) -> Result<()> {
+    let message = message.map(|s| s.to_string());
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .access()
+                .create_review_request(message.as_deref())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            output::success_err("Review request submitted.");
+            output::plain_err("  An admin will reconsider the revocation.");
+            output::hint("  Run `temper auth status` to check your access.");
+            Ok(())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

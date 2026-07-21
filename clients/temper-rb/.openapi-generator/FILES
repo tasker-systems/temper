@@ -66,6 +66,7 @@ lib/temper/generated/models/create_cogmap_outcome.rb
 lib/temper/generated/models/create_cogmap_request.rb
 lib/temper/generated/models/create_invitation_request.rb
 lib/temper/generated/models/create_request_body.rb
+lib/temper/generated/models/create_review_body.rb
 lib/temper/generated/models/delete_response.rb
 lib/temper/generated/models/device_overrides.rb
 lib/temper/generated/models/dispatch_tick_request.rb

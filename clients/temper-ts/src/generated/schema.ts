@@ -45,6 +45,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/access/reviews": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
+         * @description On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access
+         *     gate, and being able to ask for reconsideration is the whole point. The review is an inbox
+         *     signal only — it never feeds the admission decision.
+         */
+        post: operations["create_review_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/access/settings": {
         parameters: {
             query?: never;
@@ -1985,6 +2010,9 @@ export interface components {
             accepted_terms_version?: string | null;
             message?: string | null;
             source: string;
+        };
+        CreateReviewBody: {
+            message?: string | null;
         };
         /** @description Response body for resource deletion. */
         DeleteResponse: {
@@ -4110,7 +4138,7 @@ export interface operations {
                     "application/json": components["schemas"]["JoinRequest"];
                 };
             };
-            /** @description System is in open mode — no request needed */
+            /** @description The request is not legal from the caller's standing */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4121,6 +4149,15 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A request is already pending, or access is already granted */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4192,6 +4229,49 @@ export interface operations {
             };
             /** @description No pending join request to withdraw */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_review_request: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Review request recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Only a revoked principal may request review */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

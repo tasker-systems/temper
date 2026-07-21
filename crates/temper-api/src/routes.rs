@@ -31,6 +31,7 @@ fn auth_only_routes() -> OpenApiRouter<AppState> {
             handlers::access::get_own_request,
             handlers::access::withdraw_request
         ))
+        .routes(routes!(handlers::access::create_review_request))
         .routes(routes!(handlers::access::get_settings))
         .routes(routes!(handlers::invitations::list_mine))
         .routes(routes!(handlers::invitations::accept))

@@ -1044,6 +1044,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::commands::auth::request_access(message.as_deref())
             }
             AuthAction::WithdrawRequest => temper_cli::commands::auth::withdraw_request(),
+            AuthAction::RequestReview { message } => {
+                temper_cli::commands::auth::request_review(message.as_deref())
+            }
         },
         Commands::Slack { action } => match action {
             SlackAction::Disconnect => temper_cli::actions::runtime::with_client(|client| {
