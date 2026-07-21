@@ -692,14 +692,29 @@ pub async fn promote_admin(
 // through `standing_service::apply`, so it inherits the transition table (a refused act — Revoke on
 // a never-approved principal, Reactivate on a live one — is rejected there with a reason, never here)
 // and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
-// it is a join-request decision, handled atomically inside `review_request` (D14). The caller must
-// have verified `is_system_admin` before calling; `ActorAuthority::Admin` is asserted on that basis.
+// it is a join-request decision, handled atomically inside `review_request` (D14).
+//
+// The `is_system_admin` gate lives HERE, in the service, not in the surface — so both surfaces
+// (temper-api today, temper-mcp when parity lands) enforce it identically, and a service caller can
+// never reach `ActorAuthority::Admin` without being one. That is the F-3 posture the
+// `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
 // ---------------------------------------------------------------------------
+
+/// Refuse unless `actor` is a system admin. The gate the four admin acts share; it runs before any
+/// standing write (auth before writes).
+async fn require_system_admin(pool: &PgPool, actor: ProfileId) -> ApiResult<()> {
+    if is_system_admin(pool, actor).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
 /// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
 /// enrolls a *human requester* into the auto-join pool; a direct grant confers standing only.
 pub async fn admin_approve(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
@@ -721,6 +736,7 @@ pub async fn admin_revoke(
     actor: ProfileId,
     reason: String,
 ) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
@@ -740,6 +756,7 @@ pub async fn admin_deactivate(
     subject: ProfileId,
     actor: ProfileId,
 ) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
@@ -760,6 +777,7 @@ pub async fn admin_reactivate(
     subject: ProfileId,
     actor: ProfileId,
 ) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {

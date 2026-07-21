@@ -276,9 +276,13 @@ pub async fn promote_admin(
 // ---------------------------------------------------------------------------
 // The admin standing acts (Task 13) — operator-only, UNDOCUMENTED like their
 // neighbours above (plain `.route()`, no `#[utoipa::path]`, allowlisted in
-// `.github/scripts/check-openapi-routes.sh`). Each verifies `is_system_admin`
-// here, then hands the act to `access_service`, which routes it through the
-// admission machine's transition table.
+// `.github/scripts/check-openapi-routes.sh`).
+//
+// Unlike the older admin handlers above, these carry NO handler-side authz: the
+// `is_system_admin` gate lives in `access_service::admin_*` itself, so both
+// surfaces enforce it identically and a future MCP tool cannot bypass it (the
+// F-3 posture; see `audit-handler-authz-drift`). The handler only extracts the
+// actor and the subject and dispatches.
 // ---------------------------------------------------------------------------
 
 /// Body for `POST /api/access/admin/principals/{id}/revoke`.
@@ -288,23 +292,12 @@ pub struct RevokePrincipalBody {
     pub reason: String,
 }
 
-/// Refuse unless the caller is a system admin. Shared prelude for the standing acts.
-async fn require_admin(state: &AppState, auth: &AuthUser) -> ApiResult<()> {
-    let is_admin =
-        access_service::is_system_admin(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
-    if !is_admin {
-        return Err(ApiError::Forbidden);
-    }
-    Ok(())
-}
-
 /// POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
 pub async fn approve_principal(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    require_admin(&state, &auth).await?;
     access_service::admin_approve(
         &state.pool,
         ProfileId::from(profile_id),
@@ -321,7 +314,6 @@ pub async fn revoke_principal(
     Path(profile_id): Path<Uuid>,
     Json(body): Json<RevokePrincipalBody>,
 ) -> ApiResult<StatusCode> {
-    require_admin(&state, &auth).await?;
     access_service::admin_revoke(
         &state.pool,
         ProfileId::from(profile_id),
@@ -338,7 +330,6 @@ pub async fn deactivate_principal(
     auth: AuthUser,
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    require_admin(&state, &auth).await?;
     access_service::admin_deactivate(
         &state.pool,
         ProfileId::from(profile_id),
@@ -354,7 +345,6 @@ pub async fn reactivate_principal(
     auth: AuthUser,
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    require_admin(&state, &auth).await?;
     access_service::admin_reactivate(
         &state.pool,
         ProfileId::from(profile_id),
