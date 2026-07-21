@@ -578,6 +578,9 @@ pub async fn promote_admin(
     pool: &PgPool,
     profile_id: Uuid,
     team_id: Option<Uuid>,
+    // The promoting admin, recorded as the actor on the governance grant and standing transition.
+    // `None` for callers that do not carry one (fixture/mechanics tests).
+    actor: Option<ProfileId>,
 ) -> ApiResult<TeamMemberRow> {
     // Resolve the target team: explicit, else the configured gating team.
     let target_team = match team_id {
@@ -623,6 +626,11 @@ pub async fn promote_admin(
         )));
     }
 
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
     let row = sqlx::query_as!(
         TeamMemberRow,
         r#"
@@ -634,8 +642,42 @@ pub async fn promote_admin(
         target_team,
         profile_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    // D11: admin-ness IS a governance grant, and the invariant "admin implies Approved" is
+    // maintained here, at promotion (is_system_admin never ANDs standing in at read time). So a
+    // promotion writes both, atomically with the team row: the governance grant that makes
+    // `is_system_admin` true, and — unless the profile is already `approved` — the standing that
+    // makes `has_system_access` true. Without the standing half a promoted admin would pass the
+    // admin predicate yet fail the front door.
+    sqlx::query_scalar!(
+        "SELECT principal_governance_set($1, true, $2, 'system admin promotion')",
+        profile_id,
+        actor.map(|a| *a),
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let current: Option<String> = sqlx::query_scalar!(
+        "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+        profile_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current.as_deref() != Some("approved") {
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1,'approve','approved',$2,'system admin promotion')",
+            profile_id,
+            actor.map(|a| *a),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     Ok(row)
 }
@@ -873,8 +915,25 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
     .await?
     .ok_or(ApiError::NotFound)?;
 
-    // On approval, insert substrate-shaped team membership.
+    // On approval, grant the requester access. Under D11 access IS an `approved`
+    // `kb_principal_standing` row (`has_system_access` reads nothing else), so the decision and the
+    // standing it confers must be one transaction. `Approve` is legal from the requester's born
+    // `Denied` state (transition.rs, D14); the raw committer on the tx is the machine-door pattern —
+    // it keeps the standing write atomic with the decision, which `standing_service::apply` (a
+    // `&PgPool` call) could not. `has_system_access` is now true, so `ensure_auto_join_memberships`
+    // below (ordered after) does its enrollment rather than no-op.
     if params.decision == JoinRequestStatus::Approved {
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1,'approve','approved',$2,$3)",
+            row.requesting_profile_id,
+            *params.reviewer_profile_id,
+            params.decision_note,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        // Retain the gating-team membership the pre-D11 model wrote (harmless team-role churn now
+        // that access rides standing, not this row) so team-scoped visibility is unchanged.
         sqlx::query!(
             r#"
             INSERT INTO kb_team_members (team_id, profile_id, role)
@@ -887,9 +946,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         .execute(&mut *tx)
         .await?;
 
-        // Now that gating-team membership establishes access, enroll the
-        // profile into the rest of the auto-join "everyone" pool (Chunk 1's
-        // deferred call site). No-op if has_system_access is still false.
+        // Enroll the now-approved profile into the rest of the auto-join "everyone" pool.
         sqlx::query!(
             "SELECT ensure_auto_join_memberships($1)",
             row.requesting_profile_id,

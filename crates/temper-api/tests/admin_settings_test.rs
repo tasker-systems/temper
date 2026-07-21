@@ -87,7 +87,7 @@ async fn promote_admin_defaults_to_gating_team(pool: sqlx::PgPool) {
 
     let profile = common::fixtures::create_test_profile(&pool, "promotee@test.example.com").await;
 
-    let row = access_service::promote_admin(&pool, profile, None)
+    let row = access_service::promote_admin(&pool, profile, None, None)
         .await
         .expect("promote");
 
@@ -110,7 +110,7 @@ async fn promote_admin_defaults_to_gating_team(pool: sqlx::PgPool) {
 async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool) {
     reset_settings(&pool).await; // gating_team_slug NULL, no --team
     let profile = common::fixtures::create_test_profile(&pool, "x@test.example.com").await;
-    let err = access_service::promote_admin(&pool, profile, None)
+    let err = access_service::promote_admin(&pool, profile, None, None)
         .await
         .expect_err("no target team");
     assert!(matches!(
@@ -143,7 +143,7 @@ async fn promote_admin_rejects_nonexistent_team(pool: sqlx::PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "p@test.example.com").await;
     // Pass a random team_id that does not exist in kb_teams.
     let bad_team_id = Uuid::new_v4();
-    let err = access_service::promote_admin(&pool, profile, Some(bad_team_id))
+    let err = access_service::promote_admin(&pool, profile, Some(bad_team_id), None)
         .await
         .expect_err("explicit nonexistent team should be rejected");
     assert!(matches!(
@@ -170,7 +170,7 @@ async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
 
     // Pass a random profile_id that does not exist in kb_profiles.
     let bad_profile_id = Uuid::new_v4();
-    let err = access_service::promote_admin(&pool, bad_profile_id, None)
+    let err = access_service::promote_admin(&pool, bad_profile_id, None, None)
         .await
         .expect_err("nonexistent profile should be rejected");
     assert!(matches!(
