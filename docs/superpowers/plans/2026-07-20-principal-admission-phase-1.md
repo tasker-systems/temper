@@ -3908,6 +3908,34 @@ rebind still cannot silently resurrect them."
 
 **GD-3 tag: AMEND**, authorized by D10 and §9.
 
+> **⚠️ GROUNDED 2026-07-21 (folded in from Tasks 12–14 implementation — line numbers below are stale, re-ground per GD-2).**
+>
+> - **Half of this task is already done, by Task 12.** `promote_admin` (now `access_service.rs:580`,
+>   signature `(pool, profile_id: Uuid, team_id: Option<Uuid>, actor: Option<ProfileId>)` — **four**
+>   args; the Step-1 test sketch below calls it with three) already writes the governance grant and the
+>   standing approval **atomically** inside its own transaction:
+>   `principal_governance_set($1,true,$2,'system admin promotion')` then, if not already `approved`,
+>   `principal_standing_apply(...,'approve','approved',...)` (`access_service.rs:657–679`). So "add the
+>   governance grant" is **CONFORM, already present** — do not re-add it.
+> - **The `promotion_requires_approved_standing` guard + its test are DROPPED** (Pete, 2026-07-20):
+>   promote **keeps auto-approve** (the pulled-forward behavior), so it can never be called on a
+>   non-approved principal in a way that must be refused. Delete that test from Step 1. §9's "admin
+>   implies Approved" invariant is upheld by *auto-approving on promote*, not by *guarding*.
+> - **The raw `kb_team_members` INSERT is NOT retired** — Task 12 kept it (it confers nothing now;
+>   Phase 2 removes it). The paragraph below saying it "is retired in the same change" is superseded.
+> - **So Task 15 shrinks to two things:** (a) the demotion-by-transition hook in `standing_service::apply`,
+>   and (b) the `demote` CLI. Nothing about `promote_admin` itself changes.
+> - **The demotion hook's home:** `standing_service::apply` (`standing_service.rs:72`) computes
+>   `resulting` (`:98`) and returns `Ok(resulting)` (`:118`). Fire the demote **before that return**,
+>   keyed on `matches!(resulting, Standing::Revoked | Standing::Deactivated)`, using `params.subject` /
+>   `params.actor`. **Task 14 now routes machine-credential revocation through this same `apply`**, so
+>   the hook will also fire when a machine is credential-revoked from `Approved` — `principal_governance_set(_,false,_)`
+>   on a non-admin machine is a harmless no-op, but it is no longer *only* the admin path that reaches here.
+> - **CLI placement is a decision, not a given.** Task 13 created the `admin access {approve,revoke,deactivate,reactivate}`
+>   subcommand group, but those are **standing** acts; `demote` is a **governance** act and its twin
+>   `promote` lives at top-level `admin promote`. Put `demote` at top-level `admin demote` to mirror
+>   `promote`, **not** under `admin access` — otherwise the governance pair is split across two homes.
+
 **Invariants, carried verbatim from §9:**
 > "**`admin` implies `Approved`.** Promotion guards on standing being `Approved` — you cannot govern an instance you may not use."
 > "**Revoke and Deactivate demote**, so 'admin, but admission revoked' is never representable."
@@ -4151,6 +4179,32 @@ containment is retired (D11), but the function is still team hygiene."
 - Modify: `crates/temper-client/src/http.rs:587` (the wire fixture)
 
 **GD-3 tag: AMEND**, authorized by spec §7: *"`Refusal` is a typed enum, which retires a wart — the enriched 403 currently carries `access_mode: String`, and its tests assert a sentinel `"join_request"` that is not a real mode."*
+
+> **⚠️ GROUNDED 2026-07-21 (folded in from Tasks 12–14 implementation — line numbers stale, re-ground per GD-2).**
+>
+> - **Add `crates/temper-services/src/services/standing_service.rs` to the file list — it is the seam this task actually replaces.**
+>   Task 12 introduced `refusal_to_api_error` (`standing_service.rs:142`), the interim mapping
+>   `standing_service::apply` uses. **It never returns `ApiError::Forbidden`** — it maps a `Refusal` to
+>   `ApiError::Conflict` (an "already Requested/Approved" state conflict, which preserves the deployed
+>   CLI's duplicate-request 409) or `ApiError::BadRequest` (everything else). Retiring `Forbidden2` and
+>   the stringly 403 means **replacing `refusal_to_api_error` wholesale** so `apply` returns/raises the
+>   typed `Refusal` on `ApiError::SystemAccessRequired`. Its own doc-comment (`:136–141`) already flags
+>   itself as "the whole thing Task 17 replaces."
+> - **New call sites this task must account for — Tasks 13 and 14 multiplied `apply`'s surface.** Every
+>   refused transition now flows through `apply` from more places than the middleware:
+>   - The four admin acts — `access_service::{admin_approve, admin_revoke, admin_deactivate, admin_reactivate}`
+>     (thin wrappers over `apply`) behind `handlers/access::{approve,revoke,deactivate,reactivate}_principal`.
+>     A refused admin act (e.g. Revoke-from-Denied → today `BadRequest`, Reactivate-from-live → `BadRequest`)
+>     is where an operator sees the refusal; once typed, these handlers render it. **CONFORM:** they return
+>     `apply`'s error verbatim via `?`, so they inherit the typed refusal for free — but confirm the CLI
+>     (`temper admin access …` in `commands/admin.rs::access_remote`) renders it, not just the gate path.
+>   - `machine_client_service::revoke` (Task 14) also calls `apply`, but **load-first** — it fires `Revoke`
+>     only from `Approved`, so it **never reaches an illegal cell and never produces a refusal**. No
+>     rendering change needed there; noted so it is not mistaken for a missed call site.
+> - **The prior handoff said "access_service.rs is now a Task 17 file."** More precisely: the *helper* to
+>   replace lives in `standing_service.rs`; `access_service.rs` only *propagates* `apply`'s result (its
+>   admin_* wrappers and `create_join_request`), so it needs no mapping change of its own — the typed
+>   refusal rides through.
 
 **Verified: the sentinel really is fiction.** `"join_request"` appears only at `error.rs:299` and `error.rs:377`, both test fixtures. Production populates the field from `get_public_settings(...).access_mode`, whose live domain is `open`/`invite_only` (`middleware/system_access.rs:49`), and the client-side fixture at `http.rs:587` correctly uses `"invite_only"`. So the tests have been asserting a value the system never emits.
 
