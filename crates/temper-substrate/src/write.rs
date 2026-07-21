@@ -915,6 +915,20 @@ pub async fn refresh_salience(
     })
 }
 
+/// Thin wrapper over the shipped SQL `refresh_resource_standing(p_finding uuid)`
+/// (`migrations/20260721000010_evidential_standing_memo.sql`), which recomputes a finding's
+/// evidential-standing components and UPSERTs the `kb_resource_standing` memo row itself. The
+/// function is self-contained (its own UPSERT, no event to fire, no emitter) — unlike
+/// [`refresh_salience`], this is not a two-clock projection watermark, so there is nothing here for
+/// Rust to orchestrate beyond the call. The write-path clock (Task 6) calls this after a mutation
+/// touches a finding's provenance.
+pub async fn refresh_resource_standing(pool: &PgPool, finding: ResourceId) -> Result<()> {
+    sqlx::query!("SELECT refresh_resource_standing($1)", finding.uuid())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Write a region's member rows, each scored by [`member_affinity`].
 ///
 /// DELETE-then-INSERT rather than insert-only, because a REUSED region already carries member rows.

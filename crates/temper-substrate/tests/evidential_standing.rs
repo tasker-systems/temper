@@ -15,6 +15,7 @@ use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EdgeId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use temper_substrate::scenario::bootseed;
+use temper_substrate::write;
 use temper_substrate::writes::{self, CreateParams, UpdateParams};
 use uuid::Uuid;
 
@@ -397,4 +398,43 @@ async fn shape_read_is_gated_and_carries_band(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert!(none.is_empty(), "the gate admits only readable findings");
+}
+
+// ── Phase B — Rust wrapper over refresh_resource_standing ───────────────────────────────────────
+
+/// Same intent as `refresh_lands_where_recompute_would` (memo == live recompute), but going through
+/// the Rust wrapper `temper_substrate::write::refresh_resource_standing` instead of calling the SQL
+/// function directly — the wrapper Task 6's write-path clock will call.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn rust_wrapper_refreshes_standing_memo(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-wrap").await;
+    let n = 3;
+    let (finding, _) = seed_finding_with_n_provenance(&pool, owner, emitter, home, n).await;
+
+    write::refresh_resource_standing(&pool, finding)
+        .await
+        .unwrap();
+
+    let memo: f64 =
+        sqlx::query_scalar("SELECT r_parent FROM kb_resource_standing WHERE finding_id=$1")
+            .bind(finding.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        memo, n as f64,
+        "the memo's r_parent counts the seeded provenance"
+    );
+
+    let live: f64 = sqlx::query_scalar("SELECT resource_r_parent($1)")
+        .bind(finding.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        memo, live,
+        "the Rust wrapper lands the memo exactly where a live recompute would"
+    );
 }
