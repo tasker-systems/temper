@@ -64,6 +64,60 @@ pub async fn promote_remote(
     Ok(())
 }
 
+/// The admin standing acts (Task 13): approve / revoke / deactivate / reactivate a principal.
+/// Each is a POST that returns `200 OK` with no body, so success is reported as a line rather than
+/// a rendered payload.
+pub async fn access_remote(
+    client: &temper_client::TemperClient,
+    action: &crate::cli::AdminAccessAction,
+) -> Result<()> {
+    use crate::cli::AdminAccessAction;
+
+    let parse = |profile: &str| {
+        uuid::Uuid::parse_str(profile)
+            .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))
+    };
+    let admin = client.admin();
+
+    let (profile_id, verb) = match action {
+        AdminAccessAction::Approve { profile } => {
+            let id = parse(profile)?;
+            admin
+                .approve_principal(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "approved")
+        }
+        AdminAccessAction::Revoke { profile, reason } => {
+            let id = parse(profile)?;
+            admin
+                .revoke_principal(id, reason)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "revoked")
+        }
+        AdminAccessAction::Deactivate { profile } => {
+            let id = parse(profile)?;
+            admin
+                .deactivate_principal(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "deactivated")
+        }
+        AdminAccessAction::Reactivate { profile } => {
+            let id = parse(profile)?;
+            admin
+                .reactivate_principal(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            (id, "reactivated")
+        }
+    };
+
+    println!("{profile_id} {verb}");
+    Ok(())
+}
+
 /// List pending join requests.
 pub async fn requests_list_remote(
     client: &temper_client::TemperClient,
