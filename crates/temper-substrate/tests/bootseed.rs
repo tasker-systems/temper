@@ -109,24 +109,33 @@ async fn bootseed_publishes_payload_schemas(pool: sqlx::PgPool) {
     );
 }
 
-/// Drift guard: the production system seed (`migrations/…_canonical_seed.sql`) and the test
-/// boot-seed vocabulary (`tests/fixtures/seeds/system.yaml`) both encode the event-type registry.
-/// They are separate sources (production SQL vs the test bootseed YAML), so this asserts every
-/// system.yaml event-type name appears in the seed migration's `kb_event_types` INSERT — they can
-/// never silently drift. Replaces the retired schema_drift.rs two-copy guard. No DB needed.
+/// Drift guard: the production migrations and the test boot-seed vocabulary
+/// (`tests/fixtures/seeds/system.yaml`) both encode the event-type registry. They are separate
+/// sources (production SQL vs the test bootseed YAML), so this asserts every system.yaml event-type
+/// name is registered by SOME migration's `kb_event_types` INSERT — they can never silently drift.
+/// Replaces the retired schema_drift.rs two-copy guard. No DB needed.
+///
+/// Scans the WHOLE `migrations/` set, not just the canonical seed: the registry grows by additive
+/// migrations (e.g. the principal-admission events in `20260720000020`, a later migration than the
+/// checksum-locked canonical seed). Pinning to one historical file would forbid system.yaml from
+/// naming any event type added after it — while `seed_system`'s own genesis door emits one.
 #[test]
 fn seed_migration_event_types_match_system_yaml() {
     let yaml_names =
         bootseed::system_event_type_names().expect("read system.yaml event-type names");
-    let migration = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../migrations/20260624000003_canonical_seed.sql"
-    ))
-    .expect("read canonical seed migration");
+    let migrations_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations");
+    let mut all_sql = String::new();
+    for entry in std::fs::read_dir(migrations_dir).expect("read migrations dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) == Some("sql") {
+            all_sql.push_str(&std::fs::read_to_string(&path).expect("read migration"));
+            all_sql.push('\n');
+        }
+    }
     for name in &yaml_names {
         assert!(
-            migration.contains(&format!("('{name}',")),
-            "event type `{name}` is in system.yaml but missing from the canonical seed migration"
+            all_sql.contains(&format!("('{name}',")),
+            "event type `{name}` is in system.yaml but no migration registers it in kb_event_types"
         );
     }
 }
