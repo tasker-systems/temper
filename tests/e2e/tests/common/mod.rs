@@ -457,9 +457,9 @@ pub async fn approve(pool: &PgPool, profile_id: uuid::Uuid) {
 
 /// Approve then revoke `subject`, leaving standing `revoked` — a fixture for the D15 paths
 /// (re-request refusal, review markers). It moves through `approved` first so the illegal
-/// `denied -> revoked` transition is never simulated. Direct-SQL for now because Task 13's admin
-/// `revoke` endpoint is not built yet; `_admin` is the acting admin, recorded once this routes
-/// through that endpoint.
+/// `denied -> revoked` transition is never simulated. Stays direct-SQL even though Task 13's admin
+/// `revoke` endpoint now exists: this fixture has no admin *token* to call it with (the app
+/// principal holds standing but not governance), so `_admin` remains the intended-but-unused actor.
 pub async fn approve_then_revoke(app: &E2eTestApp, _admin: uuid::Uuid, subject: uuid::Uuid) {
     approve(&app.pool, subject).await;
     sqlx::query(

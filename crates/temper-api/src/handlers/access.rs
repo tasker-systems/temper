@@ -272,3 +272,84 @@ pub async fn promote_admin(
     .await
     .map(Json)
 }
+
+// ---------------------------------------------------------------------------
+// The admin standing acts (Task 13) — operator-only, UNDOCUMENTED like their
+// neighbours above (plain `.route()`, no `#[utoipa::path]`, allowlisted in
+// `.github/scripts/check-openapi-routes.sh`).
+//
+// Unlike the older admin handlers above, these carry NO handler-side authz: the
+// `is_system_admin` gate lives in `access_service::admin_*` itself, so both
+// surfaces enforce it identically and a future MCP tool cannot bypass it (the
+// F-3 posture; see `audit-handler-authz-drift`). The handler only extracts the
+// actor and the subject and dispatches.
+// ---------------------------------------------------------------------------
+
+/// Body for `POST /api/access/admin/principals/{id}/revoke`.
+#[derive(Deserialize)]
+pub struct RevokePrincipalBody {
+    /// Required. It rides the log and the ledger, and a later review's reviewer needs it (D15).
+    pub reason: String,
+}
+
+/// POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+pub async fn approve_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    access_service::admin_approve(
+        &state.pool,
+        ProfileId::from(profile_id),
+        ProfileId::from(auth.0.profile.id),
+    )
+    .await?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+pub async fn revoke_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+    Json(body): Json<RevokePrincipalBody>,
+) -> ApiResult<StatusCode> {
+    access_service::admin_revoke(
+        &state.pool,
+        ProfileId::from(profile_id),
+        ProfileId::from(auth.0.profile.id),
+        body.reason,
+    )
+    .await?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+pub async fn deactivate_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    access_service::admin_deactivate(
+        &state.pool,
+        ProfileId::from(profile_id),
+        ProfileId::from(auth.0.profile.id),
+    )
+    .await?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+pub async fn reactivate_principal(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(profile_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    access_service::admin_reactivate(
+        &state.pool,
+        ProfileId::from(profile_id),
+        ProfileId::from(auth.0.profile.id),
+    )
+    .await?;
+    Ok(StatusCode::OK)
+}

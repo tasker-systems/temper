@@ -115,6 +115,52 @@ impl<'a> AdminClient<'a> {
             .send_json(&Method::PATCH, &path, req, Some(&token))
             .await
     }
+
+    /// Approve a principal directly (admin only) — the machine/direct-grant door (D14/D16).
+    pub async fn approve_principal(&self, profile_id: Uuid) -> Result<()> {
+        self.standing_act(profile_id, "approve", None).await
+    }
+
+    /// Revoke a principal's admission (admin only). `reason` is required (D15).
+    pub async fn revoke_principal(&self, profile_id: Uuid, reason: &str) -> Result<()> {
+        self.standing_act(profile_id, "revoke", Some(RevokeBody { reason }))
+            .await
+    }
+
+    /// Deactivate a principal (admin only).
+    pub async fn deactivate_principal(&self, profile_id: Uuid) -> Result<()> {
+        self.standing_act(profile_id, "deactivate", None).await
+    }
+
+    /// Reactivate a deactivated principal, restoring its prior standing (admin only).
+    pub async fn reactivate_principal(&self, profile_id: Uuid) -> Result<()> {
+        self.standing_act(profile_id, "reactivate", None).await
+    }
+
+    /// Shared POST for the standing acts. They return `200 OK` with no body.
+    async fn standing_act(
+        &self,
+        profile_id: Uuid,
+        verb: &str,
+        body: Option<RevokeBody<'_>>,
+    ) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/access/admin/principals/{profile_id}/{verb}");
+        let mut req = self.http.post(&path);
+        if let Some(body) = body {
+            req = req.json(&body);
+        }
+        self.http
+            .send(&Method::POST, &path, req, Some(&token))
+            .await?;
+        Ok(())
+    }
+}
+
+/// Mirrors `handlers::access::RevokePrincipalBody`.
+#[derive(serde::Serialize)]
+struct RevokeBody<'a> {
+    reason: &'a str,
 }
 
 /// Mirrors `handlers::access::ReviewRequestBody` (the handler's private body type).

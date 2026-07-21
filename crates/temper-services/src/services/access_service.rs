@@ -686,6 +686,112 @@ pub async fn promote_admin(
 }
 
 // ---------------------------------------------------------------------------
+// The admin standing acts (Task 13)
+//
+// The five admin-authority acts of the machine, one thin service wrapper each. Every one routes
+// through `standing_service::apply`, so it inherits the transition table (a refused act — Revoke on
+// a never-approved principal, Reactivate on a live one — is rejected there with a reason, never here)
+// and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
+// it is a join-request decision, handled atomically inside `review_request` (D14).
+//
+// The `is_system_admin` gate lives HERE, in the service, not in the surface — so both surfaces
+// (temper-api today, temper-mcp when parity lands) enforce it identically, and a service caller can
+// never reach `ActorAuthority::Admin` without being one. That is the F-3 posture the
+// `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
+// ---------------------------------------------------------------------------
+
+/// Refuse unless `actor` is a system admin. The gate the four admin acts share; it runs before any
+/// standing write (auth before writes).
+async fn require_system_admin(pool: &PgPool, actor: ProfileId) -> ApiResult<()> {
+    if is_system_admin(pool, actor).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
+/// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
+/// enrolls a *human requester* into the auto-join pool; a direct grant confers standing only.
+pub async fn admin_approve(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Approve,
+            actor: Some(actor),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Revoke a principal's admission. Legal only from `Approved` (§6). `reason` rides the log and the
+/// ledger, and a later `RequestReview`'s reviewer needs it (D15) — which is why it is required.
+pub async fn admin_revoke(
+    pool: &PgPool,
+    subject: ProfileId,
+    actor: ProfileId,
+    reason: String,
+) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Revoke { reason },
+            actor: Some(actor),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Deactivate a principal from any live state (§6).
+pub async fn admin_deactivate(
+    pool: &PgPool,
+    subject: ProfileId,
+    actor: ProfileId,
+) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Deactivate,
+            actor: Some(actor),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Reactivate a deactivated principal, restoring its prior standing (§5). `prior: None` — the seam
+/// reads the prior state from the log and refuses rather than guesses.
+pub async fn admin_reactivate(
+    pool: &PgPool,
+    subject: ProfileId,
+    actor: ProfileId,
+) -> ApiResult<()> {
+    require_system_admin(pool, actor).await?;
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject,
+            act: Act::Reactivate { prior: None },
+            actor: Some(actor),
+            authority: ActorAuthority::Admin,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Join request lifecycle
 // ---------------------------------------------------------------------------
 
