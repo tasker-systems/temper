@@ -664,7 +664,11 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn registered_machine_principal_rides_ordinary_gate_rails(pool: PgPool) {
-        register_machine(&pool, "agent-rails").await;
+        let profile_id = register_machine(&pool, "agent-rails").await;
+        // Under D11 a machine is born Denied like every mint door; access is now an APPROVED
+        // standing, not an open-mode default. Approve it, and it rides the ordinary gate on the
+        // same rail an approved human does.
+        crate::test_support::approve(&pool, profile_id).await;
 
         let c = machine_claims("agent-rails");
         let authed = authenticate(&pool, &c).await.expect("authenticate machine");
@@ -673,10 +677,9 @@ mod tests {
             authed.claims.principal_kind,
             temper_core::types::PrincipalKind::Machine
         );
-        // Open mode: an authenticated agent has system access, same rail as a human.
         require_system_access(&pool, &authed)
             .await
-            .expect("open-mode machine should be system-authorized");
+            .expect("an approved machine should be system-authorized, same rail as a human");
     }
 
     /// The gate is enforced in `temper-services`, so it binds every caller of

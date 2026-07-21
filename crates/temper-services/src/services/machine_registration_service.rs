@@ -483,12 +483,14 @@ mod tests {
     ///
     /// B2 D3 moved authorization out of the handler and into `provision`/`issue`, so these
     /// tests can no longer stand in a bare profile and rely on an upstream gate: the service
-    /// itself now resolves the caller's authority. `is_system_admin` IS ownership of the
-    /// gating team, so being an admin means being seeded as one — configure the gating team
-    /// and join this profile to it as `owner`.
+    /// itself now resolves the caller's authority. Under D11 an admin is a `kb_principal_governance`
+    /// grant (`is_system_admin`) with an `approved` `kb_principal_standing` (`has_system_access`),
+    /// not gating-team ownership — so the profile is seeded with both.
     ///
-    /// The `temper-system` root team already exists in a migrated database (the L0 kernel
-    /// migration creates it), so the team write is an upsert, not an insert.
+    /// The gating-team upsert below is retained because `enroll_in_gating_team` reads the minter's
+    /// membership (the machine inherits the minter's gating-team access) — not because it confers
+    /// admin-ness, which it no longer does. `temper-system` already exists in a migrated database
+    /// (the L0 kernel migration creates it), so the team write is an upsert, not an insert.
     async fn seed_admin(pool: &PgPool) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -532,6 +534,9 @@ mod tests {
         .execute(pool)
         .await
         .expect("join gating team as owner");
+
+        // What confers admin-ness now: approved standing (front door) + a governance grant.
+        crate::test_support::approved_admin(pool, id).await;
 
         ProfileId::from(id)
     }
@@ -759,8 +764,16 @@ mod tests {
         assert_eq!(emitters, Some(4), "one emitter per Surface::ALL variant");
     }
 
-    /// D14: the trigger auto-joins only while access_mode='open'. provision must not
-    /// depend on it, or every machine 403s the day the instance flips to invite_only.
+    /// D14: the trigger auto-joins only while access_mode='open'. provision must not depend on it,
+    /// so it enrolls the machine in the gating team explicitly — the behavior this test's name
+    /// guards, still exercised below by asserting the membership directly.
+    ///
+    /// Under D11 that enrollment no longer confers system access: `has_system_access` reads an
+    /// `approved` standing, and the mint door births every machine `Denied`. So provision enrolls
+    /// the machine AND leaves it born-Denied; access is a separate axis, granted only by approval.
+    /// (`enroll_in_gating_team`'s own rationale — "an unenrolled machine 403s at
+    /// require_system_access" — is now stale for the same reason; the function is a candidate to
+    /// retire with the rest of the gating-team access model in the access_mode work.)
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provision_enrolls_the_agent_in_the_gating_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -779,14 +792,32 @@ mod tests {
             .await
             .expect("provision");
 
+        // D14 behavior preserved: provision enrolled the machine in the gating team explicitly,
+        // not via the (invite_only-inert) auto-join trigger.
+        let enrolled = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id
+                  WHERE t.slug = 'temper-system' AND m.profile_id = $1) AS "e!: bool""#,
+            client.profile_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("enrollment");
+        assert!(
+            enrolled,
+            "provision must enroll the machine in the gating team explicitly under invite_only (D14)"
+        );
+
+        // D11: enrollment is not access — the machine is born Denied and holds no system access
+        // until it is approved.
         let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", client.profile_id)
             .fetch_one(&pool)
             .await
             .expect("has_system_access");
         assert_eq!(
             has_access,
-            Some(true),
-            "a provisioned machine must pass the system gate under invite_only (D14)"
+            Some(false),
+            "a freshly provisioned machine is born Denied (D11); gating enrollment confers no access"
         );
     }
 

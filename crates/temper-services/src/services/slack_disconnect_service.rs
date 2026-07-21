@@ -442,16 +442,11 @@ mod tests {
 
     /// Make `profile` a system admin by the ONLY definition the code has.
     ///
-    /// `is_system_admin(p)` is *owner of the gating team* — it reads
-    /// `kb_team_members` joined to the team named by
-    /// `kb_system_settings.gating_team_slug`, and never looks at
-    /// `kb_profiles.system_access`. The slug is EMPTY out of the box, which is
-    /// what makes every other profile in these tests a non-admin for free.
-    /// Mirrors `admin_fixture` in `tests/admin_ledger_test.rs`; safe to mutate
-    /// the singleton settings row because `#[sqlx::test]` hands each test its
-    /// own database.
-    ///
-    /// `owner`, not `member`: `member` does not satisfy the gate.
+    /// Under D11 `is_system_admin(p)` reads `kb_principal_governance` — a governance grant, no
+    /// longer gating-team ownership. So the grant is what makes the admin; every other profile in
+    /// these tests is a non-admin for free because it has no governance row. Mirrors `admin_fixture`
+    /// in `tests/admin_ledger_test.rs`. The gating-team setup below is retained only for parity with
+    /// that fixture's topology; it no longer carries authorization meaning.
     async fn make_system_admin(pool: &PgPool, profile: Uuid) {
         let slug = format!("gating-{}", Uuid::now_v7().simple());
         let team_id: Uuid = sqlx::query_scalar(
@@ -477,6 +472,9 @@ mod tests {
         .execute(pool)
         .await
         .expect("make the fixture profile an OWNER of the gating team");
+
+        // What actually confers admin-ness under D11: a governance grant.
+        crate::test_support::grant_governance(pool, profile).await;
 
         // Asserted, not trusted: a fixture whose admin is not an admin makes the
         // non-admin test below pass for the wrong reason (nobody is an admin).

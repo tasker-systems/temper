@@ -953,29 +953,10 @@ mod lifecycle_tests {
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        // Make `admin` a system admin: OWNER of the `temper-system` gating team (born of
-        // migration 20260625000001) with `gating_team_slug` pointed at it — the same
-        // admin-minting idiom as `context_service`'s test seed. `admin` is NOT a member
-        // of `acme`, so this exercises the `is_system_admin` branch of the read gate.
-        let sys: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
-             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner'",
-        )
-        .bind(sys)
-        .bind(admin)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        // Make `admin` a system admin. Under D11 that is a `kb_principal_governance` grant, not
+        // gating-team ownership — `is_system_admin` reads governance. `admin` is NOT a member of
+        // `acme`, so this exercises the `is_system_admin` branch of the read gate.
+        crate::test_support::grant_governance(&pool, admin).await;
 
         let detail = team_detail(&pool, ProfileId::from(admin), team)
             .await

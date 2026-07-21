@@ -18,5 +18,12 @@ pub mod oauth_client;
 pub mod services;
 pub mod state;
 
+/// Test-only fixture helpers for the D11 admission model (approved standing / governance seeding).
+/// Gated on `test-db` so it is absent from production builds; reachable from both the inline
+/// `#[cfg(test)]` service modules (`crate::test_support`) and the integration suites
+/// (`temper_services::test_support`).
+#[cfg(feature = "test-db")]
+pub mod test_support;
+
 /// Embedded workspace migrations, for `#[sqlx::test(migrator = "temper_services::MIGRATOR")]`.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");

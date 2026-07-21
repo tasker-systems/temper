@@ -2,9 +2,9 @@
 //!
 //! Two things live here, and the separation is the point:
 //!
-//! 1. **Who may register** — [`authorize`]: a system admin, or the OWNER of the team that
-//!    will own the machine. `is_system_admin` already *is* ownership of the gating team, so
-//!    this is one concept keyed on two teams, not two concepts.
+//! 1. **Who may register** — [`authorize`]: a system admin (under D11 a `kb_principal_governance`
+//!    grant), or the OWNER of the team that will own the machine. Two distinct authorities — a
+//!    governance grant and team ownership — either of which admits.
 //! 2. **What reach they may confer** — [`AuthorizedReach`]: a value that only this module can
 //!    construct. `apply_reach` takes it instead of raw specs, so reach cannot be applied
 //!    without having been authorized. The invariant is enforced by the type, not by a comment
@@ -35,8 +35,10 @@ use crate::services::{access_service, team_service};
 /// `member` confers RW in team contexts, which is the whole of what an M2M credential needs.
 /// Everything above it is *governance*: `team_service::can_manage` is `Owner | Maintainer`, so a
 /// machine one notch higher could manage team membership, bind cogmaps, and reassign contexts —
-/// and on the gating team, `owner` additionally manufactures an `is_system_admin` principal that
-/// registers further machines with no human in the loop. There is no machine workload that wants
+/// and on the gating team, `owner`/`maintainer` clears `can_manage` over the very team that gates
+/// membership. (Under D11 that no longer *manufactures* an `is_system_admin` principal — admin-ness
+/// is a `kb_principal_governance` grant, a separate axis — but managing the gating team's roster is
+/// still governance no unattended credential should hold.) There is no machine workload that wants
 /// any of that, and an unattended credential is the worst possible holder of it.
 ///
 /// Compared by [`TeamRole::rank`] rather than matched as a set, so a role introduced above
@@ -53,7 +55,7 @@ const MAX_MACHINE_TEAM_ROLE: TeamRole = TeamRole::Member;
 /// The caller's authority over a machine registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MachineAuthority {
-    /// Owner of the gating team. Full, unchecked reach (Phase A D5).
+    /// A system admin (a `kb_principal_governance` grant). Full, unchecked reach (Phase A D5).
     SystemAdmin,
     /// Owner of the team that owns (or will own) the machine. Reach is contained.
     TeamOwner,
@@ -272,10 +274,11 @@ mod tests {
         .unwrap();
     }
 
-    /// A fresh DB seeds `access_mode='open'` with `gating_team_slug` NULL, so nobody is a
-    /// system admin until a gating team is configured. Configure it the way the operator
-    /// template does — WITHOUT flipping access_mode (prod runs 'open'; the admin check is
-    /// load-bearing precisely because the router gate admits everyone there).
+    /// Configure the gating team the way the operator template does. Under D11 this no longer
+    /// makes anyone an admin — `is_system_admin` reads `kb_principal_governance`, so the admin
+    /// tests grant governance explicitly (see the `grant_governance` calls after each gating-owner
+    /// join). This helper is retained because `authorize` still consults the gating team's roster
+    /// for the ordinary team-owner arm.
     ///
     /// The `temper-system` root team ALREADY EXISTS in a migrated database (the L0 kernel
     /// migration creates it, because the canonical functions reference it by slug), so this
@@ -350,6 +353,8 @@ mod tests {
         let gating = configure_gating_team(&pool).await;
         let admin = mk_profile(&pool, "authz-admin").await;
         join(&pool, gating, admin, "owner").await;
+        // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
+        crate::test_support::grant_governance(&pool, admin).await;
         let authority = authorize(&pool, ProfileId::from(admin), None)
             .await
             .expect("an admin may register a teamless machine");
@@ -463,6 +468,8 @@ mod tests {
         let gating = configure_gating_team(&pool).await;
         let admin = mk_profile(&pool, "escalate-admin").await;
         join(&pool, gating, admin, "owner").await;
+        // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
+        crate::test_support::grant_governance(&pool, admin).await;
         let foreign = mk_team(&pool, "escalate-foreign").await;
 
         assert!(
@@ -494,6 +501,8 @@ mod tests {
         let gating = configure_gating_team(&pool).await;
         let admin = mk_profile(&pool, "ceiling-admin").await;
         join(&pool, gating, admin, "owner").await;
+        // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
+        crate::test_support::grant_governance(&pool, admin).await;
 
         let alice = mk_profile(&pool, "ceiling-alice").await;
         let owned = mk_team(&pool, "ceiling-owned").await;
@@ -682,6 +691,8 @@ mod tests {
         let gating = configure_gating_team(&pool).await;
         let admin = mk_profile(&pool, "admin-unchecked").await;
         join(&pool, gating, admin, "owner").await;
+        // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
+        crate::test_support::grant_governance(&pool, admin).await;
 
         let foreign = mk_team(&pool, "admin-foreign").await;
         let l0: Uuid = "00000000-0000-0000-0005-000000000001".parse().unwrap();
@@ -727,6 +738,8 @@ mod tests {
         let gating = configure_gating_team(&pool).await;
         let admin = mk_profile(&pool, "role-admin").await;
         join(&pool, gating, admin, "owner").await;
+        // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
+        crate::test_support::grant_governance(&pool, admin).await;
         let target = mk_team(&pool, "role-target").await;
 
         let teams = vec![TeamSpec {
@@ -748,6 +761,8 @@ mod tests {
         let gating = configure_gating_team(&pool).await;
         let admin = mk_profile(&pool, "list-admin").await;
         join(&pool, gating, admin, "owner").await;
+        // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
+        crate::test_support::grant_governance(&pool, admin).await;
 
         let alice = mk_profile(&pool, "list-alice").await;
         let alice_team = mk_team(&pool, "list-alice-team").await;

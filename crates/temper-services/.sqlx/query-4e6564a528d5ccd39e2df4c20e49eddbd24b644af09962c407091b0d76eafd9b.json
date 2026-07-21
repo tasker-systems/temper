@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n                 SELECT 1 FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id\n                  WHERE t.slug = 'temper-system' AND m.profile_id = $1) AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4e6564a528d5ccd39e2df4c20e49eddbd24b644af09962c407091b0d76eafd9b"
+}
