@@ -426,6 +426,19 @@ async fn create_new_profile_and_link(
     .execute(pool)
     .await?;
 
+    // D11 — every door births Denied. THIS IS THE SHARED SITE for both human doors (SAML via
+    // resolve_federated_human, OAuth via authenticate), and putting the call here rather than at
+    // each caller is what removes the per-door constant that could be got wrong. Under the old
+    // design the doors had to DIVERGE here, and a constant at this site would have been permissive
+    // and silent — every signup born approved, with nothing to notice. Approval is a separate,
+    // admin-authored act.
+    crate::services::standing_service::provision(
+        pool,
+        temper_core::types::ids::ProfileId::from(profile_id),
+        temper_principal::Provisioner::OauthFirstLogin,
+    )
+    .await?;
+
     Ok((profile_id, handle))
 }
 

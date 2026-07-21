@@ -723,13 +723,26 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn require_system_access_allows_approved_profile(pool: PgPool) {
-        // Open-mode default: an authenticated profile has system access.
+        // Under D11 the mint door births a profile Denied, so access is now an APPROVED standing,
+        // not an open-mode default. Approve the freshly authenticated profile (legal from Denied,
+        // D14), then it is system-authorized.
         let c = claims("seam-approved", "approved@example.test");
         let authed = authenticate(&pool, &c).await.expect("authenticate");
+        crate::services::standing_service::apply(
+            &pool,
+            crate::services::standing_service::ApplyStandingParams {
+                subject: ProfileId::from(authed.profile.id),
+                act: temper_principal::Act::Approve,
+                actor: Some(ProfileId::from(authed.profile.id)),
+                authority: temper_principal::ActorAuthority::Admin,
+            },
+        )
+        .await
+        .expect("approve");
         let ok = require_system_access(&pool, &authed).await;
         assert!(
             ok.is_ok(),
-            "open-mode profile should be system-authorized: {ok:?}"
+            "an approved profile should be system-authorized: {ok:?}"
         );
     }
 
@@ -757,6 +770,152 @@ mod tests {
         assert!(
             matches!(err, AuthzError::SystemAccessDenied { profile_id } if profile_id == id),
             "expected SystemAccessDenied, got {err:?}",
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn oauth_first_login_is_born_denied(pool: PgPool) {
+        // The community edition has no paywall. An OAuth signup being born Denied — requiring an
+        // admin to enable it — IS the access-control mechanism, deliberately (spec §8). Do not
+        // "fix" this because new users are locked out. That is the feature.
+        let profile = authenticate(&pool, &claims("oauth|newcomer", "a@example.com"))
+            .await
+            .unwrap();
+        let standing =
+            crate::services::standing_service::load(&pool, ProfileId::from(profile.profile.id))
+                .await
+                .unwrap();
+        assert_eq!(standing, Some(temper_principal::Standing::Denied));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn saml_jit_is_also_born_denied(pool: PgPool) {
+        // D13 — the "assertion IS the grant" rationale was WITHDRAWN by its own author. An IdP
+        // asserting "our org says this person may use this" and the instance deciding "we agree,
+        // and now they have access" are different claims by different parties, and it is across
+        // exactly that boundary that interception and escalation happen. Team assignment already
+        // respects this; system access was the odd one out. DO NOT RESTORE AUTO-APPROVAL HERE.
+        let profile = resolve_federated_human(
+            &pool,
+            "test-provider",
+            "saml|newcomer",
+            "b@example.com",
+            Some(true),
+        )
+        .await
+        .unwrap();
+        let standing = crate::services::standing_service::load(&pool, ProfileId::from(profile.id))
+            .await
+            .unwrap();
+        assert_eq!(standing, Some(temper_principal::Standing::Denied));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_two_human_doors_mint_the_same_standing(pool: PgPool) {
+        // ONE TEST PER PATH, NEVER ONE FOR THE PAIR (§12) — the two doors share
+        // create_new_profile_and_link. This third test guards UNIFORMITY where it used to guard
+        // divergence. Distinct subjects AND distinct emails: same-email would reconcile the second
+        // door onto the FIRST door's profile and the test would pass by resolving one profile twice.
+        let oauth = authenticate(&pool, &claims("oauth|d1", "d1@example.com"))
+            .await
+            .unwrap()
+            .profile
+            .id;
+        let saml = resolve_federated_human(
+            &pool,
+            "test-provider",
+            "saml|d2",
+            "d2@example.com",
+            Some(true),
+        )
+        .await
+        .unwrap()
+        .id;
+        assert_ne!(
+            oauth, saml,
+            "guard: the two doors must have minted two profiles"
+        );
+
+        for id in [oauth, saml] {
+            assert_eq!(
+                crate::services::standing_service::load(&pool, ProfileId::from(id))
+                    .await
+                    .unwrap(),
+                Some(temper_principal::Standing::Denied),
+                "both doors must birth Denied — no door grants access (D11)"
+            );
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn provision_on_a_returning_principal_does_not_touch_standing(pool: PgPool) {
+        // F4, closed structurally. A revoked SAML principal re-asserting through the IdP must stay
+        // Revoked — the earlier per-ASSERTION wording made Revoke defeatable on the SAML door.
+        let profile = resolve_federated_human(
+            &pool,
+            "test-provider",
+            "saml|returning",
+            "r@example.com",
+            Some(true),
+        )
+        .await
+        .unwrap();
+        let id = ProfileId::from(profile.id);
+
+        // An actor with Admin authority. apply trusts the authority level (the surface is what
+        // checks the actor is really an admin, in Beat E); a distinct seeded profile stands in.
+        let admin: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('ret-admin','A') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let admin = ProfileId::from(admin);
+
+        use crate::services::standing_service::{apply, ApplyStandingParams};
+        use temper_principal::{Act, ActorAuthority};
+        apply(
+            &pool,
+            ApplyStandingParams {
+                subject: id,
+                act: Act::Approve,
+                actor: Some(admin),
+                authority: ActorAuthority::Admin,
+            },
+        )
+        .await
+        .unwrap();
+        apply(
+            &pool,
+            ApplyStandingParams {
+                subject: id,
+                act: Act::Revoke {
+                    reason: "test".into(),
+                },
+                actor: Some(admin),
+                authority: ActorAuthority::Admin,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Re-assert through the IdP.
+        resolve_federated_human(
+            &pool,
+            "test-provider",
+            "saml|returning",
+            "r@example.com",
+            Some(true),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            crate::services::standing_service::load(&pool, id)
+                .await
+                .unwrap(),
+            Some(temper_principal::Standing::Revoked),
+            "a returning principal's standing is LOADED, never SET"
         );
     }
 

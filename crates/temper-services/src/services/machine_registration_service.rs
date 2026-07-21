@@ -274,6 +274,18 @@ pub async fn provision(
     .await
     .map_err(|e| map_duplicate(e, &req.client_id))?;
 
+    // D11 — every mint door births Denied; even a machine minted by an admin gets no access.
+    // Containment is retired, not relocated: a minter who cannot confer access is moot when minting
+    // never confers any. Raw principal_standing_apply on the transaction, NOT
+    // standing_service::provision — that takes &PgPool and would write outside this tx, risking an
+    // orphaned standing row if the registration rolls back.
+    sqlx::query_scalar!(
+        "SELECT principal_standing_apply($1,'provision','denied',NULL,'machine registration')",
+        profile_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
     tx.commit()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
@@ -344,6 +356,16 @@ pub async fn issue(
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| map_duplicate(e, &client_id))?;
+
+    // D11 — the temper-minted machine door births Denied too. `issue` is `provision`'s structural
+    // twin (a second mint door), so it carries the same born-Denied standing; leaving it unwired is
+    // exactly the carelessly-added door the whole-surface property guards against.
+    sqlx::query_scalar!(
+        "SELECT principal_standing_apply($1,'provision','denied',NULL,'machine issue')",
+        profile_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     tx.commit()
         .await

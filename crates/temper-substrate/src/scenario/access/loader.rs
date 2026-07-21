@@ -149,6 +149,30 @@ async fn insert_profiles(
         .fetch_one(&mut *tx)
         .await?;
         profiles.insert(p.handle.clone(), id);
+
+        // Mint the now-authoritative standing row from the declared tier, alongside the kept
+        // system_access projection (see loader.rs for the fuller rationale). Emitter falls back to
+        // the `system` actor that seed_system creates before any access scenario loads.
+        let (standing, admin) = match p.system_access.as_sql() {
+            "admin" => ("approved", true),
+            "approved" => ("approved", false),
+            _ => ("denied", false),
+        };
+        sqlx::query!(
+            "SELECT principal_standing_apply($1,'provision',$2,NULL,'scenario load')",
+            id,
+            standing
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if admin {
+            sqlx::query!(
+                "SELECT principal_governance_set($1,true,NULL,'scenario load')",
+                id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        }
     }
     Ok(())
 }

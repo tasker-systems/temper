@@ -5879,6 +5879,7 @@ dependencies = [
  "temper-auth",
  "temper-core",
  "temper-ingest",
+ "temper-principal",
  "temper-substrate",
  "temper-workflow",
  "thiserror 2.0.18",
