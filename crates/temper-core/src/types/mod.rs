@@ -47,6 +47,7 @@ pub mod relationship_requests;
 pub mod resource_grant;
 pub mod search;
 pub mod slack;
+pub mod standing;
 pub mod steward;
 pub mod team;
 pub mod upload;
@@ -93,6 +94,7 @@ pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignRe
 pub use slack::{
     IdpRevocation, SlackDisconnectRequest, SlackDisconnectResponse, SlackDisconnectedPrincipal,
 };
+pub use standing::StandingShape;
 pub use steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta, StewardAdvanceWatermarkInput,
     StewardDeltaInput, DEFAULT_STEWARD_INGEST_THRESHOLD,

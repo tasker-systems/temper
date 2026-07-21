@@ -438,3 +438,45 @@ async fn rust_wrapper_refreshes_standing_memo(pool: sqlx::PgPool) {
         "the Rust wrapper lands the memo exactly where a live recompute would"
     );
 }
+
+// ── Task 7 — readback::resource_standing (gated read through Rust) ───────────────────────────────
+
+/// Same intent as `shape_read_is_gated_and_carries_band`, but going through the Rust readback
+/// producer `temper_substrate::readback::resource_standing` instead of calling
+/// `resource_standing_shape` directly, and gating against a genuinely unrelated second profile
+/// (not just a non-existent finding).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn readback_resource_standing_is_gated_and_carries_band(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "es-readback").await;
+    let n = 2;
+    let (finding, _bases) = seed_finding_with_n_provenance(&pool, owner, emitter, home, n).await;
+
+    // readable principal (the owner) → Some(row), band non-empty, r_parent matches the seeded
+    // provenance count.
+    let shape = temper_substrate::readback::resource_standing(&pool, owner, finding)
+        .await
+        .expect("readable read")
+        .expect("owner can read its own finding's standing shape");
+    assert_eq!(shape.finding_id, finding);
+    assert_eq!(
+        shape.r_parent, n as f64,
+        "r_parent matches the seeded provenance count"
+    );
+    assert!(
+        !shape.band.is_empty(),
+        "the band chip is carried WITH the shape"
+    );
+
+    // an unreadable principal (a second, unrelated profile with no ownership/team access) → None,
+    // never an error — the gate is inside the SQL.
+    let outsider = ProfileId::from(common::insert_profile(&pool, "es-readback-outsider").await);
+    let denied = temper_substrate::readback::resource_standing(&pool, outsider, finding)
+        .await
+        .expect("gate denial is empty, not an error");
+    assert!(
+        denied.is_none(),
+        "an unrelated profile must not read the finding's standing shape: {denied:?}"
+    );
+}
