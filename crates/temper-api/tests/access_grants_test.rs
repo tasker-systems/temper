@@ -4,6 +4,8 @@
 //! covered by the handler + e2e tiers). Membership/grants are seeded directly via SQL so the general
 //! `can()` seam genuinely flips.
 
+mod common;
+
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -52,6 +54,9 @@ async fn mint_admin(pool: &PgPool, handle: &str) -> Uuid {
         .execute(pool)
         .await
         .expect("promote admin");
+    // D11: `system_access='admin'` + gating ownership confer neither has_system_access nor
+    // is_system_admin now. Grant governance + approved standing so this profile is a real admin.
+    common::fixtures::make_test_admin(pool, id).await;
     id
 }
 

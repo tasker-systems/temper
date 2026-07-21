@@ -63,6 +63,9 @@ async fn root_bootstrap_first_admin(pool: &sqlx::PgPool, admin_id: Uuid) {
         .execute(pool)
         .await
         .expect("promote first admin"); // trigger mints owner of temper-system
+                                        // D11: is_system_admin reads governance, has_system_access reads standing; the column + gating
+                                        // ownership above confer neither. Grant both so the bootstrapped admin can actually act.
+    common::approved_admin(pool, admin_id).await;
 }
 
 /// Run a `temper` CLI step, asserting success and returning parsed JSON stdout.

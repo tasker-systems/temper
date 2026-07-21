@@ -32,7 +32,11 @@ async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("preflight");
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.expect("json");
-    body["id"].as_str().expect("id").parse().expect("uuid")
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door
+    // and the ENDPOINT authz (ownership, admin-only, grants) is what the test exercises.
+    let __pid: Uuid = body["id"].as_str().expect("id").parse().expect("uuid");
+    common::approve(&app.pool, __pid).await;
+    __pid
 }
 
 /// `GET /api/teams/{team_id}` as `token`. Returns the raw `reqwest::Response` so callers can

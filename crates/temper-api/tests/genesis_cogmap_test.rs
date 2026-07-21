@@ -14,6 +14,8 @@
 //!   events.
 //! - genesis with no telos is born with an empty charter (deliverable later via reconcile).
 
+mod common;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -144,6 +146,9 @@ async fn make_admin(pool: &PgPool, profile: Uuid) {
     .execute(pool)
     .await
     .expect("point gating_team_slug at temper-system");
+    // D11: gating-team ownership no longer confers admin-ness (is_system_admin reads governance) or
+    // access (has_system_access reads standing). Grant both so this profile is a real admin.
+    common::fixtures::make_test_admin(pool, profile).await;
 }
 
 /// An ADMIN backend for the explicit-id genesis/reconcile cases: the system profile promoted to

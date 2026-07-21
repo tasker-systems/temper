@@ -11,6 +11,8 @@
 //! event types EXCEPT the two envelope types). The test asserts that measure is unchanged AND that the
 //! envelope did fire its two bookkeeping events, so nothing is hidden.
 
+mod common;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -85,6 +87,9 @@ async fn system_profile(pool: &PgPool) -> Uuid {
 /// ignores `self.profile_id`, but we seed it with the system profile for principled construction.
 async fn backend(pool: &PgPool) -> DbBackend {
     let sys = system_profile(pool).await;
+    // D11: in a migration-only test DB the bootseed that grants the system principal governance +
+    // approved standing has not run, so grant it here — reconcile is a system-admin-gated act.
+    common::fixtures::make_test_admin(pool, sys).await;
     DbBackend::new(pool.clone(), ProfileId::from(sys))
 }
 

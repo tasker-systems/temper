@@ -37,6 +37,9 @@ async fn admin_profile(pool: &PgPool, email: &str) -> Uuid {
         .execute(pool)
         .await
         .expect("promote to admin");
+    // D11: `system_access='admin'` + gating ownership confer neither has_system_access nor
+    // is_system_admin now. Grant governance + approved standing so this profile is a real admin.
+    common::fixtures::make_test_admin(pool, id).await;
     id
 }
 

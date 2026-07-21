@@ -70,11 +70,15 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("preflight request failed");
     assert_eq!(resp.status(), StatusCode::OK, "preflight should succeed");
     let body: serde_json::Value = resp.json().await.expect("preflight json parse");
-    body["id"]
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door
+    // and the ENDPOINT authz (ownership, admin-only, grants) is what the test exercises.
+    let __pid: Uuid = body["id"]
         .as_str()
         .expect("profile id missing")
         .parse()
-        .expect("profile id parse")
+        .expect("profile id parse");
+    common::approve(&app.pool, __pid).await;
+    __pid
 }
 
 /// Create a team with a single resource visible to it (`kb_access_grants` team grant, the first branch
