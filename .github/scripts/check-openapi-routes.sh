@@ -42,6 +42,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/access/admin/requests/{id}
 /api/access/admin/settings
 /api/access/admin/promote
+/api/access/admin/demote
 /api/access/admin/principals/{id}/approve
 /api/access/admin/principals/{id}/revoke
 /api/access/admin/principals/{id}/deactivate

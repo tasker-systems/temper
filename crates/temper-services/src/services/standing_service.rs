@@ -115,6 +115,26 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
 
     // The committer echoes back what it wrote. A disagreement means the SQL grew an opinion.
     debug_assert_eq!(committed.as_deref(), Some(resulting.as_str()));
+
+    // §9 — Revoke and Deactivate demote, so "admin, but admission revoked" is never representable.
+    // The invariant is maintained BY TRANSITION: a one-directional write (admission → governance),
+    // never a read-time AND (`is_system_admin` reads governance alone). Fired unconditionally on
+    // these two terminals — `principal_governance_set(_, false, _)` is a no-op on the common case of
+    // a principal that was never an admin. Task 14 routes machine-credential revocation through this
+    // same `apply`, so the hook also fires when a machine is credential-revoked from `Approved`: a
+    // harmless no-op there too. Task 17 will fold the two writes into one transaction with the typed
+    // refusal; today `apply` is already non-transactional, so this follows the standing write.
+    if matches!(resulting, Standing::Revoked | Standing::Deactivated) {
+        sqlx::query_scalar!(
+            "SELECT principal_governance_set($1, false, $2, $3)",
+            *params.subject,
+            params.actor.map(|a| *a),
+            Some(format!("demoted by {}", act_name(&act))),
+        )
+        .fetch_one(pool)
+        .await?;
+    }
+
     Ok(resulting)
 }
 
