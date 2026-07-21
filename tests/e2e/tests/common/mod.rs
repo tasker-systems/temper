@@ -293,6 +293,11 @@ pub fn generate_second_user_jwt() -> String {
     generate_test_jwt("e2e-second-user", "second@test.example.com")
 }
 
+/// Generate a JWT for a third test user (distinct from the primary and second e2e users).
+pub fn generate_third_user_jwt() -> String {
+    generate_test_jwt("e2e-third-user", "third@test.example.com")
+}
+
 /// Sign a JWT with the test Ed25519 private key (EdDSA). Valid for 1 hour.
 ///
 /// Mirrors `generate_test_jwt` exactly (same claims shape, same issuer) but
@@ -448,6 +453,33 @@ pub async fn approve(pool: &PgPool, profile_id: uuid::Uuid) {
     .execute(pool)
     .await
     .expect("approve standing");
+}
+
+/// Approve then revoke `subject`, leaving standing `revoked` — a fixture for the D15 paths
+/// (re-request refusal, review markers). It moves through `approved` first so the illegal
+/// `denied -> revoked` transition is never simulated. Direct-SQL for now because Task 13's admin
+/// `revoke` endpoint is not built yet; `_admin` is the acting admin, recorded once this routes
+/// through that endpoint.
+pub async fn approve_then_revoke(app: &E2eTestApp, _admin: uuid::Uuid, subject: uuid::Uuid) {
+    approve(&app.pool, subject).await;
+    sqlx::query(
+        "UPDATE kb_principal_standing SET state = 'revoked', updated = now() WHERE profile_id = $1",
+    )
+    .bind(subject)
+    .execute(&app.pool)
+    .await
+    .expect("revoke standing");
+}
+
+/// Configure `temper-system` as the gating team WITHOUT touching `access_mode`. A join request has
+/// to attach to the gating team (spec D9: `create_join_request` resolves `gating_team_slug` and
+/// errors if none is set), so a request test needs one configured even while the instance is
+/// nominally `open` — which is exactly the interim state that proves the *mode* no longer gates.
+pub async fn configure_gating_team(pool: &PgPool) {
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
+        .execute(pool)
+        .await
+        .expect("configure gating team");
 }
 
 /// Provision the standard second user (`generate_second_user_jwt`) via the real auth path and grant

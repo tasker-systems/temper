@@ -12,6 +12,9 @@ use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
 use uuid::Uuid;
 
+use crate::services::standing_service::{self, ApplyStandingParams};
+use temper_principal::{Act, ActorAuthority};
+
 use temper_core::types::access_gate::{
     AccessMode, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
     PublicSystemSettings, SystemSettings,
@@ -696,38 +699,41 @@ pub struct CreateJoinRequestParams {
 
 /// Submit a join request for the gating team.
 ///
-/// Returns `BadRequest` if the system is in `open` mode (no request needed).
-/// The partial unique index on `kb_join_requests` prevents duplicate pending requests.
+/// Fires `Act::Request` (Denied → Requested) before writing the request row, so an illegal request
+/// (from Revoked or Approved) is refused first. `requested` standing is now the duplicate guard
+/// (D12); the old open-mode rejection is gone — under D11 a request is legitimate in any mode.
 pub async fn create_join_request(
     pool: &PgPool,
     params: CreateJoinRequestParams,
 ) -> ApiResult<JoinRequest> {
+    // Resolve the request's target FIRST. These are READS, so doing them before any standing write
+    // keeps auth-before-writes honest: an unconfigured gating team must fail BEFORE standing moves,
+    // or a Denied principal would land in `Requested` with no request row and no legal retry
+    // (Request from Requested is illegal). Under D11/D18 the request is legitimate in any mode — the
+    // old open-mode rejection made an `open` instance a dead end; `access_mode` is not consulted.
     let settings = get_system_settings(pool).await?;
-
-    let access_mode = AccessMode::from_db_str(&settings.access_mode).ok_or_else(|| {
-        ApiError::Internal(format!(
-            "unrecognized access_mode {:?} in kb_system_settings",
-            settings.access_mode
-        ))
-    })?;
-    match access_mode {
-        AccessMode::Open => {
-            return Err(ApiError::BadRequest(
-                "System is in open mode — no access request needed".to_string(),
-            ));
-        }
-        AccessMode::InviteOnly => {}
-    }
-
-    let gating_slug = settings.gating_team_slug.ok_or_else(|| {
-        ApiError::Internal("System is invite_only but no gating team configured".to_string())
-    })?;
-
+    let gating_slug = settings
+        .gating_team_slug
+        .ok_or_else(|| ApiError::Internal("System has no gating team configured".to_string()))?;
     // Resolve team ID from slug (substrate `kb_teams` has no `is_active`).
     let team_id = sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", gating_slug,)
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| ApiError::Internal(format!("Gating team '{gating_slug}' not found")))?;
+
+    // Now the standing transition — the first write. An illegal Request (from Revoked, from
+    // Approved) refuses here, before the request row exists (auth before writes). The refusal rides
+    // `standing_service::apply`'s interim `BadRequest` (Task 17 upgrades it to a typed 403).
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject: params.profile_id,
+            act: Act::Request,
+            actor: Some(params.profile_id),
+            authority: ActorAuthority::SelfPrincipal,
+        },
+    )
+    .await?;
 
     let request_id = Uuid::now_v7();
     let accepted_terms_at = params
@@ -802,6 +808,19 @@ pub async fn get_own_request(
 
 /// Withdraw the pending join request for this profile.
 pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult<()> {
+    // Standing first (auth before writes): Withdraw is legal only from `Requested` (§6), so a
+    // principal with nothing pending is refused here rather than reaching the row UPDATE.
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject: profile_id,
+            act: Act::Withdraw,
+            actor: Some(profile_id),
+            authority: ActorAuthority::SelfPrincipal,
+        },
+    )
+    .await?;
+
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -829,6 +848,46 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
         Some(_request_id) => Ok(()),
         None => Err(ApiError::NotFound),
     }
+}
+
+/// Parameters for a review request (spec D15 — a revoked principal asking for reconsideration).
+pub struct CreateReviewRequestParams {
+    pub profile_id: ProfileId,
+    pub message: Option<String>,
+}
+
+/// Ask an admin to reconsider a revocation (spec D15). Fires `Act::RequestReview`, which validates
+/// the principal is `Revoked` and MOVES NOTHING, then records the review as an inbox signal in
+/// `kb_principal_review_requests`. The review is NEVER read by the admission decision — a revoked
+/// principal is refused whether or not one is pending. Its own partial unique index
+/// (`idx_principal_review_one_open`) guards against duplicate open reviews (D15 obligation 2).
+pub async fn create_review_request(
+    pool: &PgPool,
+    params: CreateReviewRequestParams,
+) -> ApiResult<()> {
+    // Standing gate first (auth before writes): RequestReview is legal only from `Revoked` (§6).
+    // It moves nothing — the marker's whole point is that reconsideration cannot launder a
+    // revocation (D15). An illegal call refuses before any review row exists.
+    standing_service::apply(
+        pool,
+        ApplyStandingParams {
+            subject: params.profile_id,
+            act: Act::RequestReview,
+            actor: Some(params.profile_id),
+            authority: ActorAuthority::SelfPrincipal,
+        },
+    )
+    .await?;
+
+    sqlx::query!(
+        "INSERT INTO kb_principal_review_requests (profile_id, message) VALUES ($1, $2)",
+        *params.profile_id,
+        params.message,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 /// List pending join requests with profile info (admin view).
@@ -952,6 +1011,20 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
             row.requesting_profile_id,
         )
         .execute(&mut *tx)
+        .await?;
+    } else {
+        // Rejection returns standing to `Denied` so the principal may re-request (spec §5;
+        // `join_request_rejection_allows_resubmit` pins this). Raw on the tx (machine-door pattern),
+        // atomic with the decision, matching Approve; `Reject` is legal from the requester's
+        // `Requested` state (transition.rs). Rejection is deliberately NOT a standing state of its
+        // own — the request record keeps the `decision_note`.
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1,'reject','denied',$2,$3)",
+            row.requesting_profile_id,
+            *params.reviewer_profile_id,
+            params.decision_note,
+        )
+        .fetch_one(&mut *tx)
         .await?;
     }
 

@@ -54,7 +54,7 @@
             }
           },
           "400": {
-            "description": "System is in open mode — no request needed",
+            "description": "The request is not legal from the caller's standing",
             "content": {
               "application/json": {
                 "schema": {
@@ -65,6 +65,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A request is already pending, or access is already granted",
             "content": {
               "application/json": {
                 "schema": {
@@ -160,6 +170,71 @@
           },
           "404": {
             "description": "No pending join request to withdraw",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/access/reviews": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Access"
+        ],
+        "summary": "POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).",
+        "description": "On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access\ngate, and being able to ask for reconsideration is the whole point. The review is an inbox\nsignal only — it never feeds the admission decision.",
+        "operationId": "create_review_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Review request recorded"
+          },
+          "400": {
+            "description": "Only a revoked principal may request review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -7219,6 +7294,17 @@
           },
           "source": {
             "type": "string"
+          }
+        }
+      },
+      "CreateReviewBody": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

@@ -895,6 +895,12 @@ pub enum AuthAction {
     },
     /// Withdraw your pending system-access request.
     WithdrawRequest,
+    /// Ask an admin to reconsider a revocation. Does not restore access by itself.
+    RequestReview {
+        /// Message for the admin reviewing the revocation (e.g. why you should be reinstated).
+        #[arg(long)]
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]

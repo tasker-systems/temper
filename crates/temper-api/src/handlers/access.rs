@@ -29,6 +29,11 @@ pub struct CreateRequestBody {
     pub accepted_terms_version: Option<String>,
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CreateReviewBody {
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ReviewRequestBody {
     pub status: JoinRequestStatus,
@@ -48,7 +53,8 @@ pub struct ReviewRequestBody {
     security(("bearer_auth" = [])),
     responses(
         (status = 201, description = "Join request created", body = JoinRequest),
-        (status = 400, description = "System is in open mode — no request needed", body = ErrorBody),
+        (status = 400, description = "The request is not legal from the caller's standing", body = ErrorBody),
+        (status = 409, description = "A request is already pending, or access is already granted", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -106,6 +112,39 @@ pub async fn withdraw_request(
 ) -> ApiResult<StatusCode> {
     access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile.id)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
+///
+/// On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access
+/// gate, and being able to ask for reconsideration is the whole point. The review is an inbox
+/// signal only — it never feeds the admission decision.
+#[utoipa::path(
+    post,
+    path = "/api/access/reviews",
+    tag = "Access",
+    request_body = CreateReviewBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 201, description = "Review request recorded"),
+        (status = 400, description = "Only a revoked principal may request review", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
+pub async fn create_review_request(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateReviewBody>,
+) -> ApiResult<StatusCode> {
+    access_service::create_review_request(
+        &state.pool,
+        access_service::CreateReviewRequestParams {
+            profile_id: ProfileId::from(auth.0.profile.id),
+            message: body.message,
+        },
+    )
+    .await?;
+    Ok(StatusCode::CREATED)
 }
 
 /// GET /api/access/settings — read public system settings.

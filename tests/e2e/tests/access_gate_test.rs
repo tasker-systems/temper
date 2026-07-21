@@ -590,25 +590,12 @@ async fn duplicate_pending_request_returns_conflict(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Request in open mode returns bad request
+// 11. (Retired) Requesting in open mode used to return 400 "no request needed".
+// Under D11/D18 every door births Denied REGARDLESS of mode, so refusing the one
+// act that could change that made an `open` instance a dead end. The replacement
+// behavior — open mode accepts a request — is now covered by
+// `a_request_works_in_open_mode_too` in the Beat E / Task 12 section below.
 // ---------------------------------------------------------------------------
-
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn request_in_open_mode_returns_bad_request(pool: sqlx::PgPool) {
-    let app = common::setup(pool).await;
-    preflight(&app, &app.token).await;
-
-    let resp = app
-        .reqwest_client
-        .post(app.url("/api/access/requests"))
-        .header("Authorization", format!("Bearer {}", app.token))
-        .json(&serde_json::json!({ "source": "cli" }))
-        .send()
-        .await
-        .expect("request failed");
-
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
 
 // ---------------------------------------------------------------------------
 // 12. Audit events written for lifecycle
@@ -1108,5 +1095,190 @@ async fn no_provision_path_under_any_actor_yields_approved(pool: sqlx::PgPool) {
     assert!(
         !any_machine_approved,
         "no minted machine may be born approved — every door births Denied (D11)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Beat E / Task 12 — the self-service acts: Request, Withdraw, RequestReview
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn request_moves_standing_and_records_consent_separately(pool: sqlx::PgPool) {
+    // D5/D12: standing carries state; the request carries payload. The two must both move.
+    let app = common::setup(pool.clone()).await;
+    preflight(&app, &app.token).await;
+    common::configure_gating_team(&app.pool).await; // the request needs a team to attach to (D9)
+    let token = common::generate_second_user_jwt();
+    let me = preflight(&app, &token).await;
+    let id = profile_id(&me);
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/requests"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "source": "cli", "message": "please" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM kb_principal_standing WHERE profile_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "requested");
+
+    let msg: Option<String> =
+        sqlx::query_scalar("SELECT message FROM kb_join_requests WHERE requesting_profile_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        msg.as_deref(),
+        Some("please"),
+        "the payload stays on the request record (D5)"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_request_works_in_open_mode_too(pool: sqlx::PgPool) {
+    // C6 / the access_mode retirement: under D11 every door births Denied REGARDLESS of mode, so
+    // an `open` instance must not be a dead end. The old code returned 400 here.
+    let app = common::setup(pool.clone()).await;
+    preflight(&app, &app.token).await; // setup leaves the instance `open`
+    common::configure_gating_team(&app.pool).await; // a team to attach to, mode still `open` (D9)
+    let token = common::generate_second_user_jwt();
+    preflight(&app, &token).await;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/requests"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "source": "cli" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "open mode must not refuse a request"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_revoked_principal_cannot_re_request_but_may_ask_for_review(pool: sqlx::PgPool) {
+    // D15 — the no-laundering property, structural rather than bookkept.
+    let app = common::setup(pool.clone()).await;
+    common::configure_gating_team(&app.pool).await; // the request POST resolves the team before the
+                                                    // standing refusal fires (auth-before-writes)
+    let admin = preflight(&app, &app.token).await;
+    let token = common::generate_second_user_jwt();
+    let me = preflight(&app, &token).await;
+    let id = profile_id(&me);
+
+    common::approve_then_revoke(&app, profile_id(&admin), id).await;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/requests"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "source": "cli" }))
+        .send()
+        .await
+        .unwrap();
+    // INTERIM STATUS (Task 17): the illegal-transition refusal rides `standing_service::apply`'s
+    // interim `ApiError::BadRequest` (400) — a 4xx that names why, chosen over payload-less
+    // `Forbidden` so the reason survives (`standing_service.rs:97`). Task 17's typed `Refusal`
+    // upgrades this self-service refusal to a 403; until then the contract is 400.
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "Revoked → Request must be refused"
+    );
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/reviews"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "message": "reconsider please" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM kb_principal_standing WHERE profile_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        state, "revoked",
+        "RequestReview sets a marker and moves NOTHING (D15)"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_pending_review_does_not_change_admission(pool: sqlx::PgPool) {
+    // D15 obligation 1, and §12 names this as "the D15 obligation that a future reader is most
+    // likely to break": a Revoked principal with a pending review must be refused IDENTICALLY to
+    // one without. Not merely "also refused" — the same refusal.
+    let app = common::setup(pool.clone()).await;
+    let admin = preflight(&app, &app.token).await;
+
+    let with_token = common::generate_second_user_jwt();
+    let without_token = common::generate_third_user_jwt();
+    let with = profile_id(&preflight(&app, &with_token).await);
+    let without = profile_id(&preflight(&app, &without_token).await);
+    for id in [with, without] {
+        common::approve_then_revoke(&app, profile_id(&admin), id).await;
+    }
+
+    app.reqwest_client
+        .post(app.url("/api/access/reviews"))
+        .header("Authorization", format!("Bearer {with_token}"))
+        .json(&serde_json::json!({ "message": "please" }))
+        .send()
+        .await
+        .unwrap();
+
+    let a = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {with_token}"))
+        .send()
+        .await
+        .unwrap();
+    let b = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {without_token}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        a.status(),
+        b.status(),
+        "a pending review must not change the outcome"
+    );
+    assert_eq!(a.status(), StatusCode::FORBIDDEN);
+    // The refusal body embeds per-user identity (email, display_name), which of course differs. D15
+    // obligation 1 is that the ADMISSION-relevant shape is identical — a pending review must not
+    // leak into it. So compare the details minus identity: the review must move nothing observable.
+    let strip = |mut v: serde_json::Value| {
+        if let Some(d) = v["error"]["details"].as_object_mut() {
+            d.remove("email");
+            d.remove("display_name");
+        }
+        v["error"]["details"].clone()
+    };
+    assert_eq!(
+        strip(a.json::<serde_json::Value>().await.unwrap()),
+        strip(b.json::<serde_json::Value>().await.unwrap()),
+        "a pending review must not change the refusal (modulo identity)"
     );
 }
