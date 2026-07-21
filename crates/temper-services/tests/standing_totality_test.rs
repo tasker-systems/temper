@@ -142,6 +142,14 @@ async fn a_profile_for_log(pool: &PgPool) -> uuid::Uuid {
     .unwrap()
 }
 
+async fn a_profile(pool: &PgPool, handle: &str) -> uuid::Uuid {
+    sqlx::query_scalar("INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id")
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_standing_log_is_append_only_in_shape(pool: PgPool) {
     // The log has no UPDATE path in the design; assert it at least records both endpoints of a
@@ -163,4 +171,133 @@ async fn the_standing_log_is_append_only_in_shape(pool: PgPool) {
         .unwrap();
         assert_eq!(count, 1, "the standing log must record {col}");
     }
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn both_predicates_are_total(pool: PgPool) {
+    // Spec §7: "SQL totality has its own test — has_system_access and is_system_admin return
+    // non-NULL for a profile with no standing row, a deactivated one, and an unknown state value."
+    let absent = a_profile(&pool, "absent").await;
+
+    let deactivated = a_profile(&pool, "deactivated").await;
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,'deactivated')")
+        .bind(deactivated)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // An unknown state cannot be inserted through the CHECK, so reach past it to simulate the
+    // rolling-deploy window this obligation exists for.
+    let unknown = a_profile(&pool, "unknown").await;
+    sqlx::query(
+        "ALTER TABLE kb_principal_standing DROP CONSTRAINT kb_principal_standing_state_check",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,'quarantined')")
+        .bind(unknown)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    for (label, id) in [
+        ("absent", absent),
+        ("deactivated", deactivated),
+        ("unknown", unknown),
+    ] {
+        for f in ["has_system_access", "is_system_admin"] {
+            let v: Option<bool> = sqlx::query_scalar(&format!("SELECT {f}($1)"))
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                v,
+                Some(false),
+                "{f}({label}) must be FALSE, never NULL — a NULL in `IF NOT` falls through, \
+                 fail-OPEN, and context_reassign_fns.sql:76 falls open into system admin"
+            );
+        }
+    }
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn only_approved_standing_grants_access(pool: PgPool) {
+    for state in ["denied", "requested", "revoked", "deactivated"] {
+        let p = a_profile(&pool, &format!("s-{state}")).await;
+        sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,$2)")
+            .bind(p)
+            .bind(state)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let v: Option<bool> = sqlx::query_scalar("SELECT has_system_access($1)")
+            .bind(p)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(v, Some(false), "{state} must not grant access");
+    }
+
+    let ok = a_profile(&pool, "s-approved").await;
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,'approved')")
+        .bind(ok)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v: Option<bool> = sqlx::query_scalar("SELECT has_system_access($1)")
+        .bind(ok)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(v, Some(true));
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn admin_ness_no_longer_reads_gating_team_ownership(pool: PgPool) {
+    // D10: gating-team ownership stops being an authorization fact. Make someone a gating-team
+    // OWNER without a governance row and assert they are NOT admin — this is the property that
+    // makes the ~20 kb_team_members writers harmless.
+    let p = a_profile(&pool, "gating-owner").await;
+    let team: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('temper-system','System')
+         ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug='temper-system' WHERE id=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1,$2,'owner')")
+        .bind(team)
+        .bind(p)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let v: Option<bool> = sqlx::query_scalar("SELECT is_system_admin($1)")
+        .bind(p)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        v,
+        Some(false),
+        "owning the gating team must confer nothing once governance holds its own state (D10)"
+    );
+
+    sqlx::query("INSERT INTO kb_principal_governance (profile_id) VALUES ($1)")
+        .bind(p)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v: Option<bool> = sqlx::query_scalar("SELECT is_system_admin($1)")
+        .bind(p)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(v, Some(true), "the governance row IS admin-ness now");
 }

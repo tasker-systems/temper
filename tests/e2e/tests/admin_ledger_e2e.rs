@@ -22,7 +22,11 @@ async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
         .await
         .expect("preflight");
     let body: Value = resp.json().await.expect("json");
-    body["id"].as_str().expect("id").parse().expect("uuid")
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door
+    // and the ENDPOINT authz (ownership, admin-only, grants) is what the test exercises.
+    let __pid: Uuid = body["id"].as_str().expect("id").parse().expect("uuid");
+    common::approve(&app.pool, __pid).await;
+    __pid
 }
 
 /// POST /api/ingest → the new resource's UUID, homed in `context_id`.

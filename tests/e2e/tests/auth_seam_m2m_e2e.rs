@@ -115,6 +115,9 @@ async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool
     .await
     .expect("seed registration");
 
+    // D11: a machine is born Denied; approve so the mcp system gate admits it.
+    common::approve(&pool, profile_id).await;
+
     svc.ensure_profile_from_parts(&machine_parts("steward-client-1"))
         .await
         .expect("mcp gate must admit a registered machine");
@@ -145,6 +148,9 @@ async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
     .execute(&pool)
     .await
     .expect("seed temper-issued registration");
+
+    // D11: a machine is born Denied; approve so the mcp system gate admits it.
+    common::approve(&pool, profile_id).await;
 
     svc.ensure_profile_from_parts(&machine_parts("tmpr_mcp"))
         .await

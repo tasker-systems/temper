@@ -548,6 +548,9 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
     // is the correct REST pattern for a READ: don't leak existence across
     // visibility boundaries. If this mapping is later refined, this test
     // will fail loudly so the author can decide.
+    // D11: born Denied. Provision + approve the second user so it reaches the endpoint and the
+    // VISIBILITY predicate (404, not the front-door 403) is what this test asserts.
+    common::provision_and_approve_second(&app).await;
     let second_token = common::generate_second_user_jwt();
     let resp = app
         .reqwest_client

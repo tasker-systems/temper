@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT principal_prior_standing($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "principal_prior_standing",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "19584a528faaeb061a1fba1a5e0d8542f1efcc4e774ba354ce1f1a524e486ddd"
+}

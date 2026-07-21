@@ -666,10 +666,11 @@ mod tests {
         }
     }
 
-    /// Seed a caller who is genuinely a system admin. `is_system_admin` IS ownership of the
-    /// gating team, so being an admin means being seeded as one. The `temper-system` root team
-    /// already exists in a migrated database (the L0 kernel migration creates it), so the team
-    /// write is an upsert, not an insert.
+    /// Seed a caller who is genuinely a system admin. Under D11 that is a `kb_principal_governance`
+    /// grant (`is_system_admin`) plus an `approved` `kb_principal_standing` (`has_system_access`, the
+    /// front door) — no longer gating-team ownership. The gating-team upsert below is retained only
+    /// because `temper-system` already exists in a migrated database and other rows reference it; it
+    /// no longer carries authorization meaning.
     async fn seed_admin(pool: &PgPool) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -713,6 +714,9 @@ mod tests {
         .execute(pool)
         .await
         .expect("join gating team as owner");
+
+        // What actually confers admin-ness now: an approved standing (front door) + governance.
+        crate::test_support::approved_admin(pool, id).await;
 
         ProfileId::from(id)
     }

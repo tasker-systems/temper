@@ -104,6 +104,7 @@ async fn temper_system_is_flagged_auto_join_watcher(pool: PgPool) {
 /// (open mode) Provisioning a profile auto-joins it into EVERY auto-join team at the team's
 /// `auto_join_role`; an `admin` profile joins at `owner`.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+#[ignore = "superseded by Phase 2: trg_sync_system_membership is dropped there (plan 2026-07-20 line 20); the D11 cutover repointed its has_system_access gate to standing, so open-mode enrollment no longer holds"]
 async fn open_mode_provision_auto_joins_every_team_at_role(pool: PgPool) {
     // A second auto-join team alongside the boot-seeded temper-system.
     let everyone2 = create_team(&pool, "everyone-2", Some("watcher")).await;
@@ -138,6 +139,7 @@ async fn open_mode_provision_auto_joins_every_team_at_role(pool: PgPool) {
 /// `backfill_auto_join_team` enrolls all pre-existing `has_system_access` profiles when a
 /// team's flag is newly enabled, and is idempotent on re-run (and does not clobber manual roles).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+#[ignore = "superseded by Phase 2: trg_sync_system_membership is dropped there (plan 2026-07-20 line 20); the D11 cutover repointed its has_system_access gate to standing, so open-mode enrollment no longer holds"]
 async fn backfill_enrolls_existing_profiles_idempotently(pool: PgPool) {
     // Bob exists BEFORE the new team is flagged (open mode → he's already a temper-system watcher).
     let bob = insert_profile(&pool, "bob").await;
@@ -191,6 +193,7 @@ async fn backfill_enrolls_existing_profiles_idempotently(pool: PgPool) {
 /// membership + `ensure_auto_join_memberships` enrolls it into every auto-join team; losing
 /// access then firing the trigger removes it from ALL auto-join teams (Q-C).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+#[ignore = "superseded by Phase 2: trg_sync_system_membership is dropped there (plan 2026-07-20 line 20); the D11 cutover repointed its has_system_access gate to standing, so open-mode enrollment no longer holds"]
 async fn invite_only_gates_enrollment_and_revoke_removes_all(pool: PgPool) {
     // A dedicated gating team (NOT itself an auto-join team) and a second everyone-pool.
     let gate = create_team(&pool, "gate", None).await;
@@ -244,6 +247,7 @@ async fn invite_only_gates_enrollment_and_revoke_removes_all(pool: PgPool) {
 
 /// `ensure_auto_join_memberships` is idempotent: a second call produces no change and no error.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+#[ignore = "superseded by Phase 2: trg_sync_system_membership is dropped there (plan 2026-07-20 line 20); the D11 cutover repointed its has_system_access gate to standing, so open-mode enrollment no longer holds"]
 async fn ensure_is_idempotent(pool: PgPool) {
     let dave = insert_profile(&pool, "dave").await; // open mode → already enrolled by the trigger
     let before = auto_join_membership_count(&pool, dave).await;

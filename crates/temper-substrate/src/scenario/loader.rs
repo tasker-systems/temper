@@ -59,6 +59,32 @@ async fn insert_world_identity(
         .fetch_one(&mut *tx)
         .await?;
         profiles.insert(p.handle.clone(), id);
+
+        // Keep writing system_access (a projection that survives Phase 1) and ALSO mint the standing
+        // row that is now authoritative, from the scenario's declared tier — a scenario that says a
+        // profile is `approved` must still produce a profile that can act. Emitter falls back to the
+        // `system` actor (seed_system precedes load_seed on every scenario path). Mapped through
+        // as_sql() so this compiles against whichever SystemAccess the world model carries.
+        let (standing, admin) = match p.system_access.as_sql() {
+            "admin" => ("approved", true),
+            "approved" => ("approved", false),
+            _ => ("denied", false),
+        };
+        sqlx::query!(
+            "SELECT principal_standing_apply($1,'provision',$2,NULL,'scenario load')",
+            id,
+            standing
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if admin {
+            sqlx::query!(
+                "SELECT principal_governance_set($1,true,NULL,'scenario load')",
+                id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        }
     }
     let mut entities: HashMap<String, Uuid> = HashMap::new();
     for e in &world.entities {

@@ -26,11 +26,16 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("GET /api/profile");
     assert_eq!(resp.status(), 200, "profile auto-provision");
     let body: serde_json::Value = resp.json().await.expect("profile json");
-    body["id"]
+    let id: Uuid = body["id"]
         .as_str()
         .expect("profile id")
         .parse()
-        .expect("uuid")
+        .expect("uuid");
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door and the
+    // ENDPOINT authz (team ownership, admin-only, etc.) is what these tests actually exercise — not
+    // the system-access gate they all sat behind under open mode.
+    common::approve(&app.pool, id).await;
+    id
 }
 
 /// Create a team via the API; the caller becomes its sole owner.

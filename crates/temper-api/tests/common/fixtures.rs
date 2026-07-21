@@ -125,5 +125,53 @@ pub async fn create_test_profile_with_context(
     .await
     .expect("create test profile-owned temper context");
 
+    // 5. D11: a fresh profile is born Denied (no `kb_principal_standing` row), which the gated
+    //    router's `require_system_access` refuses — this is the ambient open-mode used to confer.
+    //    Grant approved standing so this caller clears the front door and the handler/endpoint authz
+    //    each test is actually about is what runs. NOT governance: admin-ness stays opt-in (see
+    //    `make_test_admin`), so admin-gated tests still assert a non-admin is refused.
+    approve_standing(pool, profile_id).await;
+
     (profile_id, context_id)
+}
+
+/// Grant `profile_id` an `approved` `kb_principal_standing` — the D11 front door
+/// (`has_system_access`). A fresh principal is born `Denied`.
+pub async fn approve_standing(pool: &PgPool, profile_id: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'approved')
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'approved', updated = now()",
+    )
+    .bind(profile_id)
+    .execute(pool)
+    .await
+    .expect("approve test profile standing");
+}
+
+/// Approve the profile with the given email — for JIT-provisioned callers (auto-provisioned on their
+/// first request via `generate_test_jwt`, born `Denied`) that then act on a gated route.
+pub async fn approve_standing_by_email(pool: &PgPool, email: &str) {
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state)
+         SELECT id, 'approved' FROM kb_profiles WHERE email = $1
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'approved', updated = now()",
+    )
+    .bind(email)
+    .execute(pool)
+    .await
+    .expect("approve standing by email");
+}
+
+/// Make `profile_id` a system admin under D11: `approved` standing plus a `kb_principal_governance`
+/// grant (`is_system_admin`). Gating-team ownership confers neither now.
+pub async fn make_test_admin(pool: &PgPool, profile_id: uuid::Uuid) {
+    approve_standing(pool, profile_id).await;
+    sqlx::query(
+        "INSERT INTO kb_principal_governance (profile_id) VALUES ($1)
+         ON CONFLICT (profile_id) DO NOTHING",
+    )
+    .bind(profile_id)
+    .execute(pool)
+    .await
+    .expect("grant test governance");
 }

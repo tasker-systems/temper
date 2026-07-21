@@ -31,6 +31,9 @@ async fn register(pool: &sqlx::PgPool, client_id: &str) -> Uuid {
     .execute(pool)
     .await
     .expect("seed registration");
+    // D11: a machine is born Denied. Approve so it clears the system gate and reaches the
+    // data plane (the reject tests deny at the registration/revocation layer, before standing).
+    common::approve(pool, profile_id).await;
     profile_id
 }
 
@@ -106,6 +109,9 @@ async fn register_temper_issued(pool: &sqlx::PgPool, client_id: &str) -> Uuid {
     .execute(pool)
     .await
     .expect("seed temper-issued registration");
+    // D11: a machine is born Denied. Approve so it clears the system gate and reaches the
+    // data plane (the reject tests deny at the registration/revocation layer, before standing).
+    common::approve(pool, profile_id).await;
     profile_id
 }
 

@@ -132,6 +132,16 @@ async fn test_resource_visibility_scoping(pool: PgPool) {
     let email_b = format!("user-b-{}@example.com", uuid::Uuid::new_v4());
     let token_b = common::generate_test_jwt(&sub_b, &email_b);
 
+    // D11: born Denied. Provision B (GET /api/profile) then approve, so B reaches the gated list and
+    // the VISIBILITY predicate — not the front-door gate — is what excludes A's private resource.
+    app.client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {token_b}"))
+        .send()
+        .await
+        .expect("provision User B");
+    common::fixtures::approve_standing_by_email(&app.pool, &email_b).await;
+
     let list_resp = app
         .client
         .get(app.url("/api/resources"))

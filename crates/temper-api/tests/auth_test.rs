@@ -110,6 +110,8 @@ async fn test_auto_provisioned_profile_has_default_context(pool: PgPool) {
         .await
         .expect("request failed");
     assert_eq!(resp.status().as_u16(), 200);
+    // D11: born Denied. Approve so the gated /api/contexts route admits this caller.
+    common::fixtures::approve_standing_by_email(&app.pool, &email).await;
 
     // Check that the "default" context was created
     let resp = app

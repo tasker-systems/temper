@@ -30,12 +30,20 @@ async fn identity_graft_resolves(pool: sqlx::PgPool) {
     let profile = common::insert_profile(&pool, "ada").await;
 
     // The two grafted system-access functions evaluate; open mode grants any profile.
+    // D11: access is an `approved` kb_principal_standing row now, not an open-mode ambient. Grant
+    // it, then the grafted `has_system_access` function resolves TRUE — proving the graft wired the
+    // function through (the point of this test), on the standing axis the cutover repointed it to.
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'approved')")
+        .bind(profile)
+        .execute(&pool)
+        .await
+        .expect("approve standing");
     let has: bool = sqlx::query_scalar("SELECT has_system_access($1)")
         .bind(profile)
         .fetch_one(&pool)
         .await
         .expect("has_system_access runs");
-    assert!(has, "open access_mode grants access to any profile");
+    assert!(has, "an approved principal has system access (D11)");
 
     // is_system_admin resolves (false here — no gating team / owner membership seeded).
     let _is_admin: bool = sqlx::query_scalar("SELECT is_system_admin($1)")

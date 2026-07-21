@@ -26,6 +26,7 @@ use temper_services::error::ApiError;
 use temper_services::services::access_service;
 use temper_services::services::admin_ledger_service;
 use temper_services::services::connection_service;
+use temper_services::test_support;
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
@@ -192,12 +193,13 @@ async fn resource_owned_by(pool: &PgPool, context: Uuid, owner: ProfileId, title
 /// A system-admin with emitters, an outsider, a non-admin resource owner, a team, a cogmap, and a
 /// context to grant on.
 ///
-/// **`admin_profile` is not an admin because a column says so.** `is_system_admin(p)` is *owner of
-/// the gating team* — it reads `kb_team_members`, joined to the team whose slug is
-/// `kb_system_settings.gating_team_slug`. It never looks at `kb_profiles.system_access` (verified
-/// live: the `system` profile has `system_access='admin'` and `is_system_admin()=f`). So this
-/// fixture creates the team, points `gating_team_slug` at it — the column is EMPTY out of the box,
-/// which means *nobody* is admin — and adds `admin_profile` as `owner` (`member` is not enough).
+/// **`admin_profile` is an admin because it holds a governance grant** (Beat C repointed
+/// `is_system_admin` to read `kb_principal_governance`; gating-team ownership no longer confers it).
+/// So the fixture writes governance for `admin_profile` and nothing for `outsider_profile`.
+///
+/// The gating-team + `owner` setup below is retained for a different reason: the steward-window and
+/// grant-capability tests need the team topology (`context_id` is team-owned, the cogmap is joined to
+/// the team). It is no longer what makes the admin an admin.
 ///
 /// Both halves are asserted below rather than trusted: a fixture whose admin is not an admin makes
 /// `a_non_admin_cannot_read_the_ledger` pass for the wrong reason (everyone is a non-admin).
@@ -225,10 +227,16 @@ async fn admin_fixture(pool: &PgPool) -> AdminFixture {
     .execute(pool)
     .await
     .expect("make admin_profile an OWNER of the gating team");
+    // What now makes it an admin AND a reader: a governance grant (`is_system_admin`) plus an
+    // `approved` standing (`has_system_access`, the front door every ledger read passes first).
+    test_support::approved_admin(pool, admin_profile.uuid()).await;
 
     let (outsider_profile, _) = profile_with_emitters(pool, &format!("outsider-{nonce}")).await;
     let (owner_profile, owner_emitter) =
         profile_with_emitters(pool, &format!("owner-{nonce}")).await;
+    // `owner_profile` is a legitimate actor that reads its OWN history through the self-gate, so it
+    // needs the front door (`approved` standing) — but NOT governance: it is deliberately not an admin.
+    test_support::approve(pool, owner_profile.uuid()).await;
 
     // Team-owned: this is the context the steward window covers (via kb_team_cogmaps below), and
     // the one `owner_profile` has NO grant capability over.
@@ -581,14 +589,15 @@ async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
 /// else. Lose a capability, a role, or ownership of a subject and you keep your history; lose the
 /// front door and you keep nothing, because you are no longer a reader at all.
 ///
-/// This is the one guard on the widening the self-gate decision made, and without this test it is
-/// **unexercised**: `#[sqlx::test]` databases are born `access_mode = 'open'`, where
-/// `has_system_access` short-circuits `true` for everyone, so `list_by_actor`'s front-door branch
-/// never runs. A test suite that cannot fail on a gate is not testing the gate.
+/// This is the one guard on the widening the self-gate decision made. `has_system_access` now reads
+/// one authoritative axis — an `approved` `kb_principal_standing` row — so the front door is taken
+/// away by demoting that standing to `revoked`, touching no capability, role, or ownership relation.
+/// (The fixture grants `owner_profile` its `approved` standing; a fresh profile is born with no
+/// standing at all, i.e. denied — the exact opposite of the retired `access_mode='open'` ambient.)
 ///
-/// Differential by construction — the SAME call, before and after the mode flip. The `before` half
-/// is what makes the `after` half mean something: it proves the 404 came from losing the front
-/// door, not from the fixture never having worked.
+/// Differential by construction — the SAME call, before and after the standing demotion. The
+/// `before` half is what makes the `after` half mean something: it proves the 404 came from losing
+/// the front door, not from the fixture never having worked.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
     let f = admin_fixture(&pool).await;
@@ -603,26 +612,26 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
     )
     .await;
 
-    // BEFORE: access_mode='open' ⇒ has_system_access is true for everyone ⇒ the actor reads.
+    // BEFORE: owner_profile holds an `approved` standing ⇒ has_system_access is true ⇒ it reads.
     let before =
         admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
             .await
             .expect("with system access, the actor reads their own history");
     assert_eq!(before.len(), 1, "the self-gate returns the actor's own act");
 
-    // Take the front door away. The fixture already points gating_team_slug at its team, and
-    // owner_profile is not a member of it — so invite_only mode revokes their system access
-    // without touching a single capability, role, or ownership relation.
-    sqlx::query("UPDATE kb_system_settings SET access_mode = 'invite_only' WHERE id = 1")
+    // Take the front door away. Demote owner_profile's standing to `revoked` — the single axis
+    // has_system_access reads — without touching a capability, role, or ownership relation.
+    sqlx::query("UPDATE kb_principal_standing SET state = 'revoked' WHERE profile_id = $1")
+        .bind(f.owner_profile.uuid())
         .execute(&pool)
         .await
-        .expect("flip to invite_only");
+        .expect("revoke owner_profile's standing");
 
     assert!(
         !access_service::has_system_access(&pool, f.owner_profile)
             .await
             .expect("has_system_access"),
-        "the fixture owner must be outside the gating team, or this test proves nothing"
+        "the fixture owner's standing must be revoked, or this test proves nothing"
     );
 
     // AFTER: same call, same authorship, same everything else.
@@ -634,8 +643,8 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
         "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
     );
 
-    // The admin is an owner OF the gating team, so invite_only does not touch them — proving the
-    // flip revoked one profile's access rather than simply breaking the surface for everyone.
+    // The admin keeps its own `approved` standing, so the demotion did not touch them — proving it
+    // revoked one profile's access rather than simply breaking the surface for everyone.
     let admin_still_reads =
         admin_ledger_service::list_by_actor(&pool, f.admin_profile, f.owner_profile, 50, 0)
             .await

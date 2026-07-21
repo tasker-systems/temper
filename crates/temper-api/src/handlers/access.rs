@@ -224,7 +224,12 @@ pub async fn promote_admin(
     if !is_admin {
         return Err(ApiError::Forbidden);
     }
-    access_service::promote_admin(&state.pool, body.profile_id, body.team_id)
-        .await
-        .map(Json)
+    access_service::promote_admin(
+        &state.pool,
+        body.profile_id,
+        body.team_id,
+        Some(ProfileId::from(auth.0.profile.id)),
+    )
+    .await
+    .map(Json)
 }

@@ -23,11 +23,15 @@ async fn provision_profile(app: &common::E2eTestApp, token: &str) -> Uuid {
         .expect("GET /api/profile");
     assert_eq!(resp.status(), 200, "profile auto-provision");
     let body: serde_json::Value = resp.json().await.expect("profile json");
-    body["id"]
+    // D11: a fresh principal is born Denied. Approve so this actor clears the front door
+    // and the ENDPOINT authz (ownership, admin-only, grants) is what the test exercises.
+    let __pid: Uuid = body["id"]
         .as_str()
         .expect("profile id")
         .parse()
-        .expect("uuid")
+        .expect("uuid");
+    common::approve(&app.pool, __pid).await;
+    __pid
 }
 
 /// Create a team via the API; the caller becomes its sole owner.

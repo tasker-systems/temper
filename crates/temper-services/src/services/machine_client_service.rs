@@ -233,9 +233,9 @@ mod tests {
     ///
     /// B2 D5 authorizes the lifecycle inside the service against the row's owning team, and the
     /// rows these tests seed are teamless — which is admin-only (D2). So the caller can no longer
-    /// be a bare profile: `is_system_admin` IS ownership of the gating team, so seed it that way.
-    /// The `temper-system` team already exists in a migrated database (the L0 kernel migration
-    /// creates it), hence the upsert.
+    /// be a bare profile. Under D11 admin-ness is a `kb_principal_governance` grant plus an
+    /// `approved` `kb_principal_standing`, not gating-team ownership; the gating-team upsert below
+    /// is retained only because `temper-system` already exists in a migrated database.
     async fn seed_admin(pool: &PgPool, handle: &str) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -272,6 +272,9 @@ mod tests {
         .execute(pool)
         .await
         .expect("join gating team as owner");
+
+        // What confers admin-ness now: approved standing (front door) + a governance grant.
+        crate::test_support::approved_admin(pool, id).await;
 
         ProfileId::from(id)
     }

@@ -523,6 +523,10 @@ async fn non_admin_blocked_from_admin_endpoints(pool: sqlx::PgPool) {
     .execute(&pool)
     .await
     .expect("add second user as watcher");
+    // D11: gating-team membership no longer confers `has_system_access` (which reads standing). Grant
+    // the watcher approved standing — the front door — WITHOUT governance, so it reaches gated routes
+    // yet is still blocked from the admin surface below.
+    common::approve(&pool, second_id).await;
 
     // Watcher can access gated routes
     let resp = app
@@ -1009,5 +1013,100 @@ async fn auth_request_access_leaves_stdout_empty(pool: sqlx::PgPool) {
         stdout.trim().is_empty(),
         "`auth request-access` has no payload — every line it prints is prose, so stdout \
          must stay empty for the parser; stdout={stdout:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10. Whole-surface born-Denied guard (Task 11 step 5)
+// ---------------------------------------------------------------------------
+
+/// A principal's standing, resolved by the profile's email. `None` if there is no standing row.
+async fn standing_of_email(pool: &sqlx::PgPool, email: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT s.state FROM kb_principal_standing s \
+         JOIN kb_profiles p ON p.id = s.profile_id WHERE p.email = $1",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await
+    .expect("standing by email")
+}
+
+/// D11 / Task 11 step 5 — the whole-surface born-Denied property. NO mint door, driven through the
+/// real server under any actor, yields an `approved` principal: every door births `Denied`. This is
+/// the belt-and-suspenders guard that a carelessly-added door — a new surface, a new registration
+/// path, an admin-minted machine — can never silently confer access. It exercises the two live door
+/// families end-to-end: a human OAuth first login, and a machine minted by the strongest actor there
+/// is (a system admin).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn no_provision_path_under_any_actor_yields_approved(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    // Door 1 — human OAuth first login. A brand-new principal (NOT the centrally-approved app user).
+    let fresh = common::generate_test_jwt("fresh-oauth-signup", "fresh-oauth@test.example.com");
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .bearer_auth(&fresh)
+        .send()
+        .await
+        .expect("first login");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "first login provisions the profile"
+    );
+    assert_eq!(
+        standing_of_email(&pool, "fresh-oauth@test.example.com")
+            .await
+            .as_deref(),
+        Some("denied"),
+        "human OAuth first login must birth Denied, never approved",
+    );
+
+    // Door 2 — machine issue, minted by the STRONGEST actor: a system admin. Even that yields no
+    // access. Make the app principal an admin so it may mint a teamless machine (admin-only).
+    let admin_id: uuid::Uuid =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM kb_profiles WHERE email = $1")
+            .bind("e2e@test.example.com")
+            .fetch_one(&pool)
+            .await
+            .expect("app principal id");
+    common::approved_admin(&pool, admin_id).await;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/machine-clients/issue"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .json(&serde_json::json!({
+            "label": "born-denied probe",
+            "owner_team_id": null,
+            "teams": [],
+            "grants": [],
+        }))
+        .send()
+        .await
+        .expect("issue request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a system admin may issue a teamless machine: {:?}",
+        resp.text().await
+    );
+
+    // The just-minted machine — under the strongest possible minting authority — holds no approved
+    // standing. No machine principal anywhere in this fresh instance is born approved.
+    let any_machine_approved: bool = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS( \
+           SELECT 1 FROM kb_machine_clients m \
+           JOIN kb_principal_standing s ON s.profile_id = m.profile_id \
+           WHERE s.state = 'approved')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("machine approved check");
+    assert!(
+        !any_machine_approved,
+        "no minted machine may be born approved — every door births Denied (D11)",
     );
 }
