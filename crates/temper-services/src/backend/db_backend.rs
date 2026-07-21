@@ -1149,17 +1149,27 @@ impl DbBackend {
     /// shipped SQL (Task 5's [`temper_substrate::write::refresh_resource_standing`]).
     ///
     /// **Never fails the write**, exactly as [`Self::tick_region_clocks`] does not — the resource has
-    /// already committed. And the memo is a write-cost optimization + parity anchor, NOT the read's
-    /// authority: the read path `resource_standing_shape` recomputes every component live at read time,
-    /// so a memo that lags a write is never *read-incorrect* — nothing in Set 3 reads the memo directly.
-    /// A refresh failure is therefore logged and swallowed; the memo stays stale only until the next
-    /// write over this finding re-drives it. Escalating would trade a self-healing staleness for a
-    /// user-visible 500.
+    /// already committed. A refresh failure is therefore logged and swallowed; the `kb_resource_standing`
+    /// memo stays stale only until the next write over this finding re-drives it. Escalating would trade
+    /// a self-healing staleness for a user-visible 500.
     ///
-    /// Wired onto the resource create/update paths only, NOT the edge paths (`assert_relationship` /
-    /// `fold_relationship`). Edge-incident refresh (both endpoints, when resources) is a clean follow-up
-    /// — safe to defer precisely because the memo is not the read authority (above), so an edge write
-    /// that leaves an endpoint's memo lagging is still never read-incorrect.
+    /// **What the read actually recomputes live.** `resource_standing_shape` recomputes FIVE of the six
+    /// components from live rows at read (`r_parent`, `contradiction_balance`, `adversarial_survival`,
+    /// `challenge_count`, `freshness`), so for those the `kb_resource_standing` memo is a write-cost
+    /// optimization + parity anchor, never the read's authority. The exception is `indep_breadth`:
+    /// `resource_independence_breadth` sums the `kb_independence_pairs` memo, and that pairs memo is
+    /// (re)built ONLY here (via `refresh_independence_pairs` inside the shipped SQL), NOT at read and NOT
+    /// on edge writes. So an `independent-of` edge asserted/folded among a finding's bases would leave
+    /// `indep_breadth` stale until the next resource create/update over that finding re-drives it.
+    ///
+    /// Why that is safe in Set 3, and what Set 5 owes. Wired onto the resource create/update paths only,
+    /// NOT the edge paths (`assert_relationship` / `fold_relationship`). Set 3 ships NO `independent-of`
+    /// edge writer (that is Set 5's), so `kb_independence_pairs` is always empty today and `indep_breadth`
+    /// is always the live silence-default — the staleness above is unreachable, not merely rare. The
+    /// deferral of edge-incident refresh is therefore correct now but conditional:
+    /// **TODO(Set 5): when the independence/scar edge writer lands, it MUST drive edge-incident
+    /// `refresh_independence_pairs` (both resource endpoints) — or `indep_breadth` will read stale after
+    /// an independence-edge assert/fold.**
     async fn tick_resource_standing(&self, finding: ResourceId) {
         match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
             Ok(()) => tracing::debug!(
