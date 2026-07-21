@@ -182,6 +182,14 @@ independence claim → R_indep drops → the parent's breadth silently re-lowers
 **next materialization pass**. "Maturity must not be stored" and "independence must be
 scarrable" are the same constraint.
 
+> **Grounding correction (2026-07-21, Set 3 plan):** the scar bit `is_corrected` on
+> `kb_block_provenance` exists (`DEFAULT false`, read-filtered everywhere) but has **no writer
+> anywhere in the codebase today** — full-repo grep. So scar *propagation* is real (Set 3's
+> projection reads `WHERE NOT is_corrected`, exactly as the incumbent `resource_blocks.reinforce_count`
+> / `cogmap_region_reference_standing` already do), but scar *emission* is unbuilt. Set 3 reads the
+> filter; the writer is deferred to **Set 5** (the adversary) and a future scar path. The mechanism
+> is latent-but-correct, not zero-cost-and-live.
+
 ### 2.2 Representation — one pairwise claim is a labeled edge — **CONFORM**
 
 A single pairwise independence claim = an **`express` edge**, `label='independent-of'`
@@ -194,11 +202,23 @@ exactly), `weight` carrying the estimate, between two evidentiary bases.
   `20260624000002_canonical_functions.sql:506` default label set `{'contradicts'}`).
 - CONFORM — scarrable for free via fold + edge-level correction (`fold_relationship`,
   edge `is_corrected`).
-- CONFORM — the `AnchorTable` enum **includes `kb_edges` itself**
+- ~~CONFORM — the `AnchorTable` enum **includes `kb_edges` itself**
   (`20260624000003_canonical_seed.sql:35`, `AnchorTable` enum) — so an independence
   edge can be an *endpoint* of another edge. That is the **bounded scar-recursion made
   physical**: a challenge to an independence claim is a meta-edge onto it. No new
-  machinery.
+  machinery.~~
+
+  > **Grounding correction (2026-07-21, Set 3 plan) — this claim is FALSIFIED.** `AnchorTable`
+  > includes `kb_edges` only in the **wire/JSON-Schema** layer. The `kb_edges` **table** CHECK
+  > restricts `source_table`/`target_table` to `IN ('kb_resources','kb_cogmaps')`
+  > (`20260624000001_canonical_schema.sql:630,632`), so an edge-onto-an-edge is **not persistable**
+  > today. Meta-edges are wire-representable but not storable without a CHECK-widening DROP+CREATE
+  > (its own read-gate blast radius). "No new machinery" is wrong. **Resolution:** Set 3 does **not**
+  > build meta-edges. It reads an independence claim's **live edge state** (`weight`, `is_folded`)
+  > as the scar signal; representing a *challenge* to an independence claim — meta-edge vs
+  > fold-then-recreate (`relationship_fold` + `shares-cause-with` re-assert) — is **Set 5's** spec
+  > to settle, not Set 3's. (Note also: edges scar via `is_folded`, not `is_corrected`; and
+  > `fold_relationship` is actually `relationship_fold`.)
 
 ### 2.3 Arity — pairwise, sparse-by-assertion, memoized — **CONFORM + EXTEND**
 
@@ -217,6 +237,17 @@ Independence is a property of a *set* of N bases (N-choose-2 pairs). Emission is
 - CONFORM — the memoize-a-projection / refresh-on-drift pattern:
   `kb_cogmap_regions.salience` (`20260712000030_region_anchor_expand.sql:73` drift-refresh;
   `20260629000007_wayfind_scope.sql:20,40` memoized-vs-recompute).
+
+  > **Grounding correction (2026-07-21, Set 3 plan) — mechanism was misstated.** "Refreshed on
+  > edge-change drift" is right in *spirit* but the repo has **zero** recompute-on-write DB triggers
+  > and **zero** materialized views. The actual house style is: memoized value + its input
+  > components stored as **plain columns**, refreshed by an **application-orchestrated Rust "clock"**
+  > (`crates/temper-services/src/backend/region_clocks.rs`) fired inline on the write path and gated
+  > by a **SQL drift function** (`anchor_telos_drift`, `20260712000070_two_clocks.sql:147`) vs a
+  > snapshot column, with the band/shape **recomputed at read** from the stored components
+  > (`wayfind_scope.sql:41-49`). Set 3's `independence_pairs` + component-memo therefore follow the
+  > **columns + Rust-clock + read-time recompute** template, **not** a Postgres trigger. (The cited
+  > `region_anchor_expand.sql:73` is a *comment* describing the future clock, not a trigger.)
 - EXTEND — the `independence_pairs` memo table and its refresh trigger are new (its own
   DDL in Set 3).
 
@@ -302,8 +333,10 @@ Each is scoped by the breakdown and earns its own spec→plan→implementation:
 
 - **Set 2** — the full read-gate inventory + DROP/CREATE sweep for the `kb_finding_boards`
   anchor; `kb_team_finding_boards`; scope-exclusion predicate; topic wiring via `kb_topics`.
-- **Set 3** — the `independence_pairs` and maturity component-memo DDL, refresh triggers,
-  the exact band **thresholds** and the shape presentation (a tuning + surfacing pass).
+- **Set 3** — the `independence_pairs` and maturity component-memo DDL, refresh clocks (Rust,
+  not triggers — see the 2026-07-21 correction under §2.3), the exact band **thresholds** and the
+  shape presentation (a tuning + surfacing pass). **Now planned:**
+  [`docs/superpowers/plans/2026-07-21-set3-maturity-projection.md`](plans/2026-07-21-set3-maturity-projection.md).
 - **Set 5** — the adversary persona's jobs-to-be-done, its spatial reliability profile, and
   the concrete adversarial-challenge / survived event vocabulary the projection reads.
 - **Set 6** — the promotion gate (what standing shape licenses promotion), the redaction/
