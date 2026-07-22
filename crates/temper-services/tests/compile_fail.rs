@@ -1,6 +1,11 @@
+#![cfg(feature = "trybuild")]
 //! Proof of the enclosure (spec §3.1, Testing): the sealed `SystemAdmin` proof — these fixtures MUST
 //! NOT compile. This PR's whole thesis is "we were technically doing it right but it took discipline →
 //! now it is typed"; a compile-fail proof is that guarantee *demonstrated*, not asserted.
+//!
+//! Gated behind the `trybuild` feature (OFF by default): trybuild recompiles temper-services + ort in
+//! an isolated target dir (~157s), so it must not ride the fast `--workspace` runs. It runs in exactly
+//! one place — the dedicated "Seal Proof (trybuild)" CI job — and locally via `cargo make test-trybuild`.
 //!
 //! The `.stderr` snapshots are committed because trybuild requires them (a missing one is a test
 //! failure, not a pass — verified). CI runs `dtolnay/rust-toolchain@stable`, which floats, and

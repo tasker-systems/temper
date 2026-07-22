@@ -1,12 +1,22 @@
 name: Rust Tests
 
-# Jobs are split by INTENTION — by what a job needs from its ENVIRONMENT — never by feature flag:
+# Jobs are split by INTENTION — by what a job needs that the others do not — never by a feature flag
+# used as a hiding place:
 #
 #   Unit         no database.
-#   Integration  needs Postgres (+ git-LFS for the bundled model). The whole DB-backed workspace, in
-#                ONE command.
+#   Integration  needs Postgres (+ git-LFS for the bundled model). The whole DB-backed workspace,
+#                SHARDED 3 ways with `nextest --partition` (test EXECUTION dominates build ~2:1 —
+#                measured 713s vs 333s — so sharding the run is the wall-clock lever, at N× the build
+#                compute). `--partition` distributes the SAME `--workspace` selection; it does not
+#                select, so no test is hidden and rule 2 below is intact.
 #   Artifacts    needs Postgres, but a different FEATURE SET (temper-substrate's write-path scenarios),
 #                which is why it cannot fold into the workspace run above.
+#   Seal Proof   needs neither Postgres nor the model — but the trybuild compile-fail proof recompiles
+#                temper-services + ort in an ISOLATED target dir (~157s), a cost that must not gate the
+#                fast Unit run or run twice. Gated behind the `trybuild` feature: OFF everywhere else,
+#                so those `--workspace` runs compile it to EMPTY (not filtered out — rule 2 intact),
+#                enabled only here. The intention is COST-isolation; the feature is the mechanism,
+#                exactly as `artifact-tests` is for Artifacts.
 #
 # ── Two rules that keep this honest ────────────────────────────────────────────────────────────────
 #
@@ -119,11 +129,19 @@ jobs:
         run: cargo nextest run -p temper-substrate --features scenario-schema --locked --no-fail-fast
 
   integration-tests:
-    name: Integration & E2E Tests
+    name: Integration & E2E Tests (${{ matrix.partition }}/3)
     runs-on: ubuntu-latest
-    # The entire DB-backed workspace WITH embed, run in parallel. It is the long pole by design —
-    # it is now the job that actually runs everything.
+    # The entire DB-backed workspace WITH embed. SHARDED 3 ways: each leg rebuilds and runs 1/3 of the
+    # tests via `nextest --partition` (see the header — test execution is the ~2:1 dominant cost, so
+    # sharding it is the wall-clock lever, at 3× the build compute). Each leg gets its OWN Postgres
+    # service (separate runners), so there is no cross-shard DB contention. `fail-fast: false` — one
+    # shard's failure must not cancel its siblings, so a red run surfaces every failure (matching
+    # `--no-fail-fast` within a leg).
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
 
     services:
       postgres:
@@ -179,14 +197,16 @@ jobs:
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
 
-      - name: Run integration & E2E tests
-        # ONE command for the whole DB-backed workspace. This single line replaces the old integration
-        # job AND all six per-crate invocations of the old embed job — including the e2e allowlist that
-        # was keeping streaming_ingest_test out of CI entirely.
+      - name: Run integration & E2E tests (shard ${{ matrix.partition }}/3)
+        # ONE command for the whole DB-backed workspace, SHARDED. `--partition count:i/3` runs a
+        # deterministic (test-name-hash) 1/3 slice; the `--workspace` selection is UNCHANGED, so this
+        # DISTRIBUTES rather than selects — a new crate or test still lands in exactly one shard with no
+        # CI edit. This single line still replaces the old per-crate invocations + the e2e allowlist.
         run: |
           cargo nextest run \
             --workspace --exclude temper-cloud \
             --features test-db,test-embed \
+            --partition count:${{ matrix.partition }}/3 \
             --locked --no-fail-fast
 
   artifact-tests:
@@ -243,3 +263,33 @@ jobs:
 
       - name: Run substrate artifact tests
         run: cargo nextest run -p temper-substrate --features artifact-tests --locked --no-fail-fast
+
+  seal-proof:
+    name: Seal Proof (trybuild)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The trybuild compile-fail proof of the admin-authz `SystemAdmin` seal, in its OWN job — see the
+    # header (split by COST-intention, not environment). No Postgres and no model: it only COMPILES
+    # fixtures, it never runs a query or an embed. But temper-services links ort (via temper-substrate →
+    # temper-ingest), so `install-onnx` is present for the link, and its `query!` macros must resolve
+    # against the committed `.sqlx` cache — hence SQLX_OFFLINE, which lets this job skip Postgres.
+    env:
+      SQLX_OFFLINE: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        # No `lfs`: the proof compiles, it never embeds, so the bundled model is not needed.
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: sealproof-v1
+          tools: nextest
+
+      - uses: ./.github/actions/install-onnx
+
+      - name: Run the compile-fail seal proof
+        # Gated behind `trybuild`, so this is the ONLY job that compiles it. ~157s cold (the isolated
+        # trybuild-workspace recompile of temper-services + ort); the 300s nextest slow-timeout override
+        # in .config/nextest.toml covers it.
+        run: cargo nextest run -p temper-services --features trybuild --test compile_fail --locked --no-fail-fast
