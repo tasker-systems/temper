@@ -82,7 +82,12 @@ async fn system_settings_no_slug_leak(pool: sqlx::PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.expect("json parse");
 
-    assert!(body.get("access_mode").is_some(), "should have access_mode");
+    // The public settings object is present (a public field surfaces) but the sensitive
+    // gating_team_slug never does. `access_mode` was dropped from the wire in Phase 2.
+    assert!(
+        body.get("instance_name").is_some(),
+        "the public settings object should surface instance_name"
+    );
     assert!(
         body.get("gating_team_slug").is_none(),
         "should NOT have gating_team_slug"
@@ -208,7 +213,7 @@ fn assert_advertised_command_is_runnable(advertised: &str) {
 // ---------------------------------------------------------------------------
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn enriched_403_shows_pending_join_request_status(pool: sqlx::PgPool) {
+async fn enriched_403_shows_a_pending_request_via_typed_refusal(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
     let admin_profile = preflight(&app, &app.token).await;
     let admin_id = profile_id(&admin_profile);
@@ -245,14 +250,15 @@ async fn enriched_403_shows_pending_join_request_status(pool: sqlx::PgPool) {
     let body: Value = resp.json().await.expect("json parse");
 
     assert_eq!(body["error"]["code"], "SYSTEM_ACCESS_REQUIRED");
-    assert_eq!(
-        body["error"]["details"]["join_request_status"], "pending",
-        "should reflect pending join request (kept one release for the deployed CLI)"
-    );
-    // A request moves standing Denied → Requested (Act::Request), so the typed refusal is `requested`.
+    // Phase 2 dropped the legacy `join_request_status` field; the typed `refusal` is the sole
+    // signal now. A request moves standing Denied → Requested (Act::Request), so it is `requested`.
     assert_eq!(
         body["error"]["details"]["refusal"]["kind"], "requested",
         "a pending requester's typed refusal is `requested`"
+    );
+    assert!(
+        body["error"]["details"]["join_request_status"].is_null(),
+        "the legacy join_request_status field is gone from the 403"
     );
 }
 

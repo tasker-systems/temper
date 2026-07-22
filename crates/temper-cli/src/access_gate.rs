@@ -43,7 +43,11 @@ pub fn render_system_access_required(
     ));
     output::blank_err();
 
-    render_refusal(refusal.unwrap_or(&Refusal::NoStanding), request_url, cli_command);
+    render_refusal(
+        refusal.unwrap_or(&Refusal::NoStanding),
+        request_url,
+        cli_command,
+    );
 }
 
 /// Typed-refusal rendering. Exhaustive, no catchall: a new [`Refusal`] variant is a compile error
