@@ -350,7 +350,7 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 ClientError::SystemAccessRequired(Box::new(temper_core::error::CliAccessDetails {
                     email: details.email,
                     display_name: details.display_name,
-                    access_mode: details.access_mode.unwrap_or_else(|| "unknown".to_string()),
+                    refusal: details.refusal,
                     join_request_status: details.join_request_status,
                     request_url: details.request_url,
                     cli_command: details.cli_command,
@@ -399,11 +399,15 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
 }
 
 /// Details from a `SystemAccessRequired` 403 response.
+///
+/// `refusal` is `Option` for graceful degradation: a server older than the typed-refusal 403 sends
+/// no such field, so it parses as `None` and the CLI falls back to `join_request_status`. `access_mode`
+/// (the retired field) is simply not read — serde drops it as an unknown field if an old server sends it.
 #[derive(Deserialize)]
 struct SystemAccessErrorDetails {
     email: Option<String>,
     display_name: Option<String>,
-    access_mode: Option<String>,
+    refusal: Option<temper_principal::Refusal>,
     join_request_status: Option<String>,
     request_url: Option<String>,
     cli_command: Option<String>,
@@ -583,13 +587,30 @@ mod tests {
     }
 
     #[test]
-    fn test_403_system_access_required_parses_details() {
-        let body = r#"{"error":{"code":"SYSTEM_ACCESS_REQUIRED","message":"This system requires approved access.","details":{"email":"pete@example.com","display_name":"Pete Taylor","access_mode":"invite_only","join_request_status":"pending","request_url":"https://temperkb.io/request-access","cli_command":"temper team join --message \"...\""}}}"#;
+    fn test_403_system_access_required_parses_typed_refusal() {
+        let body = r#"{"error":{"code":"SYSTEM_ACCESS_REQUIRED","message":"This system requires approved access.","details":{"email":"pete@example.com","display_name":"Pete Taylor","refusal":{"kind":"revoked"},"join_request_status":"pending","request_url":"https://temperkb.io/request-access","cli_command":"temper auth request-access --message \"...\""}}}"#;
         let err = map_status_to_error(status(403), body);
         match err {
             ClientError::SystemAccessRequired(details) => {
                 assert_eq!(details.email.as_deref(), Some("pete@example.com"));
-                assert_eq!(details.access_mode, "invite_only");
+                assert_eq!(details.refusal, Some(temper_principal::Refusal::Revoked));
+            }
+            other => panic!("expected SystemAccessRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_403_from_older_server_without_refusal_still_parses() {
+        // A server predating the typed 403 sends `access_mode` and no `refusal`. The client must
+        // still recognize the gate error (not fall through to generic Forbidden) and degrade to a
+        // `None` refusal so rendering falls back to `join_request_status`.
+        let body = r#"{"error":{"code":"SYSTEM_ACCESS_REQUIRED","message":"This system requires approved access.","details":{"email":"pete@example.com","display_name":"Pete Taylor","access_mode":"invite_only","join_request_status":"pending","request_url":"https://temperkb.io/request-access","cli_command":"temper auth request-access --message \"...\""}}}"#;
+        let err = map_status_to_error(status(403), body);
+        match err {
+            ClientError::SystemAccessRequired(details) => {
+                assert_eq!(details.email.as_deref(), Some("pete@example.com"));
+                assert_eq!(details.refusal, None);
+                assert_eq!(details.join_request_status.as_deref(), Some("pending"));
             }
             other => panic!("expected SystemAccessRequired, got {other:?}"),
         }

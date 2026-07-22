@@ -37,6 +37,7 @@ sha2 = "0.10"
 shell-words = "1"
 temper-client = { path = "../temper-client" }
 temper-core = { path = "../temper-core" }
+temper-principal = { path = "../temper-principal" }
 temper-workflow = { path = "../temper-workflow" }
 temper-ingest = { path = "../temper-ingest" }
 tempfile = "3"

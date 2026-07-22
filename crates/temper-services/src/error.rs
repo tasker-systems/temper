@@ -168,7 +168,7 @@ impl From<ApiError> for temper_core::error::TemperError {
                 TemperError::SystemAccessRequired(Box::new(CliAccessDetails {
                     email: details.email,
                     display_name: details.display_name,
-                    access_mode: details.access_mode,
+                    refusal: Some(details.refusal),
                     join_request_status,
                     request_url: details.request_url,
                     cli_command: details.cli_command,
@@ -210,7 +210,11 @@ impl From<temper_core::error::TemperError> for ApiError {
                     details: Box::new(SystemAccessDetails {
                         email: details.email,
                         display_name: details.display_name,
-                        access_mode: details.access_mode,
+                        // An older server may have sent no typed refusal; default to the generic
+                        // "no standing" denial when reconstructing the server-side shape.
+                        refusal: details
+                            .refusal
+                            .unwrap_or(temper_principal::Refusal::NoStanding),
                         join_request_status,
                         request_url: details.request_url,
                         cli_command: details.cli_command,
@@ -292,11 +296,14 @@ mod tests {
     #[test]
     fn api_error_system_access_required_preserves_field_set() {
         use temper_core::types::access_gate::SystemAccessDetails;
+        use temper_principal::Refusal;
         let api = ApiError::SystemAccessRequired {
             details: Box::new(SystemAccessDetails {
                 email: Some("a@b.co".into()),
                 display_name: Some("A".into()),
-                access_mode: "join_request".into(),
+                // A real refusal, not the retired sentinel: `Revoked` is the case the typed value
+                // exists to distinguish from `Denied`.
+                refusal: Refusal::Revoked,
                 join_request_status: None,
                 request_url: Some("https://x".into()),
                 cli_command: Some("temper join".into()),
@@ -307,7 +314,7 @@ mod tests {
             TemperError::SystemAccessRequired(details) => {
                 assert_eq!(details.email.as_deref(), Some("a@b.co"));
                 assert_eq!(details.display_name.as_deref(), Some("A"));
-                assert_eq!(details.access_mode, "join_request");
+                assert_eq!(details.refusal, Some(Refusal::Revoked));
                 assert_eq!(details.request_url.as_deref(), Some("https://x"));
                 assert_eq!(details.cli_command.as_deref(), Some("temper join"));
             }
@@ -369,12 +376,13 @@ mod tests {
     fn temper_error_system_access_required_round_trip() {
         use temper_core::error::CliAccessDetails;
         use temper_core::types::access_gate::JoinRequestStatus;
+        use temper_principal::Refusal;
 
         // Create a TemperError with a join_request_status that will round-trip cleanly.
         let details = CliAccessDetails {
             email: Some("test@example.com".into()),
             display_name: Some("Test User".into()),
-            access_mode: "join_request".into(),
+            refusal: Some(Refusal::Requested),
             join_request_status: Some("pending".into()), // stringified enum value
             request_url: Some("https://example.com/join".into()),
             cli_command: Some("temper join-request".into()),
@@ -387,7 +395,7 @@ mod tests {
             ApiError::SystemAccessRequired { details } => {
                 assert_eq!(details.email.as_deref(), Some("test@example.com"));
                 assert_eq!(details.display_name.as_deref(), Some("Test User"));
-                assert_eq!(details.access_mode, "join_request");
+                assert_eq!(details.refusal, Refusal::Requested);
                 // join_request_status should have round-tripped to the enum
                 assert_eq!(
                     details.join_request_status,

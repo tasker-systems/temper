@@ -14,6 +14,7 @@ path = "src/bin/emit-openapi.rs"
 
 [dependencies]
 temper-auth = { path = "../temper-auth" }
+temper-principal = { path = "../temper-principal" }
 temper-core = { path = "../temper-core", features = ["web-api"] }
 temper-services = { path = "../temper-services" }
 temper-workflow = { path = "../temper-workflow", features = ["web-api"] }

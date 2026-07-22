@@ -34,8 +34,9 @@ use crate::error::{ApiError, ApiResult};
 // ---------------------------------------------------------------------------
 
 /// Check if a profile has system-level access.
-/// In `open` mode this always returns true.
-/// In `invite_only` mode the profile must be a member of the gating team.
+///
+/// Reads the SQL `has_system_access` predicate, which since Task 7's repoint answers from the
+/// principal's **standing** (`approved`), not from an `access_mode`/gating-team-membership check.
 pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
     let result = sqlx::query_scalar!("SELECT has_system_access($1)", *profile_id,)
         .fetch_one(pool)

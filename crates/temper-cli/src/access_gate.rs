@@ -6,6 +6,7 @@
 //! at the bottom, which feed each one to clap exactly as a shell would.
 
 use crate::output;
+use temper_principal::Refusal;
 
 /// The command a caller with a pending request runs to check on it.
 ///
@@ -14,14 +15,25 @@ use crate::output;
 /// which arrives over the wire in the 403 payload.
 pub const CHECK_STATUS_COMMAND: &str = "temper auth status";
 
-/// Renders the "you're signed in, but this instance requires approved access"
-/// error, tailored to whether the caller has a request outstanding.
+/// The command a caller whose access was revoked runs to ask an admin to reconsider.
 ///
-/// `cli_command` is the server's advertised remedy (see
-/// [`REQUEST_ACCESS_COMMAND`](temper_core::types::access_gate::REQUEST_ACCESS_COMMAND));
-/// it is `Option` because it crosses the wire and an older server may omit it.
+/// CLI-authored like [`CHECK_STATUS_COMMAND`]: the `revoked` refusal is a distinct state from
+/// `denied` precisely so it can offer this different remedy (spec D12/D15).
+pub const REQUEST_REVIEW_COMMAND: &str = "temper auth request-review --message \"...\"";
+
+/// Renders the "you're signed in, but this instance requires approved access" error.
+///
+/// Prefers the typed [`Refusal`] the server now sends — branched exhaustively so a new refusal
+/// variant forces a message rather than falling through to a generic one. When `refusal` is `None`
+/// (a server older than the typed 403), it falls back to the legacy `join_request_status` rendering,
+/// so a new CLI against an old server still degrades to a sensible message.
+///
+/// `cli_command` is the server's advertised request-access remedy (see
+/// [`REQUEST_ACCESS_COMMAND`](temper_core::types::access_gate::REQUEST_ACCESS_COMMAND)); it is
+/// `Option` because it crosses the wire and an older server may omit it.
 pub fn render_system_access_required(
     email: Option<&str>,
+    refusal: Option<&Refusal>,
     join_request_status: Option<&str>,
     request_url: Option<&str>,
     cli_command: Option<&str>,
@@ -32,6 +44,63 @@ pub fn render_system_access_required(
     ));
     output::blank_err();
 
+    match refusal {
+        Some(refusal) => render_refusal(refusal, request_url, cli_command),
+        None => render_from_join_request_status(join_request_status, request_url, cli_command),
+    }
+}
+
+/// Typed-refusal rendering. Exhaustive, no catchall: a new [`Refusal`] variant is a compile error
+/// here until it is given a message.
+fn render_refusal(refusal: &Refusal, request_url: Option<&str>, cli_command: Option<&str>) {
+    match refusal {
+        // No standing row, or provisioned-but-never-granted: the remedy is to request access.
+        Refusal::NoStanding | Refusal::Denied => {
+            output::plain_err("  Access has not been granted. To request it, run:");
+            if let Some(cmd) = cli_command {
+                output::hint(format!("    {cmd}"));
+            }
+            if let Some(url) = request_url {
+                output::blank_err();
+                output::plain_err(format!("  Or visit: {url}"));
+            }
+        }
+        Refusal::Requested => {
+            output::plain_err("  Your access request is pending review.");
+            output::hint(format!(
+                "  Run `{CHECK_STATUS_COMMAND}` to check for updates."
+            ));
+        }
+        Refusal::Revoked => {
+            output::plain_err("  Your access was revoked. You can ask an admin to reconsider:");
+            output::hint(format!("    {REQUEST_REVIEW_COMMAND}"));
+        }
+        Refusal::Deactivated => {
+            output::plain_err("  This account is deactivated. Contact an administrator.");
+        }
+        Refusal::UnrecognizedStanding { raw } => {
+            output::plain_err(format!(
+                "  Your access state ({raw:?}) is not recognized by this build of temper."
+            ));
+            output::hint("  Update temper, or contact an administrator.");
+        }
+        // These arise from admin *acts*, never from the admission gate that produces this 403, so
+        // they should not reach here. Render the machine's own reason rather than guess, and say so.
+        Refusal::IllegalTransition { .. }
+        | Refusal::InsufficientAuthority { .. }
+        | Refusal::NoPriorStanding => {
+            output::plain_err(format!("  Access was refused: {}.", refusal.reason()));
+            output::plain_err("  Contact an administrator if this is unexpected.");
+        }
+    }
+}
+
+/// Legacy rendering for a server that predates the typed refusal (no `refusal` field on the 403).
+fn render_from_join_request_status(
+    join_request_status: Option<&str>,
+    request_url: Option<&str>,
+    cli_command: Option<&str>,
+) {
     match join_request_status {
         Some("pending") => {
             output::plain_err("  Your access request is pending review.");
@@ -96,7 +165,11 @@ mod tests {
     /// falsifies it.
     #[test]
     fn advertised_commands_parse_against_the_clap_tree() {
-        for advertised in [REQUEST_ACCESS_COMMAND, CHECK_STATUS_COMMAND] {
+        for advertised in [
+            REQUEST_ACCESS_COMMAND,
+            CHECK_STATUS_COMMAND,
+            REQUEST_REVIEW_COMMAND,
+        ] {
             if let Err(err) = parses_as_a_real_command(advertised) {
                 panic!(
                     "the access-gate 403 tells users to run `{advertised}`, \
@@ -117,6 +190,10 @@ mod tests {
              invitation: got `{REQUEST_ACCESS_COMMAND}`"
         );
         assert_eq!(CHECK_STATUS_COMMAND, "temper auth status");
+        assert!(
+            REQUEST_REVIEW_COMMAND.starts_with("temper auth request-review"),
+            "the revoked-refusal remedy must ask for review: got `{REQUEST_REVIEW_COMMAND}`"
+        );
     }
 
     /// Proves the test above can actually fail — a gate that cannot go red is

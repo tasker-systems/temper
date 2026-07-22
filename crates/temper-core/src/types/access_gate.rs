@@ -136,7 +136,20 @@ pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \
 pub struct SystemAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
-    pub access_mode: String,
+    /// Why this principal was refused, typed (spec §7). Replaces the stringly `access_mode` the 403
+    /// used to carry (retired: it was never rendered by any client and its tests asserted a sentinel
+    /// `"join_request"` the system never emits). Unlike `access_mode` + `join_request_status`
+    /// inference, the typed refusal distinguishes "never granted" (`denied`) from "granted and
+    /// revoked" (`revoked`) — a distinction that matters to the user and in an audit.
+    ///
+    /// Carried as `temper_principal::Refusal` so the Rust surfaces branch on it exhaustively. This
+    /// struct is not an OpenAPI component (the error body serializes `details` as a free-form value),
+    /// so only the ts-rs generator needs steering — it sees the field as opaque for now, since
+    /// temper-principal stays free of schema-derive deps by design; enriching that is a parity follow-up.
+    #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
+    pub refusal: temper_principal::Refusal,
+    /// Legacy field kept one release for the deployed CLI, which renders it. New clients branch on
+    /// `refusal` instead; Phase 2 retires this. Populated from the caller's own join request.
     pub join_request_status: Option<JoinRequestStatus>,
     pub request_url: Option<String>,
     pub cli_command: Option<String>,

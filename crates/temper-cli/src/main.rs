@@ -60,6 +60,7 @@ fn main() {
             temper_cli::error::TemperError::SystemAccessRequired(details) => {
                 temper_cli::access_gate::render_system_access_required(
                     details.email.as_deref(),
+                    details.refusal.as_ref(),
                     details.join_request_status.as_deref(),
                     details.request_url.as_deref(),
                     details.cli_command.as_deref(),

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// the act is that the actor learns why; a test that only checks 'not admitted' would pass on a
 /// silent denial."
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "refusal")]
+#[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Refusal {
     /// No standing row. Absence denies (spec §7 obligation 1) — this is what makes D7 structural.
     NoStanding,
@@ -26,10 +26,11 @@ pub enum Refusal {
     /// The principal itself is disabled.
     Deactivated,
     /// The act is not legal from this state (spec §6 — every unlisted cell).
-    IllegalTransition {
-        from: Option<Standing>,
-        act: &'static str,
-    },
+    ///
+    /// `act` is an owned `String` rather than `&'static str` so `Refusal` is `DeserializeOwned`: it
+    /// rides the 403 wire, and a borrowed-`'static` field would make the whole enum undeserializable
+    /// from a short-lived `serde_json` input. The value is still one of a fixed set of act literals.
+    IllegalTransition { from: Option<Standing>, act: String },
     /// The actor lacks the authority this act requires.
     InsufficientAuthority {
         required: ActorAuthority,
