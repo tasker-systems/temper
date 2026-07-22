@@ -19,8 +19,8 @@ use uuid::Uuid;
 /// Boot a canonical owner profile + emitter entity inline (mirrors `cogmap_genesis_charter.rs`).
 async fn seed_actor(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
     let profile: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) \
-         VALUES ('owner', 'Owner', 'approved'::system_access) RETURNING id",
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ('owner', 'Owner') RETURNING id",
     )
     .fetch_one(pool)
     .await

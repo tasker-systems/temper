@@ -60,8 +60,8 @@ const CENSUS: &[(&str, &str, usize, usize, usize, usize)] = &[
 /// rows — so those are spelled exactly as production spells them.
 async fn seed_census(pool: &PgPool) -> (Uuid, Uuid) {
     let profile: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) \
-         VALUES ('census', 'Census', 'approved'::system_access) RETURNING id",
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ('census', 'Census') RETURNING id",
     )
     .fetch_one(pool)
     .await

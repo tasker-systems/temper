@@ -49,6 +49,12 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
             n.ends_with(".sql")
                 && !n.contains("auto_join_team_generalization")
                 && !n.contains("cogmap_write_tightening")
+                // Phase 2 A4: CREATE-OR-REPLACEs the two auto-join functions to read the team's
+                // `auto_join_role` instead of the retired `kb_profiles.system_access`. It belongs to
+                // the post-auto-join world (same reason as the two above) — its function bodies
+                // reference `kb_teams.auto_join_role`, the column `auto_join_team_generalization`
+                // adds and this baseline omits.
+                && !n.contains("phase2_auto_join_drop_system_access_read")
         })
         .collect();
     migrations.sort();

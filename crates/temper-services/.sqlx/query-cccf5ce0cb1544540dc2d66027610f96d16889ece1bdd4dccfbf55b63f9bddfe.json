@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, access_mode, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
+  "query": "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -10,31 +10,26 @@
       },
       {
         "ordinal": 1,
-        "name": "access_mode",
-        "type_info": "Varchar"
-      },
-      {
-        "ordinal": 2,
         "name": "gating_team_slug",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "terms_version",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 4,
+        "ordinal": 3,
         "name": "terms_resource_uri",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "instance_name",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "updated",
         "type_info": "Timestamptz"
       }
@@ -44,7 +39,6 @@
     },
     "nullable": [
       false,
-      false,
       true,
       true,
       true,
@@ -52,5 +46,5 @@
       false
     ]
   },
-  "hash": "9ae300366626fa4ed62145dfae90330694aad26e8394b6ebc2cf59dbf747b7e6"
+  "hash": "cccf5ce0cb1544540dc2d66027610f96d16889ece1bdd4dccfbf55b63f9bddfe"
 }

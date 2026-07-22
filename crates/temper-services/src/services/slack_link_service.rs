@@ -499,8 +499,12 @@ mod tests {
     async fn lookup_still_reports_a_deactivated_profile_as_linked(pool: PgPool) {
         let profile_id = insert_profile(&pool, "gone-away").await;
         link(&pool, profile_id, PRINCIPAL).await;
+        // Deactivate on the authoritative axis (Phase 2 repointed deactivation off the dropped
+        // `kb_profiles.is_active` onto `kb_principal_standing`). `lookup_linked_handle` deliberately
+        // does not filter on standing, so a deactivated profile is still reported as linked.
         sqlx::query!(
-            "UPDATE kb_profiles SET is_active = false WHERE id = $1",
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'deactivated')
+             ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'",
             profile_id
         )
         .execute(&pool)

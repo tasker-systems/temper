@@ -19,8 +19,8 @@ use uuid::Uuid;
 
 async fn insert_profile(pool: &sqlx::PgPool, handle: &str) -> Uuid {
     sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name, system_access) \
-         VALUES ($1, $1, 'none') RETURNING id",
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ($1, $1) RETURNING id",
     )
     .bind(handle)
     .fetch_one(pool)

@@ -50,21 +50,19 @@ async fn insert_world_identity(
     let mut profiles: HashMap<String, Uuid> = HashMap::new();
     for p in &world.profiles {
         let id = sqlx::query_scalar!(
-            "INSERT INTO kb_profiles (handle, display_name, system_access) \
-             VALUES ($1,$2,$3::system_access) RETURNING id",
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$2) RETURNING id",
             p.handle,
             p.display_name,
-            p.system_access.as_sql() as _,
         )
         .fetch_one(&mut *tx)
         .await?;
         profiles.insert(p.handle.clone(), id);
 
-        // Keep writing system_access (a projection that survives Phase 1) and ALSO mint the standing
-        // row that is now authoritative, from the scenario's declared tier — a scenario that says a
-        // profile is `approved` must still produce a profile that can act. Emitter falls back to the
-        // `system` actor (seed_system precedes load_seed on every scenario path). Mapped through
-        // as_sql() so this compiles against whichever SystemAccess the world model carries.
+        // Mint the standing row that is authoritative under D11, from the scenario's declared tier —
+        // a scenario that says a profile is `approved` must still produce a profile that can act.
+        // (Phase 2 A4 stopped writing the `system_access` projection column; the tier is still read
+        // from the in-memory world model via as_sql(), not the DB.) Emitter falls back to the
+        // `system` actor (seed_system precedes load_seed on every scenario path).
         let (standing, admin) = match p.system_access.as_sql() {
             "admin" => ("approved", true),
             "approved" => ("approved", false),

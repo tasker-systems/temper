@@ -220,12 +220,57 @@ intent (GD-4)** — read the cited sites and the cited spec sections.
   does **not** read `system_access`; its retirement is goal-deferred to the machine-principal work.
 - **Cite:** spec §9, §11 (the `system_access` writers + the trigger note), D18.
 
+> **Implementation note (done, 2026-07-22).** Migration `20260722000010_phase2_auto_join_drop_system_access_read.sql`
+> CREATE-OR-REPLACEs both functions with `t.auto_join_role`/`v_role` uniform. bootseed's
+> `system_access='admin'` write dropped (admin-ness already rides the standing+governance mint at
+> `bootseed.rs:103-122`, F6). **Grounding found a plan gap the trigger analysis missed:** post-repoint
+> the `system_access`-write trigger *already* no-ops during scenario load (it fires on the INSERT
+> *before* `principal_standing_apply` mints the row, so `has_system_access` reads a not-yet-existent
+> standing → false). So removing the write changed no *live* enrollment — but it surfaced that the
+> access-scenario substrate baseline (`reset_schema`) deliberately **skips** `auto_join_team_generalization`
+> and runs the *slug-based* `sync_system_membership`, which enrolled alice into `temper-system` by
+> firing on the `system_access` write. With that write gone, scenario-loaded approved profiles are no
+> longer auto-enrolled in `temper-system` (decorative under D18; **every S1–S8 access invariant still
+> passes** — verified). Consequences: (a) `reset_schema` also skips `20260722000010` (post-auto-join
+> world, references `auto_join_role`); (b) `access_scenario::loads_topology_row_counts` alice 3→2
+> (documented in-test); (c) `auto_join_team.rs` rewritten onto standing (was 4/5 `#[ignore]`d against
+> the old admin→owner + slug-trigger world) so the two rewritten functions keep live coverage. The
+> loaders were **not** given an explicit `ensure_auto_join_memberships` call — that would be beyond
+> the plan (which says "keep the standing mint", nothing more) and the invariants don't need it.
+
 ### A5 · The test-seed sweep — CONFORM
 - Switch the ~25 fixtures that `UPDATE/INSERT … system_access` (E3) and the ~8 that seed
   `access_mode` (E1) to mint standing / omit the retired column. Prefer **one shared test helper**
   (mint `standing='approved'`/`admin` via `principal_standing_apply` + governance) over 25 bespoke
   edits — the incumbent to conform to is the loaders' existing standing-mint (E3).
 - **Cite:** spec §12 (verification) for what the fixtures must still guarantee.
+
+> **Implementation note (done, 2026-07-22).** Grounding reframed the sweep: post-A1/A2 **nothing
+> reads** `system_access`/`access_mode` (has_system_access/is_system_admin read standing/governance;
+> `access_mode` has no live SQL reader), so these writes are **dead**, not access-granting. The
+> harnesses already carry the D11-correct grants — e2e `approve`/`approved_admin`, temper-api
+> `approve_standing`/`make_test_admin`. So the sweep is **strip-or-repoint**, not build-a-helper:
+> - temper-api (9 sites): admin sites already call `make_test_admin` → deleted the dead `UPDATE
+>   system_access='admin'`; approved sites → replaced `UPDATE system_access='approved'` with
+>   `approve_standing` (intent-faithful; L0 is the *public* kernel so its readability never depended
+>   on the trigger-membership those comments claimed).
+> - e2e (4 sites): deleted the dead `UPDATE system_access='admin'` (each already had `approved_admin`).
+> - substrate (13 INSERTs): stripped the column (all seed `'none'`/`'approved'`, none mint standing,
+>   so `has_system_access` was already false — behavior-neutral). `identity_graft`'s
+>   `kb_system_settings(access_mode)` INSERT → bare `(id)` (default 'open').
+> - `access_mode` (e2e + api + 3 `#[cfg(test)]` service helpers): dropped the dead `access_mode` clause,
+>   **kept** the live `gating_team_slug` (read by `is_system_admin`).
+> - **`is_active` test writes** (not in the plan's A5 list — grounding caught them): `slack_link_service`
+>   and `slack_disconnect_service` `#[cfg(test)]` reads/writes of `kb_profiles.is_active` repointed onto
+>   `kb_principal_standing` (deactivation axis). **No prod reader of `kb_profiles.is_active` remains** —
+>   A1 was complete.
+> - **Deferred to PR-B (subject-under-test, cannot be repointed):** `standing_backfill_test.rs` seeds
+>   `system_access`/`is_active`/`access_mode` as the *inputs* to the one-time legacy column→standing
+>   backfill (migration `20260720000120`). It dies **with** the columns in PR-B (delete-test-with-the-drop
+>   is coherent; the backfill already ran in Phase 1's prod deploy, so forward coverage value is nil).
+> - Verified: substrate artifacts (294), temper-services (489), the 8 touched temper-api targets (48),
+>   `cargo make check`. `.sqlx`: workspace regen (loaders/bootseed) + `prepare-services` (which also
+>   swept ~87 pre-existing Phase-1 orphan cache entries — offline check confirms completeness).
 
 **PR-A verification:** `cargo make check` (offline sqlx honesty), `cargo make test-all`,
 `cargo make test-e2e-embed`, `cd packages/temper-ui && bun run check`. The columns still exist, so
@@ -248,6 +293,15 @@ load-bearing**:
 5. **Not dropped:** `kb_join_requests.status`, its indexes, the `join_request_status` enum (D-B) —
    state this explicitly in the migration so a future reader knows it was a decision, and that spec
    §11's "drop it + `idx_join_requests_one_pending`" was superseded by the shipped lifecycle.
+
+> **Code deletion PR-B must carry (from A5 grounding, 2026-07-22).** One test seeds the doomed columns
+> as its *subject*, not as a convenience, so it could not be repointed in PR-A and must be **deleted**
+> here alongside the drop (else PR-B's `#[sqlx::test]` seed INSERTs + `prepare-services` regen break):
+> `crates/temper-services/tests/standing_backfill_test.rs` — it tests the one-time legacy
+> `system_access`/`is_active`/`access_mode` → standing backfill (migration `20260720000120`), which
+> already ran in Phase 1's prod deploy. After the drop its input columns are gone; delete the file as
+> step 0 of PR-B, before the `.sqlx` regen. Everything else in the tree references none of the three
+> dropped columns after PR-A (grep-verified).
 
 Then: `cargo sqlx prepare --workspace -- --all-features` → `cargo make prepare-services` →
 `cargo make prepare-e2e` (per-crate last; §"SQL Query Checking"), and commit the `.sqlx` churn.
