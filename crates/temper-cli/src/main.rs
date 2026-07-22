@@ -639,6 +639,18 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            AdminAction::Demote { profile } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin::demote_remote(client, &profile).await
+                    })
+                })
+            }
+            AdminAction::Access { action } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::admin::access_remote(client, &action).await
+                })
+            }),
             AdminAction::Ledger {
                 subject,
                 actor,

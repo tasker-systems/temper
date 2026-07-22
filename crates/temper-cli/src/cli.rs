@@ -1054,6 +1054,16 @@ pub enum AdminAction {
         #[arg(long)]
         team: Option<String>,
     },
+    /// Demote a system admin — revoke its governance grant (the manual twin of `promote`)
+    Demote {
+        /// Profile ID (UUID) to demote
+        profile: String,
+    },
+    /// Admit, revoke, deactivate, or reactivate a principal's system access
+    Access {
+        #[command(subcommand)]
+        action: AdminAccessAction,
+    },
     /// Review pending join requests
     Requests {
         #[command(subcommand)]
@@ -1411,6 +1421,35 @@ pub enum AdminRequestsAction {
         /// Optional decision note
         #[arg(long)]
         note: Option<String>,
+    },
+}
+
+/// The admin standing acts (Task 13). `approve` admits a principal directly (a machine, or a
+/// reinstatement) — reviewing a join *request* is `admin requests review` instead.
+#[derive(Subcommand)]
+pub enum AdminAccessAction {
+    /// Admit a principal directly (legal from denied, revoked, or requested)
+    Approve {
+        /// Profile ID (UUID) to approve
+        profile: String,
+    },
+    /// Revoke a principal's admission (legal only from approved)
+    Revoke {
+        /// Profile ID (UUID) to revoke
+        profile: String,
+        /// Why — recorded on the ledger; a later review's reviewer needs it
+        #[arg(long)]
+        reason: String,
+    },
+    /// Deactivate a principal (legal from any live state)
+    Deactivate {
+        /// Profile ID (UUID) to deactivate
+        profile: String,
+    },
+    /// Reactivate a deactivated principal, restoring its prior standing
+    Reactivate {
+        /// Profile ID (UUID) to reactivate
+        profile: String,
     },
 }
 

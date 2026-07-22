@@ -62,11 +62,21 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #   when the sink had simply stepped out of the guard's field of view. A guard whose coverage
 #   quietly narrows is worse than one that never had it, because the number went the reassuring way.
 #   `sql_current()` below now scans migrations/ as well. See task 019f7c98-fbea-7a62-b5f0-5f8e0556b196.
+# REVIEWED 2026-07-21 (Principal Admission Task 14) — machine_client_service.rs 0 → 1.
+#   The new hit is a TEST-ONLY seed inside `#[cfg(all(test, feature = "test-db"))] mod tests`
+#   (`seed_machine_with_reach`), which inserts one `can_read`-only grant so
+#   `revoking_a_credential_also_revokes_standing_but_leaves_grants` has reach to prove SURVIVES a
+#   revoke. It is never compiled into the shipped binary, so it is not a production grant path.
+#   AUTHORITY / ATTENUATION: N/A — a fixed read-only fixture row, not reachable by any caller; there
+#   is no capability-bit pass-through and no self-escalation vector. `machine_client_service::revoke`
+#   (the production change in this task) grants NOTHING — it only revokes standing — so the live
+#   grant surface is unchanged.
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/src/backend/db_backend.rs
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/connection_service.rs
 1 crates/temper-services/src/services/machine_authz.rs
+1 crates/temper-services/src/services/machine_client_service.rs
 1 crates/temper-services/src/services/machine_registration_service.rs
 2 crates/temper-services/src/services/materialize_service.rs
 1 crates/temper-services/src/services/steward_service.rs

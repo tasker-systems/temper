@@ -11,8 +11,11 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::MachineClient;
 
+use temper_principal::{Act, ActorAuthority, Standing};
+
 use crate::error::{ApiError, ApiResult};
 use crate::services::machine_authz;
+use crate::services::standing_service::{self, ApplyStandingParams};
 
 /// The authentication-path lookup. `None` ⇒ unregistered. A revoked row still
 /// resolves here; the caller distinguishes (the gate needs the timestamp to
@@ -135,6 +138,35 @@ pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Ma
     )
     .execute(pool)
     .await?;
+
+    // D17 — one revocation fact, not two that can drift. `revoked_at` is an AUTHENTICATION detail (a
+    // revoked credential is rejected at profile resolution and never reaches admission); standing is
+    // the ADMISSION fact. If they disagree an audit reads badly — "credential dead" on one axis,
+    // "admitted" on the other — so a credential revocation also revokes standing.
+    //
+    // Load-first, not fire-and-swallow: Revoke is legal ONLY from `Approved` (transition.rs), and a
+    // machine is born `Denied` (D11) and may never have been approved. Firing unconditionally would
+    // fail the credential revocation on that illegal cell — but the credential is what the operator
+    // asked to kill, and it must succeed regardless. Routing through `standing_service::apply` (rather
+    // than an inlined committer) also means this inherits Task 15's demotion hook and Task 17's typed
+    // refusal once they land. Grants and memberships are deliberately left intact (D11): Revoke denies
+    // ADMISSION, which sits above them, so a later rebind still cannot silently resurrect them.
+    let subject = ProfileId::from(existing.profile_id);
+    if standing_service::load(pool, subject).await? == Some(Standing::Approved) {
+        standing_service::apply(
+            pool,
+            ApplyStandingParams {
+                subject,
+                act: Act::Revoke {
+                    reason: format!("machine client {} revoked", existing.client_id),
+                },
+                actor: Some(revoker),
+                authority: ActorAuthority::Admin,
+            },
+        )
+        .await?;
+    }
+
     get(pool, id).await
 }
 
@@ -518,5 +550,155 @@ mod tests {
 
         let all = svc::list(&pool, admin, true).await.expect("list all");
         assert!(all.iter().any(|c| c.client_id == "doomed"));
+    }
+
+    /// A machine client with genuine reach — a read grant and a team membership, the two things D11
+    /// says a revoke must NOT touch. Returns the machine-client row id (what `revoke` takes), the
+    /// machine's profile id, and the acting admin.
+    struct MachineReach {
+        machine_id: Uuid,
+        machine_profile: Uuid,
+        admin: ProfileId,
+    }
+
+    async fn seed_machine_with_reach(pool: &PgPool) -> MachineReach {
+        let admin = seed_admin(pool, "revoke-standing-admin").await;
+        let team: Uuid =
+            sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+                .fetch_one(pool)
+                .await
+                .expect("gating team seeded by seed_admin");
+        let machine_id = seed_registered(pool, "reachful-machine").await;
+        let machine_profile: Uuid = sqlx::query_scalar!(
+            "SELECT profile_id FROM kb_machine_clients WHERE id = $1",
+            machine_id
+        )
+        .fetch_one(pool)
+        .await
+        .expect("machine profile");
+
+        // subject_table is CHECK-constrained to the grantable object kinds; subject_id has no FK, so
+        // a synthetic context id stands in for "some object this machine can read".
+        sqlx::query!(
+            "INSERT INTO kb_access_grants \
+               (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+             VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, $3)",
+            Uuid::now_v7(),
+            machine_profile,
+            *admin,
+        )
+        .execute(pool)
+        .await
+        .expect("grant reach");
+
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'watcher'::team_role) \
+             ON CONFLICT (team_id, profile_id) DO NOTHING",
+            team,
+            machine_profile,
+        )
+        .execute(pool)
+        .await
+        .expect("member reach");
+
+        MachineReach {
+            machine_id,
+            machine_profile,
+            admin,
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn revoking_a_credential_also_revokes_standing_but_leaves_grants(pool: PgPool) {
+        // D17 — one revocation fact, one place. `revoked_at` becomes purely an authentication
+        // detail; standing tells the admission story; the two cannot drift because a credential
+        // revocation drives both.
+        let f = seed_machine_with_reach(&pool).await;
+        crate::test_support::approve(&pool, f.machine_profile).await;
+
+        let grants_before: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_access_grants WHERE principal_id = $1",
+            f.machine_profile
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap_or(0);
+        let members_before: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members WHERE profile_id = $1",
+            f.machine_profile
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap_or(0);
+        assert!(
+            grants_before > 0 && members_before > 0,
+            "fixture must have reach to preserve"
+        );
+
+        svc::revoke(&pool, f.machine_id, f.admin).await.unwrap();
+
+        let state: String = sqlx::query_scalar!(
+            "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+            f.machine_profile
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            state, "revoked",
+            "one revocation fact, not two that can drift"
+        );
+
+        // THE PRIOR INTENT, PROVEN NOT ASSUMED. Revocation deliberately leaves grants and
+        // memberships so a rebind cannot silently resurrect them (D11). Revoke on standing denies
+        // admission, which sits ABOVE grants and does not touch them.
+        let grants_after: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_access_grants WHERE principal_id = $1",
+            f.machine_profile
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap_or(0);
+        let members_after: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members WHERE profile_id = $1",
+            f.machine_profile
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .unwrap_or(0);
+        assert_eq!(grants_after, grants_before, "D11's intent survives D17");
+        assert_eq!(members_after, members_before, "D11's intent survives D17");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn revoking_an_unapproved_machine_is_not_an_error(pool: PgPool) {
+        // Revoke is illegal from `Denied` (§6 — you cannot revoke what was never granted), but a
+        // credential revocation must still succeed. The standing fire is load-guarded to `Approved`
+        // in exactly this cell, so the credential revocation the operator asked for never fails.
+        let f = seed_machine_with_reach(&pool).await; // born Denied under D11, never approved
+
+        svc::revoke(&pool, f.machine_id, f.admin)
+            .await
+            .expect("credential revocation must succeed even with nothing to revoke on standing");
+
+        // The load-first guard fired nothing (this machine was never `Approved`), so no `revoked`
+        // row was written — the credential revocation the operator asked for still succeeded.
+        let state: Option<String> = sqlx::query_scalar!(
+            "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+            f.machine_profile
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_ne!(
+            state.as_deref(),
+            Some("revoked"),
+            "an unapproved machine has nothing to revoke on the admission axis"
+        );
     }
 }

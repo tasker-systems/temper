@@ -57,6 +57,21 @@ pub struct PromoteAdminRequest {
     pub team_id: Option<Uuid>,
 }
 
+/// Body for `POST /api/access/admin/demote`.
+///
+/// The governance twin of [`PromoteAdminRequest`]: it revokes the system-admin grant. Not
+/// team-scoped — governance is keyed on the profile alone, so it carries no team.
+///
+/// Leaner derives than its sibling on purpose: this is an operator-only endpoint, excluded from the
+/// OpenAPI contract (no `#[utoipa::path]`), fronted by no MCP tool, and consumed by no UI — so it
+/// carries only the wire derives, not the `typescript`/`web-api`/`mcp` set that would generate
+/// surface nothing consumes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemoteAdminRequest {
+    /// Profile to demote (revoke its system-admin governance grant).
+    pub profile_id: Uuid,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

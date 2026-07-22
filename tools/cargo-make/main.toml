@@ -31,10 +31,36 @@ dependencies = [
   "rust-machete",
   "openapi-check",
   "openapi-routes-check",
+  "security-tripwires",
   "openapi-rb-drift",
   "openapi-ts-drift",
   "ts-check"
 ]
+
+[tasks.security-tripwires]
+description = "Run the code-quality security tripwires (grant sinks, route auth, handler authz, signature secrets, credential Debug)"
+# These pin security-relevant sets (grant write-sites, unauthenticated routes, handler-side authz
+# calls, signature-secret distinctness, credential types deriving Debug) against reviewed baselines.
+# They lived ONLY in the `code-quality / Rust Quality` CI job, so a new grant sink / handler-side
+# authz call / unauthenticated route passed a green local `cargo make check` and failed in CI —
+# exactly the round-trip this task removes. Run all five and report EVERY failure in one pass, not
+# just the first, so one `check` surfaces the whole set. Delegates to the same scripts CI runs, so
+# local and CI logic are identical (CI cannot call cargo-make: the root Makefile.toml needs a ./.env
+# no runner has).
+script = ['''
+set -u
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+fail=0
+for s in audit-grant-sinks audit-route-auth audit-handler-authz-drift audit-signature-secrets audit-credential-debug; do
+  echo "--- security tripwire: ${s} ---"
+  if ! bash ".github/scripts/${s}.sh"; then fail=1; fi
+done
+if [ "${fail}" -ne 0 ]; then
+  echo "security-tripwires: one or more tripwires failed (see above)." >&2
+  exit 1
+fi
+echo "security-tripwires: all five passed."
+''']
 
 [tasks.test-schema]
 description = "Run the payload JSON-Schema snapshot gate (no database, no ONNX). Regenerate: UPDATE_SCHEMA=1 cargo make test-schema"
