@@ -4,7 +4,15 @@ mod common;
 
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_services::services::access_service;
+use temper_services::test_support;
 use uuid::Uuid;
+
+/// A sealed `SystemAdmin` proof for the mechanics tests below. They exercise service behavior
+/// (coalesce, lockout guards, promotion, auto-join enrollment), not the authz gate — but the acts now
+/// require the proof, so mint a real one (admin-authz enclosure, spec §3).
+async fn admin_proof(pool: &sqlx::PgPool) -> temper_services::auth::SystemAdmin {
+    test_support::system_admin_proof(pool).await
+}
 
 /// Seed the singleton settings row to a known baseline (the seed migration
 /// inserts `id=1` already, but be explicit so the test is self-contained).
@@ -22,12 +30,13 @@ async fn reset_settings(pool: &sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_settings_partial_coalesces(pool: sqlx::PgPool) {
     reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
 
     let req = UpdateSettingsRequest {
         instance_name: Some("Acme Temper".to_owned()),
         ..Default::default()
     };
-    let updated = access_service::update_system_settings(&pool, &req)
+    let updated = access_service::update_system_settings(&pool, &admin, &req)
         .await
         .expect("update");
 
@@ -38,12 +47,13 @@ async fn update_settings_partial_coalesces(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_settings_rejects_unknown_access_mode(pool: sqlx::PgPool) {
     reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
 
     let req = UpdateSettingsRequest {
         access_mode: Some("banana".to_owned()),
         ..Default::default()
     };
-    let err = access_service::update_system_settings(&pool, &req)
+    let err = access_service::update_system_settings(&pool, &admin, &req)
         .await
         .expect_err("should reject");
     assert!(matches!(
@@ -55,12 +65,13 @@ async fn update_settings_rejects_unknown_access_mode(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_settings_invite_only_requires_gating_team(pool: sqlx::PgPool) {
     reset_settings(&pool).await; // gating_team_slug is NULL
+    let admin = admin_proof(&pool).await;
 
     let req = UpdateSettingsRequest {
         access_mode: Some("invite_only".to_owned()),
         ..Default::default()
     };
-    let err = access_service::update_system_settings(&pool, &req)
+    let err = access_service::update_system_settings(&pool, &admin, &req)
         .await
         .expect_err("invite_only without a gating team should be rejected");
     assert!(matches!(
@@ -72,6 +83,7 @@ async fn update_settings_invite_only_requires_gating_team(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promote_admin_defaults_to_gating_team(pool: sqlx::PgPool) {
     reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
     // Configure a gating team that exists.
     let team_id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_teams (slug, name) VALUES ('temper-system','Temper System') \
@@ -87,7 +99,7 @@ async fn promote_admin_defaults_to_gating_team(pool: sqlx::PgPool) {
 
     let profile = common::fixtures::create_test_profile(&pool, "promotee@test.example.com").await;
 
-    let row = access_service::promote_admin(&pool, profile, None, None)
+    let row = access_service::promote_admin(&pool, &admin, profile, None)
         .await
         .expect("promote");
 
@@ -109,8 +121,9 @@ async fn promote_admin_defaults_to_gating_team(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool) {
     reset_settings(&pool).await; // gating_team_slug NULL, no --team
+    let admin = admin_proof(&pool).await;
     let profile = common::fixtures::create_test_profile(&pool, "x@test.example.com").await;
-    let err = access_service::promote_admin(&pool, profile, None, None)
+    let err = access_service::promote_admin(&pool, &admin, profile, None)
         .await
         .expect_err("no target team");
     assert!(matches!(
@@ -122,13 +135,14 @@ async fn promote_admin_without_gating_or_team_is_bad_request(pool: sqlx::PgPool)
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_settings_invite_only_rejects_nonexistent_gating_team(pool: sqlx::PgPool) {
     reset_settings(&pool).await; // gating_team_slug is NULL, no team named "does-not-exist"
+    let admin = admin_proof(&pool).await;
 
     let req = UpdateSettingsRequest {
         access_mode: Some("invite_only".to_owned()),
         gating_team_slug: Some("does-not-exist".to_owned()),
         ..Default::default()
     };
-    let err = access_service::update_system_settings(&pool, &req)
+    let err = access_service::update_system_settings(&pool, &admin, &req)
         .await
         .expect_err("invite_only with a nonexistent gating team should be rejected");
     assert!(matches!(
@@ -140,10 +154,11 @@ async fn update_settings_invite_only_rejects_nonexistent_gating_team(pool: sqlx:
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promote_admin_rejects_nonexistent_team(pool: sqlx::PgPool) {
     reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
     let profile = common::fixtures::create_test_profile(&pool, "p@test.example.com").await;
     // Pass a random team_id that does not exist in kb_teams.
     let bad_team_id = Uuid::new_v4();
-    let err = access_service::promote_admin(&pool, profile, Some(bad_team_id), None)
+    let err = access_service::promote_admin(&pool, &admin, profile, Some(bad_team_id))
         .await
         .expect_err("explicit nonexistent team should be rejected");
     assert!(matches!(
@@ -155,6 +170,7 @@ async fn promote_admin_rejects_nonexistent_team(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
     reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
     // Configure a real gating team so the None branch resolves.
     sqlx::query(
         "INSERT INTO kb_teams (slug, name) VALUES ('temper-system','Temper System') \
@@ -170,7 +186,7 @@ async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
 
     // Pass a random profile_id that does not exist in kb_profiles.
     let bad_profile_id = Uuid::new_v4();
-    let err = access_service::promote_admin(&pool, bad_profile_id, None, None)
+    let err = access_service::promote_admin(&pool, &admin, bad_profile_id, None)
         .await
         .expect_err("nonexistent profile should be rejected");
     assert!(matches!(
@@ -205,17 +221,6 @@ async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
     .await
     .expect("invite_only");
 
-    let admin = common::fixtures::create_test_profile(&pool, "admin@test.example.com").await;
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1,$2,'owner') \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role=EXCLUDED.role",
-    )
-    .bind(gating_id)
-    .bind(admin)
-    .execute(&pool)
-    .await
-    .expect("make admin");
-
     let joiner = common::fixtures::create_test_profile(&pool, "joiner@test.example.com").await;
 
     // Joiner submits a request for the gating team.
@@ -229,12 +234,14 @@ async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
     .await
     .expect("join request");
 
-    // Admin approves via the service.
+    // An operator approves via the service. The reviewer recorded on the decision is now the
+    // authorizing admin (`admin.actor()`), so the proof IS the reviewer.
+    let admin = admin_proof(&pool).await;
     access_service::review_request(
         &pool,
+        &admin,
         access_service::ReviewRequestParams {
             request_id,
-            reviewer_profile_id: temper_core::types::ids::ProfileId::from(admin),
             decision: temper_core::types::access_gate::JoinRequestStatus::Approved,
             decision_note: None,
         },

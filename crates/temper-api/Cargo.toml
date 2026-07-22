@@ -40,7 +40,9 @@ utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 utoipa-axum = "0.2"
 
 [features]
-test-db = []
+# Forwards to temper-services/test-db so DB-backed integration tests can reach the shared
+# `temper_services::test_support` fixtures (e.g. minting a sealed `SystemAdmin` proof).
+test-db = ["temper-services/test-db"]
 # Pure marker that gates body-persistence tests needing real embeddings at
 # runtime (the bge ONNX model). ort itself is linked unconditionally via
 # temper-substrate → temper-ingest(embed), so no dep/feature plumbing is needed

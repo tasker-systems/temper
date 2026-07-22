@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/forge_system_admin.rs:9:19
+  |
+9 |     let _forged = SystemAdmin(ProfileId::from(uuid::Uuid::nil()));
+  |                   ^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/auth/mod.rs
+  |
+  | pub struct SystemAdmin(ProfileId);
+  |                        ^^^^^^^^^ private field

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
 use crate::services::workflow_job_service;
 use temper_core::types::workflow_job::{
@@ -122,7 +123,17 @@ pub enum ReembedScope {
 /// Returns the resource ids enqueued. Resources with a live job are skipped (the underlying
 /// `ON CONFLICT DO NOTHING`), so this is safe to run repeatedly and safe to run while the drain is
 /// mid-flight — re-running it simply picks up whatever is still stale.
-pub async fn enqueue_stale(pool: &PgPool, scope: ReembedScope, limit: i32) -> ApiResult<Vec<Uuid>> {
+///
+/// Operator-only: enqueuing index-wide re-embed work is a system-authority act, so it takes a
+/// `&SystemAdmin` proof (admin-authz enclosure, spec §3.2). The `_admin` param is the capability —
+/// the automatic stale sweep does not exist; every enqueue is operator-triggered. Its ungated sibling
+/// `stale_summary` is a pure read (the dry-run path uses it), so the proof stays off it.
+pub async fn enqueue_stale(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+    scope: ReembedScope,
+    limit: i32,
+) -> ApiResult<Vec<Uuid>> {
     let model = temper_ingest::embed::EXPECTED_MODEL_SHA256;
 
     // One predicate, three scopes. The `$2::uuid IS NULL OR ...` shape keeps this a single prepared
@@ -737,6 +748,7 @@ mod tests {
     /// Scoping is the whole point of the trigger: try ONE resource before you try 31,000.
     #[sqlx::test(migrations = "../../migrations")]
     async fn enqueue_stale_scopes_to_a_single_resource(pool: PgPool) {
+        let admin = crate::test_support::system_admin_proof(&pool).await;
         let a = a_named_resource(&pool, "a").await;
         let ba = a_block(&pool, a, 0, false).await;
         a_chunk(&pool, ba, a, 0, true, true).await;
@@ -748,13 +760,13 @@ mod tests {
         let (all_stale, _) = stale_summary(&pool, ReembedScope::All).await.unwrap();
         assert_eq!(all_stale, 2, "both resources are stale");
 
-        let enqueued = enqueue_stale(&pool, ReembedScope::Resource(a), 100)
+        let enqueued = enqueue_stale(&pool, &admin, ReembedScope::Resource(a), 100)
             .await
             .unwrap();
         assert_eq!(enqueued, vec![a], "only the scoped resource is enqueued");
 
         // Idempotent: the resource now has a live job, so a second call adds nothing.
-        let again = enqueue_stale(&pool, ReembedScope::Resource(a), 100)
+        let again = enqueue_stale(&pool, &admin, ReembedScope::Resource(a), 100)
             .await
             .unwrap();
         assert!(
@@ -768,6 +780,7 @@ mod tests {
     /// without it a context-scoped re-embed would silently drag in every cogmap-homed resource too.
     #[sqlx::test(migrations = "../../migrations")]
     async fn enqueue_stale_scopes_to_a_context_and_excludes_cogmap_homes(pool: PgPool) {
+        let admin = crate::test_support::system_admin_proof(&pool).await;
         let owner: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_profiles (handle, display_name) VALUES ('scope-owner', 'Scope Owner') \
              RETURNING id",
@@ -822,7 +835,7 @@ mod tests {
             .unwrap();
         assert_eq!(stale, 1, "only the context-homed resource is in scope");
 
-        let enqueued = enqueue_stale(&pool, ReembedScope::Context(ctx), 100)
+        let enqueued = enqueue_stale(&pool, &admin, ReembedScope::Context(ctx), 100)
             .await
             .unwrap();
         assert_eq!(
@@ -887,11 +900,14 @@ mod tests {
     /// pending forever, looking enqueued and doing nothing.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_stale_enqueued_resource_is_claimed_by_the_drain(pool: PgPool) {
+        let admin = crate::test_support::system_admin_proof(&pool).await;
         let r = a_named_resource(&pool, "drainable").await;
         let b = a_block(&pool, r, 0, false).await;
         a_chunk(&pool, b, r, 0, true, true).await;
 
-        let enqueued = enqueue_stale(&pool, ReembedScope::All, 100).await.unwrap();
+        let enqueued = enqueue_stale(&pool, &admin, ReembedScope::All, 100)
+            .await
+            .unwrap();
         assert_eq!(enqueued, vec![r]);
 
         let summary = dispatch_tick(&pool, Some(5), false).await.unwrap();
