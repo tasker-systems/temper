@@ -259,8 +259,19 @@ fn gate_resolved_profile(
 /// system-authorized. Only obtainable from [`require_system_access`], which
 /// only accepts an [`AuthenticatedProfile`] — so the type makes it impossible
 /// to run Level 2 without having passed Level 1.
+///
+/// SEALED: the field is private, so the only way to hold one is [`require_system_access`].
+/// A struct-literal forgery outside this module is a compile error — the enforcement the
+/// doc comment above has always *claimed* but, with a `pub` field, did not have.
 #[derive(Debug)]
-pub struct SystemAuthorized(pub AuthenticatedProfile);
+pub struct SystemAuthorized(AuthenticatedProfile);
+
+impl SystemAuthorized {
+    /// The authenticated identity this proof was minted for.
+    pub fn authenticated(&self) -> &AuthenticatedProfile {
+        &self.0
+    }
+}
 
 /// Level 2 — system authorization. Consumes proof of Level 1, adds the
 /// gating-team access gate. Runs on the gated tier of both surfaces.
@@ -282,6 +293,39 @@ pub async fn require_system_access(
     }
 
     Ok(SystemAuthorized(authed.clone()))
+}
+
+/// Proof the caller is a system admin (D10 governance / spec §3). SEALED: the private field means the
+/// only way to hold one is [`require_system_admin`], which checks the DB. Forging one by struct
+/// literal is a compile error outside this module — so a pure-admin fn that takes `&SystemAdmin`
+/// cannot be reached without the gate having run. It carries the acting admin's [`ProfileId`], the
+/// only thing admin fns need for governance/standing/ledger writes.
+#[derive(Debug)]
+pub struct SystemAdmin(ProfileId);
+
+impl SystemAdmin {
+    /// The acting admin — recorded as `actor` on every governance/standing/ledger write.
+    pub fn actor(&self) -> ProfileId {
+        self.0
+    }
+}
+
+/// Level 3 — governance check. A sibling of [`require_system_access`] off Level 1, not a chain on top
+/// of it: it consumes an [`AuthenticatedProfile`] and reads governance *alone* (D11's posture that
+/// `is_system_admin` never ANDs standing). Returns a plain [`ApiError::Forbidden`] on denial — admin
+/// denial needs none of `AuthzError::SystemAccessDenied`'s CLI-presentation payload, and `Forbidden`
+/// is exactly what the admin gate returns today, so parity is trivial and no new surface mapping is
+/// needed.
+pub async fn require_system_admin(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+) -> ApiResult<SystemAdmin> {
+    let actor = ProfileId::from(authed.profile.id);
+    if crate::services::access_service::is_system_admin(pool, actor).await? {
+        Ok(SystemAdmin(actor))
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 #[cfg(all(test, feature = "test-db"))]

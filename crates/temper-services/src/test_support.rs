@@ -58,3 +58,30 @@ pub async fn approved_admin(pool: &PgPool, profile: Uuid) {
     approve(pool, profile).await;
     grant_governance(pool, profile).await;
 }
+
+/// Load a real `AuthenticatedProfile` for a seeded profile id — for tests that exercise the auth
+/// ladder directly (e.g. minting a `SystemAdmin` via `require_system_admin`). The claims are a
+/// minimal human token: the proofs downstream only read `profile.id`.
+pub async fn authenticated_profile_for(
+    pool: &PgPool,
+    profile_id: Uuid,
+) -> temper_core::types::AuthenticatedProfile {
+    use temper_core::types::ids::ProfileId;
+    use temper_core::types::{AuthClaims, AuthenticatedProfile, PrincipalKind};
+
+    let profile = crate::services::profile_service::get_by_id(pool, ProfileId::from(profile_id))
+        .await
+        .expect("load seeded profile");
+    AuthenticatedProfile {
+        profile,
+        claims: AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "test".to_string(),
+            external_user_id: format!("test|{profile_id}"),
+            email: format!("{profile_id}@test.invalid"),
+            email_verified: Some(true),
+            exp: 0,
+            iat: 0,
+        },
+    }
+}
