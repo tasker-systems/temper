@@ -63,6 +63,7 @@ echo "Testing:"
 echo "  cargo make test        Rust unit tests (no feature flags)"
 echo "  cargo make test-db     + database integration tests (requires Docker Postgres)"
 echo "  cargo make test-all    All tests: Rust + TypeScript + integration"
+echo "  cargo make test-trybuild  Compile-fail seal proof (trybuild; no DB/ONNX runtime)"
 echo "  cargo make ts-test     TypeScript unit tests only"
 echo ""
 echo "Build & Run:"
@@ -85,6 +86,15 @@ description = "Run temper-substrate write-path artifact tests on ephemeral per-t
 env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development" }
 script = '''
 cargo nextest run -p temper-substrate --features artifact-tests
+'''
+
+[tasks.test-trybuild]
+description = "Run the compile-fail seal proof (trybuild) for the sealed SystemAdmin. Compiles temper-services + ort in an isolated target dir (~157s); no DB (offline sqlx cache) and no ONNX runtime needed — it only compiles fixtures."
+# SQLX_OFFLINE: the fixtures compile temper-services' `query!` macros; offline uses the committed
+# `.sqlx` cache so no Postgres is needed (mirrors the DB-less CI "Seal Proof" job).
+env = { SQLX_OFFLINE = "true" }
+script = '''
+cargo nextest run -p temper-services --features trybuild --test compile_fail
 '''
 
 [tasks.prepare-services]
