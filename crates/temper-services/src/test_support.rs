@@ -85,3 +85,22 @@ pub async fn authenticated_profile_for(
         },
     }
 }
+
+/// Mint a real, sealed `SystemAdmin` proof — seeding a fresh approved-admin operator and passing it
+/// through the actual `require_system_admin` gate. For mechanics tests that must *call* a proof-gated
+/// admin fn but do not themselves exercise the gate; the seal has no test bypass, so the honest path
+/// is to mint one. The operator handle is uniquified so a test may mint more than one.
+pub async fn system_admin_proof(pool: &PgPool) -> crate::auth::SystemAdmin {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ('operator-' || gen_random_uuid(), 'operator') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("seed operator profile");
+    approved_admin(pool, id).await;
+    let authed = authenticated_profile_for(pool, id).await;
+    crate::auth::require_system_admin(pool, &authed)
+        .await
+        .expect("mint system admin proof")
+}

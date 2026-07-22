@@ -490,6 +490,14 @@ pub async fn get_public_settings(pool: &PgPool) -> ApiResult<PublicSystemSetting
         .map(PublicSystemSettings::from)
 }
 
+/// Admin-authority read of the FULL settings (admin-authz enclosure, spec §3.4). The proof goes on
+/// this admin *act*, never on the shared `get_system_settings` reader — that reader also backs the
+/// public route and internal callers (`promote_admin`, `update_system_settings`), so gating it would
+/// deny the public path. The `_admin` param is the capability; the body just delegates.
+pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<SystemSettings> {
+    get_system_settings(pool).await
+}
+
 /// Admin-only partial update of the singleton `kb_system_settings` row.
 ///
 /// COALESCE semantics: each `Some` field overwrites its column; each `None`
@@ -499,6 +507,7 @@ pub async fn get_public_settings(pool: &PgPool) -> ApiResult<PublicSystemSetting
 /// false for everyone, so it is rejected.
 pub async fn update_system_settings(
     pool: &PgPool,
+    _admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
     // Validate access_mode (parse-don't-validate against the DB CHECK).
@@ -577,14 +586,13 @@ pub async fn update_system_settings(
 /// `team_id == None` resolves to the configured gating team — system-admin ≡
 /// owner of the gating team, so this mints a second system admin. Decoupled
 /// from `kb_profiles.system_access` (the auth gate reads gating-team ownership,
-/// not the enum). Auth is enforced by the caller (handler `is_system_admin`).
+/// not the enum). Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3); the promoting
+/// admin (`admin.actor()`) is recorded as the actor on the governance grant and standing transition.
 pub async fn promote_admin(
     pool: &PgPool,
+    admin: &SystemAdmin,
     profile_id: Uuid,
     team_id: Option<Uuid>,
-    // The promoting admin, recorded as the actor on the governance grant and standing transition.
-    // `None` for callers that do not carry one (fixture/mechanics tests).
-    actor: Option<ProfileId>,
 ) -> ApiResult<TeamMemberRow> {
     // Resolve the target team: explicit, else the configured gating team.
     let target_team = match team_id {
@@ -658,7 +666,7 @@ pub async fn promote_admin(
     sqlx::query_scalar!(
         "SELECT principal_governance_set($1, true, $2, 'system admin promotion')",
         profile_id,
-        actor.map(|a| *a),
+        Some(*admin.actor()),
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -673,7 +681,7 @@ pub async fn promote_admin(
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'approve','approved',$2,'system admin promotion')",
             profile_id,
-            actor.map(|a| *a),
+            Some(*admin.actor()),
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -695,16 +703,15 @@ pub async fn promote_admin(
 // and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
 // it is a join-request decision, handled atomically inside `review_request` (D14).
 //
-// The `is_system_admin` gate lives HERE, in the service, not in the surface — so both surfaces
-// (temper-api today, temper-mcp when parity lands) enforce it identically, and a service caller can
-// never reach `ActorAuthority::Admin` without being one. That is the F-3 posture the
+// The gate is the `&SystemAdmin` proof each act requires (admin-authz enclosure, spec §3.2): its
+// presence in the signature IS the authorization requirement, minted once by `require_system_admin`
+// at the surface and read via `admin.actor()`. The old private
+// `require_system_admin(pool, actor) -> ApiResult<()>` per-act gate is gone — an ungated call path is
+// now a compile error, not a forgotten `.await?`. Both surfaces (temper-api today, temper-mcp when
+// parity lands) inherit the gate by construction, and a service caller can never reach
+// `ActorAuthority::Admin` without holding the proof. That is the F-3 posture the
 // `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
 // ---------------------------------------------------------------------------
-
-// The admin acts below take a `&SystemAdmin` proof (admin-authz enclosure, spec §3.2): its presence in
-// the signature IS the authorization requirement, minted once by `require_system_admin` at the surface
-// and read via `admin.actor()`. The old private `require_system_admin(pool, actor) -> ApiResult<()>`
-// per-act gate is gone — an ungated call path is now a compile error, not a forgotten `.await?`.
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
 /// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
@@ -1011,8 +1018,12 @@ pub async fn create_review_request(
     Ok(())
 }
 
-/// List pending join requests with profile info (admin view).
-pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWithProfile>> {
+/// List pending join requests with profile info (admin view). The `_admin` proof is the capability
+/// (admin-authz enclosure, spec §3.2).
+pub async fn list_pending_requests(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+) -> ApiResult<Vec<JoinRequestWithProfile>> {
     let settings = get_system_settings(pool).await?;
 
     let Some(gating_slug) = settings.gating_team_slug else {
@@ -1044,10 +1055,11 @@ pub async fn list_pending_requests(pool: &PgPool) -> ApiResult<Vec<JoinRequestWi
     Ok(rows)
 }
 
-/// Parameters for reviewing (approving/rejecting) a join request.
+/// Parameters for reviewing (approving/rejecting) a join request. The reviewer is no longer carried
+/// here: it is the authorizing admin (`admin.actor()` on [`review_request`]), so a caller can no
+/// longer supply a reviewer id that disagrees with who actually authorized the decision.
 pub struct ReviewRequestParams {
     pub request_id: Uuid,
-    pub reviewer_profile_id: ProfileId,
     pub decision: JoinRequestStatus,
     pub decision_note: Option<String>,
 }
@@ -1055,7 +1067,14 @@ pub struct ReviewRequestParams {
 /// Approve or reject a join request. On approval, atomically insert the
 /// substrate-shaped team membership row (no `id`/`joined_at`/`invited_by_profile_id`;
 /// reviewer attribution survives on `kb_join_requests.reviewed_by_profile_id`).
-pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiResult<JoinRequest> {
+///
+/// Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3.2); the reviewer recorded on the
+/// decision and the standing transition is `admin.actor()`.
+pub async fn review_request(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    params: ReviewRequestParams,
+) -> ApiResult<JoinRequest> {
     if params.decision != JoinRequestStatus::Approved
         && params.decision != JoinRequestStatus::Rejected
     {
@@ -1088,7 +1107,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         "#,
         params.request_id,
         params.decision as JoinRequestStatus,
-        *params.reviewer_profile_id,
+        *admin.actor(),
         params.decision_note,
     )
     .fetch_optional(&mut *tx)
@@ -1106,7 +1125,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'approve','approved',$2,$3)",
             row.requesting_profile_id,
-            *params.reviewer_profile_id,
+            *admin.actor(),
             params.decision_note,
         )
         .fetch_one(&mut *tx)
@@ -1142,7 +1161,7 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'reject','denied',$2,$3)",
             row.requesting_profile_id,
-            *params.reviewer_profile_id,
+            *admin.actor(),
             params.decision_note,
         )
         .fetch_one(&mut *tx)
