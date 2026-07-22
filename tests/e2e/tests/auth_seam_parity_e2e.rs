@@ -153,10 +153,13 @@ async fn deactivated_profile_refused_on_both_surfaces(pool: sqlx::PgPool) {
         .expect("preflight");
     assert_eq!(resp.status(), StatusCode::OK, "preflight should succeed");
 
-    // Deactivate the profile at the persistence layer.
+    // Deactivate the profile at the persistence layer — a `deactivated` standing (Phase 2 dropped
+    // the `is_active` column; the Level-1 gate reads standing now).
     sqlx::query(
-        "UPDATE kb_profiles SET is_active = false WHERE id IN \
-         (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user')",
+        "INSERT INTO kb_principal_standing (profile_id, state) \
+         SELECT profile_id, 'deactivated' FROM kb_profile_auth_links \
+          WHERE auth_provider_user_id = 'e2e-test-user' \
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'",
     )
     .execute(&pool)
     .await

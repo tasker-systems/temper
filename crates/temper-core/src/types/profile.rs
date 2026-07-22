@@ -11,8 +11,10 @@ use uuid::Uuid;
 /// authenticated through. No auth provider fields — those live in
 /// `ProfileAuthLink`.
 ///
-/// Auto-provisioned on first authenticated request. Soft-deleted via
-/// `is_active = false` for referential integrity and GDPR compliance.
+/// Auto-provisioned on first authenticated request. Deactivation is a
+/// principal-standing state (`kb_principal_standing.state = 'deactivated'`),
+/// not a column on this row — the legacy `is_active` flag was dropped in
+/// principal-admission Phase 2.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "profile.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -25,7 +27,6 @@ pub struct Profile {
     pub avatar_url: Option<String>,
     pub preferences: serde_json::Value,
     pub vault_config: serde_json::Value,
-    pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
 }

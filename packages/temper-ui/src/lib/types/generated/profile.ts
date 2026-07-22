@@ -10,10 +10,12 @@ import type { JsonValue } from "./serde_json/JsonValue";
  * authenticated through. No auth provider fields — those live in
  * `ProfileAuthLink`.
  *
- * Auto-provisioned on first authenticated request. Soft-deleted via
- * `is_active = false` for referential integrity and GDPR compliance.
+ * Auto-provisioned on first authenticated request. Deactivation is a
+ * principal-standing state (`kb_principal_standing.state = 'deactivated'`),
+ * not a column on this row — the legacy `is_active` flag was dropped in
+ * principal-admission Phase 2.
  */
-export type Profile = { id: string, display_name: string, slug: string, email: string | null, avatar_url: string | null, preferences: JsonValue, vault_config: JsonValue, is_active: boolean, created: string, updated: string, };
+export type Profile = { id: string, display_name: string, slug: string, email: string | null, avatar_url: string | null, preferences: JsonValue, vault_config: JsonValue, created: string, updated: string, };
 
 /**
  * Links an external auth provider identity to a temper profile.

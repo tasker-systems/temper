@@ -246,9 +246,9 @@ pub async fn mint_access_token(
     let row = sqlx::query!(
         r#"
         SELECT v.rt_nonce, v.rt_ciphertext, v.at_nonce, v.at_ciphertext,
-               v.access_expires_at, v.revoked_at, p.is_active
+               v.access_expires_at, v.revoked_at, s.state AS "standing?"
           FROM kb_slack_grant_vault v
-          JOIN kb_profiles p ON p.id = v.profile_id
+          LEFT JOIN kb_principal_standing s ON s.profile_id = v.profile_id
          WHERE v.slack_principal_id = $1
          FOR UPDATE OF v
         "#,
@@ -261,8 +261,11 @@ pub async fn mint_access_token(
         return Ok(MintOutcome::NotVaulted);
     };
     // Not-mintable checks first, before any cached token is decrypted or the RT is spent: an
-    // explicit revocation, OR a deactivated profile (the kill-switch must reach the vault).
-    if row.revoked_at.is_some() || !row.is_active {
+    // explicit vault revocation, OR anything short of an `approved` principal standing. Under D-A
+    // (Phase 2, repointed off the dropped `kb_profiles.is_active`) mint requires `approved`, so a
+    // `Revoke` stops the token immediately and a born-`Denied` Slack-linked human cannot mint until
+    // an admin approves (§8) — a missing standing row (NULL) is likewise not `approved`.
+    if row.revoked_at.is_some() || row.standing.as_deref() != Some("approved") {
         return Ok(MintOutcome::Revoked);
     }
 
@@ -445,7 +448,23 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+        // Mint is gated on `approved` standing (D-A), so a mintable fixture is an approved one.
+        set_standing(pool, id, "approved").await;
         id
+    }
+
+    /// Upsert a principal's standing directly — the test-side analogue of the state machine, used
+    /// to drive the mint gate across `approved`/`revoked`/`deactivated` without an admin actor.
+    async fn set_standing(pool: &PgPool, profile: Uuid, state: &str) {
+        sqlx::query(
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1,$2) \
+             ON CONFLICT (profile_id) DO UPDATE SET state = EXCLUDED.state",
+        )
+        .bind(profile)
+        .bind(state)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     /// Seal a grant under the test key. Wraps the [`NewGrant`] construction the tests would
@@ -681,12 +700,13 @@ mod tests {
         );
     }
 
-    /// The deactivation kill-switch reaches the vault: a grant whose profile is deactivated mints
-    /// nothing, even with a still-valid cached token and without ever being explicitly revoked.
+    /// The deactivation kill-switch reaches the vault: a grant whose principal standing is
+    /// `deactivated` mints nothing, even with a still-valid cached token and without ever being
+    /// explicitly revoked.
     #[sqlx::test(migrations = "../../migrations")]
     async fn mint_refuses_a_deactivated_profile(pool: PgPool) {
         let profile = insert_profile(&pool).await;
-        // A comfortably-valid cached AT — absent the is_active gate, mint would hand it straight back.
+        // A comfortably-valid cached AT — absent the standing gate, mint would hand it straight back.
         store(
             &pool,
             profile,
@@ -696,13 +716,7 @@ mod tests {
             Some(3600),
         )
         .await;
-        sqlx::query!(
-            "UPDATE kb_profiles SET is_active = false WHERE id = $1",
-            profile
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        set_standing(&pool, profile, "deactivated").await;
 
         let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
             .await
@@ -711,6 +725,60 @@ mod tests {
             out,
             MintOutcome::Revoked,
             "a deactivated profile must not mint — the kill-switch must reach the vault",
+        );
+    }
+
+    /// D-A: a `Revoke` stops minting immediately. This is the Phase-2 policy call — the mint gate is
+    /// `standing = 'approved'`, not the behaviour-preserving `<> 'deactivated'` — so a revoked
+    /// principal (whose cached token is otherwise still valid) mints nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mint_refuses_a_revoked_profile(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile,
+            PRINCIPAL,
+            "rt",
+            "still-valid-at",
+            Some(3600),
+        )
+        .await;
+        set_standing(&pool, profile, "revoked").await;
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            MintOutcome::Revoked,
+            "a revoked principal must not mint (D-A: mint requires an approved standing)",
+        );
+    }
+
+    /// D-A / §8: a Slack-linked human born `Denied` (or with no standing row at all) cannot mint —
+    /// being born denied *is* the access control. Here the profile is left without an approved
+    /// standing, and even a fresh cached token is withheld.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mint_refuses_a_profile_without_approved_standing(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(
+            &pool,
+            profile,
+            PRINCIPAL,
+            "rt",
+            "still-valid-at",
+            Some(3600),
+        )
+        .await;
+        set_standing(&pool, profile, "denied").await;
+
+        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            MintOutcome::Revoked,
+            "a born-Denied principal must not mint until approved (§8)",
         );
     }
 

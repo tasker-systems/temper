@@ -25,8 +25,6 @@ module Temper::Generated
 
     attr_accessor :id
 
-    attr_accessor :is_active
-
     attr_accessor :preferences
 
     attr_accessor :slug
@@ -45,7 +43,6 @@ module Temper::Generated
         :'display_name' => :'display_name',
         :'email' => :'email',
         :'id' => :'id',
-        :'is_active' => :'is_active',
         :'preferences' => :'preferences',
         :'slug' => :'slug',
         :'updated' => :'updated',
@@ -72,7 +69,6 @@ module Temper::Generated
         :'display_name' => :'String',
         :'email' => :'String',
         :'id' => :'String',
-        :'is_active' => :'Boolean',
         :'preferences' => :'Object',
         :'slug' => :'String',
         :'updated' => :'Time',
@@ -138,12 +134,6 @@ module Temper::Generated
         self.id = nil
       end
 
-      if attributes.key?(:'is_active')
-        self.is_active = attributes[:'is_active']
-      else
-        self.is_active = nil
-      end
-
       if attributes.key?(:'preferences')
         self.preferences = attributes[:'preferences']
       else
@@ -192,10 +182,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "id", id cannot be nil.')
       end
 
-      if @is_active.nil?
-        invalid_properties.push('invalid value for "is_active", is_active cannot be nil.')
-      end
-
       if @slug.nil?
         invalid_properties.push('invalid value for "slug", slug cannot be nil.')
       end
@@ -218,7 +204,6 @@ module Temper::Generated
       return false if @created.nil?
       return false if @display_name.nil?
       return false if @id.nil?
-      return false if @is_active.nil?
       return false if @slug.nil?
       return false if @updated.nil?
       return false if @entitlements.nil?
@@ -253,16 +238,6 @@ module Temper::Generated
       end
 
       @id = id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] is_active Value to be assigned
-    def is_active=(is_active)
-      if is_active.nil?
-        fail ArgumentError, 'is_active cannot be nil'
-      end
-
-      @is_active = is_active
     end
 
     # Custom attribute writer method with validation
@@ -305,7 +280,6 @@ module Temper::Generated
           display_name == o.display_name &&
           email == o.email &&
           id == o.id &&
-          is_active == o.is_active &&
           preferences == o.preferences &&
           slug == o.slug &&
           updated == o.updated &&
@@ -322,7 +296,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [avatar_url, created, display_name, email, id, is_active, preferences, slug, updated, vault_config, entitlements].hash
+      [avatar_url, created, display_name, email, id, preferences, slug, updated, vault_config, entitlements].hash
     end
 
     # Builds the object from hash
