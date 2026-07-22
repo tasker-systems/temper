@@ -284,12 +284,8 @@ pub async fn demote_admin(
     auth: AuthUser,
     Json(body): Json<DemoteAdminRequest>,
 ) -> ApiResult<StatusCode> {
-    access_service::demote_admin(
-        &state.pool,
-        ProfileId::from(body.profile_id),
-        ProfileId::from(auth.0.profile.id),
-    )
-    .await?;
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::demote_admin(&state.pool, &admin, ProfileId::from(body.profile_id)).await?;
     Ok(StatusCode::OK)
 }
 
@@ -298,11 +294,12 @@ pub async fn demote_admin(
 // neighbours above (plain `.route()`, no `#[utoipa::path]`, allowlisted in
 // `.github/scripts/check-openapi-routes.sh`).
 //
-// Unlike the older admin handlers above, these carry NO handler-side authz: the
-// `is_system_admin` gate lives in `access_service::admin_*` itself, so both
-// surfaces enforce it identically and a future MCP tool cannot bypass it (the
-// F-3 posture; see `audit-handler-authz-drift`). The handler only extracts the
-// actor and the subject and dispatches.
+// Their authz IS the service signature: each dispatches to an `access_service`
+// fn that requires a `&SystemAdmin` proof (admin-authz enclosure, spec §3),
+// minted here by `require_system_admin`. Because the requirement lives in the
+// service type — not a handler-side `is_system_admin` — both surfaces enforce it
+// identically and a future MCP tool cannot bypass it (the F-3 posture; see
+// `audit-handler-authz-drift`). The handler mints the proof, then dispatches.
 // ---------------------------------------------------------------------------
 
 /// Body for `POST /api/access/admin/principals/{id}/revoke`.
@@ -318,12 +315,8 @@ pub async fn approve_principal(
     auth: AuthUser,
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    access_service::admin_approve(
-        &state.pool,
-        ProfileId::from(profile_id),
-        ProfileId::from(auth.0.profile.id),
-    )
-    .await?;
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_approve(&state.pool, &admin, ProfileId::from(profile_id)).await?;
     Ok(StatusCode::OK)
 }
 
@@ -334,10 +327,11 @@ pub async fn revoke_principal(
     Path(profile_id): Path<Uuid>,
     Json(body): Json<RevokePrincipalBody>,
 ) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
     access_service::admin_revoke(
         &state.pool,
+        &admin,
         ProfileId::from(profile_id),
-        ProfileId::from(auth.0.profile.id),
         body.reason,
     )
     .await?;
@@ -350,12 +344,8 @@ pub async fn deactivate_principal(
     auth: AuthUser,
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    access_service::admin_deactivate(
-        &state.pool,
-        ProfileId::from(profile_id),
-        ProfileId::from(auth.0.profile.id),
-    )
-    .await?;
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_deactivate(&state.pool, &admin, ProfileId::from(profile_id)).await?;
     Ok(StatusCode::OK)
 }
 
@@ -365,11 +355,7 @@ pub async fn reactivate_principal(
     auth: AuthUser,
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    access_service::admin_reactivate(
-        &state.pool,
-        ProfileId::from(profile_id),
-        ProfileId::from(auth.0.profile.id),
-    )
-    .await?;
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::admin_reactivate(&state.pool, &admin, ProfileId::from(profile_id)).await?;
     Ok(StatusCode::OK)
 }

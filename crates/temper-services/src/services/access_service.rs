@@ -12,6 +12,7 @@ use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
 use uuid::Uuid;
 
+use crate::auth::SystemAdmin;
 use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
 
@@ -700,27 +701,25 @@ pub async fn promote_admin(
 // `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
 // ---------------------------------------------------------------------------
 
-/// Refuse unless `actor` is a system admin. The gate the four admin acts share; it runs before any
-/// standing write (auth before writes).
-async fn require_system_admin(pool: &PgPool, actor: ProfileId) -> ApiResult<()> {
-    if is_system_admin(pool, actor).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
+// The admin acts below take a `&SystemAdmin` proof (admin-authz enclosure, spec §3.2): its presence in
+// the signature IS the authorization requirement, minted once by `require_system_admin` at the surface
+// and read via `admin.actor()`. The old private `require_system_admin(pool, actor) -> ApiResult<()>`
+// per-act gate is gone — an ungated call path is now a compile error, not a forgotten `.await?`.
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
 /// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
 /// enrolls a *human requester* into the auto-join pool; a direct grant confers standing only.
-pub async fn admin_approve(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
+pub async fn admin_approve(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Approve,
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -732,17 +731,16 @@ pub async fn admin_approve(pool: &PgPool, subject: ProfileId, actor: ProfileId) 
 /// ledger, and a later `RequestReview`'s reviewer needs it (D15) — which is why it is required.
 pub async fn admin_revoke(
     pool: &PgPool,
+    admin: &SystemAdmin,
     subject: ProfileId,
-    actor: ProfileId,
     reason: String,
 ) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Revoke { reason },
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -753,16 +751,15 @@ pub async fn admin_revoke(
 /// Deactivate a principal from any live state (§6).
 pub async fn admin_deactivate(
     pool: &PgPool,
+    admin: &SystemAdmin,
     subject: ProfileId,
-    actor: ProfileId,
 ) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Deactivate,
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -774,16 +771,15 @@ pub async fn admin_deactivate(
 /// reads the prior state from the log and refuses rather than guesses.
 pub async fn admin_reactivate(
     pool: &PgPool,
+    admin: &SystemAdmin,
     subject: ProfileId,
-    actor: ProfileId,
 ) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
     standing_service::apply(
         pool,
         ApplyStandingParams {
             subject,
             act: Act::Reactivate { prior: None },
-            actor: Some(actor),
+            actor: Some(admin.actor()),
             authority: ActorAuthority::Admin,
         },
     )
@@ -797,13 +793,13 @@ pub async fn admin_reactivate(
 /// profile alone, so it takes no team. Idempotent — a no-op on a profile that holds no grant.
 ///
 /// Governance-only: it never touches standing. A demoted admin keeps its access; it just may no
-/// longer change the rules. The gate lives HERE (F-3), so both surfaces enforce it identically.
-pub async fn demote_admin(pool: &PgPool, subject: ProfileId, actor: ProfileId) -> ApiResult<()> {
-    require_system_admin(pool, actor).await?;
+/// longer change the rules. The `&SystemAdmin` proof is the gate (F-3), so both surfaces enforce it
+/// identically.
+pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId) -> ApiResult<()> {
     sqlx::query_scalar!(
         "SELECT principal_governance_set($1, false, $2, 'system admin demotion')",
         *subject,
-        *actor,
+        *admin.actor(),
     )
     .fetch_one(pool)
     .await?;
