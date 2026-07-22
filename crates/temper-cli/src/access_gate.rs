@@ -23,10 +23,10 @@ pub const REQUEST_REVIEW_COMMAND: &str = "temper auth request-review --message \
 
 /// Renders the "you're signed in, but this instance requires approved access" error.
 ///
-/// Prefers the typed [`Refusal`] the server now sends — branched exhaustively so a new refusal
-/// variant forces a message rather than falling through to a generic one. When `refusal` is `None`
-/// (a server older than the typed 403), it falls back to the legacy `join_request_status` rendering,
-/// so a new CLI against an old server still degrades to a sensible message.
+/// Renders from the typed [`Refusal`] the server sends — branched exhaustively so a new refusal
+/// variant forces a message rather than falling through to a generic one. `refusal` is `Option` only
+/// as a defensive default in the client error chain; a missing one renders the generic
+/// request-access message (`NoStanding`).
 ///
 /// `cli_command` is the server's advertised request-access remedy (see
 /// [`REQUEST_ACCESS_COMMAND`](temper_core::types::access_gate::REQUEST_ACCESS_COMMAND)); it is
@@ -34,7 +34,6 @@ pub const REQUEST_REVIEW_COMMAND: &str = "temper auth request-review --message \
 pub fn render_system_access_required(
     email: Option<&str>,
     refusal: Option<&Refusal>,
-    join_request_status: Option<&str>,
     request_url: Option<&str>,
     cli_command: Option<&str>,
 ) {
@@ -44,10 +43,7 @@ pub fn render_system_access_required(
     ));
     output::blank_err();
 
-    match refusal {
-        Some(refusal) => render_refusal(refusal, request_url, cli_command),
-        None => render_from_join_request_status(join_request_status, request_url, cli_command),
-    }
+    render_refusal(refusal.unwrap_or(&Refusal::NoStanding), request_url, cli_command);
 }
 
 /// Typed-refusal rendering. Exhaustive, no catchall: a new [`Refusal`] variant is a compile error
@@ -91,46 +87,6 @@ fn render_refusal(refusal: &Refusal, request_url: Option<&str>, cli_command: Opt
         | Refusal::NoPriorStanding => {
             output::plain_err(format!("  Access was refused: {}.", refusal.reason()));
             output::plain_err("  Contact an administrator if this is unexpected.");
-        }
-    }
-}
-
-/// Legacy rendering for a server that predates the typed refusal (no `refusal` field on the 403).
-fn render_from_join_request_status(
-    join_request_status: Option<&str>,
-    request_url: Option<&str>,
-    cli_command: Option<&str>,
-) {
-    match join_request_status {
-        Some("pending") => {
-            output::plain_err("  Your access request is pending review.");
-            output::hint(format!(
-                "  Run `{CHECK_STATUS_COMMAND}` to check for updates."
-            ));
-        }
-        Some("rejected") => {
-            output::plain_err(
-                "  Your previous request was not approved. You can submit a new one:",
-            );
-            if let Some(cmd) = cli_command {
-                output::hint(format!("    {cmd}"));
-            }
-        }
-        Some("withdrawn") => {
-            output::plain_err("  You withdrew your previous request. Submit a new one:");
-            if let Some(cmd) = cli_command {
-                output::hint(format!("    {cmd}"));
-            }
-        }
-        _ => {
-            output::plain_err("  To request access, run:");
-            if let Some(cmd) = cli_command {
-                output::hint(format!("    {cmd}"));
-            }
-            if let Some(url) = request_url {
-                output::blank_err();
-                output::plain_err(format!("  Or visit: {url}"));
-            }
         }
     }
 }

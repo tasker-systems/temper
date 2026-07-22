@@ -3055,7 +3055,6 @@ export interface components {
         };
         /** @description Public-facing system settings (no gating_team_slug — prevents info leakage). */
         PublicSystemSettings: {
-            access_mode: string;
             instance_name?: string | null;
             terms_resource_uri?: string | null;
             terms_version?: string | null;

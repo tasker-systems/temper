@@ -351,7 +351,6 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                     email: details.email,
                     display_name: details.display_name,
                     refusal: details.refusal,
-                    join_request_status: details.join_request_status,
                     request_url: details.request_url,
                     cli_command: details.cli_command,
                 }))
@@ -400,15 +399,14 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
 
 /// Details from a `SystemAccessRequired` 403 response.
 ///
-/// `refusal` is `Option` for graceful degradation: a server older than the typed-refusal 403 sends
-/// no such field, so it parses as `None` and the CLI falls back to `join_request_status`. `access_mode`
-/// (the retired field) is simply not read — serde drops it as an unknown field if an old server sends it.
+/// `refusal` is `Option` only as a defensive default; every current server sends it. The retired
+/// `access_mode` and `join_request_status` fields are simply not read — serde drops them as unknown
+/// fields if an older server sends them.
 #[derive(Deserialize)]
 struct SystemAccessErrorDetails {
     email: Option<String>,
     display_name: Option<String>,
     refusal: Option<temper_principal::Refusal>,
-    join_request_status: Option<String>,
     request_url: Option<String>,
     cli_command: Option<String>,
 }
@@ -600,17 +598,16 @@ mod tests {
     }
 
     #[test]
-    fn test_403_from_older_server_without_refusal_still_parses() {
-        // A server predating the typed 403 sends `access_mode` and no `refusal`. The client must
-        // still recognize the gate error (not fall through to generic Forbidden) and degrade to a
-        // `None` refusal so rendering falls back to `join_request_status`.
+    fn test_403_with_unknown_and_missing_fields_still_parses() {
+        // Retired fields (`access_mode`, `join_request_status`) are dropped as unknown, and a body
+        // with no `refusal` still recognizes the gate error (not a generic Forbidden) and degrades
+        // to a `None` refusal, which renders the generic request-access message.
         let body = r#"{"error":{"code":"SYSTEM_ACCESS_REQUIRED","message":"This system requires approved access.","details":{"email":"pete@example.com","display_name":"Pete Taylor","access_mode":"invite_only","join_request_status":"pending","request_url":"https://temperkb.io/request-access","cli_command":"temper auth request-access --message \"...\""}}}"#;
         let err = map_status_to_error(status(403), body);
         match err {
             ClientError::SystemAccessRequired(details) => {
                 assert_eq!(details.email.as_deref(), Some("pete@example.com"));
                 assert_eq!(details.refusal, None);
-                assert_eq!(details.join_request_status.as_deref(), Some("pending"));
             }
             other => panic!("expected SystemAccessRequired, got {other:?}"),
         }

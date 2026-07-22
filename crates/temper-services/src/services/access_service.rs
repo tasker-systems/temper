@@ -476,7 +476,7 @@ pub(crate) async fn cogmap_write_requires_admin(
 pub async fn get_system_settings(pool: &PgPool) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
         SystemSettings,
-        "SELECT id, access_mode, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
+        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
@@ -543,7 +543,7 @@ pub async fn update_system_settings(
                terms_resource_uri = COALESCE($4, terms_resource_uri),
                updated            = now()
          WHERE id = 1
-        RETURNING id, access_mode, gating_team_slug, terms_version,
+        RETURNING id, gating_team_slug, terms_version,
                   terms_resource_uri, instance_name, updated
         "#,
         req.gating_team_slug,

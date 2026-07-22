@@ -9108,13 +9108,7 @@
       "PublicSystemSettings": {
         "type": "object",
         "description": "Public-facing system settings (no gating_team_slug — prevents info leakage).",
-        "required": [
-          "access_mode"
-        ],
         "properties": {
-          "access_mode": {
-            "type": "string"
-          },
           "instance_name": {
             "type": [
               "string",
